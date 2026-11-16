@@ -79,6 +79,7 @@ cargo check --all-targets --locked
 cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo run
 ```
 
@@ -88,7 +89,7 @@ Linux では Wayland/X11 と GPU ドライバが必要です（`gpui-kit` / wgpu
 
 `.github/workflows/ci.yml` から共通ワークフロー
 `Seduce0068/workflows/.github/workflows/rust-gates.yml@v1` を呼び出します。
-fmt → check → test → clippy → `cargo audit` のゲートを実行します。
+fmt → check → test → clippy → `cargo audit` → doc のゲートを実行します。
 clippy の `unwrap_used` / `expect_used` / `panic` deny は `Cargo.toml` の
 `[lints.clippy]` で一元管理しています。
 監査は脆弱性検出時に失敗し、unmaintained の warning は失敗させません。

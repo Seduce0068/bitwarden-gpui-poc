@@ -213,11 +213,14 @@ fn draw_below(bound: u16) -> Result<u16, GeneratorError> {
     Err(GeneratorError::RandomUnavailable)
 }
 
-/// Public wrapper around [`draw_below`] for callers outside this module.
+/// Draw a uniform index in `0..bound` from the OS CSPRNG.
+///
+/// Uses the same rejection sampling as the internal password generator.
 ///
 /// # Errors
 ///
-/// As [`draw_below`].
+/// [`GeneratorError::InvalidSettings`] when `bound` is zero, or
+/// [`GeneratorError::RandomUnavailable`] if the OS source fails.
 pub fn random_index(bound: u16) -> Result<u16, GeneratorError> {
     draw_below(bound)
 }
