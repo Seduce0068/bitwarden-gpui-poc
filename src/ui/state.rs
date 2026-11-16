@@ -50,7 +50,9 @@ pub enum AuthField {
 }
 
 /// Editable generator settings and the last values drawn from them.
-#[derive(Clone, Debug, Default)]
+///
+/// `Debug` masks the last generated values so secrets are not printed.
+#[derive(Clone, Default)]
 pub struct GeneratorState {
     /// Password generator settings.
     pub password: PasswordSettings,
@@ -62,6 +64,23 @@ pub struct GeneratorState {
     pub last_passphrase: Option<String>,
 }
 
+impl core::fmt::Debug for GeneratorState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("GeneratorState")
+            .field("password", &self.password)
+            .field("passphrase", &self.passphrase)
+            .field(
+                "last_password",
+                &self.last_password.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "last_passphrase",
+                &self.last_passphrase.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
+}
+
 impl GeneratorState {
     /// Build generator state from persisted settings.
     pub fn from_settings(settings: &Settings) -> Self {
@@ -71,5 +90,24 @@ impl GeneratorState {
             last_password: None,
             last_passphrase: None,
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn debug_masks_generated_secrets() {
+        let state = GeneratorState {
+            last_password: Some("generated-password".into()),
+            last_passphrase: Some("correct-horse-battery".into()),
+            ..Default::default()
+        };
+        let debug = format!("{state:?}");
+        assert!(!debug.contains("generated-password"), "{debug}");
+        assert!(!debug.contains("correct-horse-battery"), "{debug}");
+        assert!(debug.contains("[redacted]"), "{debug}");
     }
 }
