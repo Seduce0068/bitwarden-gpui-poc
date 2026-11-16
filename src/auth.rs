@@ -31,6 +31,10 @@ pub enum AuthError {
     MissingField(&'static str),
     /// The server URL is not a valid HTTPS base URL.
     InvalidServerUrl,
+    /// The server URL points at a link-local address (e.g. cloud metadata).
+    BlockedServerUrl,
+    /// The email address is malformed.
+    InvalidEmail,
     /// The client could not be built.
     ClientSetup,
     /// The prelogin call failed.
@@ -51,6 +55,8 @@ impl AuthError {
         match self {
             Self::MissingField(_) => "認証情報が未入力です",
             Self::InvalidServerUrl => "サーバー URL が不正です（HTTPS または loopback の HTTP）",
+            Self::BlockedServerUrl => "サーバー URL が link-local アドレスを指しています",
+            Self::InvalidEmail => "メールアドレスの形式が不正です",
             Self::ClientSetup => "クライアントを初期化できませんでした",
             Self::Prelogin => "サーバー情報の取得に失敗しました",
             Self::Login => "ログインに失敗しました",
@@ -71,11 +77,50 @@ impl std::error::Error for AuthError {}
 
 pub use crate::cache::SyncCacheError;
 
+/// A minimal structural check: exactly one `@`, no whitespace, and a dotted
+/// domain. Regex-level RFC 5322 validation is out of scope for the PoC.
+pub fn valid_email(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+}
+
+/// Reject link-local addresses, including the cloud metadata endpoint
+/// `169.254.169.254`. Private LAN addresses remain allowed so self-hosted
+/// Vaultwarden instances keep working.
+pub fn is_blocked_server_url(value: &str) -> bool {
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => {
+            let octets = ip.octets();
+            octets[0] == 169 && octets[1] == 254
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            // fe80::/10 link-local
+            (ip.segments()[0] & 0xffc0) == 0xfe80
+        }
+        _ => false,
+    }
+}
+
 /// Validate everything that does not require a network round trip.
 ///
 /// # Errors
 ///
-/// [`AuthError::MissingField`] for an empty field, or
+/// [`AuthError::MissingField`] for an empty field,
+/// [`AuthError::InvalidEmail`] for a malformed address,
+/// [`AuthError::BlockedServerUrl`] for link-local hosts, or
 /// [`AuthError::InvalidServerUrl`] for a URL `openwarden` rejects.
 pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
     if config.server_url.trim().is_empty() {
@@ -90,8 +135,14 @@ pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
     if config.email.trim().is_empty() {
         return Err(AuthError::MissingField("email"));
     }
+    if !valid_email(&config.email) {
+        return Err(AuthError::InvalidEmail);
+    }
     if config.master_password.expose_secret().is_empty() {
         return Err(AuthError::MissingField("master_password"));
+    }
+    if is_blocked_server_url(config.server_url.trim()) {
+        return Err(AuthError::BlockedServerUrl);
     }
     ServerUrls::self_hosted(config.server_url.trim()).map_err(|_| AuthError::InvalidServerUrl)?;
     Ok(())
@@ -278,6 +329,35 @@ mod tests {
     }
 
     #[test]
+    fn email_validation_rejects_malformed_addresses() {
+        assert!(valid_email("alice@example.com"));
+        assert!(!valid_email(""));
+        assert!(!valid_email("alice"));
+        assert!(!valid_email("alice@"));
+        assert!(!valid_email("@example.com"));
+        assert!(!valid_email("alice@example"));
+        assert!(!valid_email("a b@example.com"));
+
+        let mut value = config();
+        value.email = "not-an-email".into();
+        assert_eq!(validate_config(&value), Err(AuthError::InvalidEmail));
+    }
+
+    #[test]
+    fn link_local_servers_are_blocked() {
+        assert!(is_blocked_server_url("http://169.254.169.254"));
+        assert!(is_blocked_server_url("http://169.254.1.1:8080"));
+        assert!(is_blocked_server_url("http://[fe80::1]"));
+        assert!(!is_blocked_server_url("https://vault.example.com"));
+        assert!(!is_blocked_server_url(" http://127.0.0.1:8080".trim()));
+        assert!(!is_blocked_server_url("http://192.168.1.10"));
+
+        let mut value = config();
+        value.server_url = "http://169.254.169.254".into();
+        assert_eq!(validate_config(&value), Err(AuthError::BlockedServerUrl));
+    }
+
+    #[test]
     fn validation_fails_before_the_timeout_race() {
         let mut invalid = config();
         invalid.client_id.clear();
@@ -294,6 +374,8 @@ mod tests {
         for error in [
             AuthError::MissingField("email"),
             AuthError::InvalidServerUrl,
+            AuthError::BlockedServerUrl,
+            AuthError::InvalidEmail,
             AuthError::ClientSetup,
             AuthError::Prelogin,
             AuthError::Login,
