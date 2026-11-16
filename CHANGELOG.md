@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-11-17
+
 ### クリップボード設定
 
 - 復元までの秒数を `Settings.clipboard_restore_seconds` から読み込むよう変更
