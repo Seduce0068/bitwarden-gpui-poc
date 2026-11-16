@@ -10,15 +10,19 @@ tags:
 generated:
   by: "dsh-agent (lead)"
   at: "2026-11-16T23:49:40+09:00"
-status: "draft"
-stale_after: "2027-05-16T23:49:40+09:00"
+status: "approved"
+verified:
+  by: "dsh-agent (lead)"
+  at: "2026-11-17T00:27:33+09:00"
+stale_after: "2027-05-17T00:27:33+09:00"
 ---
 
 ## Context
 
-Bitwarden GPUI PoC は現在モックデータのみを表示している。
+Bitwarden GPUI PoC は当初モックデータのみを表示していた。
 プロジェクトの目的は GPUI で Bitwarden クライアント UI を構築し、
 `openwarden` を vault API/暗号層として使う構成を検証することにある。
+本 ADR はその統合設計を記録し、実装完了時にステータスを更新した。
 
 `openwarden` 0.1.0 の公開 API をローカルソースで確認した結果は次のとおり。
 
@@ -70,14 +74,25 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 
 ## Implementation Plan
 
-1. `auth` モジュールの骨格とエラー型を追加する
-2. `SyncData` から `model::Vault` への変換関数のテストを先に書く
-3. ロック画面に API key とマスターパスワードの入力欄を追加する
-4. KDF を blocking thread で実行し、同期結果を一覧に反映する
+1. `auth` モジュールの骨格とエラー型を追加する — 完了
+2. `SyncData` から `model::Vault` への変換関数のテストを先に書く — 完了
+3. ロック画面に API key とマスターパスワードの入力欄を追加する — 完了
+4. KDF を blocking thread で実行し、同期結果を一覧に反映する — 完了
+
+## Implementation Result
+
+`auth` / `vault_sync` の2モジュールと UI 接続を実装し、
+`cargo test` は 74 件すべて成功している。認証情報未入力時はモック vault
+にフォールバックし、入力時は `authenticate` → `Vault::unlock` →
+`apply_sync` → `import_logins` の順で実 vault を読み込む。
+
+未解決事項: 実サーバーへの接続テストは認証情報がないため未実施。
+ログイン項目以外の kind はまだ model に変換されない。
+device identifier は固定値であり、インストールごとの一意性は未保証。
 
 ## Status
 
-Self-reviewed by agent at 2026-11-16T23:49:40+09:00.
+Self-reviewed by agent at 2026-11-17T00:27:33+09:00.
 
 ## Links
 
