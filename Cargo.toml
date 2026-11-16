@@ -42,3 +42,5 @@ debug = 0
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+# Defense in depth: unsafe is already forbidden at the crate root.
+undocumented_unsafe_blocks = "deny"

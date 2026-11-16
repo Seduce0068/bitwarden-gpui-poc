@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 静的解析
+
+- `clippy::undocumented_unsafe_blocks` を deny に追加（共通指示セクション15）
+
 ## [0.1.35] - 2026-11-17
 
 ### 起動時エラー

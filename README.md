@@ -93,8 +93,9 @@ Linux では Wayland/X11 と GPU ドライバが必要です（`gpui-kit` / wgpu
 `.github/workflows/ci.yml` から共通ワークフロー
 `Seduce0068/workflows/.github/workflows/rust-gates.yml@v1` を呼び出します。
 fmt → check → test → clippy → `cargo audit` → doc のゲートを実行します。
-clippy の `unwrap_used` / `expect_used` / `panic` deny は `Cargo.toml` の
-`[lints.clippy]` で一元管理しています。
+clippy の `unwrap_used` / `expect_used` / `panic` /
+`undocumented_unsafe_blocks` deny は `Cargo.toml` の `[lints.clippy]` で
+一元管理しています（unsafe は crate root の `forbid` でも禁止）。
 監査は脆弱性検出時に失敗し、unmaintained の warning は失敗させません。
 
 ## ライセンス
