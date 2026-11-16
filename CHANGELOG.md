@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-11-17
+
 ### ドメイン層への集約
 
 - 復号・同期データ取り込み・model 変換を `auth::unlock_and_import` に
