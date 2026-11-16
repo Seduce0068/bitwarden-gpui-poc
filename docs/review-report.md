@@ -84,7 +84,7 @@ High の1件と、即対応可能な Medium/Low を修正した。
 
 - `cargo fmt --all -- --check`
 - `cargo check --all-targets --locked`
-- `cargo test --all-targets --locked`（125 passed）
+- `cargo test --all-targets --locked`（126 passed）
 - `cargo clippy --all-targets --locked -- -D warnings -D clippy::unwrap_used
   -D clippy::expect_used -D clippy::panic`
 - `cargo audit`
