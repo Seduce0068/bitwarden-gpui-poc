@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.41] - 2026-11-17
+
 ### ログイン設定
 
 - ログインのタイムアウトを `Settings.login_timeout_seconds` から読み込むよう変更
