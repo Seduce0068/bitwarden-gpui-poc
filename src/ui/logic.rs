@@ -1,5 +1,6 @@
 //! Pure UI predicates that can be tested without a GPUI window.
 
+use crate::health::Thresholds;
 use crate::ui::model::{AuthField, Panel, Screen, SettingsField};
 
 /// Whether the lock screen has enough credential input to attempt a login.
@@ -21,6 +22,32 @@ pub fn selection_in_view<'a>(
     match selected_id {
         None => true,
         Some(id) => ids.into_iter().any(|candidate| candidate == id),
+    }
+}
+
+/// Adjust audit thresholds by one UI step, clamping to safe bounds.
+///
+/// `delta` is +1 for `+`/`=` and -1 for `-`/`_`.
+pub fn adjust_thresholds(current: Thresholds, delta: i32) -> Thresholds {
+    let weak_step = delta.saturating_mul(5);
+    let day_step = delta.saturating_mul(30);
+    Thresholds {
+        weak_bits: if weak_step > 0 {
+            current.weak_bits.saturating_add(weak_step as u32).min(200)
+        } else {
+            current
+                .weak_bits
+                .saturating_sub(weak_step.unsigned_abs())
+                .min(200)
+        },
+        stale_days: if day_step > 0 {
+            current.stale_days.saturating_add(day_step as i64).min(3650)
+        } else {
+            current
+                .stale_days
+                .saturating_sub(day_step.unsigned_abs() as i64)
+                .max(1)
+        },
     }
 }
 
@@ -238,6 +265,34 @@ mod tests {
         assert!(selection_in_view(Some("2"), ids));
         assert!(!selection_in_view(Some("4"), ids));
         assert!(!selection_in_view(Some("1"), []));
+    }
+
+    #[::core::prelude::v1::test]
+    fn threshold_adjustment_steps_and_clamps() {
+        let base = Thresholds::default();
+        let up = adjust_thresholds(base, 1);
+        assert_eq!(up.weak_bits, base.weak_bits + 5);
+        assert_eq!(up.stale_days, base.stale_days + 30);
+
+        let down = adjust_thresholds(base, -1);
+        assert_eq!(down.weak_bits, base.weak_bits - 5);
+        assert_eq!(down.stale_days, base.stale_days - 30);
+
+        let at_max = Thresholds {
+            weak_bits: 199,
+            stale_days: 3640,
+        };
+        let clamped = adjust_thresholds(at_max, 1);
+        assert_eq!(clamped.weak_bits, 200);
+        assert_eq!(clamped.stale_days, 3650);
+
+        let at_min = Thresholds {
+            weak_bits: 2,
+            stale_days: 10,
+        };
+        let clamped = adjust_thresholds(at_min, -1);
+        assert!(clamped.weak_bits < 2);
+        assert_eq!(clamped.stale_days, 1);
     }
 
     fn ctx(key: &str) -> KeyContext<'_> {
