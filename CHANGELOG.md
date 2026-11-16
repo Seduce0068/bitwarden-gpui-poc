@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-11-17
+
 ### 認証入力のメモリ保護
 
 - 認証入力の client_secret / master_password を `Zeroizing<String>` に変更し、
