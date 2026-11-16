@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.38] - 2026-11-17
+
 ### 未使用 API の削除
 
 - テスト専用の `imports_logins_only()` を削除し、未使用 import を整理
