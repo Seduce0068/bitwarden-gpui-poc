@@ -8,9 +8,6 @@ use crate::ui::model::{AuthField, GeneratorState, Panel, Screen, SettingsField};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-/// Seconds before a copied secret is restored to the previous clipboard value.
-pub(super) const CLIPBOARD_CLEAR_SECONDS: u64 = 30;
-
 /// Seconds of inactivity before an unlocked vault is locked automatically.
 pub(super) const IDLE_LOCK_SECONDS: u64 = 300;
 
@@ -36,8 +33,7 @@ pub struct BitwardenApp {
     pub(super) client_id: String,
     pub(super) client_secret: String,
     pub(super) master_password: String,
-    pub(super) clipboard_restore: Option<String>,
-    pub(super) clipboard_clear_at: Option<std::time::Instant>,
+    pub(super) clipboard: crate::ui::clipboard::ClipboardState,
     pub(super) last_activity: std::time::Instant,
     pub(super) login_failed: bool,
     pub(super) scroll_handle: UniformListScrollHandle,
@@ -69,8 +65,7 @@ impl BitwardenApp {
             client_id: String::new(),
             client_secret: String::new(),
             master_password: String::new(),
-            clipboard_restore: None,
-            clipboard_clear_at: None,
+            clipboard: crate::ui::clipboard::ClipboardState::new(),
             last_activity: std::time::Instant::now(),
             login_failed: false,
             scroll_handle: UniformListScrollHandle::new(),
@@ -92,10 +87,7 @@ impl BitwardenApp {
                         let alive = cx.update(|cx| {
                             this.update(cx, |view, cx| {
                                 let instant = std::time::Instant::now();
-                                if crate::ui::timing::clipboard_expired(
-                                    view.clipboard_clear_at,
-                                    instant,
-                                ) {
+                                if view.clipboard.due(instant) {
                                     view.restore_clipboard(cx);
                                     cx.notify();
                                 }
@@ -136,7 +128,7 @@ impl BitwardenApp {
 
     /// Build an [`AuthConfig`] from the current lock-screen fields.
     pub(super) fn lock(&mut self, cx: &mut Context<Self>) {
-        self.restore_clipboard(cx);
+        self.clipboard.restore(cx);
         self.vault = Vault::new();
         self.audit_report = None;
         self.panel = Panel::Vault;

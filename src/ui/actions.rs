@@ -2,7 +2,7 @@
 
 use crate::settings::Settings;
 use crate::totp;
-use crate::ui::app::{BitwardenApp, CLIPBOARD_CLEAR_SECONDS};
+use crate::ui::app::BitwardenApp;
 use crate::ui::model::SettingsField;
 use gpui_kit::*;
 
@@ -36,34 +36,19 @@ impl BitwardenApp {
         }
     }
 
-    /// Copy `value` to the clipboard, remembering the previous text so it can
-    /// be restored automatically after [`CLIPBOARD_CLEAR_SECONDS`] seconds.
+    /// Copy `value` to the clipboard with automatic restoration.
     pub(super) fn copy_to_clipboard(&mut self, value: &str, cx: &mut Context<Self>) {
-        if self.clipboard_clear_at.is_none() {
-            self.clipboard_restore = cx.read_from_clipboard().and_then(|item| {
-                item.entries.into_iter().find_map(|entry| match entry {
-                    ClipboardEntry::String(text) => Some(text.text),
-                    _ => None,
-                })
-            });
-        }
-        cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
-        self.clipboard_clear_at = Some(
-            std::time::Instant::now() + std::time::Duration::from_secs(CLIPBOARD_CLEAR_SECONDS),
+        self.clipboard.copy(value, cx);
+        self.status = format!(
+            "クリップボードにコピーしました（{}秒後に復元）",
+            crate::ui::clipboard::CLEAR_SECONDS
         );
-        self.status =
-            format!("クリップボードにコピーしました（{CLIPBOARD_CLEAR_SECONDS}秒後に復元）");
         cx.notify();
     }
 
     /// Put the clipboard back the way it was before the last copy.
     pub(super) fn restore_clipboard(&mut self, cx: &mut Context<Self>) {
-        if self.clipboard_clear_at.is_none() {
-            return;
-        }
-        let previous = self.clipboard_restore.take().unwrap_or_default();
-        cx.write_to_clipboard(ClipboardItem::new_string(previous));
-        self.clipboard_clear_at = None;
+        self.clipboard.restore(cx);
     }
 
     /// Copy editable UI state back into the persistent settings object.
