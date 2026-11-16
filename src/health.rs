@@ -758,6 +758,17 @@ mod tests {
         assert!(Finding::Unnamed.message().contains("名前"));
     }
 
+    #[::core::prelude::v1::test]
+    fn insecure_uri_messages_never_include_secrets() {
+        let finding = Finding::InsecureUri {
+            uri: "http://user:token@example.com/path?key=secret".into(),
+        };
+        let message = finding.message();
+        assert!(message.contains("http://example.com"), "{message}");
+        assert!(!message.contains("token"), "{message}");
+        assert!(!message.contains("secret"), "{message}");
+    }
+
     #[test]
     fn reports_are_ordered_worst_first_then_by_name() {
         let mut high = login("1", "Zebra", "1234", "http://a.example", "");
