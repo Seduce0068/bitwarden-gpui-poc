@@ -105,13 +105,13 @@ impl BitwardenApp {
         }
         match vault_sync::import_logins(&open_vault) {
             Ok(vault) => {
-                self.vault = vault;
+                self.view.vault = vault;
                 self.screen = Screen::Unlocked;
                 self.panel = Panel::Vault;
-                self.selected_id = None;
+                self.view.selected_id = None;
                 self.status = format!(
                     "ログイン成功: {} 件のログインを読み込みました",
-                    self.vault.len()
+                    self.view.vault.len()
                 );
             }
             Err(error) => {
@@ -143,16 +143,18 @@ impl BitwardenApp {
     }
 
     pub(super) fn unlock_mock(&mut self, cx: &mut Context<Self>) {
-        self.vault = mock_vault();
+        self.view.vault = mock_vault();
         self.generator = GeneratorState::from_settings(&self.settings);
         self.refresh_audit();
         self.panel = Panel::Vault;
         self.screen = Screen::Unlocked;
-        self.selected_id = None;
-        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        self.view.selected_id = None;
+        self.view
+            .scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Top);
         self.status = format!(
             "{} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / y TOTPコピー / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",
-            self.vault.len()
+            self.view.vault.len()
         );
         cx.notify();
     }

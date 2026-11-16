@@ -1,6 +1,6 @@
 //! The main application state and GPUI wiring.
 
-use crate::health::{audit, Report};
+use crate::health::audit;
 use crate::model::{Filter, ItemData, ItemKind, SortKey, Vault, VaultItem};
 use crate::settings::Settings;
 use crate::totp;
@@ -16,14 +16,8 @@ pub struct BitwardenApp {
     pub(super) server_url: String,
     pub(super) email: String,
     pub(super) status: String,
-    pub(super) vault: Vault,
-    pub(super) filter: Filter,
-    pub(super) query: String,
-    pub(super) sort: SortKey,
-    pub(super) searching: bool,
-    pub(super) selected_id: Option<String>,
+    pub(super) view: crate::ui::vault_view::VaultViewState,
     pub(super) totp: crate::ui::totp_state::TotpState,
-    pub(super) audit_report: Option<Report>,
     pub(super) panel: Panel,
     pub(super) generator: GeneratorState,
     pub(super) settings: Settings,
@@ -31,7 +25,6 @@ pub struct BitwardenApp {
     pub(super) auth: crate::ui::auth_state::AuthState,
     pub(super) clipboard: crate::ui::clipboard::ClipboardState,
     pub(super) last_activity: std::time::Instant,
-    pub(super) scroll_handle: UniformListScrollHandle,
     pub focus_handle: FocusHandle,
 }
 
@@ -43,14 +36,8 @@ impl BitwardenApp {
             server_url: settings.server_url.clone(),
             email: settings.email.clone(),
             status: "ロック中: Enter でモック vault を開く / Esc で終了".to_string(),
-            vault: Vault::new(),
-            filter: Filter::All,
-            query: String::new(),
-            sort: SortKey::NameAsc,
-            searching: false,
-            selected_id: None,
+            view: crate::ui::vault_view::VaultViewState::new(),
             totp: crate::ui::totp_state::TotpState::new(),
-            audit_report: None,
             panel: Panel::Vault,
             generator: GeneratorState::from_settings(&settings),
             settings,
@@ -58,7 +45,6 @@ impl BitwardenApp {
             auth: crate::ui::auth_state::AuthState::new(),
             clipboard: crate::ui::clipboard::ClipboardState::new(),
             last_activity: std::time::Instant::now(),
-            scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         };
         this.start_totp_ticker(cx);
@@ -113,24 +99,26 @@ impl BitwardenApp {
 
     /// The current view, computed by the library exactly as the tests see it.
     pub(super) fn visible_items(&self) -> Vec<&VaultItem> {
-        self.vault.view(&self.filter, &self.query, self.sort)
+        self.view
+            .vault
+            .view(&self.view.filter, &self.view.query, self.view.sort)
     }
 
     /// Build an [`AuthConfig`] from the current lock-screen fields.
     pub(super) fn lock(&mut self, cx: &mut Context<Self>) {
         self.clipboard.restore(cx);
-        self.vault = Vault::new();
-        self.audit_report = None;
+        self.view.vault = Vault::new();
+        self.view.audit_report = None;
         self.panel = Panel::Vault;
         self.generator = GeneratorState::from_settings(&self.settings);
         self.editing = None;
         self.auth.clear_secrets();
         self.totp.clear();
-        self.query.clear();
-        self.filter = Filter::All;
-        self.sort = SortKey::NameAsc;
-        self.searching = false;
-        self.selected_id = None;
+        self.view.query.clear();
+        self.view.filter = Filter::All;
+        self.view.sort = SortKey::NameAsc;
+        self.view.searching = false;
+        self.view.selected_id = None;
         self.screen = Screen::Locked;
         self.last_activity = std::time::Instant::now();
         self.status = "ロックしました（Enter でモック解除）".to_string();
@@ -144,12 +132,14 @@ impl BitwardenApp {
     pub(super) fn revalidate_selection(&mut self) -> bool {
         let visible = self.visible_items();
         let valid = crate::ui::logic::selection_in_view(
-            self.selected_id.as_deref(),
+            self.view.selected_id.as_deref(),
             visible.iter().map(|item| item.id.as_str()),
         );
         if !valid {
-            self.selected_id = None;
-            self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+            self.view.selected_id = None;
+            self.view
+                .scroll_handle
+                .scroll_to_item(0, ScrollStrategy::Top);
         }
         valid
     }
@@ -160,22 +150,24 @@ impl BitwardenApp {
             return;
         }
         let current = self
+            .view
             .selected_id
             .as_deref()
             .and_then(|id| visible.iter().position(|item| item.id == id))
             .unwrap_or(0);
         let next = (current as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
         let id = visible[next].id.clone();
-        if self.selected_id.as_deref() != Some(id.as_str()) {
-            self.selected_id = Some(id);
-            self.scroll_handle
+        if self.view.selected_id.as_deref() != Some(id.as_str()) {
+            self.view.selected_id = Some(id);
+            self.view
+                .scroll_handle
                 .scroll_to_item(next, ScrollStrategy::Nearest);
             cx.notify();
         }
     }
 
     pub(super) fn cycle_filter(&mut self, cx: &mut Context<Self>) {
-        self.filter = match self.filter {
+        self.view.filter = match self.view.filter {
             Filter::All => Filter::Favorites,
             Filter::Favorites => Filter::Kind(ItemKind::Login),
             Filter::Kind(ItemKind::Login) => Filter::Kind(ItemKind::SecureNote),
@@ -185,20 +177,23 @@ impl BitwardenApp {
             Filter::Kind(ItemKind::SshKey) => Filter::NoFolder,
             Filter::NoFolder | Filter::Folder(_) => Filter::All,
         };
-        self.selected_id = None;
-        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        self.view.selected_id = None;
+        self.view
+            .scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
     }
 
     pub(super) fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self
+            .view
             .selected_id
             .clone()
             .or_else(|| self.visible_items().first().map(|item| item.id.clone()))
         else {
             return;
         };
-        if let Some(favorite) = self.vault.toggle_favorite(&id) {
+        if let Some(favorite) = self.view.vault.toggle_favorite(&id) {
             self.status = format!(
                 "お気に入りを{}にしました",
                 if favorite { "設定" } else { "解除" }
@@ -218,6 +213,7 @@ impl BitwardenApp {
         let Some((base, data)) = (|| {
             let visible = self.visible_items();
             let item = self
+                .view
                 .selected_id
                 .as_deref()
                 .and_then(|id| visible.iter().find(|item| item.id == id))
@@ -267,8 +263,8 @@ impl BitwardenApp {
 
     /// Recompute the health report with the current thresholds.
     pub(super) fn refresh_audit(&mut self) {
-        self.audit_report = Some(audit(
-            &self.vault,
+        self.view.audit_report = Some(audit(
+            &self.view.vault,
             self.settings.thresholds,
             i64::try_from(totp::now_unix()).unwrap_or(i64::MAX),
         ));

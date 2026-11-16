@@ -11,6 +11,7 @@ impl BitwardenApp {
         let secret = {
             let visible = self.visible_items();
             let Some(item) = self
+                .view
                 .selected_id
                 .as_deref()
                 .and_then(|id| visible.iter().find(|item| item.id == id))

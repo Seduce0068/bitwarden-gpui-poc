@@ -82,7 +82,7 @@ impl BitwardenApp {
                             continue;
                         };
                         let row_id = item.id.clone();
-                        let selected = this.selected_id.as_deref() == Some(row_id.as_str());
+                        let selected = this.view.selected_id.as_deref() == Some(row_id.as_str());
                         let row_bg = if selected {
                             rgb(0x45475a)
                         } else {
@@ -98,7 +98,7 @@ impl BitwardenApp {
                                 .id(index)
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     this.last_activity = std::time::Instant::now();
-                                    this.selected_id = Some(row_id.clone());
+                                    this.view.selected_id = Some(row_id.clone());
                                     cx.notify();
                                 }))
                                 .flex()
@@ -157,10 +157,10 @@ impl BitwardenApp {
                 },
             ),
         )
-        .track_scroll(&self.scroll_handle)
+        .track_scroll(&self.view.scroll_handle)
         .flex_1();
 
-        let filter_label = self.filter.label(&self.vault.folders);
+        let filter_label = self.view.filter.label(&self.view.vault.folders);
         div()
             .flex()
             .flex_col()
@@ -176,15 +176,15 @@ impl BitwardenApp {
                     .child(format!(
                         "Vault: {} / {} 件  |  フィルタ: {}  |  並び: {}  |  検索: {}{}",
                         count,
-                        self.vault.len(),
+                        self.view.vault.len(),
                         filter_label,
-                        self.sort.label(),
-                        if self.query.is_empty() {
+                        self.view.sort.label(),
+                        if self.view.query.is_empty() {
                             "(なし)"
                         } else {
-                            &self.query
+                            &self.view.query
                         },
-                        if self.searching { " _" } else { "" }
+                        if self.view.searching { " _" } else { "" }
                     )),
             )
             .child(if count == 0 {
@@ -294,7 +294,7 @@ impl Render for BitwardenApp {
                 .justify_center()
                 .child(self.render_locked(cx))
                 .into_any_element(),
-            Screen::Unlocked if self.panel == Panel::Audit => match &self.audit_report {
+            Screen::Unlocked if self.panel == Panel::Audit => match &self.view.audit_report {
                 Some(report) => audit_panel(report).into_any_element(),
                 None => self.render_unlocked(cx).into_any_element(),
             },
