@@ -65,6 +65,13 @@ cargo run
 
 Linux では Wayland/X11 と GPU ドライバが必要です（`gpui-kit` / wgpu 経由）。
 
+## CI
+
+`.github/workflows/ci.yml` から共通ワークフロー
+`Seduce0068/workflows/.github/workflows/rust-gates.yml@v1` を呼び出します。
+fmt → check → test → clippy のゲートを実行し、clippy では加えて
+`unwrap_used` / `expect_used` / `panic` を deny します。
+
 ## 既知の制約
 
 - openwarden は v0.1 の早期実装（個人 vault 向け、組織/2FA/一部 item type 未対応、roadmap 参照）

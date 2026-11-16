@@ -84,10 +84,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
 
-        let mut settings = Settings::default();
-        settings.email = "alice@example.com".to_string();
-        settings.server_url = "https://vault.example.com".to_string();
-        settings.thresholds.weak_bits = 60;
+        let settings = Settings {
+            email: "alice@example.com".to_string(),
+            server_url: "https://vault.example.com".to_string(),
+            thresholds: crate::health::Thresholds {
+                weak_bits: 60,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         settings.save(&path).expect("failed to save settings");
 
         let loaded = Settings::load(&path);
