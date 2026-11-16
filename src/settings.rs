@@ -91,15 +91,17 @@ impl core::fmt::Debug for Settings {
 }
 
 impl Settings {
-    /// Clamp timing fields to safe ranges before persisting or applying them.
-    ///
-    /// Bounds match the UI adjusters: 1..=60 minutes for idle lock, and
-    /// 1..=3600 seconds for login and clipboard delays.
+    /// Clamp editable fields to safe ranges before persisting or applying
+    /// them. Bounds match the UI adjusters: 1..=60 minutes for idle lock,
+    /// 1..=3600 seconds for login/clipboard delays, 4..=128 characters and
+    /// 2..=20 words for the generators.
     pub fn sanitized(&self) -> Self {
         let mut result = self.clone();
         result.idle_lock_seconds = result.idle_lock_seconds.clamp(60, 3600);
         result.login_timeout_seconds = result.login_timeout_seconds.clamp(1, 3600);
         result.clipboard_restore_seconds = result.clipboard_restore_seconds.clamp(1, 3600);
+        result.password_generator.length = result.password_generator.length.clamp(4, 128);
+        result.passphrase_generator.words = result.passphrase_generator.words.clamp(2, 20);
         result
     }
 
@@ -196,17 +198,27 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn sanitized_clamps_timing_fields() {
+    fn sanitized_clamps_editable_fields() {
         let settings = Settings {
             idle_lock_seconds: 0,
             login_timeout_seconds: 0,
             clipboard_restore_seconds: 10_000,
+            password_generator: crate::generator::PasswordSettings {
+                length: 5000,
+                ..Default::default()
+            },
+            passphrase_generator: crate::generator::PassphraseSettings {
+                words: 100,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let safe = settings.sanitized();
         assert_eq!(safe.idle_lock_seconds, 60);
         assert_eq!(safe.login_timeout_seconds, 1);
         assert_eq!(safe.clipboard_restore_seconds, 3600);
+        assert_eq!(safe.password_generator.length, 128);
+        assert_eq!(safe.passphrase_generator.words, 20);
         assert_eq!(settings.idle_lock_seconds, 0, "sanitized must not mutate");
     }
 
