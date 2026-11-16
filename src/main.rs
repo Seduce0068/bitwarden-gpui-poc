@@ -10,6 +10,7 @@
 use bitwarden_gpui_poc::model::{
     Filter, Folder, ItemData, ItemKind, LoginUri, SortKey, Vault, VaultItem,
 };
+use bitwarden_gpui_poc::totp::{self, Tick};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -104,13 +105,15 @@ struct BitwardenApp {
     sort: SortKey,
     searching: bool,
     selected: usize,
+    totp_secret: String,
+    totp_tick: Option<Tick>,
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
 }
 
 impl BitwardenApp {
     fn new(cx: &mut Context<Self>) -> Self {
-        Self {
+        let mut this = Self {
             screen: Screen::Locked,
             server_url: "https://vault.bitwarden.com".to_string(),
             email: String::new(),
@@ -121,9 +124,41 @@ impl BitwardenApp {
             sort: SortKey::NameAsc,
             searching: false,
             selected: 0,
+            totp_secret: String::new(),
+            totp_tick: None,
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
-        }
+        };
+        this.start_totp_ticker(cx);
+        this
+    }
+
+    /// Invalidate the cached TOTP snapshot once a second so the countdown
+    /// advances. The task ends when the view is dropped.
+    fn start_totp_ticker(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(
+            |this: gpui_kit::WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    loop {
+                        smol::Timer::after(std::time::Duration::from_secs(1)).await;
+                        let alive = cx.update(|cx| {
+                            this.update(cx, |view, cx| {
+                                if view.screen == Screen::Unlocked && !view.totp_secret.is_empty() {
+                                    view.totp_tick = None;
+                                    cx.notify();
+                                }
+                            })
+                            .is_ok()
+                        });
+                        if !alive {
+                            break;
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
     }
 
     /// The current view, computed by the library exactly as the tests see it.
@@ -145,6 +180,8 @@ impl BitwardenApp {
 
     fn lock(&mut self, cx: &mut Context<Self>) {
         self.vault = Vault::new();
+        self.totp_secret.clear();
+        self.totp_tick = None;
         self.query.clear();
         self.filter = Filter::All;
         self.sort = SortKey::NameAsc;
@@ -203,33 +240,58 @@ impl BitwardenApp {
         }
     }
 
-    fn selected_detail(&self) -> String {
-        let visible = self.visible_items();
-        let Some(item) = visible.get(self.selected.min(visible.len().saturating_sub(1))) else {
+    /// The current TOTP code for `secret`, cached within its validity period.
+    fn totp_text(&mut self, secret: &str) -> String {
+        let now = totp::now_unix();
+        let refresh = self.totp_secret != secret
+            || self
+                .totp_tick
+                .as_ref()
+                .is_none_or(|tick| !tick.is_fresh(now));
+        if refresh {
+            self.totp_secret = secret.to_string();
+            self.totp_tick = Some(Tick::sample(secret, now));
+        }
+        match self.totp_tick.as_ref().and_then(|tick| tick.code.as_ref()) {
+            Some(code) => format!("{} (あと{}秒)", code.grouped(), code.remaining()),
+            None => "コード生成失敗".to_string(),
+        }
+    }
+
+    fn selected_detail(&mut self) -> String {
+        let Some((base, data)) = (|| {
+            let visible = self.visible_items();
+            let item = visible.get(self.selected.min(visible.len().saturating_sub(1)))?;
+            Some((
+                format!(
+                    "{} | {} | 更新: {}",
+                    item.kind().label(),
+                    item.name,
+                    item.revision_date
+                ),
+                item.data.clone(),
+            ))
+        })() else {
             return "項目なし".to_string();
         };
-        let base = format!(
-            "{} | {} | 更新: {}",
-            item.kind().label(),
-            item.name,
-            item.revision_date
-        );
-        match &item.data {
+        match data {
             ItemData::Login {
                 username,
                 password,
-                totp,
+                totp: secret,
                 uris,
-            } => format!(
-                "{base} | {username} | パスワード: {}文字 | TOTP: {} | URI: {}",
-                "*".repeat(password.chars().count()),
-                if totp.trim().is_empty() {
-                    "なし"
+            } => {
+                let code = if secret.trim().is_empty() {
+                    "なし".to_string()
                 } else {
-                    "あり"
-                },
-                uris.first().map_or("なし".into(), |uri| uri.uri.clone())
-            ),
+                    self.totp_text(&secret)
+                };
+                format!(
+                    "{base} | {username} | パスワード: {}文字 | TOTP: {code} | URI: {}",
+                    "*".repeat(password.chars().count()),
+                    uris.first().map_or("なし".into(), |uri| uri.uri.clone())
+                )
+            }
             ItemData::SecureNote { text } => {
                 format!("{base} | メモ: {}文字", text.chars().count())
             }
@@ -342,7 +404,7 @@ impl BitwardenApp {
             )
     }
 
-    fn render_unlocked(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_unlocked(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.visible_items().len();
         let detail = self.selected_detail();
 
