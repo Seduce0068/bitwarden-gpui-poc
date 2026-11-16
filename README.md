@@ -97,6 +97,7 @@ clippy の `unwrap_used` / `expect_used` / `panic` deny は `Cargo.toml` の
 
 [AGPL-3.0-or-later](LICENSE)（[GNU 公式文書](https://www.gnu.org/licenses/agpl-3.0.txt)）。
 
+設計記録・レビュー結果は [docs/index.md](docs/index.md)、
 変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ## 既知の制約
