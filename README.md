@@ -14,8 +14,9 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - `src/ui/`: アプリ状態（`app.rs`）、アクション（`actions.rs`）、認証フロー
   （`auth.rs`）、クリップボード状態（`clipboard.rs`）、キー入力（`input.rs`）、
   モックデータ（`mock.rs`）、GPUI 描画（`render.rs`）、純粋判定ロジックと
-  キー分類・そのテスト（`logic.rs` / `timing.rs`）、画面状態の型（`model.rs`）、
-  パネル描画ヘルパー（`panels.rs`）
+  キー分類・そのテスト（`logic.rs` / `timing.rs`）、TOTP 表示状態
+  （`totp_state.rs`）、画面状態の型（`model.rs`）、パネル描画ヘルパー
+  （`panels.rs`）
 - `src/main.rs`: アプリケーションの起動のみ
 - 一覧のフィルタ・ソート・検索は `Vault::view()` に委譲しており、テストと同じロジックを通る
 - TOTP は実際の6桁コードを生成し、1秒ごとのカウントダウンを表示する

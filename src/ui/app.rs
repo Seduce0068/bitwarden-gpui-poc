@@ -3,7 +3,7 @@
 use crate::health::{audit, Report};
 use crate::model::{Filter, ItemData, ItemKind, SortKey, Vault, VaultItem};
 use crate::settings::Settings;
-use crate::totp::{self, Tick};
+use crate::totp;
 use crate::ui::model::{AuthField, GeneratorState, Panel, Screen, SettingsField};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -22,8 +22,7 @@ pub struct BitwardenApp {
     pub(super) sort: SortKey,
     pub(super) searching: bool,
     pub(super) selected_id: Option<String>,
-    pub(super) totp_secret: String,
-    pub(super) totp_tick: Option<Tick>,
+    pub(super) totp: crate::ui::totp_state::TotpState,
     pub(super) audit_report: Option<Report>,
     pub(super) panel: Panel,
     pub(super) generator: GeneratorState,
@@ -54,8 +53,7 @@ impl BitwardenApp {
             sort: SortKey::NameAsc,
             searching: false,
             selected_id: None,
-            totp_secret: String::new(),
-            totp_tick: None,
+            totp: crate::ui::totp_state::TotpState::new(),
             audit_report: None,
             panel: Panel::Vault,
             generator: GeneratorState::from_settings(&settings),
@@ -103,8 +101,8 @@ impl BitwardenApp {
                                         );
                                         return;
                                     }
-                                    if view.panel == Panel::Vault && !view.totp_secret.is_empty() {
-                                        view.totp_tick = None;
+                                    if view.panel == Panel::Vault && view.totp.has_secret() {
+                                        view.totp.invalidate();
                                         cx.notify();
                                     }
                                 }
@@ -138,8 +136,7 @@ impl BitwardenApp {
         self.login_failed = false;
         self.client_secret.clear();
         self.master_password.clear();
-        self.totp_secret.clear();
-        self.totp_tick = None;
+        self.totp.clear();
         self.query.clear();
         self.filter = Filter::All;
         self.sort = SortKey::NameAsc;
@@ -225,20 +222,7 @@ impl BitwardenApp {
 
     /// The current TOTP code for `secret`, cached within its validity period.
     pub(super) fn totp_text(&mut self, secret: &str) -> String {
-        let now = totp::now_unix();
-        let refresh = self.totp_secret != secret
-            || self
-                .totp_tick
-                .as_ref()
-                .is_none_or(|tick| !tick.is_fresh(now));
-        if refresh {
-            self.totp_secret = secret.to_string();
-            self.totp_tick = Some(Tick::sample(secret, now));
-        }
-        match self.totp_tick.as_ref().and_then(|tick| tick.code.as_ref()) {
-            Some(code) => format!("{} (あと{}秒)", code.grouped(), code.remaining()),
-            None => "コード生成失敗".to_string(),
-        }
+        self.totp.display(secret, totp::now_unix())
     }
 
     pub(super) fn selected_detail(&mut self) -> String {
