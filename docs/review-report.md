@@ -62,14 +62,15 @@ High の1件と、即対応可能な Medium/Low を修正した。
 - 秘密の `zeroize` 化（security #2）: 新規依存が必要なため見送り。
 - アイドル自動ロック（security #9）とクリップボード期限の単調時計化
   （security #7）は、その後のラウンドで新規依存なしに実装した。
-- メール形式検証と link-local URL 拒否（security #5 / #6）も実装した。
+- メール形式検証と link-local URL 拒否（security #5 / #6）、キャッシュの
+  Debug マスクとサーバー不一致エラーの分離（security #8 / ops #12）も実装した。
 - `selected` の ID ベース管理（arch #7）はその後のラウンドで実装した。
   `selected_id: Option<String>` と `selection_in_view()` により、
   フィルタ・ソート変更後も選択が項目に紐づく。
 - God Object の部分状態分割、UI 状態遷移の Effect パターン化、
   モジュール名衝突の解消など
-  （arch #3〜#6 / #8〜#11, security #4 / #8 / #10,
-  ops #4 / #10〜#12 / #14 / #15）:
+  （arch #3〜#6 / #8〜#11, security #4 / #10,
+  ops #4 / #10 / #11 / #14 / #15）:
   いずれも設計変更または新規依存を伴い、PoC の目的（GPUI + openwarden の
   構成検証）に直接寄与しないため見送り。
 

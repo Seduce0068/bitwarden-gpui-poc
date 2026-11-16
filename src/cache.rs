@@ -14,8 +14,10 @@ use crate::vault_sync;
 pub enum SyncCacheError {
     /// The cached body is missing or cannot be parsed.
     InvalidCache,
-    /// The cache belongs to a different account or server.
+    /// The cache belongs to a different account.
     UserMismatch,
+    /// The cache was fetched from a different server.
+    ServerMismatch,
 }
 
 impl core::fmt::Display for SyncCacheError {
@@ -27,7 +29,7 @@ impl core::fmt::Display for SyncCacheError {
 impl std::error::Error for SyncCacheError {}
 
 /// A cached sync response, still encrypted.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncCache {
     /// Schema version, so a future format change can be detected.
     pub version: u32,
@@ -37,6 +39,17 @@ pub struct SyncCache {
     pub server_url: String,
     /// Raw `/api/sync` JSON body.
     pub body: Vec<u8>,
+}
+
+impl core::fmt::Debug for SyncCache {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SyncCache")
+            .field("version", &self.version)
+            .field("user_id", &self.user_id)
+            .field("server_url", &self.server_url)
+            .field("body", &format!("<{} bytes redacted>", self.body.len()))
+            .finish()
+    }
 }
 
 impl SyncCache {
@@ -119,11 +132,15 @@ pub fn save(path: impl AsRef<std::path::Path>, cache: &SyncCache) -> Result<(), 
 ///
 /// # Errors
 ///
-/// [`SyncCacheError::UserMismatch`] when the account differs, or
+/// [`SyncCacheError::UserMismatch`] when the account differs,
+/// [`SyncCacheError::ServerMismatch`] when the server differs, or
 /// [`SyncCacheError::InvalidCache`] when the body cannot be parsed.
 pub fn validate(cache: &SyncCache, user_id: &str, server_url: &str) -> Result<(), SyncCacheError> {
-    if cache.user_id != user_id || cache.server_url != server_url {
+    if cache.user_id != user_id {
         return Err(SyncCacheError::UserMismatch);
+    }
+    if cache.server_url != server_url {
+        return Err(SyncCacheError::ServerMismatch);
     }
     cache.sync()?;
     Ok(())
@@ -134,6 +151,7 @@ pub const fn cache_error_message(error: SyncCacheError) -> &'static str {
     match error {
         SyncCacheError::InvalidCache => "キャッシュが破損しています",
         SyncCacheError::UserMismatch => "キャッシュが別のアカウントのものです",
+        SyncCacheError::ServerMismatch => "キャッシュが別のサーバーのものです",
     }
 }
 
@@ -194,8 +212,16 @@ mod tests {
         );
         assert_eq!(
             validate(&cache, "user-1", "https://other.example.com"),
-            Err(SyncCacheError::UserMismatch)
+            Err(SyncCacheError::ServerMismatch)
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn debug_never_reveals_the_body() {
+        let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(rendered.contains("redacted"), "{rendered}");
+        assert!(!rendered.contains("ciphers"), "{rendered}");
     }
 
     #[test]
@@ -230,5 +256,6 @@ mod tests {
     fn error_messages_are_present() {
         assert!(!cache_error_message(SyncCacheError::InvalidCache).is_empty());
         assert!(!cache_error_message(SyncCacheError::UserMismatch).is_empty());
+        assert!(!cache_error_message(SyncCacheError::ServerMismatch).is_empty());
     }
 }
