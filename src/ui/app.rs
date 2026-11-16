@@ -1,6 +1,5 @@
 //! The main application state and GPUI wiring.
 
-use crate::auth::{authenticate, validate_config, AuthConfig};
 use crate::health::{audit, Report};
 use crate::model::{
     CardData, Filter, Folder, IdentityData, ItemData, ItemKind, LoginUri, SortKey, SshKeyData,
@@ -9,16 +8,14 @@ use crate::model::{
 use crate::settings::Settings;
 use crate::totp::{self, Tick};
 use crate::ui::model::{AuthField, GeneratorState, Panel, Screen, SettingsField};
-use crate::vault_sync;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use openwarden::{SecretString, Vault as OpenVault};
 
 /// Seconds before a copied secret is restored to the previous clipboard value.
 const CLIPBOARD_CLEAR_SECONDS: u64 = 30;
 
 /// A small personal vault used until real sync is wired up.
-fn mock_vault() -> Vault {
+pub(super) fn mock_vault() -> Vault {
     fn login(
         id: &str,
         name: &str,
@@ -239,157 +236,6 @@ impl BitwardenApp {
     }
 
     /// Build an [`AuthConfig`] from the current lock-screen fields.
-    pub(super) fn auth_config(&self) -> AuthConfig {
-        AuthConfig {
-            server_url: self.server_url.clone(),
-            client_id: self.client_id.clone(),
-            client_secret: SecretString::from(self.client_secret.clone()),
-            email: self.email.clone(),
-            master_password: SecretString::from(self.master_password.clone()),
-        }
-    }
-
-    /// Validate entered credentials before opening the demo vault. Real
-    /// network login is still handled by `auth::authenticate` and is not
-    /// wired to this button yet.
-    pub(super) fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
-        let config = self.auth_config();
-        let has_credentials = !self.client_id.is_empty()
-            || !self.client_secret.is_empty()
-            || !self.master_password.is_empty();
-        if !has_credentials {
-            self.unlock_mock(cx);
-            return;
-        }
-        if let Err(error) = validate_config(&config) {
-            self.status = error.message().to_string();
-            cx.notify();
-            return;
-        }
-        self.login_failed = false;
-        self.status = "ログイン中…".to_string();
-        cx.notify();
-        // A fixed identifier is enough for the PoC; a real installation would
-        // persist a UUID in Settings.
-        let device_id = "bitwarden-gpui-poc-install".to_string();
-        cx.spawn(
-            |this: gpui_kit::WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
-                let cx = cx.clone();
-                async move {
-                    let result = authenticate(&config, &device_id).await;
-                    cx.update(|cx| {
-                        this.update(cx, |view, cx| view.finish_login(result, cx))
-                            .ok();
-                    });
-                }
-            },
-        )
-        .detach();
-    }
-
-    /// Apply the result of an asynchronous login on the UI thread.
-    pub(super) fn finish_login(
-        &mut self,
-        result: Result<crate::auth::AuthenticatedVault, crate::auth::AuthError>,
-        cx: &mut Context<Self>,
-    ) {
-        let authenticated = match result {
-            Ok(value) => value,
-            Err(error) => {
-                self.login_failed = true;
-                self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
-                cx.notify();
-                return;
-            }
-        };
-        let protected_key = authenticated
-            .session
-            .protected_key()
-            .unwrap_or("")
-            .to_string();
-        if protected_key.is_empty() {
-            self.status = "ログイン失敗: 復号キーが応答にありません".to_string();
-            cx.notify();
-            return;
-        }
-        let kdf = authenticated.session.kdf();
-        let mut open_vault = match OpenVault::unlock(&authenticated.master_key, &protected_key, kdf)
-        {
-            Ok(vault) => vault,
-            Err(error) => {
-                self.status = format!("ログイン失敗: 復号キーを取得できません（{error}）");
-                cx.notify();
-                return;
-            }
-        };
-        if let Err(error) = open_vault.apply_sync(authenticated.sync) {
-            self.status = format!("ログイン失敗: 同期データを取り込めません（{error}）");
-            cx.notify();
-            return;
-        }
-        match vault_sync::import_logins(&open_vault) {
-            Ok(vault) => {
-                self.vault = vault;
-                self.screen = Screen::Unlocked;
-                self.panel = Panel::Vault;
-                self.selected = 0;
-                self.status = format!(
-                    "ログイン成功: {} 件のログインを読み込みました",
-                    self.vault.len()
-                );
-            }
-            Err(error) => self.status = format!("vault 変換失敗: {}", error.message()),
-        }
-        cx.notify();
-    }
-
-    pub(super) fn edit_auth_field(&mut self, character: char) {
-        match self.auth_field {
-            Some(AuthField::ServerUrl) => self.server_url.push(character),
-            Some(AuthField::Email) => self.email.push(character),
-            Some(AuthField::ClientId) => self.client_id.push(character),
-            Some(AuthField::ClientSecret) => self.client_secret.push(character),
-            Some(AuthField::MasterPassword) => self.master_password.push(character),
-            None => {}
-        }
-    }
-
-    pub(super) fn backspace_auth_field(&mut self) {
-        match self.auth_field {
-            Some(AuthField::ServerUrl) => {
-                self.server_url.pop();
-            }
-            Some(AuthField::Email) => {
-                self.email.pop();
-            }
-            Some(AuthField::ClientId) => {
-                self.client_id.pop();
-            }
-            Some(AuthField::ClientSecret) => {
-                self.client_secret.pop();
-            }
-            Some(AuthField::MasterPassword) => {
-                self.master_password.pop();
-            }
-            None => {}
-        }
-    }
-
-    pub(super) fn unlock_mock(&mut self, cx: &mut Context<Self>) {
-        self.vault = mock_vault();
-        self.generator = GeneratorState::from_settings(&self.settings);
-        self.refresh_audit();
-        self.panel = Panel::Vault;
-        self.screen = Screen::Unlocked;
-        self.selected = 0;
-        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
-        self.status = format!(
-            "{} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / y TOTPコピー / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",
-            self.vault.len()
-        );
-        cx.notify();
-    }
-
     pub(super) fn lock(&mut self, cx: &mut Context<Self>) {
         self.restore_clipboard(cx);
         self.vault = Vault::new();
