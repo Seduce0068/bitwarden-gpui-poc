@@ -7,6 +7,9 @@
 
 #![forbid(unsafe_code)]
 
+use bitwarden_gpui_poc::generator::{
+    passphrase_entropy, password_entropy, PassphraseSettings, PasswordSettings, Strength,
+};
 use bitwarden_gpui_poc::health::{audit, Report, Severity, Thresholds};
 use bitwarden_gpui_poc::model::{
     Filter, Folder, ItemData, ItemKind, LoginUri, SortKey, Vault, VaultItem,
@@ -95,6 +98,23 @@ enum Screen {
     Unlocked,
 }
 
+/// Which panel occupies the main area while unlocked.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Panel {
+    Vault,
+    Audit,
+    Generator,
+}
+
+/// Editable generator settings and the last values drawn from them.
+#[derive(Clone, Debug, Default)]
+struct GeneratorState {
+    password: PasswordSettings,
+    passphrase: PassphraseSettings,
+    last_password: Option<String>,
+    last_passphrase: Option<String>,
+}
+
 struct BitwardenApp {
     screen: Screen,
     server_url: String,
@@ -109,7 +129,8 @@ struct BitwardenApp {
     totp_secret: String,
     totp_tick: Option<Tick>,
     audit_report: Option<Report>,
-    show_audit: bool,
+    panel: Panel,
+    generator: GeneratorState,
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
 }
@@ -130,7 +151,8 @@ impl BitwardenApp {
             totp_secret: String::new(),
             totp_tick: None,
             audit_report: None,
-            show_audit: false,
+            panel: Panel::Vault,
+            generator: GeneratorState::default(),
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -150,7 +172,7 @@ impl BitwardenApp {
                         let alive = cx.update(|cx| {
                             this.update(cx, |view, cx| {
                                 if view.screen == Screen::Unlocked
-                                    && !view.show_audit
+                                    && view.panel == Panel::Vault
                                     && !view.totp_secret.is_empty()
                                 {
                                     view.totp_tick = None;
@@ -181,12 +203,12 @@ impl BitwardenApp {
             Thresholds::default(),
             i64::try_from(totp::now_unix()).unwrap_or(i64::MAX),
         ));
-        self.show_audit = false;
+        self.panel = Panel::Vault;
         self.screen = Screen::Unlocked;
         self.selected = 0;
         self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         self.status = format!(
-            "同期済み（モック）: {} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / g 監査 / l ロック / Esc 終了",
+            "同期済み（モック）: {} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / g 監査 / n 生成 / l ロック / Esc 終了",
             self.vault.len()
         );
         cx.notify();
@@ -195,7 +217,8 @@ impl BitwardenApp {
     fn lock(&mut self, cx: &mut Context<Self>) {
         self.vault = Vault::new();
         self.audit_report = None;
-        self.show_audit = false;
+        self.panel = Panel::Vault;
+        self.generator = GeneratorState::default();
         self.totp_secret.clear();
         self.totp_tick = None;
         self.query.clear();
@@ -321,6 +344,59 @@ impl BitwardenApp {
         }
     }
 
+    fn generate_password(&mut self, cx: &mut Context<Self>) {
+        match self.generator.password.generate() {
+            Ok(value) => {
+                self.generator.last_password = Some(value);
+                self.status = "パスワードを生成しました".to_string();
+            }
+            Err(error) => self.status = error.message().to_string(),
+        }
+        cx.notify();
+    }
+
+    fn generate_passphrase(&mut self, cx: &mut Context<Self>) {
+        match self.generator.passphrase.generate() {
+            Ok(value) => {
+                self.generator.last_passphrase = Some(value);
+                self.status = "パスフレーズを生成しました".to_string();
+            }
+            Err(error) => self.status = error.message().to_string(),
+        }
+        cx.notify();
+    }
+
+    fn toggle_generator(&mut self, key: &str, cx: &mut Context<Self>) {
+        let state = &mut self.generator;
+        match key {
+            "1" => state.password.lowercase = !state.password.lowercase,
+            "2" => state.password.uppercase = !state.password.uppercase,
+            "3" => state.password.digits = !state.password.digits,
+            "4" => state.password.symbols = !state.password.symbols,
+            "5" => state.password.avoid_ambiguous = !state.password.avoid_ambiguous,
+            "6" => state.passphrase.capitalize = !state.passphrase.capitalize,
+            "7" => state.passphrase.include_number = !state.passphrase.include_number,
+            "+" | "=" => {
+                state.password.length = (state.password.length + 1).min(128);
+                state.passphrase.words = (state.passphrase.words + 1).min(20);
+            }
+            "-" | "_" => {
+                state.password.length = state.password.length.saturating_sub(1).max(4);
+                state.passphrase.words = state.passphrase.words.saturating_sub(1).max(2);
+            }
+            "," => {
+                state.passphrase.separator = match state.passphrase.separator.as_str() {
+                    "-" => ".".into(),
+                    "." => "_".into(),
+                    "_" => String::new(),
+                    _ => "-".into(),
+                };
+            }
+            _ => return,
+        }
+        cx.notify();
+    }
+
     fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         match self.screen {
             Screen::Locked => match event.keystroke.key.as_str() {
@@ -350,15 +426,29 @@ impl BitwardenApp {
                     }
                     return;
                 }
-                if self.show_audit {
+                if self.panel == Panel::Audit {
                     match key {
                         "escape" => cx.quit(),
                         "g" => {
-                            self.show_audit = false;
+                            self.panel = Panel::Vault;
                             cx.notify();
                         }
                         "l" => self.lock(cx),
                         _ => {}
+                    }
+                    return;
+                }
+                if self.panel == Panel::Generator {
+                    match key {
+                        "escape" => cx.quit(),
+                        "n" => {
+                            self.panel = Panel::Vault;
+                            cx.notify();
+                        }
+                        "l" => self.lock(cx),
+                        "p" => self.generate_password(cx),
+                        "h" => self.generate_passphrase(cx),
+                        value => self.toggle_generator(value, cx),
                     }
                     return;
                 }
@@ -375,7 +465,11 @@ impl BitwardenApp {
                     }
                     "f" => self.toggle_favorite(cx),
                     "g" if self.audit_report.is_some() => {
-                        self.show_audit = true;
+                        self.panel = Panel::Audit;
+                        cx.notify();
+                    }
+                    "n" => {
+                        self.panel = Panel::Generator;
                         cx.notify();
                     }
                     "/" => {
@@ -634,6 +728,97 @@ fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
     panel
 }
 
+fn setting_row<'a>(label: &'a str, enabled: bool) -> impl IntoElement + 'a {
+    div()
+        .flex()
+        .gap_3()
+        .text_sm()
+        .child(div().w(px(170.0)).child(label.to_string()))
+        .child(
+            div()
+                .text_color(if enabled {
+                    rgb(0xa6e3a1)
+                } else {
+                    rgb(0x6c7086)
+                })
+                .child(if enabled { "ON" } else { "OFF" }),
+        )
+}
+
+fn result_row<'a>(label: &'a str, value: Option<&'a str>) -> impl IntoElement + 'a {
+    div()
+        .flex()
+        .gap_3()
+        .text_sm()
+        .child(
+            div()
+                .w(px(170.0))
+                .text_color(rgb(0x89b4fa))
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .font_weight(FontWeight::BOLD)
+                .child(value.unwrap_or("(未生成)").to_string()),
+        )
+}
+
+fn generator_panel<'a>(state: &'a GeneratorState) -> impl IntoElement + 'a {
+    let password = &state.password;
+    let passphrase = &state.passphrase;
+    let pw_bits = password_entropy(password);
+    let pp_bits = passphrase_entropy(passphrase);
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_4()
+        .flex_1()
+        .child(
+            div()
+                .text_lg()
+                .font_weight(FontWeight::BOLD)
+                .child("パスワード生成"),
+        )
+        .child(setting_row("1  小文字 a-z", password.lowercase))
+        .child(setting_row("2  大文字 A-Z", password.uppercase))
+        .child(setting_row("3  数字 0-9", password.digits))
+        .child(setting_row("4  記号 !@#$%^&*", password.symbols))
+        .child(setting_row("5  曖昧文字を除外", password.avoid_ambiguous))
+        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
+            "+/-  長さ: {}  |  強度: {} ({:.0} bit)",
+            password.length,
+            Strength::from_bits(pw_bits).label(),
+            pw_bits
+        )))
+        .child(result_row("p  生成", state.last_password.as_deref()))
+        .child(
+            div()
+                .mt_4()
+                .text_lg()
+                .font_weight(FontWeight::BOLD)
+                .child("パスフレーズ生成"),
+        )
+        .child(setting_row("6  先頭を大文字に", passphrase.capitalize))
+        .child(setting_row("7  数字を追加", passphrase.include_number))
+        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
+            "+/-  単語数: {}  |  ,  区切り: {:?}  |  強度: {} ({:.0} bit)",
+            passphrase.words,
+            passphrase.separator,
+            Strength::from_bits(pp_bits).label(),
+            pp_bits
+        )))
+        .child(result_row("h  生成", state.last_passphrase.as_deref()))
+        .child(
+            div()
+                .mt_4()
+                .text_xs()
+                .text_color(rgb(0x6c7086))
+                .child("n: 一覧に戻る / l: ロック / Esc: 終了"),
+        )
+}
+
 fn info_row(label: &str, value: &str) -> impl IntoElement {
     div()
         .flex()
@@ -680,10 +865,13 @@ impl Render for BitwardenApp {
                 .justify_center()
                 .child(self.render_locked(cx))
                 .into_any_element(),
-            Screen::Unlocked if self.show_audit => match &self.audit_report {
+            Screen::Unlocked if self.panel == Panel::Audit => match &self.audit_report {
                 Some(report) => audit_panel(report).into_any_element(),
                 None => self.render_unlocked(cx).into_any_element(),
             },
+            Screen::Unlocked if self.panel == Panel::Generator => {
+                generator_panel(&self.generator).into_any_element()
+            }
             Screen::Unlocked => self.render_unlocked(cx).into_any_element(),
         };
 
