@@ -64,7 +64,7 @@ High の1件と、即対応可能な Medium/Low を修正した。
 - 認証情報なしでモック解除できる経路（security #4）は `m` キーに分離し、
   `Enter` を実認証専用にした。
 - README への MSRV 記載と gpui-kit 固定理由の記録（ops #14 / #15）、
-  clippy 設定の一元化（ops #11）も対応した。
+  clippy 設定の一元化（ops #11）、LICENSE の追加も対応した。
 - 構造化ログ・メトリクスの導入（ops #2）: 新規依存 `tracing` が必要で、
   事前承認が必要になるため今回は見送り。「未実装」を README に追記した。
 - 秘密の `zeroize` 化（security #2）: 新規依存が必要なため見送り。
