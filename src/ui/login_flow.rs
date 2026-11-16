@@ -1,6 +1,6 @@
 //! Authentication flow helpers on the app state.
 
-use crate::auth::{authenticate, validate_config, AuthConfig};
+use crate::auth::{validate_config, AuthConfig};
 use crate::ui::app::BitwardenApp;
 use crate::ui::mock::mock_vault;
 use crate::ui::state::{AuthField, GeneratorState, Panel, Screen};
@@ -35,11 +35,13 @@ impl BitwardenApp {
         // A fixed identifier is enough for the PoC; a real installation would
         // persist a UUID in Settings.
         let device_id = "bitwarden-gpui-poc-install".to_string();
+        let timeout = std::time::Duration::from_secs(self.settings.login_timeout_seconds);
         cx.spawn(
-            |this: gpui_kit::WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
+            move |this: gpui_kit::WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
                 let cx = cx.clone();
                 async move {
-                    let result = authenticate(&config, &device_id).await;
+                    let result =
+                        crate::auth::authenticate_with_timeout(&config, &device_id, timeout).await;
                     cx.update(|cx| {
                         this.update(cx, |view, cx| view.finish_login(result, cx))
                             .ok();
