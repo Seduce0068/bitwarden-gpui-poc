@@ -244,7 +244,8 @@ impl BitwardenApp {
                 format!(
                     "{base} | {username} | パスワード: {}文字 | TOTP: {code} | URI: {}",
                     "*".repeat(password.chars().count()),
-                    uris.first().map_or("なし".into(), |uri| uri.uri.clone())
+                    uris.first()
+                        .map_or("なし".into(), |uri| { crate::model::mask_uri(&uri.uri) })
                 )
             }
             ItemData::SecureNote { text } => {

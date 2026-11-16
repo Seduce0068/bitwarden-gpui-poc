@@ -54,7 +54,9 @@ impl Finding {
             Self::WeakPassword { bits } => format!("弱いパスワード（推定 {bits} bit）"),
             Self::ReusedPassword { count } => format!("{count} 件で同じパスワードを再利用"),
             Self::Stale { days } => format!("{days} 日以上更新されていない"),
-            Self::InsecureUri { uri } => format!("http の URI（{uri}）"),
+            Self::InsecureUri { uri } => {
+                format!("http の URI（{}）", crate::model::mask_uri(uri))
+            }
             Self::NoTotp => "TOTP 未設定".to_string(),
             Self::NoUri => "URI 未設定".to_string(),
             Self::Unnamed => "名前が空".to_string(),
