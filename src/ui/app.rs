@@ -1,6 +1,5 @@
 //! The main application state and GPUI wiring.
 
-use crate::health::audit;
 use crate::model::{Filter, ItemData, ItemKind, SortKey, Vault, VaultItem};
 use crate::settings::Settings;
 use crate::totp;
@@ -263,7 +262,7 @@ impl BitwardenApp {
 
     /// Recompute the health report with the current thresholds.
     pub(super) fn refresh_audit(&mut self) {
-        self.view.audit_report = Some(audit(
+        self.view.audit_report = Some(crate::ui::logic::compute_audit(
             &self.view.vault,
             self.settings.thresholds,
             i64::try_from(totp::now_unix()).unwrap_or(i64::MAX),

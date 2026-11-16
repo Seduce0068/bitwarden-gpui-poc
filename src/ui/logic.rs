@@ -1,6 +1,7 @@
 //! Pure UI predicates that can be tested without a GPUI window.
 
-use crate::health::Thresholds;
+use crate::health::{audit, Report, Thresholds};
+use crate::model::Vault;
 use crate::ui::state::{AuthField, GeneratorState, Panel, Screen, SettingsField};
 
 /// Whether the lock screen has enough credential input to attempt a login.
@@ -23,6 +24,13 @@ pub fn selection_in_view<'a>(
         None => true,
         Some(id) => ids.into_iter().any(|candidate| candidate == id),
     }
+}
+
+/// Run the vault health audit with an explicit clock value.
+///
+/// Keeping the clock as a parameter makes the audit reproducible in tests.
+pub fn compute_audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
+    audit(vault, thresholds, now)
 }
 
 /// Apply a generator-panel key to its settings.
@@ -315,6 +323,17 @@ mod tests {
         assert!(selection_in_view(Some("2"), ids));
         assert!(!selection_in_view(Some("4"), ids));
         assert!(!selection_in_view(Some("1"), []));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_is_deterministic_for_a_given_clock() {
+        let vault = Vault::new();
+        let thresholds = Thresholds::default();
+        let first = compute_audit(&vault, thresholds, 1_700_000_000);
+        let second = compute_audit(&vault, thresholds, 1_700_000_000);
+        assert_eq!(first, second);
+        assert_eq!(first.examined, 0);
+        assert!(first.items.is_empty());
     }
 
     #[::core::prelude::v1::test]
