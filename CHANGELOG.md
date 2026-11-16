@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.44] - 2026-11-17
+
 ### 生成値のマスキング
 
 - `GeneratorState` の `Debug` から生成済みパスワード / passphrase を除外
