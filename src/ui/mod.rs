@@ -3,6 +3,7 @@
 pub mod actions;
 pub mod app;
 pub mod auth;
+pub mod auth_state;
 pub mod clipboard;
 pub mod input;
 pub mod logic;

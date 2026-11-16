@@ -12,7 +12,8 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 
 - `src/lib.rs`: vault モデル、パスワード / passphrase 生成、TOTP（RFC 6238）、健全性監査、設定の永続化を提供。すべて単体テスト付き
 - `src/ui/`: アプリ状態（`app.rs`）、アクション（`actions.rs`）、認証フロー
-  （`auth.rs`）、クリップボード状態（`clipboard.rs`）、キー入力（`input.rs`）、
+  （`auth.rs`）と認証状態（`auth_state.rs`）、クリップボード状態
+  （`clipboard.rs`）、キー入力（`input.rs`）、
   モックデータ（`mock.rs`）、GPUI 描画（`render.rs`）、純粋判定ロジックと
   キー分類・そのテスト（`logic.rs` / `timing.rs`）、TOTP 表示状態
   （`totp_state.rs`）、画面状態の型（`model.rs`）、パネル描画ヘルパー
