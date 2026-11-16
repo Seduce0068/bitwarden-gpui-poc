@@ -108,6 +108,11 @@ mod tests {
         let debug = format!("{state:?}");
         assert!(!debug.contains("generated-password"), "{debug}");
         assert!(!debug.contains("correct-horse-battery"), "{debug}");
-        assert!(debug.contains("[redacted]"), "{debug}");
+        assert_eq!(debug.matches("[redacted]").count(), 2, "{debug}");
+
+        let empty = GeneratorState::default();
+        let debug = format!("{empty:?}");
+        assert!(!debug.contains("[redacted]"), "{debug}");
+        assert!(debug.contains("None"), "{debug}");
     }
 }
