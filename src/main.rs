@@ -20,6 +20,7 @@ use bitwarden_gpui_poc::settings::Settings;
 use bitwarden_gpui_poc::totp::{self, Tick};
 use bitwarden_gpui_poc::vault_sync;
 use gpui_kit::prelude::*;
+use gpui_kit::StatefulInteractiveElement;
 use gpui_kit::*;
 use openwarden::{SecretString, Vault as OpenVault};
 
@@ -997,7 +998,7 @@ impl BitwardenApp {
             "vault-items",
             count,
             cx.processor(
-                move |this: &mut Self, range: std::ops::Range<usize>, _window, _cx| {
+                move |this: &mut Self, range: std::ops::Range<usize>, _window, cx| {
                     let visible = this.visible_items();
                     let mut rows = Vec::with_capacity(range.len());
                     for index in range {
@@ -1018,6 +1019,10 @@ impl BitwardenApp {
                         rows.push(
                             div()
                                 .id(index)
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.selected = index;
+                                    cx.notify();
+                                }))
                                 .flex()
                                 .items_center()
                                 .gap_3()
@@ -1345,6 +1350,29 @@ fn settings_panel<'a>(app: &'a BitwardenApp) -> impl IntoElement + 'a {
         ))
 }
 
+fn panel_button(
+    label: &str,
+    panel: Panel,
+    current: Panel,
+    cx: &mut Context<BitwardenApp>,
+) -> AnyElement {
+    let active = panel == current;
+    div()
+        .id(SharedString::from(format!("panel-button-{label}")))
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(if active { rgb(0x45475a) } else { rgb(0x313244) })
+        .text_color(if active { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
+        .text_xs()
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.panel = panel;
+            cx.notify();
+        }))
+        .child(label.to_string())
+        .into_any_element()
+}
+
 fn auth_row<'a>(
     label: &'a str,
     value: &'a str,
@@ -1401,12 +1429,22 @@ impl Render for BitwardenApp {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Bitwarden GPUI PoC"),
             )
-            .child(
+            .child(if self.screen == Screen::Unlocked {
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(panel_button("[一覧]", Panel::Vault, self.panel, cx))
+                    .child(panel_button("[監査]", Panel::Audit, self.panel, cx))
+                    .child(panel_button("[生成]", Panel::Generator, self.panel, cx))
+                    .child(panel_button("[設定]", Panel::Settings, self.panel, cx))
+                    .into_any_element()
+            } else {
                 div()
                     .text_xs()
                     .text_color(rgb(0x6c7086))
-                    .child("gpui-kit 0.9.1 + model::Vault"),
-            );
+                    .child("gpui-kit 0.9.1 + model::Vault")
+                    .into_any_element()
+            });
 
         let body = match self.screen {
             Screen::Locked => div()
