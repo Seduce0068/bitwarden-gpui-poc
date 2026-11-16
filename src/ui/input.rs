@@ -5,7 +5,7 @@
 
 use crate::ui::app::BitwardenApp;
 use crate::ui::logic::{classify_key, KeyAction, KeyContext};
-use crate::ui::model::Panel;
+use crate::ui::state::Panel;
 use gpui_kit::*;
 
 impl BitwardenApp {

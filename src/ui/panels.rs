@@ -6,7 +6,7 @@ use gpui_kit::*;
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
 use crate::health::{Report, Severity};
 use crate::settings::Settings;
-use crate::ui::model::{GeneratorState, Panel, SettingsField};
+use crate::ui::state::{GeneratorState, Panel, SettingsField};
 
 pub fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
     let mut panel = div()

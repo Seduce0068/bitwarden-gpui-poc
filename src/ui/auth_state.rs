@@ -1,7 +1,7 @@
 //! Lock-screen credential state, independent of GPUI types.
 
 use crate::ui::logic::has_credentials;
-use crate::ui::model::AuthField;
+use crate::ui::state::AuthField;
 
 /// Credentials entered on the lock screen and the active edit field.
 #[derive(Default)]

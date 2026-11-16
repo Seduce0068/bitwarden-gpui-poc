@@ -1,8 +1,8 @@
 //! GPUI render implementations for the app.
 
 use crate::ui::app::BitwardenApp;
-use crate::ui::model::{AuthField, Panel, Screen};
 use crate::ui::panels::{audit_panel, auth_row, generator_panel, panel_button, settings_panel};
+use crate::ui::state::{AuthField, Panel, Screen};
 use gpui_kit::prelude::*;
 use gpui_kit::StatefulInteractiveElement;
 use gpui_kit::*;
