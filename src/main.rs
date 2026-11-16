@@ -444,7 +444,7 @@ impl BitwardenApp {
         self.selected = 0;
         self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         self.status = format!(
-            "同期済み（モック）: {} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",
+            "{} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / y TOTPコピー / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",
             self.vault.len()
         );
         cx.notify();
@@ -582,6 +582,31 @@ impl BitwardenApp {
             ),
             ItemData::Identity(identity) => format!("{base} | {}", identity.email),
             ItemData::SshKey(key) => format!("{base} | {}", key.fingerprint),
+        }
+    }
+
+    /// Copy the selected item's current TOTP code, if it has one.
+    fn copy_totp(&mut self, cx: &mut Context<Self>) {
+        let secret = {
+            let visible = self.visible_items();
+            let Some(item) = visible.get(self.selected.min(visible.len().saturating_sub(1))) else {
+                self.status = "項目が選択されていません".to_string();
+                cx.notify();
+                return;
+            };
+            item.totp_secret().unwrap_or("").to_string()
+        };
+        if secret.trim().is_empty() {
+            self.status = "この項目には TOTP が設定されていません".to_string();
+            cx.notify();
+            return;
+        }
+        match totp::code_at(&secret, totp::now_unix()) {
+            Ok(code) => self.copy_to_clipboard(code.code(), cx),
+            Err(error) => {
+                self.status = error.message().to_string();
+                cx.notify();
+            }
         }
     }
 
@@ -876,6 +901,7 @@ impl BitwardenApp {
                         cx.notify();
                     }
                     "f" => self.toggle_favorite(cx),
+                    "y" => self.copy_totp(cx),
                     "g" if self.audit_report.is_some() => {
                         self.panel = Panel::Audit;
                         cx.notify();
