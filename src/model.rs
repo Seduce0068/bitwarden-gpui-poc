@@ -620,6 +620,16 @@ mod tests {
         assert_eq!(mask_uri("not a url"), "(不正な URI)");
     }
 
+    #[test]
+    fn mask_uri_handles_ipv6_and_credentials() {
+        assert_eq!(mask_uri("https://[::1]:8443/path"), "https://[::1]:8443");
+        assert_eq!(
+            mask_uri("https://user:token@[2001:db8::1]/secret"),
+            "https://[2001:db8::1]"
+        );
+        assert_eq!(mask_uri("ftp://example.com/x"), "ftp://example.com");
+    }
+
     fn login(id: &str, name: &str, username: &str, password: &str, uri: &str) -> VaultItem {
         VaultItem::new(
             id,
