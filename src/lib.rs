@@ -19,3 +19,4 @@ pub mod settings;
 pub mod totp;
 pub mod ui;
 pub mod vault_sync;
+pub mod words;

@@ -19,6 +19,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   キー分類・そのテスト（`keys.rs`）、時刻判定（`timing.rs`）、TOTP 表示状態
   （`totp_state.rs`）、画面状態の型（`state.rs`）、パネル描画ヘルパー
   （`panels.rs`）
+- `src/words.rs`: passphrase 用の単語リスト
 - `src/main.rs`: アプリケーションの起動のみ
 - 一覧のフィルタ・ソート・検索は `Vault::view()` に委譲しており、テストと同じロジックを通る
 - TOTP は実際の6桁コードを生成し、1秒ごとのカウントダウンを表示する
