@@ -110,11 +110,56 @@ pub fn default_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("sync-cache.json"))
 }
 
+/// Why a cache entry could not be loaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheLoadError {
+    /// The cache file does not exist yet.
+    NotFound,
+    /// The file exists but could not be read.
+    ReadFailed,
+    /// The file exists but is not valid cache JSON.
+    ParseFailed,
+    /// The cache was written by an incompatible version.
+    VersionMismatch,
+}
+
+impl CacheLoadError {
+    /// A message for the UI status bar.
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::NotFound => "キャッシュが未作成です",
+            Self::ReadFailed => "キャッシュを読み込めません",
+            Self::ParseFailed => "キャッシュが破損しています",
+            Self::VersionMismatch => "キャッシュのバージョンが古いです",
+        }
+    }
+}
+
+/// Read a cache entry, distinguishing missing, unreadable, malformed and
+/// outdated files.
+///
+/// # Errors
+///
+/// [`CacheLoadError`] when the file cannot be used as a cache.
+pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<SyncCache, CacheLoadError> {
+    let contents = std::fs::read(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            CacheLoadError::NotFound
+        } else {
+            CacheLoadError::ReadFailed
+        }
+    })?;
+    let cache: SyncCache =
+        serde_json::from_slice(&contents).map_err(|_| CacheLoadError::ParseFailed)?;
+    if cache.version != SyncCache::VERSION {
+        return Err(CacheLoadError::VersionMismatch);
+    }
+    Ok(cache)
+}
+
 /// Read a cache entry, returning `None` when missing or unreadable.
 pub fn load(path: impl AsRef<std::path::Path>) -> Option<SyncCache> {
-    let contents = std::fs::read(path).ok()?;
-    let cache: SyncCache = serde_json::from_slice(&contents).ok()?;
-    (cache.version == SyncCache::VERSION).then_some(cache)
+    load_detailed(path).ok()
 }
 
 /// Write a cache entry.
@@ -191,6 +236,41 @@ mod tests {
         let path = std::env::temp_dir().join("bitwarden-gpui-poc-broken-cache.json");
         std::fs::write(&path, b"not json").unwrap();
         assert!(load(&path).is_none());
+    }
+
+    #[::core::prelude::v1::test]
+    fn load_detailed_distinguishes_failure_modes() {
+        let missing = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-missing.json");
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(
+            load_detailed(&missing).err(),
+            Some(CacheLoadError::NotFound)
+        );
+
+        let broken = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-broken.json");
+        std::fs::write(&broken, b"not json").unwrap();
+        assert_eq!(
+            load_detailed(&broken).err(),
+            Some(CacheLoadError::ParseFailed)
+        );
+
+        let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+        cache.version += 1;
+        let outdated = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-old.json");
+        save(&outdated, &cache).unwrap();
+        assert_eq!(
+            load_detailed(&outdated).err(),
+            Some(CacheLoadError::VersionMismatch)
+        );
+
+        for error in [
+            CacheLoadError::NotFound,
+            CacheLoadError::ReadFailed,
+            CacheLoadError::ParseFailed,
+            CacheLoadError::VersionMismatch,
+        ] {
+            assert!(!error.message().is_empty());
+        }
     }
 
     #[test]
