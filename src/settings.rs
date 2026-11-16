@@ -37,18 +37,54 @@ impl Default for Settings {
     }
 }
 
+/// Why settings could not be loaded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettingsLoadError {
+    /// The file does not exist yet; defaults are expected on first launch.
+    NotFound,
+    /// The file exists but could not be read.
+    ReadFailed,
+    /// The file exists but is not valid settings JSON.
+    ParseFailed,
+}
+
+impl SettingsLoadError {
+    /// A message for the UI status bar.
+    pub const fn message(&self) -> &'static str {
+        match self {
+            Self::NotFound => "設定ファイルが未作成です（既定値を使用）",
+            Self::ReadFailed => "設定ファイルを読み込めません（既定値を使用）",
+            Self::ParseFailed => "設定ファイルが破損しています（既定値を使用）",
+        }
+    }
+}
+
 impl Settings {
     /// The default config file path.
     pub fn default_path() -> Option<PathBuf> {
         dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("settings.json"))
     }
 
+    /// Load settings from `path`, distinguishing missing, unreadable and
+    /// malformed files.
+    ///
+    /// # Errors
+    ///
+    /// [`SettingsLoadError`] when the file cannot be used as settings.
+    pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<Self, SettingsLoadError> {
+        let contents = std::fs::read_to_string(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                SettingsLoadError::NotFound
+            } else {
+                SettingsLoadError::ReadFailed
+            }
+        })?;
+        serde_json::from_str(&contents).map_err(|_| SettingsLoadError::ParseFailed)
+    }
+
     /// Load settings from `path`, or fall back to defaults on any error.
     pub fn load(path: impl AsRef<std::path::Path>) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|contents| serde_json::from_str(&contents).ok())
-            .unwrap_or_default()
+        Self::load_detailed(path).unwrap_or_default()
     }
 
     /// Save settings to `path`, creating parent directories if needed.
@@ -101,5 +137,30 @@ mod tests {
         let path = std::env::temp_dir().join("bitwarden-gpui-poc-does-not-exist.json");
         let settings = Settings::load(&path);
         assert_eq!(settings, Settings::default());
+    }
+
+    #[test]
+    fn load_detailed_distinguishes_missing_and_malformed() {
+        let missing = std::env::temp_dir().join("bitwarden-gpui-poc-load-missing.json");
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(
+            Settings::load_detailed(&missing).err(),
+            Some(SettingsLoadError::NotFound)
+        );
+
+        let broken = std::env::temp_dir().join("bitwarden-gpui-poc-load-broken.json");
+        std::fs::write(&broken, b"not json").unwrap();
+        assert_eq!(
+            Settings::load_detailed(&broken).err(),
+            Some(SettingsLoadError::ParseFailed)
+        );
+
+        for error in [
+            SettingsLoadError::NotFound,
+            SettingsLoadError::ReadFailed,
+            SettingsLoadError::ParseFailed,
+        ] {
+            assert!(!error.message().is_empty());
+        }
     }
 }
