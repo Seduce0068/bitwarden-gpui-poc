@@ -7,9 +7,6 @@ use crate::ui::state::{GeneratorState, Panel, Screen, SettingsField};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-/// Seconds of inactivity before an unlocked vault is locked automatically.
-pub(super) const IDLE_LOCK_SECONDS: u64 = 300;
-
 pub struct BitwardenApp {
     pub(super) screen: Screen,
     pub(super) server_url: String,
@@ -81,7 +78,9 @@ impl BitwardenApp {
                                         && crate::ui::timing::idle_lock_due(
                                             view.last_activity,
                                             instant,
-                                            std::time::Duration::from_secs(IDLE_LOCK_SECONDS),
+                                            std::time::Duration::from_secs(
+                                                view.settings.idle_lock_seconds,
+                                            ),
                                         ),
                                     unlocked
                                         && view.panel == Panel::Vault
@@ -100,7 +99,8 @@ impl BitwardenApp {
                                         crate::ui::timing::TickEffect::AutoLock => {
                                             view.lock(cx);
                                             view.status = format!(
-                                                "無操作のため自動ロックしました（{IDLE_LOCK_SECONDS}秒）"
+                                                "無操作のため自動ロックしました（{}秒）",
+                                                view.settings.idle_lock_seconds
                                             );
                                         }
                                     }

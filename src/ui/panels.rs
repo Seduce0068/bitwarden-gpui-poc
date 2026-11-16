@@ -221,6 +221,10 @@ pub fn settings_panel<'a>(
             "監査閾値: 弱パスワード < {} bit / 更新が古い: {} 日以上",
             settings.thresholds.weak_bits, settings.thresholds.stale_days
         )))
+        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
+            "自動ロック: {} 分（i/u で調整）",
+            settings.idle_lock_seconds / 60
+        )))
         .child(
             div()
                 .text_xs()
@@ -228,7 +232,7 @@ pub fn settings_panel<'a>(
                 .child(format!("保存先: {path}")),
         )
         .child(div().mt_4().text_xs().text_color(rgb(0x6c7086)).child(
-            "1,2: 編集 / enter: 確定 / +/-: 閾値調整 / w: 保存 / c: 戻る / l: ロック / Esc: 終了",
+            "1,2: 編集 / enter: 確定 / +/-: 閾値 / i/u: 自動ロック / w: 保存 / c: 戻る / l: ロック / Esc: 終了",
         ))
 }
 

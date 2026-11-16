@@ -100,6 +100,8 @@ pub enum KeyAction {
     SaveSettings,
     /// Adjust audit thresholds by the given delta.
     AdjustThreshold(i32),
+    /// Adjust the idle auto-lock timeout by the given delta (minutes).
+    AdjustIdleLock(i32),
     /// Toggle one generator option.
     ToggleLowercase,
     ToggleUppercase,
@@ -228,6 +230,8 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
                 "2" => KeyAction::EditSettingsField(SettingsField::Email),
                 "+" | "=" => KeyAction::AdjustThreshold(1),
                 "-" | "_" => KeyAction::AdjustThreshold(-1),
+                "i" => KeyAction::AdjustIdleLock(1),
+                "u" => KeyAction::AdjustIdleLock(-1),
                 "w" => KeyAction::SaveSettings,
                 _ => KeyAction::None,
             }
@@ -380,6 +384,10 @@ mod tests {
         assert_eq!(classify_key(&value), KeyAction::SaveSettings);
         value.key = "+";
         assert_eq!(classify_key(&value), KeyAction::AdjustThreshold(1));
+        value.key = "i";
+        assert_eq!(classify_key(&value), KeyAction::AdjustIdleLock(1));
+        value.key = "u";
+        assert_eq!(classify_key(&value), KeyAction::AdjustIdleLock(-1));
 
         value.panel = Panel::Generator;
         value.key = "p";
