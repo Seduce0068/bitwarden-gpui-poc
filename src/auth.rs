@@ -419,6 +419,7 @@ mod tests {
         assert!(is_blocked_server_url("http://169.254.1.1:8080"));
         assert!(is_blocked_server_url("http://[fe80::1]"));
         assert!(is_blocked_server_url("http://[::ffff:169.254.169.254]"));
+        assert!(is_blocked_server_url("http://0xa9fea9fe"));
         assert!(!is_blocked_server_url("https://vault.example.com"));
         assert!(!is_blocked_server_url(" http://127.0.0.1:8080".trim()));
         assert!(!is_blocked_server_url("http://192.168.1.10"));
