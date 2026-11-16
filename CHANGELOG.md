@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.56] - 2026-11-17
+
 ### テストの分割
 
 - vault モデルのテストを `src/model_tests.rs` に分割し、
