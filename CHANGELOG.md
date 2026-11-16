@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### ドメイン層への集約
+
+- 復号・同期データ取り込み・model 変換を `auth::unlock_and_import` に
+  集約し、UI から openwarden / vault_sync への直接依存を削除
+
 ### 入力の統一
 
 - キーボード・マウス両方の操作を `apply_action` に集約し、
