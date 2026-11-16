@@ -1,7 +1,7 @@
 //! Keyboard input handling for the app.
 //!
-//! Key classification lives in the pure [`logic`] module; this file only
-//! applies the resulting action to the app state.
+//! Key classification lives in the pure [`crate::ui::keys`] module; this file
+//! only applies the resulting action to the app state.
 
 use crate::ui::app::BitwardenApp;
 use crate::ui::keys::{classify_key, KeyAction, KeyContext};
