@@ -45,10 +45,8 @@ impl BitwardenApp {
             server_url: settings.server_url.clone(),
             email: settings.email.clone(),
             status: load_notice
-                .map(|notice| format!("{notice} / Enter でモック vault を開く"))
-                .unwrap_or_else(|| {
-                    "ロック中: Enter でモック vault を開く / Esc で終了".to_string()
-                }),
+                .map(|notice| format!("{notice} / Enter: ログイン / m: モック / Esc: 終了"))
+                .unwrap_or_else(|| "ロック中: Enter: ログイン / m: モック / Esc: 終了".to_string()),
             view: crate::ui::vault_view::VaultViewState::new(),
             totp: crate::ui::totp_state::TotpState::new(),
             panel: Panel::Vault,
@@ -134,7 +132,7 @@ impl BitwardenApp {
         self.view.selected_id = None;
         self.screen = Screen::Locked;
         self.last_activity = std::time::Instant::now();
-        self.status = "ロックしました（Enter でモック解除）".to_string();
+        self.status = "ロックしました（Enter: ログイン / m: モック）".to_string();
         cx.notify();
     }
 

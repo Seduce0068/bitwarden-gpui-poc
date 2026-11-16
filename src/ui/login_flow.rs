@@ -19,19 +19,12 @@ impl BitwardenApp {
         }
     }
 
-    /// Validate credentials and, when present, start a real network login.
-    /// Without credentials the demo vault is opened instead.
+    /// Validate credentials and start a real network login.
+    ///
+    /// The demo vault is opened only through the explicit `OpenDemoVault`
+    /// action, so `Enter` always means a real login attempt.
     pub(super) fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
         let config = self.auth_config();
-        let has_credentials = crate::ui::logic::has_credentials(
-            self.auth.client_id(),
-            self.auth.client_secret(),
-            self.auth.master_password(),
-        );
-        if !has_credentials {
-            self.unlock_mock(cx);
-            return;
-        }
         if let Err(error) = validate_config(&config) {
             self.status = error.message().to_string();
             cx.notify();

@@ -30,6 +30,7 @@ impl BitwardenApp {
         match classify_key(&ctx) {
             KeyAction::Quit => cx.quit(),
             KeyAction::Authenticate | KeyAction::RetryLogin => self.unlock_with_auth(cx),
+            KeyAction::OpenDemoVault => self.unlock_mock(cx),
             KeyAction::EditAuthField(field) => {
                 self.auth.set_field(Some(field));
                 cx.notify();

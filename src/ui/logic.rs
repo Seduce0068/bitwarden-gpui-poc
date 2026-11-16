@@ -98,8 +98,10 @@ pub fn adjust_thresholds(current: Thresholds, delta: i32) -> Thresholds {
 pub enum KeyAction {
     /// Leave the application.
     Quit,
-    /// Attempt login or open the demo vault.
+    /// Attempt a real login with the entered credentials.
     Authenticate,
+    /// Open the mock vault explicitly (demo only).
+    OpenDemoVault,
     /// Retry a failed login.
     RetryLogin,
     /// Select the credential field to edit.
@@ -210,6 +212,7 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
         return match ctx.key {
             "escape" => KeyAction::Quit,
             "enter" => KeyAction::Authenticate,
+            "m" => KeyAction::OpenDemoVault,
             "r" if ctx.login_failed => KeyAction::RetryLogin,
             "1" => KeyAction::EditAuthField(AuthField::ServerUrl),
             "2" => KeyAction::EditAuthField(AuthField::Email),
@@ -480,6 +483,9 @@ mod tests {
         let mut value = ctx("enter");
         value.screen = Screen::Locked;
         assert_eq!(classify_key(&value), KeyAction::Authenticate);
+
+        value.key = "m";
+        assert_eq!(classify_key(&value), KeyAction::OpenDemoVault);
 
         value.key = "r";
         assert_eq!(classify_key(&value), KeyAction::None);
