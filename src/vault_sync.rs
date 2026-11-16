@@ -6,7 +6,7 @@
 
 use openwarden::{ExposeSecret as _, LoginInfo, Vault as OpenVault};
 
-use crate::model::{Folder, ItemData, ItemKind, LoginUri, Vault, VaultItem};
+use crate::model::{Folder, ItemData, LoginUri, Vault, VaultItem};
 
 /// Errors produced while converting a synced vault.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,11 +164,6 @@ pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
     Ok(model)
 }
 
-/// Whether the model item kind matches an openwarden login.
-pub const fn imports_logins_only() -> ItemKind {
-    ItemKind::Login
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -216,6 +211,5 @@ mod tests {
     fn error_messages_are_present() {
         assert!(!SyncError::Locked.message().is_empty());
         assert!(!SyncError::InvalidLogin("x".into()).message().is_empty());
-        assert_eq!(imports_logins_only(), ItemKind::Login);
     }
 }
