@@ -254,6 +254,14 @@ mod tests {
             Some(CacheLoadError::ParseFailed)
         );
 
+        // Reading a directory as a file fails (EISDIR on Unix).
+        let directory = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-dir");
+        std::fs::create_dir_all(&directory).unwrap();
+        assert_eq!(
+            load_detailed(&directory).err(),
+            Some(CacheLoadError::ReadFailed)
+        );
+
         let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
         cache.version += 1;
         let outdated = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-old.json");
