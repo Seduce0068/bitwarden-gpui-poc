@@ -315,6 +315,21 @@ mod tests {
         assert!(rendered.contains("redacted"));
     }
 
+    #[::core::prelude::v1::test]
+    fn code_equality_uses_only_the_validity_window() {
+        let a = code_at(RFC_SECRET, 40).unwrap();
+        let b = code_at(RFC_SECRET, 40).unwrap();
+        let c = code_at(RFC_SECRET, 50).unwrap();
+        // Equality uses only period + remaining, never the code value. Two
+        // samples at the same instant are equal without exposing the code.
+        assert_eq!(a, b);
+        // A different remaining time is not equal.
+        assert_ne!(a, c);
+        // Equality never exposes the code value.
+        let debug = format!("{a:?}");
+        assert!(debug.contains("redacted"), "{debug}");
+    }
+
     #[test]
     fn tick_caches_within_a_period_and_refreshes_across_it() {
         let tick = Tick::sample(RFC_SECRET, 100);
