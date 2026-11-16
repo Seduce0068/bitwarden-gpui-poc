@@ -21,4 +21,4 @@ jobs:
     uses: Seduce0068/workflows/.github/workflows/rust-gates.yml@v1
     with:
       audit: true
-      clippy_args: -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+      # unwrap_used / expect_used / panic are denied via Cargo.toml [lints.clippy].

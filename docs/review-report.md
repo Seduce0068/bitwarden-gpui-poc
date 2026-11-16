@@ -63,7 +63,8 @@ High の1件と、即対応可能な Medium/Low を修正した。
   rename に変更して対処した。
 - 認証情報なしでモック解除できる経路（security #4）は `m` キーに分離し、
   `Enter` を実認証専用にした。
-- README への MSRV 記載と gpui-kit 固定理由の記録（ops #14 / #15）も対応した。
+- README への MSRV 記載と gpui-kit 固定理由の記録（ops #14 / #15）、
+  clippy 設定の一元化（ops #11）も対応した。
 - 構造化ログ・メトリクスの導入（ops #2）: 新規依存 `tracing` が必要で、
   事前承認が必要になるため今回は見送り。「未実装」を README に追記した。
 - 秘密の `zeroize` 化（security #2）: 新規依存が必要なため見送り。
@@ -78,7 +79,7 @@ High の1件と、即対応可能な Medium/Low を修正した。
 - God Object の部分状態分割、UI 状態遷移の Effect パターン化、
   モジュール名衝突の解消など
   （arch #3〜#6 / #8〜#11,
-  ops #10 / #11）:
+  ops #10）:
   いずれも設計変更または新規依存を伴い、PoC の目的（GPUI + openwarden の
   構成検証）に直接寄与しないため見送り。
 
