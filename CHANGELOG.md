@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.49] - 2026-11-17
+
 ### 認証情報のメモリ保護
 
 - `TotpState` の表示中シークレットを `Zeroizing<String>` に変更し、
