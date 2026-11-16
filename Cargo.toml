@@ -15,6 +15,7 @@ name = "bitwarden-gpui-poc"
 path = "src/main.rs"
 
 [dependencies]
+# Pinned: the UI code targets gpui-kit 0.9.1's API; a minor bump may break it.
 gpui-kit = "=0.9.1"
 # ADR assumes the 0.1.0 API; pin until the integration is revisited.
 openwarden = "=0.1.0"

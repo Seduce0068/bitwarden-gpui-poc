@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### ドキュメント
+
+- README に MSRV（Rust 1.88 以上）を記載
+- Cargo.toml に gpui-kit 固定理由のコメントを追加
+
 ### 認証フロー
 
 - `Enter` を常に実認証に変更し、モック vault の解除を `m` キーに分離
