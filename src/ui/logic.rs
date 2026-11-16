@@ -104,10 +104,20 @@ pub enum KeyAction {
     FinishSearch,
     /// Finish editing a settings field.
     FinishSettingsEdit,
-    /// Insert one character into the active text field.
-    InsertChar(char),
-    /// Remove the last character from the active text field.
-    Backspace,
+    /// Insert a character into the active credential field.
+    InsertAuthChar(char),
+    /// Insert a character into the search query.
+    InsertSearchChar(char),
+    /// Insert a character into the active settings field.
+    InsertSettingsChar(char),
+    /// Remove the last character from the active credential field.
+    BackspaceAuth,
+    /// Remove the last character from the search query.
+    BackspaceSearch,
+    /// Remove the last character from the active settings field.
+    BackspaceSettings,
+    /// Remove the last character from the current filter query.
+    BackspaceQuery,
     /// Switch to a panel.
     SetPanel(Panel),
     /// Lock the vault.
@@ -184,8 +194,8 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
         if ctx.editing_auth {
             return match ctx.key {
                 "escape" | "enter" => KeyAction::FinishAuthEdit,
-                "backspace" => KeyAction::Backspace,
-                _value if single => character.map_or(KeyAction::None, KeyAction::InsertChar),
+                "backspace" => KeyAction::BackspaceAuth,
+                _value if single => character.map_or(KeyAction::None, KeyAction::InsertAuthChar),
                 _ => KeyAction::None,
             };
         }
@@ -205,8 +215,8 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
     if ctx.searching {
         return match ctx.key {
             "escape" | "enter" => KeyAction::FinishSearch,
-            "backspace" => KeyAction::Backspace,
-            _value if single => character.map_or(KeyAction::None, KeyAction::InsertChar),
+            "backspace" => KeyAction::BackspaceSearch,
+            _value if single => character.map_or(KeyAction::None, KeyAction::InsertSearchChar),
             _ => KeyAction::None,
         };
     }
@@ -247,8 +257,10 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
             if ctx.editing_settings {
                 return match ctx.key {
                     "escape" | "enter" => KeyAction::FinishSettingsEdit,
-                    "backspace" => KeyAction::Backspace,
-                    _value if single => character.map_or(KeyAction::None, KeyAction::InsertChar),
+                    "backspace" => KeyAction::BackspaceSettings,
+                    _value if single => {
+                        character.map_or(KeyAction::None, KeyAction::InsertSettingsChar)
+                    }
                     _ => KeyAction::None,
                 };
             }
@@ -277,7 +289,7 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
             "n" => KeyAction::SetPanel(Panel::Generator),
             "c" => KeyAction::SetPanel(Panel::Settings),
             "/" => KeyAction::StartSearch,
-            "backspace" if ctx.query_nonempty => KeyAction::Backspace,
+            "backspace" if ctx.query_nonempty => KeyAction::BackspaceQuery,
             _ => KeyAction::None,
         },
     }
@@ -388,7 +400,7 @@ mod tests {
     fn editing_mode_swallows_shortcut_keys() {
         let mut value = ctx("l");
         value.searching = true;
-        assert_eq!(classify_key(&value), KeyAction::InsertChar('l'));
+        assert_eq!(classify_key(&value), KeyAction::InsertSearchChar('l'));
 
         let mut value = ctx("enter");
         value.searching = true;
@@ -396,7 +408,36 @@ mod tests {
 
         let mut value = ctx("backspace");
         value.searching = true;
-        assert_eq!(classify_key(&value), KeyAction::Backspace);
+        assert_eq!(classify_key(&value), KeyAction::BackspaceSearch);
+    }
+
+    #[::core::prelude::v1::test]
+    fn text_editing_actions_are_mode_specific() {
+        let mut value = ctx("a");
+        value.searching = true;
+        assert_eq!(classify_key(&value), KeyAction::InsertSearchChar('a'));
+
+        value.key = "backspace";
+        assert_eq!(classify_key(&value), KeyAction::BackspaceSearch);
+
+        value.searching = false;
+        value.panel = Panel::Settings;
+        value.editing_settings = true;
+        value.key = "b";
+        assert_eq!(classify_key(&value), KeyAction::InsertSettingsChar('b'));
+
+        value.screen = Screen::Locked;
+        value.editing_auth = true;
+        assert_eq!(classify_key(&value), KeyAction::InsertAuthChar('b'));
+        value.key = "backspace";
+        assert_eq!(classify_key(&value), KeyAction::BackspaceAuth);
+
+        value.screen = Screen::Unlocked;
+        value.panel = Panel::Vault;
+        value.editing_auth = false;
+        value.editing_settings = false;
+        value.query_nonempty = true;
+        assert_eq!(classify_key(&value), KeyAction::BackspaceQuery);
     }
 
     #[::core::prelude::v1::test]

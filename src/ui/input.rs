@@ -51,29 +51,32 @@ impl BitwardenApp {
                 self.sync_settings_from_ui();
                 cx.notify();
             }
-            KeyAction::InsertChar(character) => {
-                if self.auth.field().is_some() {
-                    self.edit_auth_field(character);
-                } else if self.view.searching {
-                    self.view.query.push(character);
-                    self.view.selected_id = None;
-                } else if self.editing.is_some() {
-                    self.push_editing(character);
-                }
+            KeyAction::InsertAuthChar(character) => {
+                self.edit_auth_field(character);
                 cx.notify();
             }
-            KeyAction::Backspace => {
-                if self.auth.field().is_some() {
-                    self.backspace_auth_field();
-                } else if self.view.searching {
-                    self.view.query.pop();
-                    self.view.selected_id = None;
-                } else if self.editing.is_some() {
-                    self.pop_editing();
-                } else if !self.view.query.is_empty() {
-                    self.view.query.pop();
-                    self.view.selected_id = None;
-                }
+            KeyAction::InsertSearchChar(character) => {
+                self.view.push_query(character);
+                cx.notify();
+            }
+            KeyAction::InsertSettingsChar(character) => {
+                self.push_editing(character);
+                cx.notify();
+            }
+            KeyAction::BackspaceAuth => {
+                self.backspace_auth_field();
+                cx.notify();
+            }
+            KeyAction::BackspaceSearch => {
+                self.view.pop_query();
+                cx.notify();
+            }
+            KeyAction::BackspaceSettings => {
+                self.pop_editing();
+                cx.notify();
+            }
+            KeyAction::BackspaceQuery => {
+                self.view.pop_query();
                 cx.notify();
             }
             KeyAction::SetPanel(panel) => {
