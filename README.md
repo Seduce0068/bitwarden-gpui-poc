@@ -21,6 +21,10 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   による実ログイン・同期・復号を試せる（認証情報が未入力ならモック vault）
 - KDF 計算は blocking thread で実行し、待機中も UI は操作できる
 - ログイン全体に 30 秒のタイムアウトを設定し、失敗時は `r` で再試行できる
+- 実ログインではログイン項目の名前 / username / URI を復号して表示する。
+  パスワードと TOTP 秘密は復号せず、有無と長さのマーカーのみ保持する
+- `src/cache.rs` に暗号化済み同期データのキャッシュを実装済み（キーは保存しない）。
+  ただし openwarden 0.1.0 の API 制約で認証フローからはまだ接続していない
 
 ## 画面と操作
 
@@ -56,10 +60,11 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 
 ```bash
 cd work/bitwarden-gpui-poc
-cargo fmt --check
-cargo check
-cargo test
-cargo clippy -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+cargo fmt --all -- --check
+cargo check --all-targets --locked
+cargo test --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 cargo run
 ```
 
@@ -75,7 +80,8 @@ fmt → check → test → clippy のゲートを実行し、clippy では加え
 ## 既知の制約
 
 - openwarden は v0.1 の早期実装（個人 vault 向け、組織/2FA/一部 item type 未対応、roadmap 参照）
-- セキュリティ上の配慮（OS keyring 連携、クリップボード自動消去、ロック時のメモリ保護など）は未実装
+- セキュリティ上の配慮のうち、OS keyring 連携と完全なロック時メモリ保護は未実装
+- クリップボードは30秒で復元し、ロック時にも復元するが、アプリ強制終了時は復元できない
 - 実ログイン時はログイン項目のみを変換し、他 kind はモックデータのまま
 - device identifier は固定値であり、インストールごとの一意性は未保証
 - 本番利用を意図したものではありません
