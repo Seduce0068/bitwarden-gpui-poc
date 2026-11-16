@@ -8,7 +8,8 @@ use gpui_kit::*;
 pub const CLEAR_SECONDS: u64 = 30;
 
 /// Remembers the clipboard contents from before a secret was copied and
-/// restores them after [`CLEAR_SECONDS`] seconds or on lock.
+/// restores them after the configured delay (default [`CLEAR_SECONDS`]
+/// seconds) or on lock.
 #[derive(Default)]
 pub struct ClipboardState {
     restore: Option<String>,
@@ -32,8 +33,8 @@ impl ClipboardState {
     }
 
     /// Copy `value` and remember the original clipboard text if this is the
-    /// first pending copy.
-    pub fn copy(&mut self, value: &str, cx: &mut App) {
+    /// first pending copy. `restore_seconds` controls when it is put back.
+    pub fn copy(&mut self, value: &str, restore_seconds: u64, cx: &mut App) {
         if self.clear_at.is_none() {
             self.restore = cx.read_from_clipboard().and_then(|item| {
                 item.entries.into_iter().find_map(|entry| match entry {
@@ -43,7 +44,7 @@ impl ClipboardState {
             });
         }
         cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
-        self.clear_at = Some(Instant::now() + Duration::from_secs(CLEAR_SECONDS));
+        self.clear_at = Some(Instant::now() + Duration::from_secs(restore_seconds));
     }
 
     /// Put the clipboard back if a copy is pending.
