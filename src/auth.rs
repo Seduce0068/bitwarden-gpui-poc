@@ -111,6 +111,12 @@ pub fn is_blocked_server_url(value: &str) -> bool {
             octets[0] == 169 && octets[1] == 254
         }
         Some(url::Host::Ipv6(ip)) => {
+            // IPv4-mapped addresses (::ffff:a.b.c.d) must be checked as IPv4,
+            // otherwise they bypass the link-local filter.
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                let octets = mapped.octets();
+                return octets[0] == 169 && octets[1] == 254;
+            }
             // fe80::/10 link-local
             (ip.segments()[0] & 0xffc0) == 0xfe80
         }
@@ -412,6 +418,7 @@ mod tests {
         assert!(is_blocked_server_url("http://169.254.169.254"));
         assert!(is_blocked_server_url("http://169.254.1.1:8080"));
         assert!(is_blocked_server_url("http://[fe80::1]"));
+        assert!(is_blocked_server_url("http://[::ffff:169.254.169.254]"));
         assert!(!is_blocked_server_url("https://vault.example.com"));
         assert!(!is_blocked_server_url(" http://127.0.0.1:8080".trim()));
         assert!(!is_blocked_server_url("http://192.168.1.10"));
