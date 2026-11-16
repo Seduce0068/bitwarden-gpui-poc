@@ -6,6 +6,26 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Reduce a URI to scheme and host so embedded credentials or tokens in the
+/// path/query are never shown in the UI or copied into reports.
+///
+/// Falls back to `"(不正な URI)"` when the value cannot be parsed.
+pub fn mask_uri(value: &str) -> String {
+    match url::Url::parse(value) {
+        Ok(url) => {
+            let scheme = url.scheme();
+            match url.host_str() {
+                Some(host) => match url.port() {
+                    Some(port) => format!("{scheme}://{host}:{port}"),
+                    None => format!("{scheme}://{host}"),
+                },
+                None => format!("{scheme}://"),
+            }
+        }
+        Err(_) => "(不正な URI)".to_string(),
+    }
+}
+
 /// The kind of a vault item, matching Bitwarden's `type` numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -580,6 +600,19 @@ fn compare(a: &VaultItem, b: &VaultItem, sort: SortKey) -> std::cmp::Ordering {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_uri_keeps_scheme_host_and_port_only() {
+        assert_eq!(
+            mask_uri("https://example.com/login?token=secret"),
+            "https://example.com"
+        );
+        assert_eq!(
+            mask_uri("http://user:pass@example.com:8080/a"),
+            "http://example.com:8080"
+        );
+        assert_eq!(mask_uri("not a url"), "(不正な URI)");
+    }
 
     fn login(id: &str, name: &str, username: &str, password: &str, uri: &str) -> VaultItem {
         VaultItem::new(
