@@ -1,8 +1,8 @@
 //! Authentication flow helpers on the app state.
 
 use crate::auth::{authenticate, validate_config, AuthConfig};
-use crate::ui::app::mock_vault;
 use crate::ui::app::BitwardenApp;
+use crate::ui::mock::mock_vault;
 use crate::ui::model::{AuthField, GeneratorState, Panel, Screen};
 use crate::vault_sync;
 use gpui_kit::*;
