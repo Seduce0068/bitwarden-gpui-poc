@@ -11,3 +11,4 @@ pub mod model;
 pub mod panels;
 pub mod render;
 pub mod timing;
+pub mod totp_state;
