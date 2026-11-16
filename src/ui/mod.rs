@@ -5,6 +5,7 @@ pub mod app;
 pub mod auth_state;
 pub mod clipboard;
 pub mod input;
+pub mod keys;
 pub mod logic;
 pub mod login_flow;
 pub mod mock;
