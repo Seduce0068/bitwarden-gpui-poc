@@ -59,9 +59,6 @@ High の1件と、即対応可能な Medium/Low を修正した。
   `tracing-subscriber`（追加の推移依存を伴う）が必要。現在のログ出力は
   起動時エラー1箇所のみで、共通指示の「依存追加は最小限の方針」に従い
   見送った。代わりに起動時エラーへ `Debug` 詳細を追加した。
-- 秘密の `zeroize` 化（security #2）: AuthState の秘密入力を
-  `Zeroizing<String>` に変更して実装（最終バッファの消去を保証）。
-  文字追加時の再確保で生じる旧コピーは zeroize 側の制約で保証外。
 - repository / homepage フィールド（ops #10）: リモート URL が未確認のため
   断定せず追加していない（push 先確定後に設定する）。
 - テスト・型の整理残り（arch #3 / #5 / #8 / #11 の一部）: 設計変更を伴い、
@@ -76,7 +73,10 @@ High の1件と、即対応可能な Medium/Low を修正した。
 ドメイン層移動（arch #6）、選択の ID 化（arch #7）、モジュール名衝突の解消
 （arch #8）、テスト専用ハックの削除（arch #9）、タイマー判定の純粋化
 （arch #10）、MSRV / 依存固定理由の記録（ops #14 / #15）、clippy 設定の
-一元化（ops #11）、LICENSE 追加、パスフレーズ単語リストの分離。
+一元化（ops #11）、LICENSE 追加、パスフレーズ単語リストの分離、秘密の
+`zeroize` 化（security #2、AuthState / TOTP 表示 / 再確保の旧コピーは
+zeroize 側の制約で保証外）、TOTP シークレットの検索除外、各種 `Debug`
+出力（Vault 項目 / GeneratorState / Settings / Identity / URI）のマスキング。
 
 ## 検証
 
