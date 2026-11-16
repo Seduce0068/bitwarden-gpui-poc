@@ -108,7 +108,9 @@ impl LoginUri {
 }
 
 /// Card details.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` masks the number and security code.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardData {
     /// Name on the card.
     pub cardholder_name: String,
@@ -142,7 +144,9 @@ pub struct IdentityData {
 }
 
 /// SSH key details.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` masks the private key.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SshKeyData {
     /// Public key line.
     pub public_key: String,
@@ -152,8 +156,33 @@ pub struct SshKeyData {
     pub fingerprint: String,
 }
 
+impl core::fmt::Debug for CardData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CardData")
+            .field("cardholder_name", &self.cardholder_name)
+            .field("brand", &self.brand)
+            .field("number", &"[redacted]")
+            .field("exp_month", &self.exp_month)
+            .field("exp_year", &self.exp_year)
+            .field("code", &"[redacted]")
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for SshKeyData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SshKeyData")
+            .field("public_key", &self.public_key)
+            .field("private_key", &"[redacted]")
+            .field("fingerprint", &self.fingerprint)
+            .finish()
+    }
+}
+
 /// Kind-specific payload.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` is implemented manually so login secrets are never printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ItemData {
     /// A login.
@@ -178,6 +207,32 @@ pub enum ItemData {
     Identity(IdentityData),
     /// An SSH key.
     SshKey(SshKeyData),
+}
+
+impl core::fmt::Debug for ItemData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Login {
+                username,
+                password: _,
+                totp,
+                uris,
+            } => f
+                .debug_struct("Login")
+                .field("username", username)
+                .field("password", &"[redacted]")
+                .field("totp", &if totp.is_empty() { "" } else { "[redacted]" })
+                .field("uris", uris)
+                .finish(),
+            Self::SecureNote { text: _ } => f
+                .debug_struct("SecureNote")
+                .field("text", &"[redacted]")
+                .finish(),
+            Self::Card(card) => f.debug_tuple("Card").field(card).finish(),
+            Self::Identity(identity) => f.debug_tuple("Identity").field(identity).finish(),
+            Self::SshKey(key) => f.debug_tuple("SshKey").field(key).finish(),
+        }
+    }
 }
 
 impl ItemData {
@@ -606,6 +661,48 @@ fn compare(a: &VaultItem, b: &VaultItem, sort: SortKey) -> std::cmp::Ordering {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn debug_never_reveals_item_secrets() {
+        let item = VaultItem::new(
+            "1",
+            "Sample",
+            ItemData::Login {
+                username: "alice".into(),
+                password: "super-secret-pw".into(),
+                totp: "JBSWY3DPEHPK3PXP".into(),
+                uris: vec![],
+            },
+        );
+        let debug = format!("{item:?}");
+        assert!(debug.contains("Sample"));
+        assert!(!debug.contains("super-secret-pw"), "{debug}");
+        assert!(!debug.contains("JBSWY3DPEHPK3PXP"), "{debug}");
+
+        let card = VaultItem::new(
+            "2",
+            "Card",
+            ItemData::Card(CardData {
+                number: "4111111111111234".into(),
+                code: "987".into(),
+                ..CardData::default()
+            }),
+        );
+        let debug = format!("{card:?}");
+        assert!(!debug.contains("4111111111111234"), "{debug}");
+        assert!(!debug.contains("987"), "{debug}");
+
+        let ssh = VaultItem::new(
+            "3",
+            "Key",
+            ItemData::SshKey(SshKeyData {
+                private_key: "PRIVATE-KEY-MATERIAL".into(),
+                ..SshKeyData::default()
+            }),
+        );
+        let debug = format!("{ssh:?}");
+        assert!(!debug.contains("PRIVATE-KEY-MATERIAL"), "{debug}");
+    }
 
     #[test]
     fn mask_uri_keeps_scheme_host_and_port_only() {
