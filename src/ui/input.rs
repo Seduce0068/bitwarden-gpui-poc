@@ -27,7 +27,14 @@ impl BitwardenApp {
             has_audit_report: self.view.audit_report.is_some(),
             query_nonempty: !self.view.query.is_empty(),
         };
-        match classify_key(&ctx) {
+        self.apply_action(classify_key(&ctx), cx);
+    }
+
+    /// Apply a UI action to the app state. Both keyboard and mouse input go
+    /// through this single path so state transitions stay consistent.
+    pub(super) fn apply_action(&mut self, action: KeyAction, cx: &mut Context<Self>) {
+        self.last_activity = std::time::Instant::now();
+        match action {
             KeyAction::Quit => cx.quit(),
             KeyAction::Authenticate | KeyAction::RetryLogin => self.unlock_with_auth(cx),
             KeyAction::OpenDemoVault => self.unlock_mock(cx),
@@ -134,6 +141,14 @@ impl BitwardenApp {
                 self.toggle_generator(if delta > 0 { "+" } else { "-" }, cx)
             }
             KeyAction::CycleSeparator => self.toggle_generator(",", cx),
+            KeyAction::SelectRow(index) => {
+                if self.view.select_index(index) {
+                    self.view
+                        .scroll_handle
+                        .scroll_to_item(index, gpui_kit::ScrollStrategy::Nearest);
+                }
+                cx.notify();
+            }
             KeyAction::None => {}
         }
     }

@@ -97,9 +97,10 @@ impl BitwardenApp {
                             div()
                                 .id(index)
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                                    this.last_activity = std::time::Instant::now();
-                                    this.view.selected_id = Some(row_id.clone());
-                                    cx.notify();
+                                    this.apply_action(
+                                        crate::ui::logic::KeyAction::SelectRow(index),
+                                        cx,
+                                    );
                                 }))
                                 .flex()
                                 .items_center()
@@ -238,9 +239,10 @@ impl Render for BitwardenApp {
                         Panel::Vault,
                         self.panel,
                         |this, cx| {
-                            this.last_activity = std::time::Instant::now();
-                            this.panel = Panel::Vault;
-                            cx.notify();
+                            this.apply_action(
+                                crate::ui::logic::KeyAction::SetPanel(Panel::Vault),
+                                cx,
+                            );
                         },
                         cx,
                     ))
@@ -249,9 +251,10 @@ impl Render for BitwardenApp {
                         Panel::Audit,
                         self.panel,
                         |this, cx| {
-                            this.last_activity = std::time::Instant::now();
-                            this.panel = Panel::Audit;
-                            cx.notify();
+                            this.apply_action(
+                                crate::ui::logic::KeyAction::SetPanel(Panel::Audit),
+                                cx,
+                            );
                         },
                         cx,
                     ))
@@ -260,9 +263,10 @@ impl Render for BitwardenApp {
                         Panel::Generator,
                         self.panel,
                         |this, cx| {
-                            this.last_activity = std::time::Instant::now();
-                            this.panel = Panel::Generator;
-                            cx.notify();
+                            this.apply_action(
+                                crate::ui::logic::KeyAction::SetPanel(Panel::Generator),
+                                cx,
+                            );
                         },
                         cx,
                     ))
@@ -271,9 +275,10 @@ impl Render for BitwardenApp {
                         Panel::Settings,
                         self.panel,
                         |this, cx| {
-                            this.last_activity = std::time::Instant::now();
-                            this.panel = Panel::Settings;
-                            cx.notify();
+                            this.apply_action(
+                                crate::ui::logic::KeyAction::SetPanel(Panel::Settings),
+                                cx,
+                            );
                         },
                         cx,
                     ))
