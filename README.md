@@ -15,6 +15,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - 一覧のフィルタ・ソート・検索は `Vault::view()` に委譲しており、テストと同じロジックを通る
 - TOTP は実際の6桁コードを生成し、1秒ごとのカウントダウンを表示する
 - 設定は `~/.config/bitwarden-gpui-poc/settings.json` に保存する（パスワードや鍵は保存しない）
+- モックデータには5種類すべての item kind（ログイン / メモ / カード / ID / SSH鍵）を含む
 - 実際のログイン・同期・復号は未接続（`openwarden` 統合は今後の作業）
 
 ## 画面と操作
@@ -58,5 +59,4 @@ Linux では Wayland/X11 と GPU ドライバが必要です（`gpui-kit` / wgpu
 - openwarden は v0.1 の早期実装（個人 vault 向け、組織/2FA/一部 item type 未対応、roadmap 参照）
 - セキュリティ上の配慮（OS keyring 連携、クリップボード自動消去、ロック時のメモリ保護など）は未実装
 - 生成結果や TOTP コードは画面表示のみで、クリップボード連携は未実装
-- モックデータのログイン項目のみをUIで確認しており、Card / Identity / SSH鍵の表示は未検証
 - 本番利用を意図したものではありません
