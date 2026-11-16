@@ -10,7 +10,7 @@ use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::health::Thresholds;
 
 /// Top-level settings object.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Server URL (Bitwarden or Vaultwarden).
@@ -65,6 +65,28 @@ impl SettingsLoadError {
             Self::ReadFailed => "設定ファイルを読み込めません（既定値を使用）",
             Self::ParseFailed => "設定ファイルが破損しています（既定値を使用）",
         }
+    }
+}
+
+impl core::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Settings")
+            .field("server_url", &self.server_url)
+            .field(
+                "email",
+                &if self.email.is_empty() {
+                    ""
+                } else {
+                    "[redacted]"
+                },
+            )
+            .field("password_generator", &self.password_generator)
+            .field("passphrase_generator", &self.passphrase_generator)
+            .field("thresholds", &self.thresholds)
+            .field("idle_lock_seconds", &self.idle_lock_seconds)
+            .field("login_timeout_seconds", &self.login_timeout_seconds)
+            .field("clipboard_restore_seconds", &self.clipboard_restore_seconds)
+            .finish()
     }
 }
 
@@ -159,6 +181,18 @@ mod tests {
 
         let loaded = Settings::load(&path);
         assert_eq!(loaded, settings);
+    }
+
+    #[::core::prelude::v1::test]
+    fn debug_masks_email() {
+        let settings = Settings {
+            email: "alice@example.com".into(),
+            ..Default::default()
+        };
+        let debug = format!("{settings:?}");
+        assert!(!debug.contains("alice@example.com"), "{debug}");
+        assert!(debug.contains("[redacted]"), "{debug}");
+        assert!(debug.contains("vault.bitwarden.com"), "{debug}");
     }
 
     #[::core::prelude::v1::test]
