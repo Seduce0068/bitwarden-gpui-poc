@@ -41,6 +41,8 @@ pub enum AuthError {
     Sync,
     /// The KDF policy rejected the account's settings.
     KdfRejected,
+    /// The login sequence did not finish within the allotted time.
+    Timeout,
 }
 
 impl AuthError {
@@ -54,6 +56,7 @@ impl AuthError {
             Self::Login => "ログインに失敗しました",
             Self::Sync => "同期に失敗しました",
             Self::KdfRejected => "KDF 設定がポリシーで拒否されました",
+            Self::Timeout => "ログインがタイムアウトしました",
         }
     }
 }
@@ -128,7 +131,10 @@ pub struct AuthenticatedVault {
     pub master_key: MasterKey,
 }
 
-/// Log in and fetch the vault data.
+/// Default time budget for the whole login sequence.
+pub const DEFAULT_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Log in and fetch the vault data with a timeout.
 ///
 /// The KDF derivation is CPU- and memory-heavy; callers should run this
 /// future on a background task so the UI stays responsive.
@@ -136,8 +142,32 @@ pub struct AuthenticatedVault {
 /// # Errors
 ///
 /// The corresponding [`AuthError`] variant when validation, login, sync or
-/// key derivation fails.
+/// key derivation fails, or [`AuthError::Timeout`] when the budget expires.
+pub async fn authenticate_with_timeout(
+    config: &AuthConfig,
+    device_identifier: &str,
+    timeout: std::time::Duration,
+) -> Result<AuthenticatedVault, AuthError> {
+    // Validate before starting the race so bad input fails deterministically
+    // without touching the network or the timeout.
+    validate_config(config)?;
+    let login = authenticate_inner(config, device_identifier);
+    let timer = async {
+        smol::Timer::after(timeout).await;
+        Err(AuthError::Timeout)
+    };
+    smol::future::race(login, timer).await
+}
+
+/// Log in using [`DEFAULT_LOGIN_TIMEOUT`].
 pub async fn authenticate(
+    config: &AuthConfig,
+    device_identifier: &str,
+) -> Result<AuthenticatedVault, AuthError> {
+    authenticate_with_timeout(config, device_identifier, DEFAULT_LOGIN_TIMEOUT).await
+}
+
+async fn authenticate_inner(
     config: &AuthConfig,
     device_identifier: &str,
 ) -> Result<AuthenticatedVault, AuthError> {
@@ -263,6 +293,18 @@ mod tests {
     }
 
     #[test]
+    fn validation_fails_before_the_timeout_race() {
+        let mut invalid = config();
+        invalid.client_id.clear();
+        let result = smol::block_on(authenticate_with_timeout(
+            &invalid,
+            "device",
+            std::time::Duration::from_millis(0),
+        ));
+        assert_eq!(result.err(), Some(AuthError::MissingField("client_id")));
+    }
+
+    #[test]
     fn error_messages_are_present() {
         for error in [
             AuthError::MissingField("email"),
@@ -272,6 +314,7 @@ mod tests {
             AuthError::Login,
             AuthError::Sync,
             AuthError::KdfRejected,
+            AuthError::Timeout,
         ] {
             assert!(!error.message().is_empty());
             assert!(!error.to_string().is_empty());

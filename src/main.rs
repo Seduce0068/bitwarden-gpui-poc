@@ -216,6 +216,7 @@ struct BitwardenApp {
     master_password: String,
     clipboard_restore: Option<String>,
     clipboard_clear_at: Option<u64>,
+    login_failed: bool,
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
 }
@@ -247,6 +248,7 @@ impl BitwardenApp {
             master_password: String::new(),
             clipboard_restore: None,
             clipboard_clear_at: None,
+            login_failed: false,
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -326,6 +328,7 @@ impl BitwardenApp {
             cx.notify();
             return;
         }
+        self.login_failed = false;
         self.status = "ログイン中…".to_string();
         cx.notify();
         // A fixed identifier is enough for the PoC; a real installation would
@@ -358,7 +361,8 @@ impl BitwardenApp {
         let authenticated = match result {
             Ok(value) => value,
             Err(error) => {
-                self.status = format!("ログイン失敗: {}", error.message());
+                self.login_failed = true;
+                self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
                 cx.notify();
                 return;
             }
@@ -459,6 +463,7 @@ impl BitwardenApp {
         self.generator = GeneratorState::from_settings(&self.settings);
         self.editing = None;
         self.auth_field = None;
+        self.login_failed = false;
         self.client_secret.clear();
         self.master_password.clear();
         self.totp_secret.clear();
@@ -767,6 +772,7 @@ impl BitwardenApp {
                 match key {
                     "escape" => cx.quit(),
                     "enter" => self.unlock_with_auth(cx),
+                    "r" if self.login_failed => self.unlock_with_auth(cx),
                     "1" => self.auth_field = Some(AuthField::ServerUrl),
                     "2" => self.auth_field = Some(AuthField::Email),
                     "3" => self.auth_field = Some(AuthField::ClientId),
