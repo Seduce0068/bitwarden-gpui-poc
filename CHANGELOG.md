@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 個人情報のマスキング
+
+- `IdentityData` の個人情報と `LoginUri` の URI を `Debug` からマスク
+
 ## [0.1.51] - 2026-11-17
 
 ### 設定のマスキング

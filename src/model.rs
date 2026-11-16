@@ -79,7 +79,9 @@ impl ItemKind {
 }
 
 /// One login URI and its Bitwarden match type (`None` = default: domain).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` masks the URI to scheme + host.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoginUri {
     /// The URI as stored.
     pub uri: String,
@@ -127,7 +129,9 @@ pub struct CardData {
 }
 
 /// Identity details.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` masks personal fields.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdentityData {
     /// Given name.
     pub first_name: String,
@@ -154,6 +158,28 @@ pub struct SshKeyData {
     pub private_key: String,
     /// Key fingerprint.
     pub fingerprint: String,
+}
+
+impl core::fmt::Debug for LoginUri {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LoginUri")
+            .field("uri", &mask_uri(&self.uri))
+            .field("match_type", &self.match_type)
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for IdentityData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("IdentityData")
+            .field("first_name", &"[redacted]")
+            .field("last_name", &"[redacted]")
+            .field("email", &"[redacted]")
+            .field("phone", &"[redacted]")
+            .field("address", &"[redacted]")
+            .field("company", &self.company)
+            .finish()
+    }
 }
 
 impl core::fmt::Debug for CardData {
@@ -851,6 +877,47 @@ mod tests {
             .is_empty());
         // http page vs https login, strict scheme: no match.
         assert!(vault.matches_page("http://github.com/", &opts).is_empty());
+    }
+
+    #[::core::prelude::v1::test]
+    fn debug_masks_identity_and_uri_details() {
+        let identity = VaultItem::new(
+            "1",
+            "Person",
+            ItemData::Identity(IdentityData {
+                first_name: "Alice".into(),
+                last_name: "Smith".into(),
+                email: "alice@example.com".into(),
+                phone: "090-1234-5678".into(),
+                address: "1 Main St".into(),
+                company: "Acme".into(),
+            }),
+        );
+        let debug = format!("{identity:?}");
+        for secret in [
+            "Alice",
+            "Smith",
+            "alice@example.com",
+            "090-1234-5678",
+            "1 Main St",
+        ] {
+            assert!(!debug.contains(secret), "{debug}");
+        }
+        assert!(debug.contains("Acme"), "{debug}");
+
+        let login = VaultItem::new(
+            "2",
+            "Site",
+            ItemData::Login {
+                username: "u".into(),
+                password: "p".into(),
+                totp: String::new(),
+                uris: vec![LoginUri::new("https://user:token@example.com/secret")],
+            },
+        );
+        let debug = format!("{login:?}");
+        assert!(debug.contains("https://example.com"), "{debug}");
+        assert!(!debug.contains("token"), "{debug}");
     }
 
     #[::core::prelude::v1::test]
