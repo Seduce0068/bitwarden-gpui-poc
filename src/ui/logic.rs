@@ -134,6 +134,8 @@ pub enum KeyAction {
     Lock,
     /// Move the selected row.
     MoveSelection(isize),
+    /// Select a row by index (mouse click); not produced by key classification.
+    SelectRow(usize),
     /// Toggle the selected item's favorite flag.
     ToggleFavorite,
     /// Open the audit panel when a report exists.
