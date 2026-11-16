@@ -22,4 +22,4 @@ jobs:
     with:
       audit: true
       extra_gates: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-      # unwrap_used / expect_used / panic are denied via Cargo.toml [lints.clippy].
+      # Clippy lints (unwrap/expect/panic/unsafe) are denied via Cargo.toml [lints.clippy].
