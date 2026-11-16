@@ -96,6 +96,7 @@ impl BitwardenApp {
                             div()
                                 .id(index)
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.last_activity = std::time::Instant::now();
                                     this.selected = index;
                                     cx.notify();
                                 }))
@@ -236,6 +237,7 @@ impl Render for BitwardenApp {
                         Panel::Vault,
                         self.panel,
                         |this, cx| {
+                            this.last_activity = std::time::Instant::now();
                             this.panel = Panel::Vault;
                             cx.notify();
                         },
@@ -246,6 +248,7 @@ impl Render for BitwardenApp {
                         Panel::Audit,
                         self.panel,
                         |this, cx| {
+                            this.last_activity = std::time::Instant::now();
                             this.panel = Panel::Audit;
                             cx.notify();
                         },
@@ -256,6 +259,7 @@ impl Render for BitwardenApp {
                         Panel::Generator,
                         self.panel,
                         |this, cx| {
+                            this.last_activity = std::time::Instant::now();
                             this.panel = Panel::Generator;
                             cx.notify();
                         },
@@ -266,6 +270,7 @@ impl Render for BitwardenApp {
                         Panel::Settings,
                         self.panel,
                         |this, cx| {
+                            this.last_activity = std::time::Instant::now();
                             this.panel = Panel::Settings;
                             cx.notify();
                         },
