@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+use bitwarden_gpui_poc::health::{audit, Report, Severity, Thresholds};
 use bitwarden_gpui_poc::model::{
     Filter, Folder, ItemData, ItemKind, LoginUri, SortKey, Vault, VaultItem,
 };
@@ -107,6 +108,8 @@ struct BitwardenApp {
     selected: usize,
     totp_secret: String,
     totp_tick: Option<Tick>,
+    audit_report: Option<Report>,
+    show_audit: bool,
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
 }
@@ -126,6 +129,8 @@ impl BitwardenApp {
             selected: 0,
             totp_secret: String::new(),
             totp_tick: None,
+            audit_report: None,
+            show_audit: false,
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -144,7 +149,10 @@ impl BitwardenApp {
                         smol::Timer::after(std::time::Duration::from_secs(1)).await;
                         let alive = cx.update(|cx| {
                             this.update(cx, |view, cx| {
-                                if view.screen == Screen::Unlocked && !view.totp_secret.is_empty() {
+                                if view.screen == Screen::Unlocked
+                                    && !view.show_audit
+                                    && !view.totp_secret.is_empty()
+                                {
                                     view.totp_tick = None;
                                     cx.notify();
                                 }
@@ -168,11 +176,17 @@ impl BitwardenApp {
 
     fn unlock_mock(&mut self, cx: &mut Context<Self>) {
         self.vault = mock_vault();
+        self.audit_report = Some(audit(
+            &self.vault,
+            Thresholds::default(),
+            i64::try_from(totp::now_unix()).unwrap_or(i64::MAX),
+        ));
+        self.show_audit = false;
         self.screen = Screen::Unlocked;
         self.selected = 0;
         self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         self.status = format!(
-            "同期済み（モック）: {} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / l ロック / Esc 終了",
+            "同期済み（モック）: {} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / g 監査 / l ロック / Esc 終了",
             self.vault.len()
         );
         cx.notify();
@@ -180,6 +194,8 @@ impl BitwardenApp {
 
     fn lock(&mut self, cx: &mut Context<Self>) {
         self.vault = Vault::new();
+        self.audit_report = None;
+        self.show_audit = false;
         self.totp_secret.clear();
         self.totp_tick = None;
         self.query.clear();
@@ -334,6 +350,18 @@ impl BitwardenApp {
                     }
                     return;
                 }
+                if self.show_audit {
+                    match key {
+                        "escape" => cx.quit(),
+                        "g" => {
+                            self.show_audit = false;
+                            cx.notify();
+                        }
+                        "l" => self.lock(cx),
+                        _ => {}
+                    }
+                    return;
+                }
                 match key {
                     "escape" => cx.quit(),
                     "up" => self.move_selection(-1, cx),
@@ -346,6 +374,10 @@ impl BitwardenApp {
                         cx.notify();
                     }
                     "f" => self.toggle_favorite(cx),
+                    "g" if self.audit_report.is_some() => {
+                        self.show_audit = true;
+                        cx.notify();
+                    }
                     "/" => {
                         self.searching = true;
                         self.query.clear();
@@ -544,6 +576,64 @@ impl BitwardenApp {
     }
 }
 
+fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_4()
+        .flex_1()
+        .child(
+            div()
+                .text_lg()
+                .font_weight(FontWeight::BOLD)
+                .child("Vault 健全性レポート"),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(0xa6adc8))
+                .child(report.summary()),
+        )
+        .child(div().text_xs().text_color(rgb(0x6c7086)).child(format!(
+            "TOTP 設定済み: {}/{} ({:.0}%)",
+            report.with_totp,
+            report.logins,
+            report.totp_coverage() * 100.0
+        )));
+    for item in &report.items {
+        let color = match item.worst() {
+            Some(Severity::High) => rgb(0xf38ba8),
+            Some(Severity::Medium) => rgb(0xf9e2af),
+            _ => rgb(0xa6adc8),
+        };
+        panel = panel.child(
+            div()
+                .mt_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(color)
+                        .child(format!(
+                            "[{}] {} ({})",
+                            item.worst().map_or("?", Severity::label),
+                            item.name,
+                            item.kind.label()
+                        )),
+                )
+                .children(item.findings.iter().map(|finding| {
+                    div()
+                        .text_xs()
+                        .pl_4()
+                        .text_color(rgb(0xcdd6f4))
+                        .child(format!("- {}", finding.message()))
+                })),
+        );
+    }
+    panel
+}
+
 fn info_row(label: &str, value: &str) -> impl IntoElement {
     div()
         .flex()
@@ -590,6 +680,10 @@ impl Render for BitwardenApp {
                 .justify_center()
                 .child(self.render_locked(cx))
                 .into_any_element(),
+            Screen::Unlocked if self.show_audit => match &self.audit_report {
+                Some(report) => audit_panel(report).into_any_element(),
+                None => self.render_unlocked(cx).into_any_element(),
+            },
             Screen::Unlocked => self.render_unlocked(cx).into_any_element(),
         };
 
