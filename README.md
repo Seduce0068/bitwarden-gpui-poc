@@ -11,7 +11,8 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 ## 現状
 
 - `src/lib.rs`: vault モデル、パスワード / passphrase 生成、TOTP（RFC 6238）、健全性監査、設定の永続化を提供。すべて単体テスト付き
-- `src/main.rs`: GPUI によるロック画面と、一覧 / 監査 / 生成 / 設定の4パネル
+- `src/ui/`: 画面状態の型と、一覧 / 監査 / 生成 / 設定のパネル描画ヘルパー
+- `src/main.rs`: GPUI によるロック画面とアプリ状態・イベント処理
 - 一覧のフィルタ・ソート・検索は `Vault::view()` に委譲しており、テストと同じロジックを通る
 - TOTP は実際の6桁コードを生成し、1秒ごとのカウントダウンを表示する
 - 設定は `~/.config/bitwarden-gpui-poc/settings.json` に保存する（パスワードや鍵は保存しない）
