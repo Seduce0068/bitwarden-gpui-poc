@@ -60,6 +60,7 @@ impl BitwardenApp {
 
     pub(super) fn save_settings(&mut self, cx: &mut Context<Self>) {
         self.sync_settings_from_ui();
+        self.settings = self.settings.sanitized();
         match Settings::default_path() {
             Some(path) => match self.settings.save(&path) {
                 Ok(()) => self.status = format!("設定を保存しました: {}", path.display()),

@@ -69,6 +69,18 @@ impl SettingsLoadError {
 }
 
 impl Settings {
+    /// Clamp timing fields to safe ranges before persisting or applying them.
+    ///
+    /// Bounds match the UI adjusters: 1..=60 minutes for idle lock, and
+    /// 1..=3600 seconds for login and clipboard delays.
+    pub fn sanitized(&self) -> Self {
+        let mut result = self.clone();
+        result.idle_lock_seconds = result.idle_lock_seconds.clamp(60, 3600);
+        result.login_timeout_seconds = result.login_timeout_seconds.clamp(1, 3600);
+        result.clipboard_restore_seconds = result.clipboard_restore_seconds.clamp(1, 3600);
+        result
+    }
+
     /// The default config file path.
     pub fn default_path() -> Option<PathBuf> {
         dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("settings.json"))
@@ -88,7 +100,9 @@ impl Settings {
                 SettingsLoadError::ReadFailed
             }
         })?;
-        serde_json::from_str(&contents).map_err(|_| SettingsLoadError::ParseFailed)
+        let settings: Self =
+            serde_json::from_str(&contents).map_err(|_| SettingsLoadError::ParseFailed)?;
+        Ok(settings.sanitized())
     }
 
     /// Load settings from `path`, or fall back to defaults on any error.
@@ -145,6 +159,35 @@ mod tests {
 
         let loaded = Settings::load(&path);
         assert_eq!(loaded, settings);
+    }
+
+    #[::core::prelude::v1::test]
+    fn sanitized_clamps_timing_fields() {
+        let settings = Settings {
+            idle_lock_seconds: 0,
+            login_timeout_seconds: 0,
+            clipboard_restore_seconds: 10_000,
+            ..Default::default()
+        };
+        let safe = settings.sanitized();
+        assert_eq!(safe.idle_lock_seconds, 60);
+        assert_eq!(safe.login_timeout_seconds, 1);
+        assert_eq!(safe.clipboard_restore_seconds, 3600);
+        assert_eq!(settings.idle_lock_seconds, 0, "sanitized must not mutate");
+    }
+
+    #[::core::prelude::v1::test]
+    fn load_sanitizes_hand_edited_values() {
+        let path = std::env::temp_dir().join("bitwarden-gpui-poc-sanitize.json");
+        std::fs::write(
+            &path,
+            br#"{"idle_lock_seconds":0,"login_timeout_seconds":0,"clipboard_restore_seconds":99999}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load_detailed(&path).unwrap();
+        assert_eq!(loaded.idle_lock_seconds, 60);
+        assert_eq!(loaded.login_timeout_seconds, 1);
+        assert_eq!(loaded.clipboard_restore_seconds, 3600);
     }
 
     #[test]
