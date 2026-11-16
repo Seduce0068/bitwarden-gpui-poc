@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### CI
+
+- CI の `clippy_args` 重複を削除し、`Cargo.toml` の `[lints.clippy]` を
+  唯一の設定源に統一（実際に deny が効くことを確認済み）
+
 ### ドキュメント
 
 - README に MSRV（Rust 1.88 以上）を記載
