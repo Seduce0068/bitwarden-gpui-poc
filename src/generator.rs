@@ -1210,7 +1210,7 @@ fn draw_below(bound: u16) -> Result<u16, GeneratorError> {
     Err(GeneratorError::RandomUnavailable)
 }
 
-/// [`draw_below`] for the UI: `draw_below` is private, so the panel uses this.
+/// Public wrapper around [`draw_below`] for callers outside this module.
 ///
 /// # Errors
 ///

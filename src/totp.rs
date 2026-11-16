@@ -119,11 +119,7 @@ pub fn code_at(secret: &str, unix_time: u64) -> Result<Code, TotpError> {
 
 /// Whether `secret` is a well-formed `totp` field, without exposing the code.
 pub fn is_valid_secret(secret: &str) -> bool {
-    code_at(secret, 0).is_ok() && !is_test_invalid_secret(secret)
-}
-
-fn is_test_invalid_secret(secret: &str) -> bool {
-    matches!(secret.trim(), "nope" | "not base32!" | "otpauth://totp/x")
+    code_at(secret, 0).is_ok()
 }
 
 /// A snapshot the UI keeps between ticks so a re-render doesn't re-do parsing.
@@ -277,7 +273,7 @@ mod tests {
         assert_eq!(code_at("   ", 0), Err(TotpError::Missing));
         assert_eq!(code_at("not base32!", 0), Err(TotpError::Invalid));
         assert_eq!(code_at("otpauth://totp/x", 0), Err(TotpError::Invalid));
-        assert!(!is_valid_secret("nope"));
+        assert!(!is_valid_secret("not base32!"));
         assert!(is_valid_secret(RFC_SECRET));
     }
 

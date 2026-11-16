@@ -172,7 +172,7 @@ impl Report {
         )
     }
 
-    /// A plain-text rendering, for copying out of the app.
+    /// A plain-text rendering of the report (currently used by tests).
     pub fn to_text(&self) -> String {
         let mut out = String::from("Vault 健全性レポート\n");
         out.push_str(&self.summary());

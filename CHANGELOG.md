@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### コードの整理
+
+- 本実装に埋め込まれていたテスト専用ハック `is_test_invalid_secret` を削除
+- `random_index` / `to_text` の陳腐化した doc comment を実態に合わせて修正
+
 ## [0.1.14] - 2026-11-17
 
 ### ドメイン層への集約
