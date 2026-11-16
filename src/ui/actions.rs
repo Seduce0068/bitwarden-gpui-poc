@@ -115,33 +115,8 @@ impl BitwardenApp {
     }
 
     pub(super) fn toggle_generator(&mut self, key: &str, cx: &mut Context<Self>) {
-        let state = &mut self.generator;
-        match key {
-            "1" => state.password.lowercase = !state.password.lowercase,
-            "2" => state.password.uppercase = !state.password.uppercase,
-            "3" => state.password.digits = !state.password.digits,
-            "4" => state.password.symbols = !state.password.symbols,
-            "5" => state.password.avoid_ambiguous = !state.password.avoid_ambiguous,
-            "6" => state.passphrase.capitalize = !state.passphrase.capitalize,
-            "7" => state.passphrase.include_number = !state.passphrase.include_number,
-            "+" | "=" => {
-                state.password.length = (state.password.length + 1).min(128);
-                state.passphrase.words = (state.passphrase.words + 1).min(20);
-            }
-            "-" | "_" => {
-                state.password.length = state.password.length.saturating_sub(1).max(4);
-                state.passphrase.words = state.passphrase.words.saturating_sub(1).max(2);
-            }
-            "," => {
-                state.passphrase.separator = match state.passphrase.separator.as_str() {
-                    "-" => ".".into(),
-                    "." => "_".into(),
-                    "_" => String::new(),
-                    _ => "-".into(),
-                };
-            }
-            _ => return,
+        if crate::ui::logic::apply_generator_key(&mut self.generator, key) {
+            cx.notify();
         }
-        cx.notify();
     }
 }

@@ -1,7 +1,7 @@
 //! Pure UI predicates that can be tested without a GPUI window.
 
 use crate::health::Thresholds;
-use crate::ui::model::{AuthField, Panel, Screen, SettingsField};
+use crate::ui::model::{AuthField, GeneratorState, Panel, Screen, SettingsField};
 
 /// Whether the lock screen has enough credential input to attempt a login.
 ///
@@ -23,6 +23,40 @@ pub fn selection_in_view<'a>(
         None => true,
         Some(id) => ids.into_iter().any(|candidate| candidate == id),
     }
+}
+
+/// Apply a generator-panel key to its settings.
+///
+/// Returns whether the key was recognised, so the caller can decide whether
+/// to redraw.
+pub fn apply_generator_key(state: &mut GeneratorState, key: &str) -> bool {
+    match key {
+        "1" => state.password.lowercase = !state.password.lowercase,
+        "2" => state.password.uppercase = !state.password.uppercase,
+        "3" => state.password.digits = !state.password.digits,
+        "4" => state.password.symbols = !state.password.symbols,
+        "5" => state.password.avoid_ambiguous = !state.password.avoid_ambiguous,
+        "6" => state.passphrase.capitalize = !state.passphrase.capitalize,
+        "7" => state.passphrase.include_number = !state.passphrase.include_number,
+        "+" | "=" => {
+            state.password.length = (state.password.length + 1).min(128);
+            state.passphrase.words = (state.passphrase.words + 1).min(20);
+        }
+        "-" | "_" => {
+            state.password.length = state.password.length.saturating_sub(1).max(4);
+            state.passphrase.words = state.passphrase.words.saturating_sub(1).max(2);
+        }
+        "," => {
+            state.passphrase.separator = match state.passphrase.separator.as_str() {
+                "-" => ".".into(),
+                "." => "_".into(),
+                "_" => String::new(),
+                _ => "-".into(),
+            };
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// Adjust audit thresholds by one UI step, clamping to safe bounds.
@@ -265,6 +299,28 @@ mod tests {
         assert!(selection_in_view(Some("2"), ids));
         assert!(!selection_in_view(Some("4"), ids));
         assert!(!selection_in_view(Some("1"), []));
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_keys_toggle_options_and_clamp_lengths() {
+        let mut state = GeneratorState::default();
+        assert!(apply_generator_key(&mut state, "1"));
+        assert!(!state.password.lowercase);
+        assert!(apply_generator_key(&mut state, "6"));
+        assert!(!state.passphrase.capitalize);
+
+        assert!(apply_generator_key(&mut state, "+"));
+        assert_eq!(state.password.length, 21);
+        assert_eq!(state.passphrase.words, 5);
+        assert!(apply_generator_key(&mut state, "-"));
+        assert_eq!(state.password.length, 20);
+
+        assert!(apply_generator_key(&mut state, ","));
+        assert_eq!(state.passphrase.separator, ".");
+        assert!(apply_generator_key(&mut state, ","));
+        assert_eq!(state.passphrase.separator, "_");
+
+        assert!(!apply_generator_key(&mut state, "q"));
     }
 
     #[::core::prelude::v1::test]
