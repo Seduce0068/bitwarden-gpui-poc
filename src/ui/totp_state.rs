@@ -85,6 +85,21 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn clear_then_display_a_different_secret() {
+        let mut state = TotpState::new();
+        let first = state.display(SECRET, 40);
+        assert!(state.has_secret());
+
+        state.clear();
+        assert!(!state.has_secret());
+
+        let different = "JBSWY3DPEHPK3PXP";
+        let second = state.display(different, 40);
+        assert!(state.has_secret());
+        assert_ne!(second, first, "a new secret must not reuse the old code");
+    }
+
+    #[::core::prelude::v1::test]
     fn invalid_secret_reports_failure() {
         let mut state = TotpState::new();
         let value = state.display("not base32!", 0);
