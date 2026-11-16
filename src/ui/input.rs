@@ -4,7 +4,7 @@
 //! applies the resulting action to the app state.
 
 use crate::ui::app::BitwardenApp;
-use crate::ui::logic::{classify_key, KeyAction, KeyContext};
+use crate::ui::keys::{classify_key, KeyAction, KeyContext};
 use crate::ui::state::Panel;
 use gpui_kit::*;
 
