@@ -5,6 +5,7 @@
 - `adr-20261116-openwarden-integration.md` を approved に更新
 - 実装結果と未解決事項を追記
 - オフラインキャッシュが openwarden 0.1.0 の API 制約で接続不可である旨を追記
+- `index.md` に上位のドキュメント一覧への導線を追加
 
 ## 2026-11-16
 
