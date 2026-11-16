@@ -112,28 +112,8 @@ impl BitwardenApp {
             }
             KeyAction::SaveSettings => self.save_settings(cx),
             KeyAction::AdjustThreshold(delta) => {
-                let step = delta * 5;
-                let day_step = delta * 30;
-                let thresholds = &mut self.settings.thresholds;
-                thresholds.weak_bits = if step > 0 {
-                    thresholds.weak_bits.saturating_add(step as u32).min(200)
-                } else {
-                    thresholds
-                        .weak_bits
-                        .saturating_sub(step.unsigned_abs())
-                        .min(200)
-                };
-                thresholds.stale_days = if day_step > 0 {
-                    thresholds
-                        .stale_days
-                        .saturating_add(day_step as i64)
-                        .min(3650)
-                } else {
-                    thresholds
-                        .stale_days
-                        .saturating_sub(day_step.unsigned_abs() as i64)
-                        .max(1)
-                };
+                self.settings.thresholds =
+                    crate::ui::logic::adjust_thresholds(self.settings.thresholds, delta);
                 self.refresh_audit();
                 cx.notify();
             }
