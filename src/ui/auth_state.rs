@@ -1,15 +1,23 @@
 //! Lock-screen credential state, independent of GPUI types.
 
+use zeroize::Zeroizing;
+
 use crate::ui::logic::has_credentials;
 use crate::ui::state::AuthField;
 
 /// Credentials entered on the lock screen and the active edit field.
+///
+/// Secret inputs are held in [`Zeroizing<String>`] so the final buffer is
+/// wiped when the state is dropped or a field is replaced (as on lock).
+///
+/// Like all `Vec`/`String`-based zeroization, this cannot wipe copies left
+/// behind by earlier reallocations while characters were appended one by one.
 #[derive(Default)]
 pub struct AuthState {
     field: Option<AuthField>,
     client_id: String,
-    client_secret: String,
-    master_password: String,
+    client_secret: Zeroizing<String>,
+    master_password: Zeroizing<String>,
     login_failed: bool,
 }
 
@@ -96,8 +104,9 @@ impl AuthState {
     /// Clear secrets and the failure flag on lock, keeping the client id as a
     /// convenience for the next unlock attempt.
     pub fn clear_secrets(&mut self) {
-        self.client_secret.clear();
-        self.master_password.clear();
+        // Replacing the value drops the old Zeroizing buffer, which wipes it.
+        self.client_secret = Zeroizing::new(String::new());
+        self.master_password = Zeroizing::new(String::new());
         self.login_failed = false;
         self.field = None;
     }
@@ -130,6 +139,28 @@ mod tests {
 
         state.pop_char();
         assert!(state.client_secret().is_empty());
+    }
+
+    #[::core::prelude::v1::test]
+    fn clear_secrets_replaces_secret_buffers() {
+        let mut state = AuthState::new();
+        state.set_field(Some(AuthField::ClientSecret));
+        state.push_char('s');
+        state.set_field(Some(AuthField::MasterPassword));
+        state.push_char('p');
+        assert_eq!(state.client_secret(), "s");
+        assert_eq!(state.master_password(), "p");
+
+        state.clear_secrets();
+        assert!(state.client_secret().is_empty());
+        assert!(state.master_password().is_empty());
+
+        // This verifies replacement, not the memory wipe itself: the old
+        // buffer is dropped (and zeroized) by the assignment above. Observing
+        // the bytes would require unsafe, which this crate forbids.
+        state.set_field(Some(AuthField::ClientSecret));
+        state.push_char('n');
+        assert_eq!(state.client_secret(), "n");
     }
 
     #[::core::prelude::v1::test]
