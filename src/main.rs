@@ -12,7 +12,8 @@ use bitwarden_gpui_poc::generator::{
 };
 use bitwarden_gpui_poc::health::{audit, Report, Severity};
 use bitwarden_gpui_poc::model::{
-    Filter, Folder, ItemData, ItemKind, LoginUri, SortKey, Vault, VaultItem,
+    CardData, Filter, Folder, IdentityData, ItemData, ItemKind, LoginUri, SortKey, SshKeyData,
+    Vault, VaultItem,
 };
 use bitwarden_gpui_poc::settings::Settings;
 use bitwarden_gpui_poc::totp::{self, Tick};
@@ -89,7 +90,46 @@ fn mock_vault() -> Vault {
     );
     note.revision_date = 1_700_000_300;
 
-    vault.items = vec![github, vaultwarden, mail, note];
+    let mut card = VaultItem::new(
+        "5",
+        "Visa",
+        ItemData::Card(CardData {
+            cardholder_name: "Alice Example".into(),
+            brand: "Visa".into(),
+            number: "4111 1111 1111 1234".into(),
+            exp_month: "12".into(),
+            exp_year: "2030".into(),
+            code: "123".into(),
+        }),
+    );
+    card.revision_date = 1_700_000_400;
+
+    let mut identity = VaultItem::new(
+        "6",
+        "Personal Info",
+        ItemData::Identity(IdentityData {
+            first_name: "Alice".into(),
+            last_name: "Example".into(),
+            email: "alice@example.com".into(),
+            phone: "+81-90-1234-5678".into(),
+            address: "Tokyo".into(),
+            company: "Example Corp".into(),
+        }),
+    );
+    identity.revision_date = 1_700_000_500;
+
+    let mut ssh_key = VaultItem::new(
+        "7",
+        "Laptop Key",
+        ItemData::SshKey(SshKeyData {
+            public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample alice@laptop".into(),
+            private_key: String::new(),
+            fingerprint: "SHA256:examplefingerprint".into(),
+        }),
+    );
+    ssh_key.revision_date = 1_700_000_600;
+
+    vault.items = vec![github, vaultwarden, mail, note, card, identity, ssh_key];
     vault
 }
 
