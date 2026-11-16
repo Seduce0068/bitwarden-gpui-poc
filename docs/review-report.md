@@ -62,9 +62,12 @@ High の1件と、即対応可能な Medium/Low を修正した。
 - 秘密の `zeroize` 化（security #2）: 新規依存が必要なため見送り。
 - アイドル自動ロック（security #9）とクリップボード期限の単調時計化
   （security #7）は、その後のラウンドで新規依存なしに実装した。
+- `selected` の ID ベース管理（arch #7）は完全な置き換えを見送ったが、
+  具体的なバグ（Favorites フィルタ中にお気に入りを外すと選択が外れる）
+  は `revalidate_selection()` で修正した。
 - God Object の部分状態分割、UI 状態遷移の Effect パターン化、
-  モジュール名衝突の解消、`selected` の ID ベース管理など
-  （arch #3〜#11, security #4〜#6 / #8 / #10,
+  モジュール名衝突の解消など
+  （arch #3〜#6 / #8〜#11, security #4〜#6 / #8 / #10,
   ops #4 / #10〜#12 / #14 / #15）:
   いずれも設計変更または新規依存を伴い、PoC の目的（GPUI + openwarden の
   構成検証）に直接寄与しないため見送り。

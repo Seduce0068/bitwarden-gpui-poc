@@ -157,6 +157,20 @@ impl BitwardenApp {
         cx.notify();
     }
 
+    /// Keep the selected row inside the current filtered view.
+    ///
+    /// Called after any mutation that can change which items are visible,
+    /// such as toggling a favorite while the Favorites filter is active.
+    pub(super) fn revalidate_selection(&mut self) -> bool {
+        let count = self.visible_items().len();
+        let valid = count == 0 || self.selected < count;
+        if !valid {
+            self.selected = 0;
+            self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        }
+        valid
+    }
+
     pub(super) fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self.visible_items().len();
         if count == 0 {
@@ -201,6 +215,8 @@ impl BitwardenApp {
                 "お気に入りを{}にしました",
                 if favorite { "設定" } else { "解除" }
             );
+            // Under the Favorites filter the item may have just left the view.
+            self.revalidate_selection();
             cx.notify();
         }
     }
