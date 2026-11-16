@@ -142,13 +142,13 @@ pub async fn authenticate(
         .await
         .map_err(|_| AuthError::Login)?;
     let sync = client.sync(&session).await.map_err(|_| AuthError::Sync)?;
-    let master_key = MasterKey::derive(
-        &config.master_password,
-        config.email.trim(),
-        &kdf,
-        &KdfPolicy::default(),
-    )
-    .map_err(|_| AuthError::KdfRejected)?;
+    // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
+    let password = config.master_password.clone();
+    let email = config.email.trim().to_string();
+    let policy = KdfPolicy::default();
+    let master_key = smol::unblock(move || MasterKey::derive(&password, &email, &kdf, &policy))
+        .await
+        .map_err(|_| AuthError::KdfRejected)?;
     Ok(AuthenticatedVault {
         session,
         sync,

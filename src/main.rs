@@ -7,7 +7,7 @@
 
 #![forbid(unsafe_code)]
 
-use bitwarden_gpui_poc::auth::{validate_config, AuthConfig};
+use bitwarden_gpui_poc::auth::{authenticate, validate_config, AuthConfig};
 use bitwarden_gpui_poc::generator::{
     passphrase_entropy, password_entropy, PassphraseSettings, PasswordSettings, Strength,
 };
@@ -18,9 +18,10 @@ use bitwarden_gpui_poc::model::{
 };
 use bitwarden_gpui_poc::settings::Settings;
 use bitwarden_gpui_poc::totp::{self, Tick};
+use bitwarden_gpui_poc::vault_sync;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use openwarden::SecretString;
+use openwarden::{SecretString, Vault as OpenVault};
 
 /// Seconds before a copied secret is restored to the previous clipboard value.
 const CLIPBOARD_CLEAR_SECONDS: u64 = 30;
@@ -315,19 +316,91 @@ impl BitwardenApp {
         let has_credentials = !self.client_id.is_empty()
             || !self.client_secret.is_empty()
             || !self.master_password.is_empty();
-        if has_credentials {
-            match validate_config(&config) {
-                Ok(()) => {
-                    self.status = "認証情報を検証しました（実ログインは未接続）".to_string();
-                }
-                Err(error) => {
-                    self.status = error.message().to_string();
-                    cx.notify();
-                    return;
-                }
-            }
+        if !has_credentials {
+            self.unlock_mock(cx);
+            return;
         }
-        self.unlock_mock(cx);
+        if let Err(error) = validate_config(&config) {
+            self.status = error.message().to_string();
+            cx.notify();
+            return;
+        }
+        self.status = "ログイン中…".to_string();
+        cx.notify();
+        // A fixed identifier is enough for the PoC; a real installation would
+        // persist a UUID in Settings.
+        let device_id = "bitwarden-gpui-poc-install".to_string();
+        cx.spawn(
+            |this: gpui_kit::WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let result = authenticate(&config, &device_id).await;
+                    cx.update(|cx| {
+                        this.update(cx, |view, cx| view.finish_login(result, cx))
+                            .ok();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Apply the result of an asynchronous login on the UI thread.
+    fn finish_login(
+        &mut self,
+        result: Result<
+            bitwarden_gpui_poc::auth::AuthenticatedVault,
+            bitwarden_gpui_poc::auth::AuthError,
+        >,
+        cx: &mut Context<Self>,
+    ) {
+        let authenticated = match result {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = format!("ログイン失敗: {}", error.message());
+                cx.notify();
+                return;
+            }
+        };
+        let protected_key = authenticated
+            .session
+            .protected_key()
+            .unwrap_or("")
+            .to_string();
+        if protected_key.is_empty() {
+            self.status = "ログイン失敗: 復号キーが応答にありません".to_string();
+            cx.notify();
+            return;
+        }
+        let kdf = authenticated.session.kdf();
+        let mut open_vault = match OpenVault::unlock(&authenticated.master_key, &protected_key, kdf)
+        {
+            Ok(vault) => vault,
+            Err(error) => {
+                self.status = format!("ログイン失敗: 復号キーを取得できません（{error}）");
+                cx.notify();
+                return;
+            }
+        };
+        if let Err(error) = open_vault.apply_sync(authenticated.sync) {
+            self.status = format!("ログイン失敗: 同期データを取り込めません（{error}）");
+            cx.notify();
+            return;
+        }
+        match vault_sync::import_logins(&open_vault) {
+            Ok(vault) => {
+                self.vault = vault;
+                self.screen = Screen::Unlocked;
+                self.panel = Panel::Vault;
+                self.selected = 0;
+                self.status = format!(
+                    "ログイン成功: {} 件のログインを読み込みました",
+                    self.vault.len()
+                );
+            }
+            Err(error) => self.status = format!("vault 変換失敗: {}", error.message()),
+        }
+        cx.notify();
     }
 
     fn edit_auth_field(&mut self, character: char) {
@@ -845,12 +918,9 @@ impl BitwardenApp {
                     .font_weight(FontWeight::BOLD)
                     .child("Bitwarden (GPUI PoC)"),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(0xa6adc8))
-                    .child("個人 vault クライアントの UI。認証情報は入力・検証できますが、実ログイン/同期は未接続です。"),
-            )
+            .child(div().text_sm().text_color(rgb(0xa6adc8)).child(
+                "個人 vault クライアントの UI。認証情報を入力すると実ログイン・同期を試せます。",
+            ))
             .child(auth_row(
                 "1  Server",
                 &self.server_url,
