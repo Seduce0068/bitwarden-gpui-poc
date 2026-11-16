@@ -4,7 +4,7 @@ use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::settings::Settings;
 
 /// Which top-level screen is visible.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     /// Credentials are entered here.
     Locked,
@@ -13,7 +13,7 @@ pub enum Screen {
 }
 
 /// Which panel occupies the main area while unlocked.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
     /// Vault item list.
     Vault,
@@ -26,7 +26,7 @@ pub enum Panel {
 }
 
 /// A text field being edited in the settings panel.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsField {
     /// Server URL.
     ServerUrl,
@@ -35,7 +35,7 @@ pub enum SettingsField {
 }
 
 /// A credential field being edited on the lock screen.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthField {
     /// Server URL.
     ServerUrl,
