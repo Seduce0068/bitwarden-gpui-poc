@@ -4,8 +4,8 @@
 //! The crate is split so that everything that can be tested without a window
 //! (the vault model, password generation, TOTP display, vault auditing,
 //! settings, and the clipboard policy), plus reusable GPUI view helpers
-//! (`ui`), lives in this library, while `src/main.rs` holds the app state
-//! and wiring.
+//! (`ui`, including the app state), lives in this library, while
+//! `src/main.rs` only starts the application.
 
 pub mod auth;
 pub mod cache;
