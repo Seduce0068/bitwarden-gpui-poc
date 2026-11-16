@@ -21,11 +21,11 @@ impl BitwardenApp {
             panel: self.panel,
             key: &event.keystroke.key,
             editing_auth: self.auth.field().is_some(),
-            searching: self.searching,
+            searching: self.view.searching,
             editing_settings: self.editing.is_some(),
             login_failed: self.auth.login_failed(),
-            has_audit_report: self.audit_report.is_some(),
-            query_nonempty: !self.query.is_empty(),
+            has_audit_report: self.view.audit_report.is_some(),
+            query_nonempty: !self.view.query.is_empty(),
         };
         match classify_key(&ctx) {
             KeyAction::Quit => cx.quit(),
@@ -42,8 +42,8 @@ impl BitwardenApp {
                 if self.auth.take_field().is_some() {
                     // Lock-screen credentials are already stored in the
                     // fields; no extra sync is needed.
-                } else if self.searching {
-                    self.searching = false;
+                } else if self.view.searching {
+                    self.view.searching = false;
                 } else if self.editing.take().is_some() {
                     self.sync_settings_from_ui();
                 }
@@ -52,9 +52,9 @@ impl BitwardenApp {
             KeyAction::InsertChar(character) => {
                 if self.auth.field().is_some() {
                     self.edit_auth_field(character);
-                } else if self.searching {
-                    self.query.push(character);
-                    self.selected_id = None;
+                } else if self.view.searching {
+                    self.view.query.push(character);
+                    self.view.selected_id = None;
                 } else if self.editing.is_some() {
                     self.push_editing(character);
                 }
@@ -63,14 +63,14 @@ impl BitwardenApp {
             KeyAction::Backspace => {
                 if self.auth.field().is_some() {
                     self.backspace_auth_field();
-                } else if self.searching {
-                    self.query.pop();
-                    self.selected_id = None;
+                } else if self.view.searching {
+                    self.view.query.pop();
+                    self.view.selected_id = None;
                 } else if self.editing.is_some() {
                     self.pop_editing();
-                } else if !self.query.is_empty() {
-                    self.query.pop();
-                    self.selected_id = None;
+                } else if !self.view.query.is_empty() {
+                    self.view.query.pop();
+                    self.view.selected_id = None;
                 }
                 cx.notify();
             }
@@ -100,14 +100,14 @@ impl BitwardenApp {
             KeyAction::CopyTotp => self.copy_totp(cx),
             KeyAction::CycleFilter => self.cycle_filter(cx),
             KeyAction::CycleSort => {
-                self.sort = self.sort.next();
-                self.selected_id = None;
+                self.view.sort = self.view.sort.next();
+                self.view.selected_id = None;
                 cx.notify();
             }
             KeyAction::StartSearch => {
-                self.searching = true;
-                self.query.clear();
-                self.selected_id = None;
+                self.view.searching = true;
+                self.view.query.clear();
+                self.view.selected_id = None;
                 cx.notify();
             }
             KeyAction::SaveSettings => self.save_settings(cx),

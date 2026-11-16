@@ -13,3 +13,4 @@ pub mod panels;
 pub mod render;
 pub mod timing;
 pub mod totp_state;
+pub mod vault_view;
