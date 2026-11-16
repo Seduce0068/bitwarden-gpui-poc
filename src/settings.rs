@@ -25,6 +25,8 @@ pub struct Settings {
     pub thresholds: Thresholds,
     /// Seconds of inactivity before the vault auto-locks.
     pub idle_lock_seconds: u64,
+    /// Time budget for a real login attempt.
+    pub login_timeout_seconds: u64,
 }
 
 impl Default for Settings {
@@ -36,6 +38,7 @@ impl Default for Settings {
             passphrase_generator: PassphraseSettings::default(),
             thresholds: Thresholds::default(),
             idle_lock_seconds: 300,
+            login_timeout_seconds: 30,
         }
     }
 }
@@ -112,6 +115,8 @@ mod tests {
         let settings = Settings::default();
         assert!(settings.server_url.contains("bitwarden"));
         assert!(settings.email.is_empty());
+        assert_eq!(settings.idle_lock_seconds, 300);
+        assert_eq!(settings.login_timeout_seconds, 30);
     }
 
     #[test]
@@ -127,6 +132,8 @@ mod tests {
                 weak_bits: 60,
                 ..Default::default()
             },
+            idle_lock_seconds: 600,
+            login_timeout_seconds: 45,
             ..Default::default()
         };
         settings.save(&path).expect("failed to save settings");
