@@ -66,6 +66,23 @@ impl core::fmt::Display for AuthError {
 
 impl std::error::Error for AuthError {}
 
+/// Errors produced while reading an offline sync cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncCacheError {
+    /// The cached body is missing or cannot be parsed.
+    InvalidCache,
+    /// The cache belongs to a different account or server.
+    UserMismatch,
+}
+
+impl core::fmt::Display for SyncCacheError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(crate::cache::cache_error_message(*self))
+    }
+}
+
+impl std::error::Error for SyncCacheError {}
+
 /// Validate everything that does not require a network round trip.
 ///
 /// # Errors
