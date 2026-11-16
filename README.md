@@ -20,6 +20,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - ロック画面で Personal API key とマスターパスワードを入力し、`openwarden`
   による実ログイン・同期・復号を試せる（認証情報が未入力ならモック vault）
 - KDF 計算は blocking thread で実行し、待機中も UI は操作できる
+- ログイン全体に 30 秒のタイムアウトを設定し、失敗時は `r` で再試行できる
 
 ## 画面と操作
 
@@ -27,6 +28,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 | --- | --- |
 | `1`〜`5` | サーバーURL / メール / Client ID / Client Secret / パスワードを編集（ロック画面） |
 | `Enter` | 認証情報でログイン（未入力ならモック vault を開く） |
+| `r` | ログイン失敗時に再試行 |
 | `↑` / `↓` | 項目を選択 |
 | `f` | お気に入りを切り替え |
 | `t` | フィルタを切り替え |
