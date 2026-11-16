@@ -23,9 +23,11 @@ impl BitwardenApp {
     /// Without credentials the demo vault is opened instead.
     pub(super) fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
         let config = self.auth_config();
-        let has_credentials = !self.client_id.is_empty()
-            || !self.client_secret.is_empty()
-            || !self.master_password.is_empty();
+        let has_credentials = crate::ui::logic::has_credentials(
+            &self.client_id,
+            &self.client_secret,
+            &self.master_password,
+        );
         if !has_credentials {
             self.unlock_mock(cx);
             return;
