@@ -274,8 +274,12 @@ impl VaultItem {
     }
 
     /// Every searchable text field, lowercased lazily by the caller.
-    fn haystacks(&self) -> Vec<&str> {
-        let mut out = vec![self.name.as_str(), self.notes.as_str()];
+    fn haystacks(&self) -> Vec<std::borrow::Cow<'_, str>> {
+        use std::borrow::Cow;
+        let mut out: Vec<Cow<'_, str>> = vec![
+            Cow::Borrowed(self.name.as_str()),
+            Cow::Borrowed(self.notes.as_str()),
+        ];
         match &self.data {
             ItemData::Login {
                 username,
@@ -283,30 +287,32 @@ impl VaultItem {
                 totp,
                 ..
             } => {
-                out.push(username);
-                out.push(totp);
-                out.extend(uris.iter().map(|u| u.uri.as_str()));
+                out.push(Cow::Borrowed(username));
+                out.push(Cow::Borrowed(totp));
+                out.extend(uris.iter().map(|u| Cow::Borrowed(u.uri.as_str())));
             }
-            ItemData::SecureNote { text } => out.push(text),
+            ItemData::SecureNote { text } => out.push(Cow::Borrowed(text)),
             ItemData::Card(card) => {
-                out.push(&card.cardholder_name);
-                out.push(&card.brand);
-                // The full number is deliberately not searchable: only the last
-                // four digits are, so a partial PAN can't be fished out.
-                if let Some(last4) = card.number.rsplit(' ').next() {
-                    out.push(last4);
+                out.push(Cow::Borrowed(&card.cardholder_name));
+                out.push(Cow::Borrowed(&card.brand));
+                // Only the last four digits are searchable, regardless of how
+                // the number is grouped. A full PAN must never be fished out
+                // through search, so strip all non-digits first.
+                let digits: String = card.number.chars().filter(|c| c.is_ascii_digit()).collect();
+                if digits.len() >= 4 {
+                    out.push(Cow::Owned(digits[digits.len() - 4..].to_string()));
                 }
             }
             ItemData::Identity(identity) => {
-                out.push(&identity.first_name);
-                out.push(&identity.last_name);
-                out.push(&identity.email);
-                out.push(&identity.phone);
-                out.push(&identity.company);
+                out.push(Cow::Borrowed(&identity.first_name));
+                out.push(Cow::Borrowed(&identity.last_name));
+                out.push(Cow::Borrowed(&identity.email));
+                out.push(Cow::Borrowed(&identity.phone));
+                out.push(Cow::Borrowed(&identity.company));
             }
             ItemData::SshKey(key) => {
-                out.push(&key.public_key);
-                out.push(&key.fingerprint);
+                out.push(Cow::Borrowed(&key.public_key));
+                out.push(Cow::Borrowed(&key.fingerprint));
             }
         }
         out
@@ -759,6 +765,27 @@ mod tests {
         assert_eq!(
             vault
                 .view(&Filter::All, "4111 1111", SortKey::NameAsc)
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn unspaced_card_numbers_are_also_masked_to_last_four() {
+        let mut vault = Vault::new();
+        vault.items.push(VaultItem::new(
+            "c",
+            "Visa",
+            ItemData::Card(CardData {
+                number: "4111111111111234".into(),
+                ..CardData::default()
+            }),
+        ));
+        assert_eq!(vault.view(&Filter::All, "1234", SortKey::NameAsc).len(), 1);
+        // The full PAN must never be searchable, with or without spaces.
+        assert_eq!(
+            vault
+                .view(&Filter::All, "411111111111", SortKey::NameAsc)
                 .len(),
             0
         );
