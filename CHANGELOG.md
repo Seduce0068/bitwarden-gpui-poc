@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-17
+
 ### 入力処理の明確化
 
 - 曖昧な `FinishEdit` を `FinishAuthEdit` / `FinishSearch` /
