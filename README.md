@@ -69,6 +69,8 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 
 ## ビルドと検証
 
+Rust 1.88 以上が必要です（`Cargo.toml` の `rust-version`）。
+
 ```bash
 cd work/bitwarden-gpui-poc
 cargo fmt --all -- --check
