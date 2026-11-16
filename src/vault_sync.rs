@@ -66,21 +66,43 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
     Ok(folders)
 }
 
-/// Convert one `openwarden` login's metadata into a model item.
+/// Convert one `openwarden` login into a model item, decrypting the
+/// non-secret fields through the public API.
 ///
-/// Passwords are deliberately left empty: the UI shows their length only
-/// after an explicit field read, and this step avoids decrypting every
-/// secret in the vault up front.
-fn login_item(info: &LoginInfo) -> VaultItem {
+/// Passwords and TOTP secrets stay blank: the UI only needs their presence
+/// and length, so we avoid holding every decrypted secret in the model.
+fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
     let id = info.id.as_str().to_string();
+    let name = vault
+        .name(&info.id)
+        .ok()
+        .map(|value| value.expose_secret().to_string())
+        .unwrap_or_else(|| format!("ログイン ({id})"));
+    let username = vault
+        .username(&info.id)
+        .ok()
+        .flatten()
+        .map(|value| value.expose_secret().to_string())
+        .unwrap_or_default();
+    let uris = vault
+        .uris(&info.id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|uri| LoginUri {
+            uri: uri.uri.expose_secret().to_string(),
+            match_type: uri.match_type.map(|kind| kind.to_wire()),
+        })
+        .collect();
     let mut item = VaultItem::new(
         id.clone(),
-        format!("ログイン ({id})"),
+        name,
         ItemData::Login {
-            username: String::new(),
+            username,
             password: String::new(),
+            // The UI only checks whether the secret is present; keeping the
+            // marker avoids decrypting every TOTP secret up front.
             totp: if info.has_totp { "available" } else { "" }.to_string(),
-            uris: Vec::<LoginUri>::new(),
+            uris,
         },
     );
     item.folder_id = info
@@ -137,7 +159,7 @@ pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
         ..Vault::default()
     };
     for info in vault.logins() {
-        model.items.push(login_item(&info));
+        model.items.push(login_item(vault, &info));
     }
     Ok(model)
 }
