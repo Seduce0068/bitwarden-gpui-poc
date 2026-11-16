@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.28] - 2026-11-17
+
 ### SSRF 対策の強化
 
 - IPv4-mapped IPv6 アドレス（`::ffff:169.254.169.254`）による link-local フィルタの
