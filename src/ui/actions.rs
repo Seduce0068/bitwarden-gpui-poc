@@ -43,7 +43,9 @@ impl BitwardenApp {
             });
         }
         cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
-        self.clipboard_clear_at = Some(totp::now_unix() + CLIPBOARD_CLEAR_SECONDS);
+        self.clipboard_clear_at = Some(
+            std::time::Instant::now() + std::time::Duration::from_secs(CLIPBOARD_CLEAR_SECONDS),
+        );
         self.status =
             format!("クリップボードにコピーしました（{CLIPBOARD_CLEAR_SECONDS}秒後に復元）");
         cx.notify();

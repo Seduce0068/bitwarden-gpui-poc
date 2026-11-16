@@ -11,6 +11,7 @@ impl BitwardenApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.last_activity = std::time::Instant::now();
         match self.screen {
             Screen::Locked => {
                 let key = event.keystroke.key.as_str();

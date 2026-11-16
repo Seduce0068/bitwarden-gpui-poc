@@ -11,6 +11,9 @@ use gpui_kit::*;
 /// Seconds before a copied secret is restored to the previous clipboard value.
 pub(super) const CLIPBOARD_CLEAR_SECONDS: u64 = 30;
 
+/// Seconds of inactivity before an unlocked vault is locked automatically.
+pub(super) const IDLE_LOCK_SECONDS: u64 = 300;
+
 pub struct BitwardenApp {
     pub(super) screen: Screen,
     pub(super) server_url: String,
@@ -34,7 +37,8 @@ pub struct BitwardenApp {
     pub(super) client_secret: String,
     pub(super) master_password: String,
     pub(super) clipboard_restore: Option<String>,
-    pub(super) clipboard_clear_at: Option<u64>,
+    pub(super) clipboard_clear_at: Option<std::time::Instant>,
+    pub(super) last_activity: std::time::Instant,
     pub(super) login_failed: bool,
     pub(super) scroll_handle: UniformListScrollHandle,
     pub focus_handle: FocusHandle,
@@ -67,6 +71,7 @@ impl BitwardenApp {
             master_password: String::new(),
             clipboard_restore: None,
             clipboard_clear_at: None,
+            last_activity: std::time::Instant::now(),
             login_failed: false,
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
@@ -86,20 +91,28 @@ impl BitwardenApp {
                         smol::Timer::after(std::time::Duration::from_secs(1)).await;
                         let alive = cx.update(|cx| {
                             this.update(cx, |view, cx| {
-                                let now = totp::now_unix();
+                                let instant = std::time::Instant::now();
                                 if view
                                     .clipboard_clear_at
-                                    .is_some_and(|deadline| now >= deadline)
+                                    .is_some_and(|deadline| instant >= deadline)
                                 {
                                     view.restore_clipboard(cx);
                                     cx.notify();
                                 }
-                                if view.screen == Screen::Unlocked
-                                    && view.panel == Panel::Vault
-                                    && !view.totp_secret.is_empty()
-                                {
-                                    view.totp_tick = None;
-                                    cx.notify();
+                                if view.screen == Screen::Unlocked {
+                                    if instant.duration_since(view.last_activity)
+                                        >= std::time::Duration::from_secs(IDLE_LOCK_SECONDS)
+                                    {
+                                        view.lock(cx);
+                                        view.status = format!(
+                                            "無操作のため自動ロックしました（{IDLE_LOCK_SECONDS}秒）"
+                                        );
+                                        return;
+                                    }
+                                    if view.panel == Panel::Vault && !view.totp_secret.is_empty() {
+                                        view.totp_tick = None;
+                                        cx.notify();
+                                    }
                                 }
                             })
                             .is_ok()
@@ -139,6 +152,7 @@ impl BitwardenApp {
         self.searching = false;
         self.selected = 0;
         self.screen = Screen::Locked;
+        self.last_activity = std::time::Instant::now();
         self.status = "ロックしました（Enter でモック解除）".to_string();
         cx.notify();
     }
