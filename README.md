@@ -79,6 +79,8 @@ fmt → check → test → clippy → `cargo audit` のゲートを実行しま�
 clippy では加えて `unwrap_used` / `expect_used` / `panic` を deny します。
 監査は脆弱性検出時に失敗し、unmaintained の warning は失敗させません。
 
+変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
+
 ## 既知の制約
 
 - openwarden は v0.1 の早期実装（個人 vault 向け、組織/2FA/一部 item type 未対応、roadmap 参照）
