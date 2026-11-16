@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-11-17
+
 ### CI
 
 - CI の `clippy_args` 重複を削除し、`Cargo.toml` の `[lints.clippy]` を
