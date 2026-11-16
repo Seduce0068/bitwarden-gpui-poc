@@ -92,6 +92,10 @@ clippy の `unwrap_used` / `expect_used` / `panic` deny は `Cargo.toml` の
 `[lints.clippy]` で一元管理しています。
 監査は脆弱性検出時に失敗し、unmaintained の warning は失敗させません。
 
+## ライセンス
+
+[AGPL-3.0-or-later](LICENSE)（[GNU 公式文書](https://www.gnu.org/licenses/agpl-3.0.txt)）。
+
 変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ## 既知の制約
