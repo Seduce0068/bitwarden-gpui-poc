@@ -188,6 +188,9 @@ mod tests {
     #[test]
     fn malformed_sync_body_is_reported() {
         assert!(parse_sync(b"not json").is_err());
+        // profile.id is required by openwarden's sync wire format.
+        assert!(parse_sync(br#"{"folders": [], "ciphers": []}"#).is_err());
+        assert!(parse_sync(br#"{"profile": {}}"#).is_err());
     }
 
     #[test]
