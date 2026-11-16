@@ -24,7 +24,7 @@ pub struct BitwardenApp {
     pub(super) query: String,
     pub(super) sort: SortKey,
     pub(super) searching: bool,
-    pub(super) selected: usize,
+    pub(super) selected_id: Option<String>,
     pub(super) totp_secret: String,
     pub(super) totp_tick: Option<Tick>,
     pub(super) audit_report: Option<Report>,
@@ -57,7 +57,7 @@ impl BitwardenApp {
             query: String::new(),
             sort: SortKey::NameAsc,
             searching: false,
-            selected: 0,
+            selected_id: None,
             totp_secret: String::new(),
             totp_tick: None,
             audit_report: None,
@@ -152,7 +152,7 @@ impl BitwardenApp {
         self.filter = Filter::All;
         self.sort = SortKey::NameAsc;
         self.searching = false;
-        self.selected = 0;
+        self.selected_id = None;
         self.screen = Screen::Locked;
         self.last_activity = std::time::Instant::now();
         self.status = "ロックしました（Enter でモック解除）".to_string();
@@ -164,24 +164,32 @@ impl BitwardenApp {
     /// Called after any mutation that can change which items are visible,
     /// such as toggling a favorite while the Favorites filter is active.
     pub(super) fn revalidate_selection(&mut self) -> bool {
-        let count = self.visible_items().len();
-        let valid = crate::ui::logic::selection_is_valid(self.selected, count);
+        let visible = self.visible_items();
+        let valid = crate::ui::logic::selection_in_view(
+            self.selected_id.as_deref(),
+            visible.iter().map(|item| item.id.as_str()),
+        );
         if !valid {
-            self.selected = 0;
+            self.selected_id = None;
             self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         }
         valid
     }
 
     pub(super) fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.visible_items().len();
-        if count == 0 {
+        let visible = self.visible_items();
+        if visible.is_empty() {
             return;
         }
-        let len = count as isize;
-        let next = (self.selected as isize + delta).clamp(0, len - 1) as usize;
-        if self.selected != next {
-            self.selected = next;
+        let current = self
+            .selected_id
+            .as_deref()
+            .and_then(|id| visible.iter().position(|item| item.id == id))
+            .unwrap_or(0);
+        let next = (current as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
+        let id = visible[next].id.clone();
+        if self.selected_id.as_deref() != Some(id.as_str()) {
+            self.selected_id = Some(id);
             self.scroll_handle
                 .scroll_to_item(next, ScrollStrategy::Nearest);
             cx.notify();
@@ -199,16 +207,16 @@ impl BitwardenApp {
             Filter::Kind(ItemKind::SshKey) => Filter::NoFolder,
             Filter::NoFolder | Filter::Folder(_) => Filter::All,
         };
-        self.selected = 0;
+        self.selected_id = None;
         self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
     }
 
     pub(super) fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self
-            .visible_items()
-            .get(self.selected)
-            .map(|item| item.id.clone())
+            .selected_id
+            .clone()
+            .or_else(|| self.visible_items().first().map(|item| item.id.clone()))
         else {
             return;
         };
@@ -244,7 +252,11 @@ impl BitwardenApp {
     pub(super) fn selected_detail(&mut self) -> String {
         let Some((base, data)) = (|| {
             let visible = self.visible_items();
-            let item = visible.get(self.selected.min(visible.len().saturating_sub(1)))?;
+            let item = self
+                .selected_id
+                .as_deref()
+                .and_then(|id| visible.iter().find(|item| item.id == id))
+                .or_else(|| visible.first())?;
             Some((
                 format!(
                     "{} | {} | 更新: {}",

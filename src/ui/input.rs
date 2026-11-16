@@ -54,7 +54,7 @@ impl BitwardenApp {
                     self.edit_auth_field(character);
                 } else if self.searching {
                     self.query.push(character);
-                    self.selected = 0;
+                    self.selected_id = None;
                 } else if self.editing.is_some() {
                     self.push_editing(character);
                 }
@@ -65,12 +65,12 @@ impl BitwardenApp {
                     self.backspace_auth_field();
                 } else if self.searching {
                     self.query.pop();
-                    self.selected = 0;
+                    self.selected_id = None;
                 } else if self.editing.is_some() {
                     self.pop_editing();
                 } else if !self.query.is_empty() {
                     self.query.pop();
-                    self.selected = 0;
+                    self.selected_id = None;
                 }
                 cx.notify();
             }
@@ -101,13 +101,13 @@ impl BitwardenApp {
             KeyAction::CycleFilter => self.cycle_filter(cx),
             KeyAction::CycleSort => {
                 self.sort = self.sort.next();
-                self.selected = 0;
+                self.selected_id = None;
                 cx.notify();
             }
             KeyAction::StartSearch => {
                 self.searching = true;
                 self.query.clear();
-                self.selected = 0;
+                self.selected_id = None;
                 cx.notify();
             }
             KeyAction::SaveSettings => self.save_settings(cx),
