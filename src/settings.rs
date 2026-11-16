@@ -23,6 +23,8 @@ pub struct Settings {
     pub passphrase_generator: PassphraseSettings,
     /// Vault-health thresholds.
     pub thresholds: Thresholds,
+    /// Seconds of inactivity before the vault auto-locks.
+    pub idle_lock_seconds: u64,
 }
 
 impl Default for Settings {
@@ -33,6 +35,7 @@ impl Default for Settings {
             password_generator: PasswordSettings::default(),
             passphrase_generator: PassphraseSettings::default(),
             thresholds: Thresholds::default(),
+            idle_lock_seconds: 300,
         }
     }
 }

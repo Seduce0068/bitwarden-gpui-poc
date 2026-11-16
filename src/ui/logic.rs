@@ -32,6 +32,14 @@ pub fn compute_audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report 
     audit(vault, thresholds, now)
 }
 
+/// Adjust the idle auto-lock timeout in one-minute steps, clamped to 1..=60
+/// minutes.
+pub fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
+    let current_minutes = (current_seconds / 60).clamp(1, 60) as i64;
+    let next = (current_minutes + i64::from(delta_minutes)).clamp(1, 60);
+    (next * 60) as u64
+}
+
 /// Adjust audit thresholds by one UI step, clamping to safe bounds.
 ///
 /// `delta` is +1 for `+`/`=` and -1 for `-`/`_`.
@@ -89,6 +97,14 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.examined, 0);
         assert!(first.items.is_empty());
+    }
+
+    #[::core::prelude::v1::test]
+    fn idle_lock_adjustment_clamps_to_one_and_sixty_minutes() {
+        assert_eq!(adjust_idle_lock(300, 1), 360);
+        assert_eq!(adjust_idle_lock(300, -1), 240);
+        assert_eq!(adjust_idle_lock(60, -1), 60);
+        assert_eq!(adjust_idle_lock(3600, 1), 3600);
     }
 
     #[::core::prelude::v1::test]

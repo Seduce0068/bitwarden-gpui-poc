@@ -130,6 +130,11 @@ impl BitwardenApp {
                 self.refresh_audit();
                 cx.notify();
             }
+            KeyAction::AdjustIdleLock(delta) => {
+                self.settings.idle_lock_seconds =
+                    crate::ui::logic::adjust_idle_lock(self.settings.idle_lock_seconds, delta);
+                cx.notify();
+            }
             KeyAction::ToggleLowercase => self.toggle_generator("1", cx),
             KeyAction::ToggleUppercase => self.toggle_generator("2", cx),
             KeyAction::ToggleDigits => self.toggle_generator("3", cx),
