@@ -10,10 +10,11 @@
 use bitwarden_gpui_poc::generator::{
     passphrase_entropy, password_entropy, PassphraseSettings, PasswordSettings, Strength,
 };
-use bitwarden_gpui_poc::health::{audit, Report, Severity, Thresholds};
+use bitwarden_gpui_poc::health::{audit, Report, Severity};
 use bitwarden_gpui_poc::model::{
     Filter, Folder, ItemData, ItemKind, LoginUri, SortKey, Vault, VaultItem,
 };
+use bitwarden_gpui_poc::settings::Settings;
 use bitwarden_gpui_poc::totp::{self, Tick};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -104,6 +105,14 @@ enum Panel {
     Vault,
     Audit,
     Generator,
+    Settings,
+}
+
+/// A text field being edited in the settings panel.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsField {
+    ServerUrl,
+    Email,
 }
 
 /// Editable generator settings and the last values drawn from them.
@@ -113,6 +122,17 @@ struct GeneratorState {
     passphrase: PassphraseSettings,
     last_password: Option<String>,
     last_passphrase: Option<String>,
+}
+
+impl GeneratorState {
+    fn from_settings(settings: &Settings) -> Self {
+        Self {
+            password: settings.password_generator.clone(),
+            passphrase: settings.passphrase_generator.clone(),
+            last_password: None,
+            last_passphrase: None,
+        }
+    }
 }
 
 struct BitwardenApp {
@@ -131,16 +151,19 @@ struct BitwardenApp {
     audit_report: Option<Report>,
     panel: Panel,
     generator: GeneratorState,
+    settings: Settings,
+    editing: Option<SettingsField>,
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
 }
 
 impl BitwardenApp {
     fn new(cx: &mut Context<Self>) -> Self {
+        let settings = Settings::load(Settings::default_path().unwrap_or_default());
         let mut this = Self {
             screen: Screen::Locked,
-            server_url: "https://vault.bitwarden.com".to_string(),
-            email: String::new(),
+            server_url: settings.server_url.clone(),
+            email: settings.email.clone(),
             status: "ロック中: Enter でモック vault を開く / Esc で終了".to_string(),
             vault: Vault::new(),
             filter: Filter::All,
@@ -152,7 +175,9 @@ impl BitwardenApp {
             totp_tick: None,
             audit_report: None,
             panel: Panel::Vault,
-            generator: GeneratorState::default(),
+            generator: GeneratorState::from_settings(&settings),
+            settings,
+            editing: None,
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -198,17 +223,14 @@ impl BitwardenApp {
 
     fn unlock_mock(&mut self, cx: &mut Context<Self>) {
         self.vault = mock_vault();
-        self.audit_report = Some(audit(
-            &self.vault,
-            Thresholds::default(),
-            i64::try_from(totp::now_unix()).unwrap_or(i64::MAX),
-        ));
+        self.generator = GeneratorState::from_settings(&self.settings);
+        self.refresh_audit();
         self.panel = Panel::Vault;
         self.screen = Screen::Unlocked;
         self.selected = 0;
         self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         self.status = format!(
-            "同期済み（モック）: {} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / g 監査 / n 生成 / l ロック / Esc 終了",
+            "同期済み（モック）: {} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",
             self.vault.len()
         );
         cx.notify();
@@ -218,7 +240,8 @@ impl BitwardenApp {
         self.vault = Vault::new();
         self.audit_report = None;
         self.panel = Panel::Vault;
-        self.generator = GeneratorState::default();
+        self.generator = GeneratorState::from_settings(&self.settings);
+        self.editing = None;
         self.totp_secret.clear();
         self.totp_tick = None;
         self.query.clear();
@@ -344,6 +367,54 @@ impl BitwardenApp {
         }
     }
 
+    /// Copy editable UI state back into the persistent settings object.
+    fn sync_settings_from_ui(&mut self) {
+        self.settings.server_url = self.server_url.clone();
+        self.settings.email = self.email.clone();
+        self.settings.password_generator = self.generator.password.clone();
+        self.settings.passphrase_generator = self.generator.passphrase.clone();
+    }
+
+    fn save_settings(&mut self, cx: &mut Context<Self>) {
+        self.sync_settings_from_ui();
+        match Settings::default_path() {
+            Some(path) => match self.settings.save(&path) {
+                Ok(()) => self.status = format!("設定を保存しました: {}", path.display()),
+                Err(error) => self.status = format!("設定の保存に失敗: {error}"),
+            },
+            None => self.status = "設定ディレクトリを特定できません".to_string(),
+        }
+        cx.notify();
+    }
+
+    fn refresh_audit(&mut self) {
+        self.audit_report = Some(audit(
+            &self.vault,
+            self.settings.thresholds,
+            i64::try_from(totp::now_unix()).unwrap_or(i64::MAX),
+        ));
+    }
+
+    fn push_editing(&mut self, character: char) {
+        match self.editing {
+            Some(SettingsField::ServerUrl) => self.settings.server_url.push(character),
+            Some(SettingsField::Email) => self.settings.email.push(character),
+            None => {}
+        }
+    }
+
+    fn pop_editing(&mut self) {
+        match self.editing {
+            Some(SettingsField::ServerUrl) => {
+                self.settings.server_url.pop();
+            }
+            Some(SettingsField::Email) => {
+                self.settings.email.pop();
+            }
+            None => {}
+        }
+    }
+
     fn generate_password(&mut self, cx: &mut Context<Self>) {
         match self.generator.password.generate() {
             Ok(value) => {
@@ -452,6 +523,62 @@ impl BitwardenApp {
                     }
                     return;
                 }
+                if self.panel == Panel::Settings {
+                    if self.editing.is_some() {
+                        match key {
+                            "escape" | "enter" => {
+                                self.editing = None;
+                                self.sync_settings_from_ui();
+                                cx.notify();
+                            }
+                            "backspace" => {
+                                self.pop_editing();
+                                cx.notify();
+                            }
+                            value if value.chars().count() == 1 => {
+                                if let Some(character) = value.chars().next() {
+                                    self.push_editing(character);
+                                    cx.notify();
+                                }
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+                    match key {
+                        "escape" => cx.quit(),
+                        "c" => {
+                            self.panel = Panel::Vault;
+                            cx.notify();
+                        }
+                        "l" => self.lock(cx),
+                        "1" => {
+                            self.editing = Some(SettingsField::ServerUrl);
+                            cx.notify();
+                        }
+                        "2" => {
+                            self.editing = Some(SettingsField::Email);
+                            cx.notify();
+                        }
+                        "+" | "=" => {
+                            let thresholds = &mut self.settings.thresholds;
+                            thresholds.weak_bits = (thresholds.weak_bits + 5).min(200);
+                            thresholds.stale_days = (thresholds.stale_days + 30).min(3650);
+                            self.refresh_audit();
+                            cx.notify();
+                        }
+                        "-" | "_" => {
+                            let thresholds = &mut self.settings.thresholds;
+                            thresholds.weak_bits = thresholds.weak_bits.saturating_sub(5);
+                            thresholds.stale_days = thresholds.stale_days.saturating_sub(30).max(1);
+                            self.refresh_audit();
+                            cx.notify();
+                        }
+                        "w" => self.save_settings(cx),
+                        _ => {}
+                    }
+                    return;
+                }
                 match key {
                     "escape" => cx.quit(),
                     "up" => self.move_selection(-1, cx),
@@ -470,6 +597,10 @@ impl BitwardenApp {
                     }
                     "n" => {
                         self.panel = Panel::Generator;
+                        cx.notify();
+                    }
+                    "c" => {
+                        self.panel = Panel::Settings;
                         cx.notify();
                     }
                     "/" => {
@@ -819,6 +950,75 @@ fn generator_panel<'a>(state: &'a GeneratorState) -> impl IntoElement + 'a {
         )
 }
 
+fn field_row<'a>(label: &'a str, value: &'a str, editing: bool) -> impl IntoElement + 'a {
+    div()
+        .flex()
+        .gap_3()
+        .text_sm()
+        .child(
+            div()
+                .w(px(170.0))
+                .text_color(rgb(0x89b4fa))
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .font_weight(if editing {
+                    FontWeight::BOLD
+                } else {
+                    FontWeight::NORMAL
+                })
+                .text_color(if editing {
+                    rgb(0xf9e2af)
+                } else {
+                    rgb(0xcdd6f4)
+                })
+                .child(format!("{value}{}", if editing { " _" } else { "" })),
+        )
+}
+
+fn settings_panel<'a>(app: &'a BitwardenApp) -> impl IntoElement + 'a {
+    let settings = &app.settings;
+    let path = Settings::default_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "(設定ディレクトリを特定できません)".to_string());
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_4()
+        .flex_1()
+        .child(div().text_lg().font_weight(FontWeight::BOLD).child("設定"))
+        .child(field_row(
+            "1  サーバー URL",
+            &settings.server_url,
+            app.editing == Some(SettingsField::ServerUrl),
+        ))
+        .child(field_row(
+            "2  メール",
+            &settings.email,
+            app.editing == Some(SettingsField::Email),
+        ))
+        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
+            "生成設定: パスワード {} 文字 / パスフレーズ {} 語（n キーで編集）",
+            settings.password_generator.length, settings.passphrase_generator.words
+        )))
+        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
+            "監査閾値: 弱パスワード < {} bit / 更新が古い: {} 日以上",
+            settings.thresholds.weak_bits, settings.thresholds.stale_days
+        )))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0x6c7086))
+                .child(format!("保存先: {path}")),
+        )
+        .child(div().mt_4().text_xs().text_color(rgb(0x6c7086)).child(
+            "1,2: 編集 / enter: 確定 / +/-: 閾値調整 / w: 保存 / c: 戻る / l: ロック / Esc: 終了",
+        ))
+}
+
 fn info_row(label: &str, value: &str) -> impl IntoElement {
     div()
         .flex()
@@ -871,6 +1071,9 @@ impl Render for BitwardenApp {
             },
             Screen::Unlocked if self.panel == Panel::Generator => {
                 generator_panel(&self.generator).into_any_element()
+            }
+            Screen::Unlocked if self.panel == Panel::Settings => {
+                settings_panel(self).into_any_element()
             }
             Screen::Unlocked => self.render_unlocked(cx).into_any_element(),
         };
