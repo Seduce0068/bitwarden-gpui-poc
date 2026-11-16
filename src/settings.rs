@@ -27,6 +27,8 @@ pub struct Settings {
     pub idle_lock_seconds: u64,
     /// Time budget for a real login attempt.
     pub login_timeout_seconds: u64,
+    /// Seconds before a copied secret is restored to the clipboard.
+    pub clipboard_restore_seconds: u64,
 }
 
 impl Default for Settings {
@@ -39,6 +41,7 @@ impl Default for Settings {
             thresholds: Thresholds::default(),
             idle_lock_seconds: 300,
             login_timeout_seconds: 30,
+            clipboard_restore_seconds: 30,
         }
     }
 }
@@ -117,6 +120,7 @@ mod tests {
         assert!(settings.email.is_empty());
         assert_eq!(settings.idle_lock_seconds, 300);
         assert_eq!(settings.login_timeout_seconds, 30);
+        assert_eq!(settings.clipboard_restore_seconds, 30);
     }
 
     #[test]
@@ -134,6 +138,7 @@ mod tests {
             },
             idle_lock_seconds: 600,
             login_timeout_seconds: 45,
+            clipboard_restore_seconds: 60,
             ..Default::default()
         };
         settings.save(&path).expect("failed to save settings");

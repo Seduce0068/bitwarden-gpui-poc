@@ -39,11 +39,9 @@ impl BitwardenApp {
 
     /// Copy `value` to the clipboard with automatic restoration.
     pub(super) fn copy_to_clipboard(&mut self, value: &str, cx: &mut Context<Self>) {
-        self.clipboard.copy(value, cx);
-        self.status = format!(
-            "クリップボードにコピーしました（{}秒後に復元）",
-            crate::ui::clipboard::CLEAR_SECONDS
-        );
+        let seconds = self.settings.clipboard_restore_seconds;
+        self.clipboard.copy(value, seconds, cx);
+        self.status = format!("クリップボードにコピーしました（{seconds}秒後に復元）");
         cx.notify();
     }
 

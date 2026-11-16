@@ -222,9 +222,10 @@ pub fn settings_panel<'a>(
             settings.thresholds.weak_bits, settings.thresholds.stale_days
         )))
         .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "自動ロック: {} 分（i/u で調整） / ログイン制限: {} 秒（設定ファイル）",
+            "自動ロック: {} 分（i/u で調整） / ログイン制限: {} 秒 / クリップボード復元: {} 秒（設定ファイル）",
             settings.idle_lock_seconds / 60,
-            settings.login_timeout_seconds
+            settings.login_timeout_seconds,
+            settings.clipboard_restore_seconds
         )))
         .child(
             div()
