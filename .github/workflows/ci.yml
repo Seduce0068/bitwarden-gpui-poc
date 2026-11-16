@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    uses: Seduce0068/workflows/.github/workflows/rust-gates.yml@v1
+    with:
+      clippy_args: -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
