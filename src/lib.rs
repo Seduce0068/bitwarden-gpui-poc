@@ -7,6 +7,7 @@
 //! `src/main.rs` is only the GPUI wiring.
 
 pub mod auth;
+pub mod cache;
 pub mod generator;
 pub mod health;
 pub mod model;
