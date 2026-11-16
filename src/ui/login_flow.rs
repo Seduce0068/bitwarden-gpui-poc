@@ -3,7 +3,7 @@
 use crate::auth::{authenticate, validate_config, AuthConfig};
 use crate::ui::app::BitwardenApp;
 use crate::ui::mock::mock_vault;
-use crate::ui::model::{AuthField, GeneratorState, Panel, Screen};
+use crate::ui::state::{AuthField, GeneratorState, Panel, Screen};
 use crate::vault_sync;
 use gpui_kit::*;
 use openwarden::{SecretString, Vault as OpenVault};

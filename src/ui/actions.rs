@@ -3,7 +3,7 @@
 use crate::settings::Settings;
 use crate::totp;
 use crate::ui::app::BitwardenApp;
-use crate::ui::model::SettingsField;
+use crate::ui::state::SettingsField;
 use gpui_kit::*;
 
 impl BitwardenApp {

@@ -4,7 +4,7 @@ use crate::health::audit;
 use crate::model::{Filter, ItemData, ItemKind, SortKey, Vault, VaultItem};
 use crate::settings::Settings;
 use crate::totp;
-use crate::ui::model::{GeneratorState, Panel, Screen, SettingsField};
+use crate::ui::state::{GeneratorState, Panel, Screen, SettingsField};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 

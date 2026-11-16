@@ -1,7 +1,7 @@
 //! Pure UI predicates that can be tested without a GPUI window.
 
 use crate::health::Thresholds;
-use crate::ui::model::{AuthField, GeneratorState, Panel, Screen, SettingsField};
+use crate::ui::state::{AuthField, GeneratorState, Panel, Screen, SettingsField};
 
 /// Whether the lock screen has enough credential input to attempt a login.
 ///
