@@ -20,6 +20,9 @@ use bitwarden_gpui_poc::totp::{self, Tick};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+/// Seconds before a copied secret is restored to the previous clipboard value.
+const CLIPBOARD_CLEAR_SECONDS: u64 = 30;
+
 /// A small personal vault used until real sync is wired up.
 fn mock_vault() -> Vault {
     fn login(
@@ -193,6 +196,8 @@ struct BitwardenApp {
     generator: GeneratorState,
     settings: Settings,
     editing: Option<SettingsField>,
+    clipboard_restore: Option<String>,
+    clipboard_clear_at: Option<u64>,
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
 }
@@ -218,6 +223,8 @@ impl BitwardenApp {
             generator: GeneratorState::from_settings(&settings),
             settings,
             editing: None,
+            clipboard_restore: None,
+            clipboard_clear_at: None,
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -236,6 +243,14 @@ impl BitwardenApp {
                         smol::Timer::after(std::time::Duration::from_secs(1)).await;
                         let alive = cx.update(|cx| {
                             this.update(cx, |view, cx| {
+                                let now = totp::now_unix();
+                                if view
+                                    .clipboard_clear_at
+                                    .is_some_and(|deadline| now >= deadline)
+                                {
+                                    view.restore_clipboard(cx);
+                                    cx.notify();
+                                }
                                 if view.screen == Screen::Unlocked
                                     && view.panel == Panel::Vault
                                     && !view.totp_secret.is_empty()
@@ -277,6 +292,7 @@ impl BitwardenApp {
     }
 
     fn lock(&mut self, cx: &mut Context<Self>) {
+        self.restore_clipboard(cx);
         self.vault = Vault::new();
         self.audit_report = None;
         self.panel = Panel::Vault;
@@ -427,6 +443,34 @@ impl BitwardenApp {
         cx.notify();
     }
 
+    /// Copy `value` to the clipboard, remembering the previous text so it can
+    /// be restored automatically after [`CLIPBOARD_CLEAR_SECONDS`] seconds.
+    fn copy_to_clipboard(&mut self, value: &str, cx: &mut Context<Self>) {
+        if self.clipboard_clear_at.is_none() {
+            self.clipboard_restore = cx.read_from_clipboard().and_then(|item| {
+                item.entries.into_iter().find_map(|entry| match entry {
+                    ClipboardEntry::String(text) => Some(text.text),
+                    _ => None,
+                })
+            });
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
+        self.clipboard_clear_at = Some(totp::now_unix() + CLIPBOARD_CLEAR_SECONDS);
+        self.status =
+            format!("クリップボードにコピーしました（{CLIPBOARD_CLEAR_SECONDS}秒後に復元）");
+        cx.notify();
+    }
+
+    /// Put the clipboard back the way it was before the last copy.
+    fn restore_clipboard(&mut self, cx: &mut Context<Self>) {
+        if self.clipboard_clear_at.is_none() {
+            return;
+        }
+        let previous = self.clipboard_restore.take().unwrap_or_default();
+        cx.write_to_clipboard(ClipboardItem::new_string(previous));
+        self.clipboard_clear_at = None;
+    }
+
     fn refresh_audit(&mut self) {
         self.audit_report = Some(audit(
             &self.vault,
@@ -559,6 +603,16 @@ impl BitwardenApp {
                         "l" => self.lock(cx),
                         "p" => self.generate_password(cx),
                         "h" => self.generate_passphrase(cx),
+                        "y" => {
+                            if let Some(value) = self.generator.last_password.clone() {
+                                self.copy_to_clipboard(&value, cx);
+                            }
+                        }
+                        "Y" => {
+                            if let Some(value) = self.generator.last_passphrase.clone() {
+                                self.copy_to_clipboard(&value, cx);
+                            }
+                        }
                         value => self.toggle_generator(value, cx),
                     }
                     return;
@@ -982,11 +1036,9 @@ fn generator_panel<'a>(state: &'a GeneratorState) -> impl IntoElement + 'a {
         )))
         .child(result_row("h  生成", state.last_passphrase.as_deref()))
         .child(
-            div()
-                .mt_4()
-                .text_xs()
-                .text_color(rgb(0x6c7086))
-                .child("n: 一覧に戻る / l: ロック / Esc: 終了"),
+            div().mt_4().text_xs().text_color(rgb(0x6c7086)).child(
+                "p/h: 生成 / y/Y: コピー（30秒で復元） / n: 一覧に戻る / l: ロック / Esc: 終了",
+            ),
         )
 }
 
