@@ -17,7 +17,8 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - `src/main.rs`: アプリケーションの起動のみ
 - 一覧のフィルタ・ソート・検索は `Vault::view()` に委譲しており、テストと同じロジックを通る
 - TOTP は実際の6桁コードを生成し、1秒ごとのカウントダウンを表示する
-- 設定は `~/.config/bitwarden-gpui-poc/settings.json` に保存する（パスワードや鍵は保存しない）
+- 設定は `XDG_CONFIG_HOME` 配下（既定は `~/.config`）の
+  `bitwarden-gpui-poc/settings.json` に保存する（パスワードや鍵は保存しない）
 - モックデータには5種類すべての item kind（ログイン / メモ / カード / ID / SSH鍵）を含む
 - 生成結果はクリップボードにコピーでき、30秒後に以前の内容へ自動復元される（ロック時も即復元）
 - ロック画面で Personal API key とマスターパスワードを入力し、`openwarden`
@@ -26,8 +27,9 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - ログイン全体に 30 秒のタイムアウトを設定し、失敗時は `r` で再試行できる
 - 実ログインではログイン項目の名前 / username / URI を復号して表示する。
   パスワードと TOTP 秘密は復号せず、有無と長さのマーカーのみ保持する
-- `src/cache.rs` に暗号化済み同期データのキャッシュを実装済み（キーは保存しない）。
-  ただし openwarden 0.1.0 の API 制約で認証フローからはまだ接続していない
+- `src/cache.rs` に、暗号化済みアイテムを含む平文 JSON キャッシュを実装済み
+  （キーは保存しない、ファイルは 0600 で作成）。ただし openwarden 0.1.0 の
+  API 制約で認証フローからはまだ接続していない
 
 ## 画面と操作
 
@@ -85,9 +87,10 @@ clippy では加えて `unwrap_used` / `expect_used` / `panic` を deny しま�
 
 ## 既知の制約
 
-- openwarden は v0.1 の早期実装（個人 vault 向け、組織/2FA/一部 item type 未対応、roadmap 参照）
+- openwarden は v0.1 の早期実装（個人 vault 向け、組織/2FA/一部 item type 未対応）
 - セキュリティ上の配慮のうち、OS keyring 連携と完全なロック時メモリ保護は未実装
 - クリップボードは30秒で復元し、ロック時にも復元するが、アプリ強制終了時は復元できない
 - 実ログイン時はログイン項目のみを変換し、他 kind はモックデータのまま
 - device identifier は固定値であり、インストールごとの一意性は未保証
+- 構造化ログ・メトリクス・監視は未実装
 - 本番利用を意図したものではありません

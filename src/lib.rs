@@ -7,11 +7,14 @@
 //! (`ui`, including the app state), lives in this library, while
 //! `src/main.rs` only starts the application.
 
+#![forbid(unsafe_code)]
+
 pub mod auth;
 pub mod cache;
 pub mod generator;
 pub mod health;
 pub mod model;
+pub(crate) mod private_file;
 pub mod settings;
 pub mod totp;
 pub mod ui;

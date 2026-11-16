@@ -7,8 +7,24 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::auth::SyncCacheError;
 use crate::vault_sync;
+
+/// Errors produced while reading an offline sync cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncCacheError {
+    /// The cached body is missing or cannot be parsed.
+    InvalidCache,
+    /// The cache belongs to a different account or server.
+    UserMismatch,
+}
+
+impl core::fmt::Display for SyncCacheError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(cache_error_message(*self))
+    }
+}
+
+impl std::error::Error for SyncCacheError {}
 
 /// A cached sync response, still encrypted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,10 +111,8 @@ pub fn load(path: impl AsRef<std::path::Path>) -> Option<SyncCache> {
 /// Returns `std::io::Error` on filesystem or serialization failure.
 pub fn save(path: impl AsRef<std::path::Path>, cache: &SyncCache) -> Result<(), std::io::Error> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, serde_json::to_vec_pretty(cache)?)
+    let contents = serde_json::to_vec_pretty(cache)?;
+    crate::private_file::write_private(path, &contents)
 }
 
 /// Validate a cache before it is used for the given account and server.

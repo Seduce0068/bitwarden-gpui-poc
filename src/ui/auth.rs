@@ -19,9 +19,8 @@ impl BitwardenApp {
         }
     }
 
-    /// Validate entered credentials before opening the demo vault. Real
-    /// network login is still handled by `auth::authenticate` and is not
-    /// wired to this button yet.
+    /// Validate credentials and, when present, start a real network login.
+    /// Without credentials the demo vault is opened instead.
     pub(super) fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
         let config = self.auth_config();
         let has_credentials = !self.client_id.is_empty()
@@ -78,7 +77,8 @@ impl BitwardenApp {
             .unwrap_or("")
             .to_string();
         if protected_key.is_empty() {
-            self.status = "ログイン失敗: 復号キーが応答にありません".to_string();
+            self.login_failed = true;
+            self.status = "ログイン失敗: 復号キーが応答にありません（r で再試行）".to_string();
             cx.notify();
             return;
         }
@@ -87,13 +87,17 @@ impl BitwardenApp {
         {
             Ok(vault) => vault,
             Err(error) => {
-                self.status = format!("ログイン失敗: 復号キーを取得できません（{error}）");
+                self.login_failed = true;
+                self.status =
+                    format!("ログイン失敗: 復号キーを取得できません（{error}）（r で再試行）");
                 cx.notify();
                 return;
             }
         };
         if let Err(error) = open_vault.apply_sync(authenticated.sync) {
-            self.status = format!("ログイン失敗: 同期データを取り込めません（{error}）");
+            self.login_failed = true;
+            self.status =
+                format!("ログイン失敗: 同期データを取り込めません（{error}）（r で再試行）");
             cx.notify();
             return;
         }
@@ -108,7 +112,10 @@ impl BitwardenApp {
                     self.vault.len()
                 );
             }
-            Err(error) => self.status = format!("vault 変換失敗: {}", error.message()),
+            Err(error) => {
+                self.login_failed = true;
+                self.status = format!("vault 変換失敗: {}（r で再試行）", error.message());
+            }
         }
         cx.notify();
     }

@@ -16,7 +16,8 @@ path = "src/main.rs"
 
 [dependencies]
 gpui-kit = "=0.9.1"
-openwarden = "0.1"
+# ADR assumes the 0.1.0 API; pin until the integration is revisited.
+openwarden = "=0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
