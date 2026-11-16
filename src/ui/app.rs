@@ -74,25 +74,35 @@ impl BitwardenApp {
                         let alive = cx.update(|cx| {
                             this.update(cx, |view, cx| {
                                 let instant = std::time::Instant::now();
-                                if view.clipboard.due(instant) {
-                                    view.restore_clipboard(cx);
-                                    cx.notify();
-                                }
-                                if view.screen == Screen::Unlocked {
-                                    if crate::ui::timing::idle_lock_due(
-                                        view.last_activity,
-                                        instant,
-                                        std::time::Duration::from_secs(IDLE_LOCK_SECONDS),
-                                    ) {
-                                        view.lock(cx);
-                                        view.status = format!(
-                                            "無操作のため自動ロックしました（{IDLE_LOCK_SECONDS}秒）"
-                                        );
-                                        return;
-                                    }
-                                    if view.panel == Panel::Vault && view.totp.has_secret() {
-                                        view.totp.invalidate();
-                                        cx.notify();
+                                let unlocked = view.screen == Screen::Unlocked;
+                                let effects = crate::ui::timing::evaluate_tick(
+                                    view.clipboard.due(instant),
+                                    unlocked
+                                        && crate::ui::timing::idle_lock_due(
+                                            view.last_activity,
+                                            instant,
+                                            std::time::Duration::from_secs(IDLE_LOCK_SECONDS),
+                                        ),
+                                    unlocked
+                                        && view.panel == Panel::Vault
+                                        && view.totp.has_secret(),
+                                );
+                                for effect in effects {
+                                    match effect {
+                                        crate::ui::timing::TickEffect::RestoreClipboard => {
+                                            view.restore_clipboard(cx);
+                                            cx.notify();
+                                        }
+                                        crate::ui::timing::TickEffect::InvalidateTotp => {
+                                            view.totp.invalidate();
+                                            cx.notify();
+                                        }
+                                        crate::ui::timing::TickEffect::AutoLock => {
+                                            view.lock(cx);
+                                            view.status = format!(
+                                                "無操作のため自動ロックしました（{IDLE_LOCK_SECONDS}秒）"
+                                            );
+                                        }
                                     }
                                 }
                             })
