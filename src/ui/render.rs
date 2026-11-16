@@ -81,7 +81,8 @@ impl BitwardenApp {
                         let Some(item) = visible.get(index) else {
                             continue;
                         };
-                        let selected = this.selected == index;
+                        let row_id = item.id.clone();
+                        let selected = this.selected_id.as_deref() == Some(row_id.as_str());
                         let row_bg = if selected {
                             rgb(0x45475a)
                         } else {
@@ -97,7 +98,7 @@ impl BitwardenApp {
                                 .id(index)
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     this.last_activity = std::time::Instant::now();
-                                    this.selected = index;
+                                    this.selected_id = Some(row_id.clone());
                                     cx.notify();
                                 }))
                                 .flex()

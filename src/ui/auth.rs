@@ -108,7 +108,7 @@ impl BitwardenApp {
                 self.vault = vault;
                 self.screen = Screen::Unlocked;
                 self.panel = Panel::Vault;
-                self.selected = 0;
+                self.selected_id = None;
                 self.status = format!(
                     "ログイン成功: {} 件のログインを読み込みました",
                     self.vault.len()
@@ -160,7 +160,7 @@ impl BitwardenApp {
         self.refresh_audit();
         self.panel = Panel::Vault;
         self.screen = Screen::Unlocked;
-        self.selected = 0;
+        self.selected_id = None;
         self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         self.status = format!(
             "{} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / y TOTPコピー / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",

@@ -10,7 +10,12 @@ impl BitwardenApp {
     pub(super) fn copy_totp(&mut self, cx: &mut Context<Self>) {
         let secret = {
             let visible = self.visible_items();
-            let Some(item) = visible.get(self.selected.min(visible.len().saturating_sub(1))) else {
+            let Some(item) = self
+                .selected_id
+                .as_deref()
+                .and_then(|id| visible.iter().find(|item| item.id == id))
+                .or_else(|| visible.first())
+            else {
                 self.status = "項目が選択されていません".to_string();
                 cx.notify();
                 return;

@@ -11,9 +11,17 @@ pub fn has_credentials(client_id: &str, client_secret: &str, master_password: &s
     !client_id.is_empty() || !client_secret.is_empty() || !master_password.is_empty()
 }
 
-/// Whether `selected` still points at a row in a view with `count` items.
-pub fn selection_is_valid(selected: usize, count: usize) -> bool {
-    count == 0 || selected < count
+/// Whether `selected_id` still names an item in the current view.
+///
+/// `None` is valid: the UI falls back to showing the first item.
+pub fn selection_in_view<'a>(
+    selected_id: Option<&str>,
+    ids: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    match selected_id {
+        None => true,
+        Some(id) => ids.into_iter().any(|candidate| candidate == id),
+    }
 }
 
 /// A UI intent derived from a keystroke, independent of GPUI types.
@@ -224,12 +232,12 @@ mod tests {
     }
 
     #[test]
-    fn selection_validity_covers_empty_and_bounded_views() {
-        assert!(selection_is_valid(0, 0), "empty view keeps the reset value");
-        assert!(selection_is_valid(0, 1));
-        assert!(selection_is_valid(4, 5));
-        assert!(!selection_is_valid(5, 5));
-        assert!(!selection_is_valid(6, 5));
+    fn selection_in_view_checks_ids() {
+        let ids = ["1", "2", "3"];
+        assert!(selection_in_view(None, ids));
+        assert!(selection_in_view(Some("2"), ids));
+        assert!(!selection_in_view(Some("4"), ids));
+        assert!(!selection_in_view(Some("1"), []));
     }
 
     fn ctx(key: &str) -> KeyContext<'_> {
