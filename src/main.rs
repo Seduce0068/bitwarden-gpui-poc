@@ -1,49 +1,90 @@
 //! Bitwarden/Vaultwarden client PoC built with GPUI (`gpui-kit`).
 //!
-//! This is a UI skeleton demonstrating how a personal-vault Bitwarden client
-//! could be structured with GPUI. It currently uses mock data; wiring to the
-//! [`openwarden`] crate (login, unlock, sync, decrypt) is planned.
+//! The UI renders a [`Vault`] from the library crate: filtering, sorting and
+//! searching all go through [`Vault::view`], so the same logic is exercised by
+//! both the window and the tests. Login/sync/decrypt through `openwarden` are
+//! still planned.
 
 #![forbid(unsafe_code)]
 
+use bitwarden_gpui_poc::model::{
+    Filter, Folder, ItemData, ItemKind, LoginUri, SortKey, Vault, VaultItem,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-#[derive(Clone, Debug)]
-struct VaultItem {
-    name: String,
-    username: String,
-    uri: String,
-    totp: bool,
-}
+/// A small personal vault used until real sync is wired up.
+fn mock_vault() -> Vault {
+    fn login(
+        id: &str,
+        name: &str,
+        username: &str,
+        password: &str,
+        uri: &str,
+        totp: &str,
+    ) -> VaultItem {
+        VaultItem::new(
+            id,
+            name,
+            ItemData::Login {
+                username: username.to_string(),
+                password: password.to_string(),
+                totp: totp.to_string(),
+                uris: vec![LoginUri::new(uri)],
+            },
+        )
+    }
 
-fn mock_items() -> Vec<VaultItem> {
-    vec![
-        VaultItem {
-            name: "GitHub".to_string(),
-            username: "alice@example.com".to_string(),
-            uri: "https://github.com/login".to_string(),
-            totp: true,
+    let mut vault = Vault::new();
+    vault.folders.push(Folder {
+        id: "work".into(),
+        name: "仕事".into(),
+    });
+
+    let mut github = login(
+        "1",
+        "GitHub",
+        "alice@example.com",
+        "hunter2",
+        "https://github.com/login",
+        "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+    );
+    github.folder_id = Some("work".into());
+    github.favorite = true;
+    github.revision_date = 1_700_000_100;
+
+    let mut vaultwarden = login(
+        "2",
+        "Vaultwarden",
+        "alice",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://vault.example.com",
+        "",
+    );
+    vaultwarden.folder_id = Some("work".into());
+    vaultwarden.revision_date = 1_700_000_200;
+
+    let mut mail = login(
+        "3",
+        "Email",
+        "alice@example.com",
+        "1234",
+        "http://mail.example.com",
+        "",
+    );
+    mail.revision_date = 1_600_000_000;
+
+    let mut note = VaultItem::new(
+        "4",
+        "Wi-Fi",
+        ItemData::SecureNote {
+            text: "guest / guest".into(),
         },
-        VaultItem {
-            name: "Vaultwarden".to_string(),
-            username: "alice".to_string(),
-            uri: "https://vault.example.com".to_string(),
-            totp: true,
-        },
-        VaultItem {
-            name: "Email".to_string(),
-            username: "alice@example.com".to_string(),
-            uri: "https://mail.example.com".to_string(),
-            totp: false,
-        },
-        VaultItem {
-            name: "Example Service".to_string(),
-            username: "alice".to_string(),
-            uri: "https://example.com".to_string(),
-            totp: false,
-        },
-    ]
+    );
+    note.revision_date = 1_700_000_300;
+
+    vault.items = vec![github, vaultwarden, mail, note];
+    vault
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,9 +98,12 @@ struct BitwardenApp {
     server_url: String,
     email: String,
     status: String,
-    items: Vec<VaultItem>,
+    vault: Vault,
+    filter: Filter,
+    query: String,
+    sort: SortKey,
+    searching: bool,
     selected: usize,
-    filter: String,
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
 }
@@ -70,64 +114,132 @@ impl BitwardenApp {
             screen: Screen::Locked,
             server_url: "https://vault.bitwarden.com".to_string(),
             email: String::new(),
-            status: "ロック中: API キーまたはマスターパスワードで解除（PoC: Enter でモック解除）"
-                .to_string(),
-            items: Vec::new(),
+            status: "ロック中: Enter でモック vault を開く / Esc で終了".to_string(),
+            vault: Vault::new(),
+            filter: Filter::All,
+            query: String::new(),
+            sort: SortKey::NameAsc,
+            searching: false,
             selected: 0,
-            filter: String::new(),
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         }
     }
 
+    /// The current view, computed by the library exactly as the tests see it.
+    fn visible_items(&self) -> Vec<&VaultItem> {
+        self.vault.view(&self.filter, &self.query, self.sort)
+    }
+
     fn unlock_mock(&mut self, cx: &mut Context<Self>) {
-        self.items = mock_items();
+        self.vault = mock_vault();
         self.screen = Screen::Unlocked;
         self.selected = 0;
         self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         self.status = format!(
-            "同期済み（モック）: {} 件。↑↓で選択、Lでロック、Escで終了",
-            self.items.len()
+            "同期済み（モック）: {} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / l ロック / Esc 終了",
+            self.vault.len()
         );
         cx.notify();
     }
 
     fn lock(&mut self, cx: &mut Context<Self>) {
-        self.items.clear();
+        self.vault = Vault::new();
+        self.query.clear();
+        self.filter = Filter::All;
+        self.sort = SortKey::NameAsc;
+        self.searching = false;
         self.selected = 0;
         self.screen = Screen::Locked;
-        self.status = "ロックしました（PoC: Enter でモック解除）".to_string();
+        self.status = "ロックしました（Enter でモック解除）".to_string();
         cx.notify();
     }
 
-    fn filtered_items(&self) -> Vec<VaultItem> {
-        if self.filter.is_empty() {
-            return self.items.clone();
-        }
-        let needle = self.filter.to_lowercase();
-        self.items
-            .iter()
-            .filter(|item| {
-                item.name.to_lowercase().contains(&needle)
-                    || item.username.to_lowercase().contains(&needle)
-                    || item.uri.to_lowercase().contains(&needle)
-            })
-            .cloned()
-            .collect()
-    }
-
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let visible = self.filtered_items();
-        if visible.is_empty() {
+        let count = self.visible_items().len();
+        if count == 0 {
             return;
         }
-        let len = visible.len() as isize;
+        let len = count as isize;
         let next = (self.selected as isize + delta).clamp(0, len - 1) as usize;
         if self.selected != next {
             self.selected = next;
             self.scroll_handle
                 .scroll_to_item(next, ScrollStrategy::Nearest);
             cx.notify();
+        }
+    }
+
+    fn cycle_filter(&mut self, cx: &mut Context<Self>) {
+        self.filter = match self.filter {
+            Filter::All => Filter::Favorites,
+            Filter::Favorites => Filter::Kind(ItemKind::Login),
+            Filter::Kind(ItemKind::Login) => Filter::Kind(ItemKind::SecureNote),
+            Filter::Kind(ItemKind::SecureNote) => Filter::Kind(ItemKind::Card),
+            Filter::Kind(ItemKind::Card) => Filter::Kind(ItemKind::Identity),
+            Filter::Kind(ItemKind::Identity) => Filter::Kind(ItemKind::SshKey),
+            Filter::Kind(ItemKind::SshKey) => Filter::NoFolder,
+            Filter::NoFolder | Filter::Folder(_) => Filter::All,
+        };
+        self.selected = 0;
+        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self
+            .visible_items()
+            .get(self.selected)
+            .map(|item| item.id.clone())
+        else {
+            return;
+        };
+        if let Some(favorite) = self.vault.toggle_favorite(&id) {
+            self.status = format!(
+                "お気に入りを{}にしました",
+                if favorite { "設定" } else { "解除" }
+            );
+            cx.notify();
+        }
+    }
+
+    fn selected_detail(&self) -> String {
+        let visible = self.visible_items();
+        let Some(item) = visible.get(self.selected.min(visible.len().saturating_sub(1))) else {
+            return "項目なし".to_string();
+        };
+        let base = format!(
+            "{} | {} | 更新: {}",
+            item.kind().label(),
+            item.name,
+            item.revision_date
+        );
+        match &item.data {
+            ItemData::Login {
+                username,
+                password,
+                totp,
+                uris,
+            } => format!(
+                "{base} | {username} | パスワード: {}文字 | TOTP: {} | URI: {}",
+                "*".repeat(password.chars().count()),
+                if totp.trim().is_empty() {
+                    "なし"
+                } else {
+                    "あり"
+                },
+                uris.first().map_or("なし".into(), |uri| uri.uri.clone())
+            ),
+            ItemData::SecureNote { text } => {
+                format!("{base} | メモ: {}文字", text.chars().count())
+            }
+            ItemData::Card(card) => format!(
+                "{base} | {} | 末尾: {}",
+                card.brand,
+                card.number.rsplit(' ').next().unwrap_or("")
+            ),
+            ItemData::Identity(identity) => format!("{base} | {}", identity.email),
+            ItemData::SshKey(key) => format!("{base} | {}", key.fingerprint),
         }
     }
 
@@ -138,13 +250,54 @@ impl BitwardenApp {
                 "enter" => self.unlock_mock(cx),
                 _ => {}
             },
-            Screen::Unlocked => match event.keystroke.key.as_str() {
-                "escape" => cx.quit(),
-                "up" => self.move_selection(-1, cx),
-                "down" => self.move_selection(1, cx),
-                "l" => self.lock(cx),
-                _ => {}
-            },
+            Screen::Unlocked => {
+                let key = event.keystroke.key.as_str();
+                if self.searching {
+                    match key {
+                        "escape" | "enter" => {
+                            self.searching = false;
+                            cx.notify();
+                        }
+                        "backspace" => {
+                            self.query.pop();
+                            self.selected = 0;
+                            cx.notify();
+                        }
+                        value if value.chars().count() == 1 => {
+                            self.query.push_str(value);
+                            self.selected = 0;
+                            cx.notify();
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                match key {
+                    "escape" => cx.quit(),
+                    "up" => self.move_selection(-1, cx),
+                    "down" => self.move_selection(1, cx),
+                    "l" => self.lock(cx),
+                    "t" => self.cycle_filter(cx),
+                    "s" => {
+                        self.sort = self.sort.next();
+                        self.selected = 0;
+                        cx.notify();
+                    }
+                    "f" => self.toggle_favorite(cx),
+                    "/" => {
+                        self.searching = true;
+                        self.query.clear();
+                        self.selected = 0;
+                        cx.notify();
+                    }
+                    "backspace" if !self.query.is_empty() => {
+                        self.query.pop();
+                        self.selected = 0;
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -190,30 +343,18 @@ impl BitwardenApp {
     }
 
     fn render_unlocked(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let visible = self.filtered_items();
-        let count = visible.len();
-        let selected_detail = visible
-            .get(self.selected.min(count.saturating_sub(1)))
-            .map(|item| {
-                format!(
-                    "{}  |  {}  |  {}{}",
-                    item.name,
-                    item.username,
-                    item.uri,
-                    if item.totp { "  [TOTP]" } else { "" }
-                )
-            })
-            .unwrap_or_else(|| "項目なし".to_string());
+        let count = self.visible_items().len();
+        let detail = self.selected_detail();
 
         let list = uniform_list(
             "vault-items",
             count,
             cx.processor(
                 move |this: &mut Self, range: std::ops::Range<usize>, _window, _cx| {
-                    let visible = this.filtered_items();
+                    let visible = this.visible_items();
                     let mut rows = Vec::with_capacity(range.len());
                     for index in range {
-                        let Some(item) = visible.get(index).cloned() else {
+                        let Some(item) = visible.get(index) else {
                             continue;
                         };
                         let selected = this.selected == index;
@@ -222,6 +363,11 @@ impl BitwardenApp {
                         } else {
                             rgb(0x1e1e2e)
                         };
+                        let (username, totp) = item
+                            .login()
+                            .map_or(("-".to_string(), false), |(user, _, totp, _)| {
+                                (user.to_string(), !totp.trim().is_empty())
+                            });
                         rows.push(
                             div()
                                 .id(index)
@@ -234,6 +380,24 @@ impl BitwardenApp {
                                 .text_sm()
                                 .child(
                                     div()
+                                        .w(px(18.0))
+                                        .text_xs()
+                                        .text_color(if item.favorite {
+                                            rgb(0xf9e2af)
+                                        } else {
+                                            rgb(0x45475a)
+                                        })
+                                        .child(if item.favorite { "★" } else { "☆" }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(70.0))
+                                        .text_xs()
+                                        .text_color(rgb(0x89b4fa))
+                                        .child(item.kind().label().to_string()),
+                                )
+                                .child(
+                                    div()
                                         .flex_1()
                                         .overflow_hidden()
                                         .font_weight(FontWeight::MEDIUM)
@@ -241,21 +405,21 @@ impl BitwardenApp {
                                 )
                                 .child(
                                     div()
-                                        .w(px(220.0))
+                                        .w(px(200.0))
                                         .overflow_hidden()
                                         .text_color(rgb(0xa6adc8))
-                                        .child(item.username.clone()),
+                                        .child(username),
                                 )
                                 .child(
                                     div()
-                                        .w(px(56.0))
+                                        .w(px(40.0))
                                         .text_xs()
-                                        .text_color(if item.totp {
+                                        .text_color(if totp {
                                             rgb(0xa6e3a1)
                                         } else {
                                             rgb(0x6c7086)
                                         })
-                                        .child(if item.totp { "TOTP" } else { "" }),
+                                        .child(if totp { "TOTP" } else { "" }),
                                 ),
                         );
                     }
@@ -266,6 +430,7 @@ impl BitwardenApp {
         .track_scroll(&self.scroll_handle)
         .flex_1();
 
+        let filter_label = self.filter.label(&self.vault.folders);
         div()
             .flex()
             .flex_col()
@@ -279,13 +444,17 @@ impl BitwardenApp {
                     .text_sm()
                     .text_color(rgb(0xa6adc8))
                     .child(format!(
-                        "Vault: {} 件表示（モック）  |  Filter: {}",
+                        "Vault: {} / {} 件  |  フィルタ: {}  |  並び: {}  |  検索: {}{}",
                         count,
-                        if self.filter.is_empty() {
+                        self.vault.len(),
+                        filter_label,
+                        self.sort.label(),
+                        if self.query.is_empty() {
                             "(なし)"
                         } else {
-                            &self.filter
-                        }
+                            &self.query
+                        },
+                        if self.searching { " _" } else { "" }
                     )),
             )
             .child(if count == 0 {
@@ -308,7 +477,7 @@ impl BitwardenApp {
                     .border_color(rgb(0x313244))
                     .text_xs()
                     .text_color(rgb(0xcdd6f4))
-                    .child(selected_detail),
+                    .child(detail),
             )
     }
 }
@@ -348,7 +517,7 @@ impl Render for BitwardenApp {
                 div()
                     .text_xs()
                     .text_color(rgb(0x6c7086))
-                    .child("gpui-kit 0.9.1 + openwarden 0.1 (planned)"),
+                    .child("gpui-kit 0.9.1 + model::Vault"),
             );
 
         let body = match self.screen {
