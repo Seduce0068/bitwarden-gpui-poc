@@ -33,15 +33,13 @@ fn main() {
             ..Default::default()
         };
 
-        if gpui_kit::open_window(options, cx, |window, cx| {
+        if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
             let view = cx.new(BitwardenApp::new);
             let focus_handle = view.read(cx).focus_handle.clone();
             focus_handle.focus(window, cx);
             view
-        })
-        .is_err()
-        {
-            eprintln!("ウィンドウを開けませんでした");
+        }) {
+            eprintln!("ウィンドウを開けませんでした: {error:?}");
             return;
         }
 
