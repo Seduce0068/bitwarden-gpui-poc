@@ -92,17 +92,19 @@ impl BitwardenApp {
                         let alive = cx.update(|cx| {
                             this.update(cx, |view, cx| {
                                 let instant = std::time::Instant::now();
-                                if view
-                                    .clipboard_clear_at
-                                    .is_some_and(|deadline| instant >= deadline)
-                                {
+                                if crate::ui::timing::clipboard_expired(
+                                    view.clipboard_clear_at,
+                                    instant,
+                                ) {
                                     view.restore_clipboard(cx);
                                     cx.notify();
                                 }
                                 if view.screen == Screen::Unlocked {
-                                    if instant.duration_since(view.last_activity)
-                                        >= std::time::Duration::from_secs(IDLE_LOCK_SECONDS)
-                                    {
+                                    if crate::ui::timing::idle_lock_due(
+                                        view.last_activity,
+                                        instant,
+                                        std::time::Duration::from_secs(IDLE_LOCK_SECONDS),
+                                    ) {
                                         view.lock(cx);
                                         view.status = format!(
                                             "無操作のため自動ロックしました（{IDLE_LOCK_SECONDS}秒）"
@@ -163,7 +165,7 @@ impl BitwardenApp {
     /// such as toggling a favorite while the Favorites filter is active.
     pub(super) fn revalidate_selection(&mut self) -> bool {
         let count = self.visible_items().len();
-        let valid = count == 0 || self.selected < count;
+        let valid = crate::ui::logic::selection_is_valid(self.selected, count);
         if !valid {
             self.selected = 0;
             self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
