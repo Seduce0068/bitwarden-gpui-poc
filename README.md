@@ -1,6 +1,7 @@
 # bitwarden-gpui-poc
 
-Bitwarden / Vaultwarden の個人 vault 向けクライアントを [GPUI](https://www.gpui.rs/)（`gpui-kit`）で実装する PoC。
+Bitwarden / Vaultwarden の個人 vault 向けクライアントを
+[GPUI](https://gpui.rs)（`gpui-kit`）で実装する PoC。
 
 ## 目的
 
@@ -9,14 +10,44 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを [GPUI](https
 
 ## 現状
 
-- ロック画面 / vault 一覧の UI スケルトン（モックデータ）
+- `src/lib.rs`: vault モデル、パスワード / passphrase 生成、TOTP（RFC 6238）、健全性監査、設定の永続化を提供。すべて単体テスト付き
+- `src/main.rs`: GPUI によるロック画面と、一覧 / 監査 / 生成 / 設定の4パネル
+- 一覧のフィルタ・ソート・検索は `Vault::view()` に委譲しており、テストと同じロジックを通る
+- TOTP は実際の6桁コードを生成し、1秒ごとのカウントダウンを表示する
+- 設定は `~/.config/bitwarden-gpui-poc/settings.json` に保存する（パスワードや鍵は保存しない）
 - 実際のログイン・同期・復号は未接続（`openwarden` 統合は今後の作業）
 
-## ビルド
+## 画面と操作
+
+| キー | 動作 |
+| --- | --- |
+| `Enter` | モック vault を開く（ロック画面） |
+| `↑` / `↓` | 項目を選択 |
+| `f` | お気に入りを切り替え |
+| `t` | フィルタを切り替え |
+| `s` | 並び順を切り替え |
+| `/` | 検索（Enter / Esc で確定） |
+| `g` | 健全性監査パネル（再押しで戻る） |
+| `n` | パスワード生成パネル |
+| `c` | 設定パネル |
+| `l` | ロック |
+| `Esc` | 終了 |
+
+生成パネルでは `1`〜`7` で文字種・オプションを切り替え、
+`+` / `-` で長さと単語数、`,` で区切り文字を変更します。
+`p` でパスワード、`h` で passphrase を生成します。
+
+設定パネルでは `1` / `2` でサーバーURL とメールを編集し、`Enter` で確定します。
+`+` / `-` で監査閾値を調整すると即座に再監査され、`w` で保存します。
+
+## ビルドと検証
 
 ```bash
 cd work/bitwarden-gpui-poc
+cargo fmt --check
 cargo check
+cargo test
+cargo clippy -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 cargo run
 ```
 
@@ -26,4 +57,6 @@ Linux では Wayland/X11 と GPU ドライバが必要です（`gpui-kit` / wgpu
 
 - openwarden は v0.1 の早期実装（個人 vault 向け、組織/2FA/一部 item type 未対応、roadmap 参照）
 - セキュリティ上の配慮（OS keyring 連携、クリップボード自動消去、ロック時のメモリ保護など）は未実装
+- 生成結果や TOTP コードは画面表示のみで、クリップボード連携は未実装
+- モックデータのログイン項目のみをUIで確認しており、Card / Identity / SSH鍵の表示は未検証
 - 本番利用を意図したものではありません
