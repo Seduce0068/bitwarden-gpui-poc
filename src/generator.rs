@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn random_index_respects_the_bound() {
-        for bound in [1u16, 2, 10, 62] {
+        for bound in [1u16, 2, 10, 62, 256, 994] {
             for _ in 0..256 {
                 let value = random_index(bound).unwrap();
                 assert!(value < bound, "{value} >= {bound}");
