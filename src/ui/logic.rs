@@ -40,7 +40,8 @@ pub fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
     (next * 60) as u64
 }
 
-/// Adjust audit thresholds by one UI step, clamping to safe bounds.
+/// Adjust audit thresholds by one UI step, clamping to safe bounds:
+/// 1..=200 bits and 1..=3650 days.
 ///
 /// `delta` is +1 for `+`/`=` and -1 for `-`/`_`.
 pub fn adjust_thresholds(current: Thresholds, delta: i32) -> Thresholds {
@@ -53,7 +54,7 @@ pub fn adjust_thresholds(current: Thresholds, delta: i32) -> Thresholds {
             current
                 .weak_bits
                 .saturating_sub(weak_step.unsigned_abs())
-                .min(200)
+                .max(1)
         },
         stale_days: if day_step > 0 {
             current.stale_days.saturating_add(day_step as i64).min(3650)
@@ -131,7 +132,7 @@ mod tests {
             stale_days: 10,
         };
         let clamped = adjust_thresholds(at_min, -1);
-        assert!(clamped.weak_bits < 2);
+        assert_eq!(clamped.weak_bits, 1);
         assert_eq!(clamped.stale_days, 1);
     }
 }
