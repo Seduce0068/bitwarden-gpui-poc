@@ -336,14 +336,10 @@ impl VaultItem {
             Cow::Borrowed(self.notes.as_str()),
         ];
         match &self.data {
-            ItemData::Login {
-                username,
-                uris,
-                totp,
-                ..
-            } => {
+            // Password and TOTP secret are deliberately not searchable: a
+            // leaked secret must not be recoverable through search hints.
+            ItemData::Login { username, uris, .. } => {
                 out.push(Cow::Borrowed(username));
-                out.push(Cow::Borrowed(totp));
                 out.extend(uris.iter().map(|u| Cow::Borrowed(u.uri.as_str())));
             }
             ItemData::SecureNote { text } => out.push(Cow::Borrowed(text)),
@@ -855,6 +851,24 @@ mod tests {
             .is_empty());
         // http page vs https login, strict scheme: no match.
         assert!(vault.matches_page("http://github.com/", &opts).is_empty());
+    }
+
+    #[::core::prelude::v1::test]
+    fn password_and_totp_secrets_are_not_searchable() {
+        let item = login(
+            "1",
+            "Login",
+            "alice",
+            "super-secret-pw",
+            "https://example.com",
+        );
+        let mut secret_item = item;
+        if let ItemData::Login { totp, .. } = &mut secret_item.data {
+            *totp = "JBSWY3DPEHPK3PXP".into();
+        }
+        assert!(!secret_item.matches_query("super-secret-pw"));
+        assert!(!secret_item.matches_query("jbswy3dpehpk3pxp"));
+        assert!(secret_item.matches_query("alice"));
     }
 
     #[test]
