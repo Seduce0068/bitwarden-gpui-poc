@@ -56,7 +56,9 @@ High の1件と、即対応可能な Medium/Low を修正した。
 
 - 構造化ログ・メトリクスの導入（ops #2）: 新規依存 `tracing` が必要で、
   事前承認が必要なため未実装。「未実装」を README に追記した。
-- 秘密の `zeroize` 化（security #2）: 新規依存が必要なため未実装。
+- 秘密の `zeroize` 化（security #2）: AuthState の秘密入力を
+  `Zeroizing<String>` に変更して実装（最終バッファの消去を保証）。
+  文字追加時の再確保で生じる旧コピーは zeroize 側の制約で保証外。
 - repository / homepage フィールド（ops #10）: リモート URL が未確認のため
   断定せず追加していない（push 先確定後に設定する）。
 - テスト・型の整理残り（arch #3 / #5 / #8 / #11 の一部）: 設計変更を伴い、
@@ -79,7 +81,7 @@ High の1件と、即対応可能な Medium/Low を修正した。
 
 - `cargo fmt --all -- --check`
 - `cargo check --all-targets --locked`
-- `cargo test --all-targets --locked`（119 passed）
+- `cargo test --all-targets --locked`（120 passed）
 - `cargo clippy --all-targets --locked -- -D warnings -D clippy::unwrap_used
   -D clippy::expect_used -D clippy::panic`
 - `cargo audit`

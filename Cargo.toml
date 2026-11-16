@@ -27,6 +27,9 @@ sha2 = "0.11"
 data-encoding = "2.11"
 url = "2"
 smol = "2"
+# Secret input buffers are wiped on drop/replacement (already in the lockfile
+# as a transitive dependency of secrecy/openwarden).
+zeroize = "1.9"
 
 [profile.dev]
 # GPUI + wgpu の debuginfo は巨大になりやすいため抑える
