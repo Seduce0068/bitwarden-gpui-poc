@@ -84,6 +84,9 @@ pub fn valid_email(value: &str) -> bool {
     if value.is_empty() || value.chars().any(char::is_whitespace) {
         return false;
     }
+    if value.matches('@').count() != 1 {
+        return false;
+    }
     let Some((local, domain)) = value.split_once('@') else {
         return false;
     };
@@ -92,6 +95,7 @@ pub fn valid_email(value: &str) -> bool {
         && domain.contains('.')
         && !domain.starts_with('.')
         && !domain.ends_with('.')
+        && !domain.contains("..")
 }
 
 /// Reject link-local addresses, including the cloud metadata endpoint
@@ -393,6 +397,10 @@ mod tests {
         assert!(!valid_email("@example.com"));
         assert!(!valid_email("alice@example"));
         assert!(!valid_email("a b@example.com"));
+        assert!(!valid_email("a@b@example.com"));
+        assert!(!valid_email("alice@ex..ample.com"));
+        assert!(!valid_email("alice@example."));
+        assert!(!valid_email("alice@.example.com"));
 
         let mut value = config();
         value.email = "not-an-email".into();
