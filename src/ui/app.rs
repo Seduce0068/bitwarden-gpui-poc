@@ -4,7 +4,7 @@ use crate::health::{audit, Report};
 use crate::model::{Filter, ItemData, ItemKind, SortKey, Vault, VaultItem};
 use crate::settings::Settings;
 use crate::totp;
-use crate::ui::model::{AuthField, GeneratorState, Panel, Screen, SettingsField};
+use crate::ui::model::{GeneratorState, Panel, Screen, SettingsField};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -28,13 +28,9 @@ pub struct BitwardenApp {
     pub(super) generator: GeneratorState,
     pub(super) settings: Settings,
     pub(super) editing: Option<SettingsField>,
-    pub(super) auth_field: Option<AuthField>,
-    pub(super) client_id: String,
-    pub(super) client_secret: String,
-    pub(super) master_password: String,
+    pub(super) auth: crate::ui::auth_state::AuthState,
     pub(super) clipboard: crate::ui::clipboard::ClipboardState,
     pub(super) last_activity: std::time::Instant,
-    pub(super) login_failed: bool,
     pub(super) scroll_handle: UniformListScrollHandle,
     pub focus_handle: FocusHandle,
 }
@@ -59,13 +55,9 @@ impl BitwardenApp {
             generator: GeneratorState::from_settings(&settings),
             settings,
             editing: None,
-            auth_field: None,
-            client_id: String::new(),
-            client_secret: String::new(),
-            master_password: String::new(),
+            auth: crate::ui::auth_state::AuthState::new(),
             clipboard: crate::ui::clipboard::ClipboardState::new(),
             last_activity: std::time::Instant::now(),
-            login_failed: false,
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -132,10 +124,7 @@ impl BitwardenApp {
         self.panel = Panel::Vault;
         self.generator = GeneratorState::from_settings(&self.settings);
         self.editing = None;
-        self.auth_field = None;
-        self.login_failed = false;
-        self.client_secret.clear();
-        self.master_password.clear();
+        self.auth.clear_secrets();
         self.totp.clear();
         self.query.clear();
         self.filter = Filter::All;

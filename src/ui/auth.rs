@@ -12,10 +12,10 @@ impl BitwardenApp {
     pub(super) fn auth_config(&self) -> AuthConfig {
         AuthConfig {
             server_url: self.server_url.clone(),
-            client_id: self.client_id.clone(),
-            client_secret: SecretString::from(self.client_secret.clone()),
+            client_id: self.auth.client_id().to_string(),
+            client_secret: SecretString::from(self.auth.client_secret().to_string()),
             email: self.email.clone(),
-            master_password: SecretString::from(self.master_password.clone()),
+            master_password: SecretString::from(self.auth.master_password().to_string()),
         }
     }
 
@@ -24,9 +24,9 @@ impl BitwardenApp {
     pub(super) fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
         let config = self.auth_config();
         let has_credentials = crate::ui::logic::has_credentials(
-            &self.client_id,
-            &self.client_secret,
-            &self.master_password,
+            self.auth.client_id(),
+            self.auth.client_secret(),
+            self.auth.master_password(),
         );
         if !has_credentials {
             self.unlock_mock(cx);
@@ -37,7 +37,7 @@ impl BitwardenApp {
             cx.notify();
             return;
         }
-        self.login_failed = false;
+        self.auth.set_login_failed(false);
         self.status = "ログイン中…".to_string();
         cx.notify();
         // A fixed identifier is enough for the PoC; a real installation would
@@ -67,7 +67,7 @@ impl BitwardenApp {
         let authenticated = match result {
             Ok(value) => value,
             Err(error) => {
-                self.login_failed = true;
+                self.auth.set_login_failed(true);
                 self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
                 cx.notify();
                 return;
@@ -79,7 +79,7 @@ impl BitwardenApp {
             .unwrap_or("")
             .to_string();
         if protected_key.is_empty() {
-            self.login_failed = true;
+            self.auth.set_login_failed(true);
             self.status = "ログイン失敗: 復号キーが応答にありません（r で再試行）".to_string();
             cx.notify();
             return;
@@ -89,7 +89,7 @@ impl BitwardenApp {
         {
             Ok(vault) => vault,
             Err(error) => {
-                self.login_failed = true;
+                self.auth.set_login_failed(true);
                 self.status =
                     format!("ログイン失敗: 復号キーを取得できません（{error}）（r で再試行）");
                 cx.notify();
@@ -97,7 +97,7 @@ impl BitwardenApp {
             }
         };
         if let Err(error) = open_vault.apply_sync(authenticated.sync) {
-            self.login_failed = true;
+            self.auth.set_login_failed(true);
             self.status =
                 format!("ログイン失敗: 同期データを取り込めません（{error}）（r で再試行）");
             cx.notify();
@@ -115,7 +115,7 @@ impl BitwardenApp {
                 );
             }
             Err(error) => {
-                self.login_failed = true;
+                self.auth.set_login_failed(true);
                 self.status = format!("vault 変換失敗: {}（r で再試行）", error.message());
             }
         }
@@ -123,34 +123,22 @@ impl BitwardenApp {
     }
 
     pub(super) fn edit_auth_field(&mut self, character: char) {
-        match self.auth_field {
+        match self.auth.field() {
             Some(AuthField::ServerUrl) => self.server_url.push(character),
             Some(AuthField::Email) => self.email.push(character),
-            Some(AuthField::ClientId) => self.client_id.push(character),
-            Some(AuthField::ClientSecret) => self.client_secret.push(character),
-            Some(AuthField::MasterPassword) => self.master_password.push(character),
-            None => {}
+            _ => self.auth.push_char(character),
         }
     }
 
     pub(super) fn backspace_auth_field(&mut self) {
-        match self.auth_field {
+        match self.auth.field() {
             Some(AuthField::ServerUrl) => {
                 self.server_url.pop();
             }
             Some(AuthField::Email) => {
                 self.email.pop();
             }
-            Some(AuthField::ClientId) => {
-                self.client_id.pop();
-            }
-            Some(AuthField::ClientSecret) => {
-                self.client_secret.pop();
-            }
-            Some(AuthField::MasterPassword) => {
-                self.master_password.pop();
-            }
-            None => {}
+            _ => self.auth.pop_char(),
         }
     }
 

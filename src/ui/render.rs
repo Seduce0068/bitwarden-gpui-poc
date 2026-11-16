@@ -27,31 +27,31 @@ impl BitwardenApp {
             .child(auth_row(
                 "1  Server",
                 &self.server_url,
-                self.auth_field == Some(AuthField::ServerUrl),
+                self.auth.field() == Some(AuthField::ServerUrl),
                 false,
             ))
             .child(auth_row(
                 "2  Email",
                 &self.email,
-                self.auth_field == Some(AuthField::Email),
+                self.auth.field() == Some(AuthField::Email),
                 false,
             ))
             .child(auth_row(
                 "3  Client ID",
-                &self.client_id,
-                self.auth_field == Some(AuthField::ClientId),
+                self.auth.client_id(),
+                self.auth.field() == Some(AuthField::ClientId),
                 false,
             ))
             .child(auth_row(
                 "4  Client Secret",
-                &self.client_secret,
-                self.auth_field == Some(AuthField::ClientSecret),
+                self.auth.client_secret(),
+                self.auth.field() == Some(AuthField::ClientSecret),
                 true,
             ))
             .child(auth_row(
                 "5  Master Password",
-                &self.master_password,
-                self.auth_field == Some(AuthField::MasterPassword),
+                self.auth.master_password(),
+                self.auth.field() == Some(AuthField::MasterPassword),
                 true,
             ))
             .child(

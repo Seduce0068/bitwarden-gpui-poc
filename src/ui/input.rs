@@ -20,10 +20,10 @@ impl BitwardenApp {
             screen: self.screen,
             panel: self.panel,
             key: &event.keystroke.key,
-            editing_auth: self.auth_field.is_some(),
+            editing_auth: self.auth.field().is_some(),
             searching: self.searching,
             editing_settings: self.editing.is_some(),
-            login_failed: self.login_failed,
+            login_failed: self.auth.login_failed(),
             has_audit_report: self.audit_report.is_some(),
             query_nonempty: !self.query.is_empty(),
         };
@@ -31,7 +31,7 @@ impl BitwardenApp {
             KeyAction::Quit => cx.quit(),
             KeyAction::Authenticate | KeyAction::RetryLogin => self.unlock_with_auth(cx),
             KeyAction::EditAuthField(field) => {
-                self.auth_field = Some(field);
+                self.auth.set_field(Some(field));
                 cx.notify();
             }
             KeyAction::EditSettingsField(field) => {
@@ -39,7 +39,7 @@ impl BitwardenApp {
                 cx.notify();
             }
             KeyAction::FinishEdit => {
-                if self.auth_field.take().is_some() {
+                if self.auth.take_field().is_some() {
                     // Lock-screen credentials are already stored in the
                     // fields; no extra sync is needed.
                 } else if self.searching {
@@ -50,7 +50,7 @@ impl BitwardenApp {
                 cx.notify();
             }
             KeyAction::InsertChar(character) => {
-                if self.auth_field.is_some() {
+                if self.auth.field().is_some() {
                     self.edit_auth_field(character);
                 } else if self.searching {
                     self.query.push(character);
@@ -61,7 +61,7 @@ impl BitwardenApp {
                 cx.notify();
             }
             KeyAction::Backspace => {
-                if self.auth_field.is_some() {
+                if self.auth.field().is_some() {
                     self.backspace_auth_field();
                 } else if self.searching {
                     self.query.pop();
