@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+use bitwarden_gpui_poc::auth::{validate_config, AuthConfig};
 use bitwarden_gpui_poc::generator::{
     passphrase_entropy, password_entropy, PassphraseSettings, PasswordSettings, Strength,
 };
@@ -19,6 +20,7 @@ use bitwarden_gpui_poc::settings::Settings;
 use bitwarden_gpui_poc::totp::{self, Tick};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use openwarden::SecretString;
 
 /// Seconds before a copied secret is restored to the previous clipboard value.
 const CLIPBOARD_CLEAR_SECONDS: u64 = 30;
@@ -158,6 +160,16 @@ enum SettingsField {
     Email,
 }
 
+/// A credential field being edited on the lock screen.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AuthField {
+    ServerUrl,
+    Email,
+    ClientId,
+    ClientSecret,
+    MasterPassword,
+}
+
 /// Editable generator settings and the last values drawn from them.
 #[derive(Clone, Debug, Default)]
 struct GeneratorState {
@@ -196,6 +208,10 @@ struct BitwardenApp {
     generator: GeneratorState,
     settings: Settings,
     editing: Option<SettingsField>,
+    auth_field: Option<AuthField>,
+    client_id: String,
+    client_secret: String,
+    master_password: String,
     clipboard_restore: Option<String>,
     clipboard_clear_at: Option<u64>,
     scroll_handle: UniformListScrollHandle,
@@ -223,6 +239,10 @@ impl BitwardenApp {
             generator: GeneratorState::from_settings(&settings),
             settings,
             editing: None,
+            auth_field: None,
+            client_id: String::new(),
+            client_secret: String::new(),
+            master_password: String::new(),
             clipboard_restore: None,
             clipboard_clear_at: None,
             scroll_handle: UniformListScrollHandle::new(),
@@ -276,6 +296,72 @@ impl BitwardenApp {
         self.vault.view(&self.filter, &self.query, self.sort)
     }
 
+    /// Build an [`AuthConfig`] from the current lock-screen fields.
+    fn auth_config(&self) -> AuthConfig {
+        AuthConfig {
+            server_url: self.server_url.clone(),
+            client_id: self.client_id.clone(),
+            client_secret: SecretString::from(self.client_secret.clone()),
+            email: self.email.clone(),
+            master_password: SecretString::from(self.master_password.clone()),
+        }
+    }
+
+    /// Validate entered credentials before opening the demo vault. Real
+    /// network login is still handled by `auth::authenticate` and is not
+    /// wired to this button yet.
+    fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
+        let config = self.auth_config();
+        let has_credentials = !self.client_id.is_empty()
+            || !self.client_secret.is_empty()
+            || !self.master_password.is_empty();
+        if has_credentials {
+            match validate_config(&config) {
+                Ok(()) => {
+                    self.status = "認証情報を検証しました（実ログインは未接続）".to_string();
+                }
+                Err(error) => {
+                    self.status = error.message().to_string();
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        self.unlock_mock(cx);
+    }
+
+    fn edit_auth_field(&mut self, character: char) {
+        match self.auth_field {
+            Some(AuthField::ServerUrl) => self.server_url.push(character),
+            Some(AuthField::Email) => self.email.push(character),
+            Some(AuthField::ClientId) => self.client_id.push(character),
+            Some(AuthField::ClientSecret) => self.client_secret.push(character),
+            Some(AuthField::MasterPassword) => self.master_password.push(character),
+            None => {}
+        }
+    }
+
+    fn backspace_auth_field(&mut self) {
+        match self.auth_field {
+            Some(AuthField::ServerUrl) => {
+                self.server_url.pop();
+            }
+            Some(AuthField::Email) => {
+                self.email.pop();
+            }
+            Some(AuthField::ClientId) => {
+                self.client_id.pop();
+            }
+            Some(AuthField::ClientSecret) => {
+                self.client_secret.pop();
+            }
+            Some(AuthField::MasterPassword) => {
+                self.master_password.pop();
+            }
+            None => {}
+        }
+    }
+
     fn unlock_mock(&mut self, cx: &mut Context<Self>) {
         self.vault = mock_vault();
         self.generator = GeneratorState::from_settings(&self.settings);
@@ -298,6 +384,9 @@ impl BitwardenApp {
         self.panel = Panel::Vault;
         self.generator = GeneratorState::from_settings(&self.settings);
         self.editing = None;
+        self.auth_field = None;
+        self.client_secret.clear();
+        self.master_password.clear();
         self.totp_secret.clear();
         self.totp_tick = None;
         self.query.clear();
@@ -554,11 +643,40 @@ impl BitwardenApp {
 
     fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         match self.screen {
-            Screen::Locked => match event.keystroke.key.as_str() {
-                "escape" => cx.quit(),
-                "enter" => self.unlock_mock(cx),
-                _ => {}
-            },
+            Screen::Locked => {
+                let key = event.keystroke.key.as_str();
+                if self.auth_field.is_some() {
+                    match key {
+                        "escape" | "enter" => {
+                            self.auth_field = None;
+                            cx.notify();
+                        }
+                        "backspace" => {
+                            self.backspace_auth_field();
+                            cx.notify();
+                        }
+                        value if value.chars().count() == 1 => {
+                            if let Some(character) = value.chars().next() {
+                                self.edit_auth_field(character);
+                                cx.notify();
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                match key {
+                    "escape" => cx.quit(),
+                    "enter" => self.unlock_with_auth(cx),
+                    "1" => self.auth_field = Some(AuthField::ServerUrl),
+                    "2" => self.auth_field = Some(AuthField::Email),
+                    "3" => self.auth_field = Some(AuthField::ClientId),
+                    "4" => self.auth_field = Some(AuthField::ClientSecret),
+                    "5" => self.auth_field = Some(AuthField::MasterPassword),
+                    _ => return,
+                }
+                cx.notify();
+            }
             Screen::Unlocked => {
                 let key = event.keystroke.key.as_str();
                 if self.searching {
@@ -731,18 +849,38 @@ impl BitwardenApp {
                 div()
                     .text_sm()
                     .text_color(rgb(0xa6adc8))
-                    .child("個人 vault クライアントの UI スケルトン。openwarden による実ログイン/同期は未接続です。"),
+                    .child("個人 vault クライアントの UI。認証情報は入力・検証できますが、実ログイン/同期は未接続です。"),
             )
-            .child(info_row("Server", &self.server_url))
-            .child(info_row(
-                "Email",
-                if self.email.is_empty() {
-                    "(未入力)"
-                } else {
-                    &self.email
-                },
+            .child(auth_row(
+                "1  Server",
+                &self.server_url,
+                self.auth_field == Some(AuthField::ServerUrl),
+                false,
             ))
-            .child(info_row("Auth", "Personal API key / master password (planned)"))
+            .child(auth_row(
+                "2  Email",
+                &self.email,
+                self.auth_field == Some(AuthField::Email),
+                false,
+            ))
+            .child(auth_row(
+                "3  Client ID",
+                &self.client_id,
+                self.auth_field == Some(AuthField::ClientId),
+                false,
+            ))
+            .child(auth_row(
+                "4  Client Secret",
+                &self.client_secret,
+                self.auth_field == Some(AuthField::ClientSecret),
+                true,
+            ))
+            .child(auth_row(
+                "5  Master Password",
+                &self.master_password,
+                self.auth_field == Some(AuthField::MasterPassword),
+                true,
+            ))
             .child(
                 div()
                     .mt_2()
@@ -751,7 +889,7 @@ impl BitwardenApp {
                     .rounded_md()
                     .bg(rgb(0x313244))
                     .text_sm()
-                    .child("Enter: モック vault を開く / Esc: 終了"),
+                    .child("1-5: 入力 / Enter: 検証して開く / Esc: 終了"),
             )
     }
 
@@ -1111,18 +1249,43 @@ fn settings_panel<'a>(app: &'a BitwardenApp) -> impl IntoElement + 'a {
         ))
 }
 
-fn info_row(label: &str, value: &str) -> impl IntoElement {
+fn auth_row<'a>(
+    label: &'a str,
+    value: &'a str,
+    editing: bool,
+    secret: bool,
+) -> impl IntoElement + 'a {
+    let shown = if value.is_empty() {
+        "(未入力)".to_string()
+    } else if secret && !editing {
+        "•".repeat(value.chars().count())
+    } else {
+        format!("{value}{}", if editing { " _" } else { "" })
+    };
     div()
         .flex()
         .gap_3()
         .text_sm()
         .child(
             div()
-                .w(px(90.0))
-                .text_color(rgb(0x6c7086))
+                .w(px(150.0))
+                .text_color(if editing {
+                    rgb(0x89b4fa)
+                } else {
+                    rgb(0x6c7086)
+                })
                 .child(label.to_string()),
         )
-        .child(div().flex_1().child(value.to_string()))
+        .child(
+            div()
+                .flex_1()
+                .text_color(if editing {
+                    rgb(0xf9e2af)
+                } else {
+                    rgb(0xcdd6f4)
+                })
+                .child(shown),
+        )
 }
 
 impl Render for BitwardenApp {
