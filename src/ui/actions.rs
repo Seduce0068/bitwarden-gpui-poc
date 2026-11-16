@@ -81,8 +81,8 @@ impl BitwardenApp {
 
     pub(super) fn push_editing(&mut self, character: char) {
         match self.editing {
-            Some(SettingsField::ServerUrl) => self.settings.server_url.push(character),
-            Some(SettingsField::Email) => self.settings.email.push(character),
+            Some(SettingsField::ServerUrl) => self.server_url.push(character),
+            Some(SettingsField::Email) => self.email.push(character),
             None => {}
         }
     }
@@ -90,10 +90,10 @@ impl BitwardenApp {
     pub(super) fn pop_editing(&mut self) {
         match self.editing {
             Some(SettingsField::ServerUrl) => {
-                self.settings.server_url.pop();
+                self.server_url.pop();
             }
             Some(SettingsField::Email) => {
-                self.settings.email.pop();
+                self.email.pop();
             }
             None => {}
         }

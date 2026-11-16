@@ -58,11 +58,8 @@ impl Settings {
     /// Returns `std::io::Error` on filesystem or serialization failure.
     pub fn save(&self, path: impl AsRef<std::path::Path>) -> Result<(), std::io::Error> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let contents = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, contents)
+        crate::private_file::write_private(path, contents.as_bytes())
     }
 }
 

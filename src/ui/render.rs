@@ -296,7 +296,8 @@ impl Render for BitwardenApp {
                 generator_panel(&self.generator).into_any_element()
             }
             Screen::Unlocked if self.panel == Panel::Settings => {
-                settings_panel(&self.settings, self.editing).into_any_element()
+                settings_panel(&self.settings, &self.server_url, &self.email, self.editing)
+                    .into_any_element()
             }
             Screen::Unlocked => self.render_unlocked(cx).into_any_element(),
         };

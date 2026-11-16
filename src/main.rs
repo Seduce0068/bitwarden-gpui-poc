@@ -1,9 +1,7 @@
-//! Bitwarden/Vaultwarden client PoC built with GPUI (`gpui-kit`).
+//! Application entry point for the Bitwarden/Vaultwarden GPUI PoC.
 //!
-//! The UI renders a [`Vault`] from the library crate: filtering, sorting and
-//! searching all go through [`Vault::view`], so the same logic is exercised by
-//! both the window and the tests. Login/sync/decrypt are handled by the
-//! `auth` and `vault_sync` modules.
+//! All UI state and behaviour live in `bitwarden_gpui_poc::ui`; this binary
+//! only creates the window and starts the event loop.
 
 #![forbid(unsafe_code)]
 

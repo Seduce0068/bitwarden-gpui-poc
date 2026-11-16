@@ -189,6 +189,8 @@ pub fn field_row<'a>(label: &'a str, value: &'a str, editing: bool) -> impl Into
 
 pub fn settings_panel<'a>(
     settings: &'a Settings,
+    server_url: &'a str,
+    email: &'a str,
     editing: Option<SettingsField>,
 ) -> impl IntoElement + 'a {
     let path = Settings::default_path()
@@ -203,12 +205,12 @@ pub fn settings_panel<'a>(
         .child(div().text_lg().font_weight(FontWeight::BOLD).child("設定"))
         .child(field_row(
             "1  サーバー URL",
-            &settings.server_url,
+            server_url,
             editing == Some(SettingsField::ServerUrl),
         ))
         .child(field_row(
             "2  メール",
-            &settings.email,
+            email,
             editing == Some(SettingsField::Email),
         ))
         .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
@@ -262,8 +264,10 @@ pub fn auth_row<'a>(
 ) -> impl IntoElement + 'a {
     let shown = if value.is_empty() {
         "(未入力)".to_string()
-    } else if secret && !editing {
-        "•".repeat(value.chars().count())
+    } else if secret {
+        // Never render secret values in plain text, not even while editing.
+        let masked = "•".repeat(value.chars().count());
+        format!("{masked}{}", if editing { " _" } else { "" })
     } else {
         format!("{value}{}", if editing { " _" } else { "" })
     };
