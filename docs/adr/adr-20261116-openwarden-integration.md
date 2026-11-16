@@ -90,6 +90,12 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 ログイン項目以外の kind はまだ model に変換されない。
 device identifier は固定値であり、インストールごとの一意性は未保証。
 
+オフラインキャッシュについて: `src/cache.rs` は暗号化済み同期データの
+保存・読み込みを実装済みだが、`openwarden` 0.1.0 の `Client::sync()` は
+レスポンス body を返さず、`Session::access_token` も private なため、
+認証フローからキャッシュを保存できない。実装するには openwarden 側の
+API 拡張（sync body の公開）または独自 HTTP クライアントが必要。
+
 ## Status
 
 Self-reviewed by agent at 2026-11-17T00:27:33+09:00.
