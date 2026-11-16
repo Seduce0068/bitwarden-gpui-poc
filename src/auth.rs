@@ -167,6 +167,62 @@ pub struct AuthenticatedVault {
     pub master_key: MasterKey,
 }
 
+/// Failures while turning a successful login into a usable vault.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnlockError {
+    /// The token response contained no protected key.
+    MissingProtectedKey,
+    /// The master key could not decrypt the protected key.
+    UnlockFailed(String),
+    /// The sync payload could not be applied to the decrypted vault.
+    ApplySyncFailed(String),
+    /// The decrypted vault could not be converted into the local model.
+    ImportFailed(String),
+}
+
+impl UnlockError {
+    /// A message for the UI status bar.
+    pub fn message(&self) -> String {
+        match self {
+            Self::MissingProtectedKey => "復号キーが応答にありません".to_string(),
+            Self::UnlockFailed(detail) => format!("復号キーを取得できません（{detail}）"),
+            Self::ApplySyncFailed(detail) => format!("同期データを取り込めません（{detail}）"),
+            Self::ImportFailed(detail) => format!("vault 変換に失敗しました（{detail}）"),
+        }
+    }
+}
+
+/// Decrypt a freshly authenticated vault and convert it into the local model.
+///
+/// This keeps openwarden's unlock/apply_sync/import sequence in the domain
+/// layer; the UI only applies the resulting vault.
+///
+/// # Errors
+///
+/// [`UnlockError`] at whichever step fails.
+pub fn unlock_and_import(
+    authenticated: AuthenticatedVault,
+) -> Result<crate::model::Vault, UnlockError> {
+    use openwarden::Vault as OpenVault;
+
+    let protected_key = authenticated
+        .session
+        .protected_key()
+        .unwrap_or("")
+        .to_string();
+    if protected_key.is_empty() {
+        return Err(UnlockError::MissingProtectedKey);
+    }
+    let kdf = authenticated.session.kdf();
+    let mut open_vault = OpenVault::unlock(&authenticated.master_key, &protected_key, kdf)
+        .map_err(|error| UnlockError::UnlockFailed(error.to_string()))?;
+    open_vault
+        .apply_sync(authenticated.sync)
+        .map_err(|error| UnlockError::ApplySyncFailed(error.to_string()))?;
+    crate::vault_sync::import_logins(&open_vault)
+        .map_err(|error| UnlockError::ImportFailed(error.to_string()))
+}
+
 /// Default time budget for the whole login sequence.
 pub const DEFAULT_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 

@@ -4,9 +4,8 @@ use crate::auth::{authenticate, validate_config, AuthConfig};
 use crate::ui::app::BitwardenApp;
 use crate::ui::mock::mock_vault;
 use crate::ui::state::{AuthField, GeneratorState, Panel, Screen};
-use crate::vault_sync;
 use gpui_kit::*;
-use openwarden::{SecretString, Vault as OpenVault};
+use openwarden::SecretString;
 
 impl BitwardenApp {
     pub(super) fn auth_config(&self) -> AuthConfig {
@@ -66,37 +65,7 @@ impl BitwardenApp {
                 return;
             }
         };
-        let protected_key = authenticated
-            .session
-            .protected_key()
-            .unwrap_or("")
-            .to_string();
-        if protected_key.is_empty() {
-            self.auth.set_login_failed(true);
-            self.status = "ログイン失敗: 復号キーが応答にありません（r で再試行）".to_string();
-            cx.notify();
-            return;
-        }
-        let kdf = authenticated.session.kdf();
-        let mut open_vault = match OpenVault::unlock(&authenticated.master_key, &protected_key, kdf)
-        {
-            Ok(vault) => vault,
-            Err(error) => {
-                self.auth.set_login_failed(true);
-                self.status =
-                    format!("ログイン失敗: 復号キーを取得できません（{error}）（r で再試行）");
-                cx.notify();
-                return;
-            }
-        };
-        if let Err(error) = open_vault.apply_sync(authenticated.sync) {
-            self.auth.set_login_failed(true);
-            self.status =
-                format!("ログイン失敗: 同期データを取り込めません（{error}）（r で再試行）");
-            cx.notify();
-            return;
-        }
-        match vault_sync::import_logins(&open_vault) {
+        match crate::auth::unlock_and_import(authenticated) {
             Ok(vault) => {
                 self.view.vault = vault;
                 self.screen = Screen::Unlocked;
@@ -109,7 +78,7 @@ impl BitwardenApp {
             }
             Err(error) => {
                 self.auth.set_login_failed(true);
-                self.status = format!("vault 変換失敗: {}（r で再試行）", error.message());
+                self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
             }
         }
         cx.notify();
