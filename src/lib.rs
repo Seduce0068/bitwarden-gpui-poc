@@ -6,6 +6,7 @@
 //! settings, and the clipboard policy) lives in this library, while
 //! `src/main.rs` is only the GPUI wiring.
 
+pub mod auth;
 pub mod generator;
 pub mod health;
 pub mod model;
