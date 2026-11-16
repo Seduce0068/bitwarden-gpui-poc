@@ -1,0 +1,38 @@
+[package]
+name = "bitwarden-gpui-poc"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Bitwarden/Vaultwarden client PoC built with GPUI (gpui-kit)"
+license = "AGPL-3.0-or-later"
+
+[lib]
+name = "bitwarden_gpui_poc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bitwarden-gpui-poc"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = "=0.9.1"
+openwarden = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+getrandom = "0.3"
+sha2 = "0.11"
+data-encoding = "2.11"
+url = "2"
+
+[profile.dev]
+# GPUI + wgpu の debuginfo は巨大になりやすいため抑える
+debug = 1
+
+[profile.dev.package."*"]
+debug = 0
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
