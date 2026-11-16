@@ -24,6 +24,7 @@ getrandom = "0.3"
 sha2 = "0.11"
 data-encoding = "2.11"
 url = "2"
+smol = "2"
 
 [profile.dev]
 # GPUI + wgpu の debuginfo は巨大になりやすいため抑える
