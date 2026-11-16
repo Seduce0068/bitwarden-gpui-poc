@@ -29,12 +29,26 @@ pub struct BitwardenApp {
 
 impl BitwardenApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let settings = Settings::load(Settings::default_path().unwrap_or_default());
+        let path = Settings::default_path();
+        let loaded = path
+            .as_ref()
+            .map(Settings::load_detailed)
+            .unwrap_or(Err(crate::settings::SettingsLoadError::ReadFailed));
+        let load_notice = match &loaded {
+            Err(crate::settings::SettingsLoadError::NotFound) => None,
+            Err(error) => Some(error.message()),
+            Ok(_) => None,
+        };
+        let settings = loaded.unwrap_or_default();
         let mut this = Self {
             screen: Screen::Locked,
             server_url: settings.server_url.clone(),
             email: settings.email.clone(),
-            status: "ロック中: Enter でモック vault を開く / Esc で終了".to_string(),
+            status: load_notice
+                .map(|notice| format!("{notice} / Enter でモック vault を開く"))
+                .unwrap_or_else(|| {
+                    "ロック中: Enter でモック vault を開く / Esc で終了".to_string()
+                }),
             view: crate::ui::vault_view::VaultViewState::new(),
             totp: crate::ui::totp_state::TotpState::new(),
             panel: Panel::Vault,
