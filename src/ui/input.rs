@@ -38,15 +38,17 @@ impl BitwardenApp {
                 self.editing = Some(field);
                 cx.notify();
             }
-            KeyAction::FinishEdit => {
-                if self.auth.take_field().is_some() {
-                    // Lock-screen credentials are already stored in the
-                    // fields; no extra sync is needed.
-                } else if self.view.searching {
-                    self.view.searching = false;
-                } else if self.editing.take().is_some() {
-                    self.sync_settings_from_ui();
-                }
+            KeyAction::FinishAuthEdit => {
+                self.auth.take_field();
+                cx.notify();
+            }
+            KeyAction::FinishSearch => {
+                self.view.finish_search();
+                cx.notify();
+            }
+            KeyAction::FinishSettingsEdit => {
+                self.editing = None;
+                self.sync_settings_from_ui();
                 cx.notify();
             }
             KeyAction::InsertChar(character) => {

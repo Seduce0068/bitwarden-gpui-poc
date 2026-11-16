@@ -98,8 +98,12 @@ pub enum KeyAction {
     EditAuthField(AuthField),
     /// Select the settings field to edit.
     EditSettingsField(SettingsField),
-    /// Finish editing a text field.
-    FinishEdit,
+    /// Finish editing a lock-screen credential field.
+    FinishAuthEdit,
+    /// Finish searching.
+    FinishSearch,
+    /// Finish editing a settings field.
+    FinishSettingsEdit,
     /// Insert one character into the active text field.
     InsertChar(char),
     /// Remove the last character from the active text field.
@@ -179,7 +183,7 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
     if ctx.screen == Screen::Locked {
         if ctx.editing_auth {
             return match ctx.key {
-                "escape" | "enter" => KeyAction::FinishEdit,
+                "escape" | "enter" => KeyAction::FinishAuthEdit,
                 "backspace" => KeyAction::Backspace,
                 _value if single => character.map_or(KeyAction::None, KeyAction::InsertChar),
                 _ => KeyAction::None,
@@ -200,7 +204,7 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
 
     if ctx.searching {
         return match ctx.key {
-            "escape" | "enter" => KeyAction::FinishEdit,
+            "escape" | "enter" => KeyAction::FinishSearch,
             "backspace" => KeyAction::Backspace,
             _value if single => character.map_or(KeyAction::None, KeyAction::InsertChar),
             _ => KeyAction::None,
@@ -242,7 +246,7 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
         Panel::Settings => {
             if ctx.editing_settings {
                 return match ctx.key {
-                    "escape" | "enter" => KeyAction::FinishEdit,
+                    "escape" | "enter" => KeyAction::FinishSettingsEdit,
                     "backspace" => KeyAction::Backspace,
                     _value if single => character.map_or(KeyAction::None, KeyAction::InsertChar),
                     _ => KeyAction::None,
@@ -388,11 +392,27 @@ mod tests {
 
         let mut value = ctx("enter");
         value.searching = true;
-        assert_eq!(classify_key(&value), KeyAction::FinishEdit);
+        assert_eq!(classify_key(&value), KeyAction::FinishSearch);
 
         let mut value = ctx("backspace");
         value.searching = true;
         assert_eq!(classify_key(&value), KeyAction::Backspace);
+    }
+
+    #[::core::prelude::v1::test]
+    fn finish_actions_are_mode_specific() {
+        let mut value = ctx("enter");
+        value.searching = true;
+        assert_eq!(classify_key(&value), KeyAction::FinishSearch);
+
+        value.searching = false;
+        value.panel = Panel::Settings;
+        value.editing_settings = true;
+        assert_eq!(classify_key(&value), KeyAction::FinishSettingsEdit);
+
+        value.screen = Screen::Locked;
+        value.editing_auth = true;
+        assert_eq!(classify_key(&value), KeyAction::FinishAuthEdit);
     }
 
     #[test]

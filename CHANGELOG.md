@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 入力処理の明確化
+
+- 曖昧な `FinishEdit` を `FinishAuthEdit` / `FinishSearch` /
+  `FinishSettingsEdit` に分離し、入力モードごとの動作を明示化
+
 ## [0.1.6] - 2026-11-17
 
 ### キャッシュの安全性
