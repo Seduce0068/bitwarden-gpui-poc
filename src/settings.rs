@@ -2,6 +2,11 @@
 //!
 //! The PoC stores settings in JSON under the user's config directory. No
 //! secrets are persisted here: master passwords and keys live only in memory.
+//!
+//! The file carries a [`CURRENT_SCHEMA_VERSION`] marker. Files that predate
+//! the marker (missing field) are treated as compatible with the current
+//! schema, while a *newer* version is never trusted: the whole file is
+//! discarded in favour of defaults because its field meanings may differ.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -17,10 +22,22 @@ use crate::health::Thresholds;
 /// or hide a single bad field behind a flood of data.
 pub const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 
+/// Schema version written to every settings file produced by this build.
+///
+/// Bump this when the meaning or shape of a field changes incompatibly.
+/// Values `0..=CURRENT_SCHEMA_VERSION` are accepted (0 covers legacy files
+/// that used 0 explicitly); anything larger is rejected as unknown.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 /// Top-level settings object.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Schema version of the file this struct came from.
+    ///
+    /// Missing in legacy files, in which case serde's container-level
+    /// `#[serde(default)]` fills it with [`CURRENT_SCHEMA_VERSION`].
+    pub schema_version: u32,
     /// Server URL (Bitwarden or Vaultwarden).
     pub server_url: String,
     /// Last-used email address.
@@ -42,6 +59,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
             server_url: "https://vault.bitwarden.com".to_string(),
             email: String::new(),
             password_generator: PasswordSettings::default(),
@@ -90,6 +108,7 @@ impl SettingsLoadError {
 impl core::fmt::Debug for Settings {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Settings")
+            .field("schema_version", &self.schema_version)
             .field("server_url", &self.server_url)
             .field(
                 "email",
@@ -227,6 +246,13 @@ impl Settings {
 
     /// Parse JSON with per-field tolerance, including the nested structs.
     ///
+    /// A numeric `schema_version` newer than [`CURRENT_SCHEMA_VERSION`] is
+    /// rejected before any other field is read: a future writer may have
+    /// changed the meaning of otherwise familiar keys, so no field from such
+    /// a file is safe to keep. The whole struct falls back to defaults.
+    /// A missing or wrong-typed marker stays compatible and is filled in by
+    /// the tolerance pass below.
+    ///
     /// The nested objects are repaired first so that a single bad leaf does
     /// not discard its correctly typed siblings; the top level is then parsed
     /// with the same rule. Invalid JSON syntax and a non-object root are the
@@ -237,6 +263,13 @@ impl Settings {
         let Some(obj) = value.as_object_mut() else {
             return Err(SettingsLoadError::ParseFailed);
         };
+        if obj
+            .get("schema_version")
+            .and_then(Value::as_u64)
+            .is_some_and(|version| version > u64::from(CURRENT_SCHEMA_VERSION))
+        {
+            return Ok(Self::default());
+        }
         if let Some(nested) = obj.get_mut("password_generator") {
             *nested = serde_json::to_value(tolerant_struct::<PasswordSettings>(nested.clone()))
                 .map_err(|_| SettingsLoadError::ParseFailed)?;
@@ -259,12 +292,18 @@ impl Settings {
 
     /// Save settings to `path`, creating parent directories if needed.
     ///
+    /// The file always records [`CURRENT_SCHEMA_VERSION`], so loading a
+    /// compatible legacy struct upgrades it on the next write. `self` is not
+    /// mutated.
+    ///
     /// # Errors
     ///
     /// Returns `std::io::Error` on filesystem or serialization failure.
     pub fn save(&self, path: impl AsRef<std::path::Path>) -> Result<(), std::io::Error> {
         let path = path.as_ref();
-        let contents = serde_json::to_string_pretty(self)?;
+        let mut stamped = self.clone();
+        stamped.schema_version = CURRENT_SCHEMA_VERSION;
+        let contents = serde_json::to_string_pretty(&stamped)?;
         crate::private_file::write_private(path, contents.as_bytes())
     }
 }

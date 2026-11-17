@@ -24,10 +24,10 @@ fn malformed_sync_body_is_reported() {
 #[test]
 fn revision_dates_convert_to_unix_seconds() {
     assert_eq!(parse_revision(Some("1970-01-01T00:00:00Z")), Some(0));
-    // Only the date part is used: 2023-11-14 00:00:00Z.
+    // The time-of-day is now part of the epoch value.
     assert_eq!(
         parse_revision(Some("2023-11-14T22:13:20Z")),
-        Some(1_699_920_000)
+        Some(1_700_000_000)
     );
     assert_eq!(parse_revision(Some("not-a-date")), None);
     assert_eq!(parse_revision(None), None);
@@ -38,10 +38,91 @@ fn revision_dates_convert_to_unix_seconds() {
 }
 
 #[test]
+fn revision_dates_validate_days_in_month_and_leap_years() {
+    // Leap-day rules: divisible by 4, except centuries not divisible by 400.
+    assert_eq!(
+        parse_revision(Some("2024-02-29T00:00:00Z")),
+        Some(1_709_164_800)
+    );
+    assert_eq!(parse_revision(Some("2024-02-30T00:00:00Z")), None);
+    assert_eq!(parse_revision(Some("2023-02-29T00:00:00Z")), None);
+    assert_eq!(
+        parse_revision(Some("2000-02-29T00:00:00Z")),
+        Some(951_782_400)
+    );
+    assert_eq!(parse_revision(Some("1900-02-29T00:00:00Z")), None);
+
+    // 30-day months and the boundaries of every month length.
+    assert_eq!(parse_revision(Some("2024-04-31T00:00:00Z")), None);
+    assert_eq!(parse_revision(Some("2024-06-31T00:00:00Z")), None);
+    assert_eq!(parse_revision(Some("2024-09-31T00:00:00Z")), None);
+    assert_eq!(parse_revision(Some("2024-11-31T00:00:00Z")), None);
+    assert_eq!(
+        parse_revision(Some("2024-01-31T00:00:00Z")),
+        Some(1_706_659_200)
+    );
+    assert_eq!(
+        parse_revision(Some("2024-04-30T00:00:00Z")),
+        Some(1_714_435_200)
+    );
+    assert_eq!(parse_revision(Some("2024-00-01T00:00:00Z")), None);
+    assert_eq!(parse_revision(Some("2024-01-00T00:00:00Z")), None);
+}
+
+#[test]
+fn revision_dates_apply_rfc3339_offsets() {
+    // Z / z and lower-case t are all valid RFC 3339 spellings.
+    assert_eq!(parse_revision(Some("1970-01-01t00:00:00z")), Some(0));
+    // 09:00 at +09:00 and 19:00 on the previous day at -05:00 are both UTC
+    // midnight, i.e. epoch 0.
+    assert_eq!(parse_revision(Some("1970-01-01T09:00:00+09:00")), Some(0));
+    assert_eq!(parse_revision(Some("1969-12-31T19:00:00-05:00")), Some(0));
+    // All three spellings below denote the same instant.
+    let expected = Some(1_700_000_000);
+    for value in [
+        "2023-11-14T22:13:20Z",
+        "2023-11-15T07:13:20+09:00",
+        "2023-11-14T17:13:20-05:00",
+        "2023-11-14T22:13:20.999Z",
+        "2023-11-14T22:13:20,999Z",
+    ] {
+        assert_eq!(parse_revision(Some(value)), expected, "{value}");
+    }
+    // Offsets take the date across a month/year boundary.
+    assert_eq!(
+        parse_revision(Some("2024-01-01T01:00:00+09:00")),
+        parse_revision(Some("2023-12-31T16:00:00Z"))
+    );
+}
+
+#[test]
+fn revision_dates_reject_malformed_timestamps() {
+    for value in [
+        "2023-11-14",                 // no time or offset
+        "2023-11-14 22:13:20Z",       // space instead of T
+        "2023-11-14T22:13:20",        // no offset
+        "2023-11-14T22:13:20+0900",   // offset without colon
+        "2023-11-14T22:13:20+24:00",  // offset hour out of range
+        "2023-11-14T22:13:20+09:60",  // offset minute out of range
+        "2023-11-14T22:13:20.Z",      // empty fractional part
+        "2023-11-14T24:00:00Z",       // hour out of range
+        "2023-11-14T22:60:00Z",       // minute out of range
+        "2023-11-14T22:13:60Z",       // second out of range
+        "2023-11-14T22:13:20Zjunk",   // trailing bytes
+        "2023-11-14T22:13:20+09:00x", // trailing bytes after offset
+    ] {
+        assert_eq!(parse_revision(Some(value)), None, "{value}");
+    }
+}
+
+#[test]
 fn days_from_civil_matches_known_dates() {
-    assert_eq!(days_from_civil(1970, 1, 1), 0);
-    assert_eq!(days_from_civil(2000, 2, 29), 11_016);
-    assert_eq!(days_from_civil(2023, 11, 14), 19_675);
+    assert_eq!(days_from_civil(1970, 1, 1), Some(0));
+    assert_eq!(days_from_civil(2000, 2, 29), Some(11_016));
+    assert_eq!(days_from_civil(2023, 11, 14), Some(19_675));
+    // Checked arithmetic must fail instead of wrapping on extreme inputs.
+    assert_eq!(days_from_civil(i64::MAX, 1, 1), None);
+    assert_eq!(days_from_civil(i64::MIN, 1, 1), None);
 }
 
 #[test]

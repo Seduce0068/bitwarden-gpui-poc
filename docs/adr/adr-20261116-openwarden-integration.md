@@ -81,14 +81,19 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 
 ## Implementation Result
 
-`auth` / `vault_sync` の2モジュールと UI 接続を実装し、
-`cargo test` は 74 件すべて成功している。認証情報未入力時はモック vault
-にフォールバックし、入力時は `authenticate` → `Vault::unlock` →
-`apply_sync` → `import_logins` の順で実 vault を読み込む。
+`auth` / `vault_sync` の2モジュールと UI 接続を実装し、`cargo test` は
+全件成功している（件数はコミットごとに増加するため固定値は記載しない）。
+ロック画面の `Enter` は常に実認証を試行し、モック vault は `m` で明示的に
+開く。認証成功後は `authenticate` → `unlock_and_import`（復号・同期データ
+取り込みは blocking thread）→ `import_logins_with_audit` の順で実 vault を
+読み込み、UI スレッドでは結果の適用のみを行う。
 
 未解決事項: 実サーバーへの接続テストは認証情報がないため未実施。
-ログイン項目以外の kind はまだ model に変換されない。
+ログイン項目以外の kind はまだ model に変換されない。パスワードと TOTP の
+値は復号せず、暗号層 → UI の往復は名前 / username / URI に限定される
+（「暗号層 → UI」の完全な往復は未検証）。
 device identifier は固定値であり、インストールごとの一意性は未保証。
+API key はテスト専用アカウントで使用すること（権限範囲の注意は README 参照）。
 
 オフラインキャッシュについて: `src/cache.rs` は暗号化済み同期データの
 保存・読み込みを実装済みだが、`openwarden` 0.1.0 の `Client::sync()` は

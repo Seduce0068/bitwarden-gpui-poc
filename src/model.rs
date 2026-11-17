@@ -5,6 +5,7 @@
 //! login/sync stay out of scope.
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// Reduce a URI to scheme and host so embedded credentials or tokens in the
 /// path/query are never shown in the UI or copied into reports.
@@ -205,6 +206,30 @@ impl core::fmt::Debug for SshKeyData {
     }
 }
 
+/// serde adapter for secret fields stored as [`Zeroizing<String>`].
+///
+/// The `zeroize` crate's optional `serde` feature is not enabled here, so the
+/// conversion is implemented locally: the wire format stays a plain string
+/// and deserialization immediately wraps it so it is wiped on drop.
+mod zeroizing_string_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use zeroize::Zeroizing;
+
+    pub fn serialize<S>(value: &Zeroizing<String>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(value.as_str())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Zeroizing::new)
+    }
+}
+
 /// Kind-specific payload.
 ///
 /// `Debug` is implemented manually so login secrets are never printed.
@@ -215,10 +240,13 @@ pub enum ItemData {
     Login {
         /// Username or email.
         username: String,
-        /// Password.
-        password: String,
+        /// Password. The final buffer is wiped on drop or replacement.
+        #[serde(with = "zeroizing_string_serde")]
+        password: Zeroizing<String>,
         /// TOTP field (`otpauth://` URI, `steam://`, or bare base32).
-        totp: String,
+        /// The final buffer is wiped on drop or replacement.
+        #[serde(with = "zeroizing_string_serde")]
+        totp: Zeroizing<String>,
         /// Site URIs.
         uris: Vec<LoginUri>,
     },

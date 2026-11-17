@@ -104,6 +104,34 @@ fn generator_keys_toggle_options_and_clamp_lengths() {
     assert_eq!(state.passphrase_generator.words, 5);
     assert!(apply_generator_key(&mut state, "-"));
     assert_eq!(state.password_generator.length, 20);
+    assert_eq!(state.passphrase_generator.words, 4);
+
+    // The upper bounds are 128 characters and 20 words: a step from just
+    // below them reaches the bound, further steps must not exceed it.
+    state.password_generator.length = 127;
+    state.passphrase_generator.words = 19;
+    assert!(apply_generator_key(&mut state, "+"));
+    assert_eq!(state.password_generator.length, 128);
+    assert_eq!(state.passphrase_generator.words, 20);
+    assert!(
+        apply_generator_key(&mut state, "="),
+        "'=' is an alias for '+'"
+    );
+    assert_eq!(state.password_generator.length, 128);
+    assert_eq!(state.passphrase_generator.words, 20);
+
+    // The lower bounds are 4 characters and 2 words.
+    state.password_generator.length = 5;
+    state.passphrase_generator.words = 3;
+    assert!(apply_generator_key(&mut state, "-"));
+    assert_eq!(state.password_generator.length, 4);
+    assert_eq!(state.passphrase_generator.words, 2);
+    assert!(
+        apply_generator_key(&mut state, "_"),
+        "'_' is an alias for '-'"
+    );
+    assert_eq!(state.password_generator.length, 4);
+    assert_eq!(state.passphrase_generator.words, 2);
 
     assert!(apply_generator_key(&mut state, ","));
     assert_eq!(state.passphrase_generator.separator, ".");

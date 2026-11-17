@@ -42,16 +42,43 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - モックデータには5種類すべての item kind（ログイン / メモ / カード / ID / SSH鍵）を含む
 - 生成結果はクリップボードにコピーでき、設定ファイルで指定した秒数
   （既定30秒）後に以前の内容へ自動復元される（ロック時も即復元）
-- ロック画面で Personal API key とマスターパスワードを入力し、`openwarden`
-  による実ログイン・同期・復号を試せる（モック vault は `m` で明示的に開く）
-- KDF 計算は blocking thread で実行し、待機中も UI は操作できる
+- ロック画面で Personal API key（Client ID / Client Secret）とマスターパスワードを
+  入力し、`openwarden` による実ログイン・同期・復号を試せる。`Enter` は常に実認証
+  であり、モック vault は `m` で明示的に開く
+- KDF 計算と同期データの復号は blocking thread で実行し、待機中も UI は操作できる
 - ログイン全体にタイムアウトを設定し（設定ファイルで指定、既定30秒）、失敗時は `r` で再試行できる
 - 実ログインではログイン項目の名前 / username / URI を復号して表示する。
   パスワードは復号せず空のまま保持し、TOTP は設定の有無のみをマーカーとして
   保持する（値自体は復号しない）
+- **実サーバーへの接続テストは未実施**。自動テストはモックデータとローカルの
+  openwarden API に限定されており、実運用サーバーでの動作は検証していない
 - `src/cache.rs` に、暗号化済みアイテムを含む平文 JSON キャッシュを実装済み
   （キーは保存しない、ファイルは 0600 で作成）。ただし openwarden 0.1.0 の
   API 制約で認証フローからはまだ接続していない
+
+## 実サーバー接続と注意事項
+
+初期設定の手順は次のとおりです。
+
+1. 接続先の Web vault で Personal API key（Client ID / Client Secret）を取得する。
+   Vaultwarden の場合、API key 機能が有効である必要がある（有効化手順は
+   使用するバージョンに依存するため、ここでは未確認として扱う）。
+2. ロック画面で `1`〜`5` からサーバーURL / メール / Client ID / Client Secret /
+   マスターパスワードを入力する。入力値はメモリ上の認証状態に保持され、
+   `settings.json` には保存されない。
+3. `Enter` で実認証を試行する。失敗時は `r` で再試行できる。
+
+注意事項:
+
+- API key は vault データの読み取りに加え、アカウントの権限範囲に応じた
+  操作が可能になり得る。**実運用アカウントではなく、テスト専用のアカウントを
+  使用すること**。専用アカウントには本来の秘密データ以外を置かないこと。
+- Client Secret とマスターパスワードは画面入力後もプロセス内存在し、
+  ログイン成功時に消去する（`Debug` 出力でもマスクされる）。ただし入力画面は
+  共有環境の肩越し閲覧を避けること。
+- 「暗号層 → UI」の往復は名前 / username / URI に限定され、パスワードと
+  TOTP の値は復号しない。このため、復号済みパスワードを UI やクリップボードへ
+  渡す経路は未検証である。
 
 ## 画面と操作
 
@@ -89,7 +116,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 Rust 1.88 以上が必要です（`Cargo.toml` の `rust-version`）。
 
 ```bash
-cd work/bitwarden-gpui-poc
+# このリポジトリのルートで実行
 cargo fmt --all -- --check
 cargo check --all-targets --locked
 cargo test --all-targets --locked

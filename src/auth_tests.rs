@@ -2,11 +2,15 @@
 
 use crate::auth::*;
 
+/// A unique, non-production canary so a leak of the client secret can be
+/// detected unambiguously in debug output.
+const CLIENT_SECRET_CANARY: &str = "client-secret-CANARY-7f3a9b21";
+
 fn config() -> AuthConfig {
     AuthConfig {
         server_url: "https://vault.example.com".into(),
         client_id: "user.1234".into(),
-        client_secret: SecretString::from("secret".to_string()),
+        client_secret: SecretString::from(CLIENT_SECRET_CANARY.to_string()),
         email: "alice@example.com".into(),
         master_password: SecretString::from("correct horse".to_string()),
     }
@@ -83,7 +87,15 @@ fn device_is_stable_and_typed_for_linux() {
 fn debug_output_does_not_leak_secrets() {
     let rendered = format!("{:?}", config());
     assert!(rendered.contains("[REDACTED]"), "{rendered}");
+    // The debug output really contains both secret fields, so the redaction
+    // assertion below has something to act on.
+    assert!(rendered.contains("client_secret"), "{rendered}");
+    assert!(rendered.contains("master_password"), "{rendered}");
     assert!(!rendered.contains("correct horse"), "{rendered}");
+    assert!(
+        !rendered.contains(CLIENT_SECRET_CANARY),
+        "client_secret value leaked: {rendered}"
+    );
 }
 
 #[test]

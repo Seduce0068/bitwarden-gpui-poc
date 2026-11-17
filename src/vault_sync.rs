@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use openwarden::{ExposeSecret as _, LoginInfo, Vault as OpenVault};
+use zeroize::Zeroizing;
 
 use crate::model::{Folder, ItemData, LoginUri, Vault, VaultItem};
 
@@ -125,10 +126,10 @@ fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
         name,
         ItemData::Login {
             username,
-            password: String::new(),
+            password: Zeroizing::new(String::new()),
             // The UI only checks whether the secret is present; keeping the
             // marker avoids decrypting every TOTP secret up front.
-            totp: if info.has_totp { "available" } else { "" }.to_string(),
+            totp: Zeroizing::new(if info.has_totp { "available" } else { "" }.to_string()),
             uris,
         },
     );
@@ -140,31 +141,153 @@ fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
     item
 }
 
-/// RFC 3339 timestamp to Unix seconds, using only the date part so the
-/// conversion stays deterministic and dependency-free.
+/// RFC 3339 timestamp to Unix seconds.
+///
+/// Accepts `YYYY-MM-DDTHH:MM:SSZ` (also lowercase `t`/`z`), an optional
+/// fractional second, and numeric `±HH:MM` offsets. The offset is applied so
+/// the result is always seconds since `1970-01-01T00:00:00Z`. Calendar dates
+/// are validated (including leap years) and every arithmetic step is checked,
+/// so malformed or overflowing input becomes `None` rather than wrapping.
 fn parse_revision(value: Option<&str>) -> Option<i64> {
-    let value = value?;
-    let date = value.get(0..10)?;
-    let mut parts = date.split('-');
-    let year: i64 = parts.next()?.parse().ok()?;
-    let month: i64 = parts.next()?.parse().ok()?;
-    let day: i64 = parts.next()?.parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let bytes = value?.as_bytes();
+
+    // Read the fixed-width fields directly: a signed or variable-width number
+    // would let inputs such as `2023-1-01` slip through.
+    let year = read_digits(bytes, 0, 4)?;
+    expect_byte(bytes, 4, b'-')?;
+    let month = read_digits(bytes, 5, 2)?;
+    expect_byte(bytes, 7, b'-')?;
+    let day = read_digits(bytes, 8, 2)?;
+    if !matches!(bytes.get(10), Some(b'T') | Some(b't')) {
         return None;
     }
-    Some(days_from_civil(year, month, day) * 86_400)
+    let hour = read_digits(bytes, 11, 2)?;
+    expect_byte(bytes, 13, b':')?;
+    let minute = read_digits(bytes, 14, 2)?;
+    expect_byte(bytes, 16, b':')?;
+    let second = read_digits(bytes, 17, 2)?;
+
+    if !(1..=12).contains(&month)
+        || day < 1
+        || day > days_in_month(year, month)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+
+    // RFC 3339 allows a fractional second, which is ignored (truncated) for
+    // the whole-second epoch value.
+    let mut cursor = 19;
+    if matches!(bytes.get(cursor), Some(b'.') | Some(b',')) {
+        cursor += 1;
+        let fraction_start = cursor;
+        while matches!(bytes.get(cursor), Some(byte) if byte.is_ascii_digit()) {
+            cursor += 1;
+        }
+        if cursor == fraction_start {
+            return None;
+        }
+    }
+
+    let offset_seconds = match bytes.get(cursor) {
+        Some(b'Z') | Some(b'z') => {
+            cursor += 1;
+            0
+        }
+        Some(b'+') | Some(b'-') => {
+            let negative = bytes[cursor] == b'-';
+            expect_byte(bytes, cursor.checked_add(3)?, b':')?;
+            let offset_hour = read_digits(bytes, cursor + 1, 2)?;
+            let offset_minute = read_digits(bytes, cursor + 4, 2)?;
+            if offset_hour > 23 || offset_minute > 59 {
+                return None;
+            }
+            cursor += 6;
+            let magnitude = offset_hour
+                .checked_mul(3_600)?
+                .checked_add(offset_minute.checked_mul(60)?)?;
+            if negative {
+                -magnitude
+            } else {
+                magnitude
+            }
+        }
+        _ => return None,
+    };
+    // Reject trailing bytes instead of silently ignoring part of the input.
+    if cursor != bytes.len() {
+        return None;
+    }
+
+    let days = days_from_civil(year, month, day)?;
+    let local_seconds = days
+        .checked_mul(86_400)?
+        .checked_add(hour.checked_mul(3_600)?)?
+        .checked_add(minute.checked_mul(60)?)?
+        .checked_add(second)?;
+    local_seconds.checked_sub(offset_seconds)
+}
+
+/// Parse exactly `len` ASCII digits starting at `start` as a non-negative
+/// integer. Each step is checked so an oversized value is rejected.
+fn read_digits(bytes: &[u8], start: usize, len: usize) -> Option<i64> {
+    let slice = bytes.get(start..start.checked_add(len)?)?;
+    let mut value = 0i64;
+    for &byte in slice {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(i64::from(byte - b'0'))?;
+    }
+    Some(value)
+}
+
+fn expect_byte(bytes: &[u8], index: usize, expected: u8) -> Option<()> {
+    if bytes.get(index) == Some(&expected) {
+        Some(())
+    } else {
+        None
+    }
+}
+
+fn is_leap_year(year: i64) -> bool {
+    year.rem_euclid(4) == 0 && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0)
+}
+
+/// Number of days in a Gregorian month; `month` is assumed to be 1..=12.
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
-/// algorithm), so no external date crate is needed.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = year - i64::from(month <= 2);
-    let era = year.div_euclid(400);
-    let yoe = year - era * 400;
-    let mp = month + if month > 2 { -3 } else { 9 };
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+/// algorithm), so no external date crate is needed. `None` on overflow.
+fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+    let adjusted_year = year.checked_sub(i64::from(month <= 2))?;
+    let era = adjusted_year.div_euclid(400);
+    let yoe = adjusted_year.checked_sub(era.checked_mul(400)?)?;
+    let mp = month.checked_add(if month > 2 { -3 } else { 9 })?;
+    let doy = mp
+        .checked_mul(153)?
+        .checked_add(2)?
+        .checked_div(5)?
+        .checked_add(day)?
+        .checked_sub(1)?;
+    let doe = yoe
+        .checked_mul(365)?
+        .checked_add(yoe.checked_div(4)?)?
+        .checked_sub(yoe.checked_div(100)?)?
+        .checked_add(doy)?;
+    era.checked_mul(146_097)?
+        .checked_add(doe)?
+        .checked_sub(719_468)
 }
 
 /// Build a model vault from an unlocked `openwarden` vault.

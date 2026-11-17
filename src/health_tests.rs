@@ -3,6 +3,7 @@
 use crate::generator::{entropy_bits, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::health::*;
 use crate::model::{CardData, Folder, ItemData, LoginUri, VaultItem};
+use zeroize::Zeroizing;
 
 const NOW: i64 = 1_700_000_000;
 
@@ -12,8 +13,8 @@ fn login(id: &str, name: &str, password: &str, uri: &str, totp: &str) -> VaultIt
         name,
         ItemData::Login {
             username: "user".into(),
-            password: password.into(),
-            totp: totp.into(),
+            password: Zeroizing::new(password.to_string()),
+            totp: Zeroizing::new(totp.to_string()),
             uris: vec![LoginUri::new(uri)],
         },
     )
@@ -202,8 +203,8 @@ fn insecure_uris_and_missing_totp_and_uri_are_reported() {
         "NoUri",
         ItemData::Login {
             username: "u".into(),
-            password: "vT7#kQm2!zR9wP4$xL8@".into(),
-            totp: "S".into(),
+            password: Zeroizing::new("vT7#kQm2!zR9wP4$xL8@".into()),
+            totp: Zeroizing::new("S".into()),
             uris: Vec::new(),
         },
     )]);

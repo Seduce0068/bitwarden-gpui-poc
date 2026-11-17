@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T01:56:54+09:00"
+  at: "2026-11-18T02:15:46+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -35,15 +35,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 中
 
-- [ ] 機密の zeroize 範囲を拡大する
-  - 根拠: S1 / S2 / S6
-  - File: src/ui/auth_state.rs:106-112, src/model.rs:218-222,
-    src/ui/state.rs:62-64, src/ui/app.rs:129-147
-  - 現状: ログイン成功後も AuthState に秘密が残存、ItemData::Login の
-    password/totp が通常 String でロック時に消去されず drop される、
-    last_password/last_passphrase も平文 `Option<String>`。
-  - 受け入れ条件: 成功時に clear_secrets()、暗号化対象フィールドを Zeroizing 化、
-    生成結果も Zeroizing に変更。（V3 の再確保前コピーは既知制約として除外）
 - [ ] 部分成功と再試行案内を区別する
   - 根拠: E3 / E4
   - File: src/vault_sync.rs:55-57, src/ui/login_flow.rs:81-84
@@ -63,20 +54,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     sha2 直接依存は未使用で openwarden の推移依存と重複。
   - 受け入れ条件: .github/dependabot.yml（cargo 週次）、deny.toml と
     extra_gates への cargo deny check、未使用 sha2 の削除。
-- [ ] 実接続とオンボーディングの情報を README に反映する
-  - 根拠: REL1 / REL3 / DOC1 / A5
-  - File: README.md:44-45,86-104,123-137, docs/adr/adr-20261116-openwarden-integration.md:82-91
-  - 現状: 実サーバー接続テスト未実施が README に無く、Vaultwarden の API key 取得
-    手順も無い。README の `cd work/bitwarden-gpui-poc` 例はリポジトリ内に無いパス。
-    ADR は 74件/モック挙動のまま陳腐化。
-  - 受け入れ条件: 既知の制約と初期設定手順を追記、cd 例を修正、ADR を現行実装へ更新。
-- [ ] API key の権限範囲と専用アカウント利用の注意を明記する
-  - 根拠: G7
-  - File: README.md, docs/adr/adr-20261116-openwarden-integration.md
-  - 現状: 実 vault のパスワードを復号して UI に渡す経路が無く、PoC の
-    「暗号層→UI」ラウンドトリップが未検証。テストアカウント利用の注意も無い。
-  - 受け入れ条件: オンデマンド復号＋既存クリップボード復元を再利用するか、
-    ADR に検証範囲の限定を明記。README に権限範囲と専用アカウントの注意を追記。
 - [ ] cache モジュールを本番フローへ接続するか削除する
   - 根拠: A4 / C9-6 / C9-7 / TH6
   - File: src/cache.rs:70-200, src/lib.rs:21, src/auth.rs:272-306
@@ -84,22 +61,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     オフライン復元や同期失敗時のキャッシュ活用が行われない。ADR と乖離。
   - 受け入れ条件: auth 層から SyncCache へ接続するか feature ゲート／削除し、
     ADR と実装を一致させる。
-- [ ] 日付時刻パースを堅牢化する
-  - 根拠: T8 / D4 / TH4
-  - File: src/vault_sync.rs:118-141
-  - 現状: 月1..=12/日1..=31 のみ検証し 2024-02-30 を 03-01 に正規化、
-    TZ オフセットを捨てる、極端な年で算術オーバーフロー。
-  - 受け入れ条件: 月ごとの日数とうるう年を検証、RFC3339 オフセットを解釈、
-    checked_mul/add で None を返す。
-- [ ] テストの主張とアサーションを整合させる
-  - 根拠: R1 / R2 / R3 / R5 / T5 / T7
-  - File: src/totp_tests.rs:132-145, src/ui/vault_view.rs:177-187,
-    src/ui/keys_tests.rs:86-105, src/generator_tests.rs:73-83, src/auth_tests.rs:82-87
-  - 現状: 「コードを比較しない」「両端でクランプ」「clamp を検証」といった
-    テスト名に対し、実際のアサーションが主張を検証していない。
-    client_secret の非漏洩も未検証。
-  - 受け入れ条件: 異なる secret での等価性、上限クランプ、境界値、
-    固有値の非漏洩を明示アサート。
 - [ ] キーガード分岐のテストを追加する
   - 根拠: T11 / R7 / R6
   - File: src/ui/keys_tests.rs:107-120,143-156, src/ui/auth_state.rs:79-102,
@@ -124,7 +85,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 低
 
-- [ ] 設定にスキーマバージョンを追加する（O7-d）
 - [ ] 同期キャッシュを XDG_CACHE_HOME 配下へ移す（FS4）
 - [ ] デバイス ID を永続化し再同期経路を追加する（A9）
 - [ ] 監査パネル・生成／設定パネルにスクロールを追加する（U6 / UI4）
@@ -153,6 +113,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] エージェントチームによる4タスク並列対応・第3弾（2026-11-18）
+  - 機密の Zeroizing 化（model / ui state / login_flow ほか機械的追従）
+  - 日付時刻パースの堅牢化（うるう年・RFC3339 オフセット・checked 算術）
+  - 設定スキーマバージョン（現行 1 / 未知バージョンの安全な拒否）
+  - テスト名とアサーションの整合（TOTP / クランプ / canary 非漏洩）
+  - ルート担当: README の実接続手順・API key 注意、ADR を現行実装へ更新
 - [x] エージェントチームによる4タスク並列対応（2026-11-18）
   - パスワード生成とエントロピー推定を整合（generator / health / words）
   - 同期データの重複排除・revision 検証・監査ログ（vault_sync）
