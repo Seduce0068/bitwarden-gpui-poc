@@ -172,7 +172,9 @@ fn entropy_and_strength_buckets() {
     assert_eq!(Strength::from_bits(50.0), Strength::Fair);
     assert_eq!(Strength::from_bits(70.0), Strength::Good);
     assert_eq!(Strength::from_bits(200.0), Strength::Strong);
+    assert_eq!(Strength::Weak.score(-10.0), 0, "negative bits clamp to 0");
     assert_eq!(Strength::Weak.score(0.0), 0);
+    assert_eq!(Strength::Fair.score(64.0), 50, "64/128 maps to 50");
     assert_eq!(Strength::Strong.score(128.0), 100);
     assert_eq!(Strength::Good.score(1000.0), 100);
     assert_eq!(Strength::Good.label(), "良い");
