@@ -214,6 +214,7 @@ mod tests {
         state.push_query('B');
         state.push_query('e');
         assert_eq!(state.query, "Be");
+        // view() lowercases the query before matches_query sees it.
         assert_eq!(state.visible_items().len(), 1);
         state.pop_query();
         assert_eq!(state.query, "B");
