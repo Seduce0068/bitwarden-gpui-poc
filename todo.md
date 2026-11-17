@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-17T23:33:06+09:00"
+  at: "2026-11-18T00:01:26+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -38,13 +38,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
   - 現状: `self.server_url/email` と `settings` の双方向ミラー。ロック画面の編集が
     `w` 保存なしで失われ、lock() が generator を settings から再構築し巻き戻る。
   - 受け入れ条件: Settings を単一真実源にするか、全編集経路が通る単一更新コマンドを設ける。
-- [ ] 修飾キーと IME 入力を正しく扱う
-  - 根拠: UI1 / UI2
-  - File: src/ui/input.rs:19-30, src/ui/keys.rs:146-170
-  - 現状: KeyContext に modifiers が無く Ctrl+C が "c"（設定遷移）と解釈され
-    gpui-base の Copy と競合。key_char を落とすため日本語 IME 確定文字が入力されない。
-  - 受け入れ条件: control/platform/alt 付きキーを判定から除外し、挿入系で
-    keystroke.key_char を優先する。
 
 ### 優先度: 中
 
@@ -229,6 +222,14 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 修飾キーと IME 入力を扱う（2026-11-18）
+  - `KeyModifiers` / `key_char` を `KeyContext` へ追加。Ctrl/Cmd/Fn は常に
+    除外、Alt は編集中に文字が生成された場合のみ許可。
+  - Shift 文字は `key_char` 経由で判定し、既知 P0 の Shift+Y を解消。
+  - 挿入アクションを文字列単位へ変更し、IME 確定文字を一括挿入。
+  - 敵対的レビューの High 2件（Shift+Y / Alt 由来文字）を修正。
+  - 未確認: IME 確定を Enter で行う環境の keystroke 実態はローカル資料が
+    無く検証していない。
 - [x] パネル切替時に入力モードをクリア（2026-11-17）
   - `BitwardenApp::set_panel()` に集約し、設定編集 / 認証フィールド /
     検索状態を必ず解除。マウスのパネルボタンも同じ経路を通る。

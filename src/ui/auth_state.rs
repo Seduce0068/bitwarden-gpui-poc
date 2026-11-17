@@ -76,11 +76,11 @@ impl AuthState {
     ///
     /// `ServerUrl` and `Email` are shared with settings and handled by the
     /// caller, so they are ignored here.
-    pub fn push_char(&mut self, character: char) {
+    pub fn push_text(&mut self, text: &str) {
         match self.field {
-            Some(AuthField::ClientId) => self.client_id.push(character),
-            Some(AuthField::ClientSecret) => self.client_secret.push(character),
-            Some(AuthField::MasterPassword) => self.master_password.push(character),
+            Some(AuthField::ClientId) => self.client_id.push_str(text),
+            Some(AuthField::ClientSecret) => self.client_secret.push_str(text),
+            Some(AuthField::MasterPassword) => self.master_password.push_str(text),
             _ => {}
         }
     }
@@ -128,17 +128,26 @@ mod tests {
     fn edits_target_the_active_field() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientId));
-        state.push_char('u');
-        state.push_char('s');
+        state.push_text("u");
+        state.push_text("s");
         assert_eq!(state.client_id(), "us");
 
         state.set_field(Some(AuthField::ClientSecret));
-        state.push_char('s');
+        state.push_text("s");
         assert_eq!(state.client_secret(), "s");
         assert!(state.has_credentials());
 
         state.pop_char();
         assert!(state.client_secret().is_empty());
+    }
+
+    #[::core::prelude::v1::test]
+    fn push_text_appends_a_whole_ime_string() {
+        let mut state = AuthState::new();
+        state.set_field(Some(AuthField::ClientSecret));
+        state.push_text("日本語");
+        state.push_text("abc");
+        assert_eq!(state.client_secret(), "日本語abc");
     }
 
     #[::core::prelude::v1::test]
@@ -171,9 +180,9 @@ mod tests {
     fn clear_secrets_replaces_secret_buffers() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientSecret));
-        state.push_char('s');
+        state.push_text("s");
         state.set_field(Some(AuthField::MasterPassword));
-        state.push_char('p');
+        state.push_text("p");
         assert_eq!(state.client_secret(), "s");
         assert_eq!(state.master_password(), "p");
 
@@ -185,7 +194,7 @@ mod tests {
         // buffer is dropped (and zeroized) by the assignment above. Observing
         // the bytes would require unsafe, which this crate forbids.
         state.set_field(Some(AuthField::ClientSecret));
-        state.push_char('n');
+        state.push_text("n");
         assert_eq!(state.client_secret(), "n");
     }
 
@@ -193,9 +202,9 @@ mod tests {
     fn clear_secrets_keeps_client_id() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientId));
-        state.push_char('i');
+        state.push_text("i");
         state.set_field(Some(AuthField::MasterPassword));
-        state.push_char('p');
+        state.push_text("p");
         state.set_login_failed(true);
 
         state.clear_secrets();

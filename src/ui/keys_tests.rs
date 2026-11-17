@@ -7,6 +7,8 @@ fn ctx(key: &str) -> KeyContext<'_> {
         screen: Screen::Unlocked,
         panel: Panel::Vault,
         key,
+        key_char: None,
+        modifiers: KeyModifiers::default(),
         editing_auth: false,
         searching: false,
         editing_settings: false,
@@ -20,7 +22,10 @@ fn ctx(key: &str) -> KeyContext<'_> {
 fn text_editing_actions_are_mode_specific() {
     let mut value = ctx("a");
     value.searching = true;
-    assert_eq!(classify_key(&value), KeyAction::InsertSearchChar('a'));
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertSearchText("a".into())
+    );
 
     value.key = "backspace";
     assert_eq!(classify_key(&value), KeyAction::BackspaceSearch);
@@ -29,11 +34,14 @@ fn text_editing_actions_are_mode_specific() {
     value.panel = Panel::Settings;
     value.editing_settings = true;
     value.key = "b";
-    assert_eq!(classify_key(&value), KeyAction::InsertSettingsChar('b'));
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertSettingsText("b".into())
+    );
 
     value.screen = Screen::Locked;
     value.editing_auth = true;
-    assert_eq!(classify_key(&value), KeyAction::InsertAuthChar('b'));
+    assert_eq!(classify_key(&value), KeyAction::InsertAuthText("b".into()));
     value.key = "backspace";
     assert_eq!(classify_key(&value), KeyAction::BackspaceAuth);
 
@@ -144,7 +152,10 @@ fn settings_and_generator_keys() {
 fn editing_mode_swallows_shortcut_keys() {
     let mut value = ctx("l");
     value.searching = true;
-    assert_eq!(classify_key(&value), KeyAction::InsertSearchChar('l'));
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertSearchText("l".into())
+    );
 
     let mut value = ctx("enter");
     value.searching = true;
@@ -153,4 +164,103 @@ fn editing_mode_swallows_shortcut_keys() {
     let mut value = ctx("backspace");
     value.searching = true;
     assert_eq!(classify_key(&value), KeyAction::BackspaceSearch);
+}
+
+#[::core::prelude::v1::test]
+fn command_modifiers_suppress_key_actions() {
+    let mut value = ctx("l");
+    for modifier in [
+        KeyModifiers {
+            control: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            platform: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            alt: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            function: true,
+            ..Default::default()
+        },
+    ] {
+        value.modifiers = modifier;
+        assert_eq!(classify_key(&value), KeyAction::None);
+    }
+}
+
+#[::core::prelude::v1::test]
+fn ime_composed_text_is_inserted_whole() {
+    let mut value = ctx("unknown");
+    value.key_char = Some("日本語");
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertAuthText("日本語".into())
+    );
+
+    value.screen = Screen::Unlocked;
+    value.editing_auth = false;
+    value.searching = true;
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertSearchText("日本語".into())
+    );
+
+    value.searching = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertSettingsText("日本語".into())
+    );
+}
+
+#[::core::prelude::v1::test]
+fn key_char_is_preferred_over_ascii_key() {
+    let mut value = ctx("a");
+    value.key_char = Some("ä");
+    value.searching = true;
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertSearchText("ä".into())
+    );
+}
+
+#[::core::prelude::v1::test]
+fn shift_characters_are_matched_through_key_char() {
+    let mut value = ctx("y");
+    value.key_char = Some("Y");
+    value.panel = Panel::Generator;
+    assert_eq!(classify_key(&value), KeyAction::CopyPassphrase);
+
+    value.key = "=";
+    value.key_char = Some("+");
+    assert_eq!(classify_key(&value), KeyAction::AdjustLength(1));
+}
+
+#[::core::prelude::v1::test]
+fn alt_produced_text_is_inserted() {
+    let mut value = ctx("s");
+    value.key_char = Some("ß");
+    value.modifiers.alt = true;
+    value.searching = true;
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertSearchText("ß".into())
+    );
+}
+
+#[::core::prelude::v1::test]
+fn space_key_name_inserts_a_space() {
+    let mut value = ctx("space");
+    value.searching = true;
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::InsertSearchText(" ".into())
+    );
 }

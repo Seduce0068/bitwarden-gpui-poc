@@ -36,8 +36,27 @@ pub fn apply_generator_key(state: &mut GeneratorState, key: &str) -> bool {
     true
 }
 
+/// Modifier keys that must not trigger single-key commands.
+///
+/// `shift` is deliberately absent: it is required for uppercase letters and
+/// symbols such as `+` and `_`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyModifiers {
+    pub control: bool,
+    pub platform: bool,
+    pub alt: bool,
+    pub function: bool,
+}
+
+impl KeyModifiers {
+    /// Whether a command-like modifier was held.
+    pub fn has_command(self) -> bool {
+        self.control || self.platform || self.function
+    }
+}
+
 /// A UI intent derived from a keystroke, independent of GPUI types.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyAction {
     /// Leave the application.
     Quit,
@@ -58,11 +77,11 @@ pub enum KeyAction {
     /// Finish editing a settings field.
     FinishSettingsEdit,
     /// Insert a character into the active credential field.
-    InsertAuthChar(char),
+    InsertAuthText(String),
     /// Insert a character into the search query.
-    InsertSearchChar(char),
+    InsertSearchText(String),
     /// Insert a character into the active settings field.
-    InsertSettingsChar(char),
+    InsertSettingsText(String),
     /// Remove the last character from the active credential field.
     BackspaceAuth,
     /// Remove the last character from the search query.
@@ -123,8 +142,12 @@ pub struct KeyContext<'a> {
     pub screen: Screen,
     /// Active panel while unlocked.
     pub panel: Panel,
-    /// The pressed key.
+    /// The pressed key (physical/ASCII equivalent).
     pub key: &'a str,
+    /// The text the keystroke would insert; may be multi-character with IME.
+    pub key_char: Option<&'a str>,
+    /// Command-like modifiers held during the keystroke.
+    pub modifiers: KeyModifiers,
     /// A lock-screen credential field is being edited.
     pub editing_auth: bool,
     /// The vault search box is active.
@@ -139,24 +162,65 @@ pub struct KeyContext<'a> {
     pub query_nonempty: bool,
 }
 
+/// Text produced by a keystroke, if any.
+///
+/// `key_char` is preferred because it carries IME-composed and layout-specific
+/// characters; `key` is only the ASCII/physical equivalent.
+fn typed_text<'a>(ctx: &KeyContext<'a>) -> Option<&'a str> {
+    if let Some(text) = ctx.key_char {
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+    if ctx.key == "space" {
+        return Some(" ");
+    }
+    (ctx.key.chars().count() == 1).then_some(ctx.key)
+}
+
+/// The key name to use for command matching.
+///
+/// On Linux GPUI lowercases `key` and keeps Shift characters in `key_char`,
+/// so `Shift+Y` must be matched through `key_char` or `Y` never fires.
+fn command_key<'a>(ctx: &KeyContext<'a>) -> &'a str {
+    ctx.key_char
+        .filter(|text| text.chars().count() == 1)
+        .unwrap_or(ctx.key)
+}
+
+fn text_action(text: &str, action: fn(String) -> KeyAction) -> KeyAction {
+    action(text.to_string())
+}
+
 /// Map a keystroke to a UI intent.
 ///
 /// Editing modes take priority so that typing `l` into a password field does
-/// not lock the vault.
+/// not lock the vault. Keybindings with command-like modifiers are ignored so
+/// they can be handled by the platform (e.g. Ctrl+C).
 pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
-    let single = ctx.key.chars().count() == 1;
-    let character = ctx.key.chars().next();
+    if ctx.modifiers.has_command() {
+        return KeyAction::None;
+    }
+    // Alt alone may still produce a printable layout character (e.g. Option+S
+    // -> "ß"). Allow it only while editing text and only when it produced one;
+    // in command panels Alt+key must stay inert.
+    let editing_text = ctx.editing_auth || ctx.searching || ctx.editing_settings;
+    if ctx.modifiers.alt && !(editing_text && typed_text(ctx).is_some()) {
+        return KeyAction::None;
+    }
+    let key = command_key(ctx);
 
     if ctx.screen == Screen::Locked {
         if ctx.editing_auth {
-            return match ctx.key {
+            return match key {
                 "escape" | "enter" => KeyAction::FinishAuthEdit,
                 "backspace" => KeyAction::BackspaceAuth,
-                _value if single => character.map_or(KeyAction::None, KeyAction::InsertAuthChar),
-                _ => KeyAction::None,
+                _ => typed_text(ctx).map_or(KeyAction::None, |text| {
+                    text_action(text, KeyAction::InsertAuthText)
+                }),
             };
         }
-        return match ctx.key {
+        return match key {
             "escape" => KeyAction::Quit,
             "enter" => KeyAction::Authenticate,
             "m" => KeyAction::OpenDemoVault,
@@ -171,16 +235,17 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
     }
 
     if ctx.searching {
-        return match ctx.key {
+        return match key {
             "escape" | "enter" => KeyAction::FinishSearch,
             "backspace" => KeyAction::BackspaceSearch,
-            _value if single => character.map_or(KeyAction::None, KeyAction::InsertSearchChar),
-            _ => KeyAction::None,
+            _ => typed_text(ctx).map_or(KeyAction::None, |text| {
+                text_action(text, KeyAction::InsertSearchText)
+            }),
         };
     }
 
     match ctx.panel {
-        Panel::Audit => match ctx.key {
+        Panel::Audit => match key {
             "escape" => KeyAction::Quit,
             "g" => KeyAction::SetPanel(Panel::Vault),
             "l" => KeyAction::Lock,
@@ -190,7 +255,7 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
             if ctx.editing_settings {
                 return KeyAction::None;
             }
-            match ctx.key {
+            match key {
                 "escape" => KeyAction::Quit,
                 "n" => KeyAction::SetPanel(Panel::Vault),
                 "l" => KeyAction::Lock,
@@ -213,16 +278,15 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
         }
         Panel::Settings => {
             if ctx.editing_settings {
-                return match ctx.key {
+                return match key {
                     "escape" | "enter" => KeyAction::FinishSettingsEdit,
                     "backspace" => KeyAction::BackspaceSettings,
-                    _value if single => {
-                        character.map_or(KeyAction::None, KeyAction::InsertSettingsChar)
-                    }
-                    _ => KeyAction::None,
+                    _ => typed_text(ctx).map_or(KeyAction::None, |text| {
+                        text_action(text, KeyAction::InsertSettingsText)
+                    }),
                 };
             }
-            match ctx.key {
+            match key {
                 "escape" => KeyAction::Quit,
                 "c" => KeyAction::SetPanel(Panel::Vault),
                 "l" => KeyAction::Lock,
@@ -236,7 +300,7 @@ pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
                 _ => KeyAction::None,
             }
         }
-        Panel::Vault => match ctx.key {
+        Panel::Vault => match key {
             "escape" => KeyAction::Quit,
             "up" => KeyAction::MoveSelection(-1),
             "down" => KeyAction::MoveSelection(1),

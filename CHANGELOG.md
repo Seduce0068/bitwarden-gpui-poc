@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### キー入力
+
+- Ctrl/Cmd/Fn のキーを判定から除外し、OS ショートカットと競合しないようにした
+- `keystroke.key_char` を優先して IME 確定文字を一括挿入
+- Shift 文字を `key_char` 経由で判定し、Shift+Y が効かない問題を解消
+
 ### パネル切替
 
 - `set_panel()` に集約して編集 / 検索状態をクリアし、移動先でキーが

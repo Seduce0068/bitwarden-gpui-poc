@@ -4,7 +4,7 @@
 //! only applies the resulting action to the app state.
 
 use crate::ui::app::BitwardenApp;
-use crate::ui::keys::{classify_key, KeyAction, KeyContext};
+use crate::ui::keys::{classify_key, KeyAction, KeyContext, KeyModifiers};
 use crate::ui::state::Panel;
 use gpui_kit::*;
 
@@ -20,6 +20,13 @@ impl BitwardenApp {
             screen: self.screen,
             panel: self.panel,
             key: &event.keystroke.key,
+            key_char: event.keystroke.key_char.as_deref(),
+            modifiers: KeyModifiers {
+                control: event.keystroke.modifiers.control,
+                platform: event.keystroke.modifiers.platform,
+                alt: event.keystroke.modifiers.alt,
+                function: event.keystroke.modifiers.function,
+            },
             editing_auth: self.auth.field().is_some(),
             searching: self.view.searching,
             editing_settings: self.editing.is_some(),
@@ -62,17 +69,17 @@ impl BitwardenApp {
                 self.sync_settings_from_ui();
                 cx.notify();
             }
-            KeyAction::InsertAuthChar(character) => {
+            KeyAction::InsertAuthText(text) => {
                 self.login_generation.invalidate();
-                self.edit_auth_field(character);
+                self.edit_auth_field(&text);
                 cx.notify();
             }
-            KeyAction::InsertSearchChar(character) => {
-                self.view.push_query(character);
+            KeyAction::InsertSearchText(text) => {
+                self.view.push_query(&text);
                 cx.notify();
             }
-            KeyAction::InsertSettingsChar(character) => {
-                self.push_editing(character);
+            KeyAction::InsertSettingsText(text) => {
+                self.push_editing(&text);
                 cx.notify();
             }
             KeyAction::BackspaceAuth => {
