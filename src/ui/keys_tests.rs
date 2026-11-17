@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use crate::settings::Settings;
 use crate::ui::keys::*;
 
 fn ctx(key: &str) -> KeyContext<'_> {
@@ -92,22 +93,26 @@ fn lock_screen_keys_and_retry_gate() {
 
 #[::core::prelude::v1::test]
 fn generator_keys_toggle_options_and_clamp_lengths() {
-    let mut state = GeneratorState::default();
+    let mut state = Settings::default();
     assert!(apply_generator_key(&mut state, "1"));
-    assert!(!state.password.lowercase);
+    assert!(!state.password_generator.lowercase);
     assert!(apply_generator_key(&mut state, "6"));
-    assert!(!state.passphrase.capitalize);
+    assert!(!state.passphrase_generator.capitalize);
 
     assert!(apply_generator_key(&mut state, "+"));
-    assert_eq!(state.password.length, 21);
-    assert_eq!(state.passphrase.words, 5);
+    assert_eq!(state.password_generator.length, 21);
+    assert_eq!(state.passphrase_generator.words, 5);
     assert!(apply_generator_key(&mut state, "-"));
-    assert_eq!(state.password.length, 20);
+    assert_eq!(state.password_generator.length, 20);
 
     assert!(apply_generator_key(&mut state, ","));
-    assert_eq!(state.passphrase.separator, ".");
+    assert_eq!(state.passphrase_generator.separator, ".");
     assert!(apply_generator_key(&mut state, ","));
-    assert_eq!(state.passphrase.separator, "_");
+    assert_eq!(state.passphrase_generator.separator, "_");
+    assert!(apply_generator_key(&mut state, ","));
+    assert_eq!(state.passphrase_generator.separator, "");
+    assert!(apply_generator_key(&mut state, ","));
+    assert_eq!(state.passphrase_generator.separator, "-");
 
     assert!(!apply_generator_key(&mut state, "q"));
 }

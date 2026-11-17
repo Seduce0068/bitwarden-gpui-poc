@@ -9,8 +9,6 @@ use gpui_kit::*;
 
 pub struct BitwardenApp {
     pub(super) screen: Screen,
-    pub(super) server_url: String,
-    pub(super) email: String,
     pub(super) status: String,
     pub(super) view: crate::ui::vault_view::VaultViewState,
     pub(super) totp: crate::ui::totp_state::TotpState,
@@ -40,15 +38,13 @@ impl BitwardenApp {
         let settings = loaded.unwrap_or_default();
         let mut this = Self {
             screen: Screen::Locked,
-            server_url: settings.server_url.clone(),
-            email: settings.email.clone(),
             status: load_notice
                 .map(|notice| format!("{notice} / Enter: ログイン / m: モック / Esc: 終了"))
                 .unwrap_or_else(|| "ロック中: Enter: ログイン / m: モック / Esc: 終了".to_string()),
             view: crate::ui::vault_view::VaultViewState::new(),
             totp: crate::ui::totp_state::TotpState::new(),
             panel: Panel::Vault,
-            generator: GeneratorState::from_settings(&settings),
+            generator: GeneratorState::default(),
             settings,
             editing: None,
             auth: crate::ui::auth_state::AuthState::new(),
@@ -135,7 +131,7 @@ impl BitwardenApp {
         self.view.vault = Vault::new();
         self.view.audit_report = None;
         self.panel = Panel::Vault;
-        self.generator = GeneratorState::from_settings(&self.settings);
+        self.generator = GeneratorState::default();
         self.editing = None;
         self.auth.clear_secrets();
         self.totp.clear();

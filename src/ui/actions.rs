@@ -50,16 +50,7 @@ impl BitwardenApp {
         self.clipboard.restore(cx);
     }
 
-    /// Copy editable UI state back into the persistent settings object.
-    pub(super) fn sync_settings_from_ui(&mut self) {
-        self.settings.server_url = self.server_url.clone();
-        self.settings.email = self.email.clone();
-        self.settings.password_generator = self.generator.password.clone();
-        self.settings.passphrase_generator = self.generator.passphrase.clone();
-    }
-
     pub(super) fn save_settings(&mut self, cx: &mut Context<Self>) {
-        self.sync_settings_from_ui();
         self.settings = self.settings.sanitized();
         match Settings::default_path() {
             Some(path) => match self.settings.save(&path) {
@@ -73,8 +64,8 @@ impl BitwardenApp {
 
     pub(super) fn push_editing(&mut self, text: &str) {
         match self.editing {
-            Some(SettingsField::ServerUrl) => self.server_url.push_str(text),
-            Some(SettingsField::Email) => self.email.push_str(text),
+            Some(SettingsField::ServerUrl) => self.settings.server_url.push_str(text),
+            Some(SettingsField::Email) => self.settings.email.push_str(text),
             None => {}
         }
     }
@@ -82,17 +73,17 @@ impl BitwardenApp {
     pub(super) fn pop_editing(&mut self) {
         match self.editing {
             Some(SettingsField::ServerUrl) => {
-                self.server_url.pop();
+                self.settings.server_url.pop();
             }
             Some(SettingsField::Email) => {
-                self.email.pop();
+                self.settings.email.pop();
             }
             None => {}
         }
     }
 
     pub(super) fn generate_password(&mut self, cx: &mut Context<Self>) {
-        match self.generator.password.generate() {
+        match self.settings.password_generator.generate() {
             Ok(value) => {
                 self.generator.last_password = Some(value);
                 self.status = "パスワードを生成しました".to_string();
@@ -103,7 +94,7 @@ impl BitwardenApp {
     }
 
     pub(super) fn generate_passphrase(&mut self, cx: &mut Context<Self>) {
-        match self.generator.passphrase.generate() {
+        match self.settings.passphrase_generator.generate() {
             Ok(value) => {
                 self.generator.last_passphrase = Some(value);
                 self.status = "パスフレーズを生成しました".to_string();
@@ -114,7 +105,7 @@ impl BitwardenApp {
     }
 
     pub(super) fn toggle_generator(&mut self, key: &str, cx: &mut Context<Self>) {
-        if crate::ui::keys::apply_generator_key(&mut self.generator, key) {
+        if crate::ui::keys::apply_generator_key(&mut self.settings, key) {
             cx.notify();
         }
     }

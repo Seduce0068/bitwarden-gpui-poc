@@ -66,7 +66,6 @@ impl BitwardenApp {
             }
             KeyAction::FinishSettingsEdit => {
                 self.editing = None;
-                self.sync_settings_from_ui();
                 cx.notify();
             }
             KeyAction::InsertAuthText(text) => {

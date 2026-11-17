@@ -1,35 +1,45 @@
 //! Pure key classification and generator key handling, free of GPUI types.
 
-use crate::ui::state::{AuthField, GeneratorState, Panel, Screen, SettingsField};
+use crate::settings::Settings;
+use crate::ui::state::{AuthField, Panel, Screen, SettingsField};
 
 /// Apply a generator-panel key to its settings.
 ///
 /// Returns whether the key was recognised, so the caller can decide whether
 /// to redraw.
-pub fn apply_generator_key(state: &mut GeneratorState, key: &str) -> bool {
+pub fn apply_generator_key(settings: &mut Settings, key: &str) -> bool {
     match key {
-        "1" => state.password.lowercase = !state.password.lowercase,
-        "2" => state.password.uppercase = !state.password.uppercase,
-        "3" => state.password.digits = !state.password.digits,
-        "4" => state.password.symbols = !state.password.symbols,
-        "5" => state.password.avoid_ambiguous = !state.password.avoid_ambiguous,
-        "6" => state.passphrase.capitalize = !state.passphrase.capitalize,
-        "7" => state.passphrase.include_number = !state.passphrase.include_number,
+        "1" => settings.password_generator.lowercase = !settings.password_generator.lowercase,
+        "2" => settings.password_generator.uppercase = !settings.password_generator.uppercase,
+        "3" => settings.password_generator.digits = !settings.password_generator.digits,
+        "4" => settings.password_generator.symbols = !settings.password_generator.symbols,
+        "5" => {
+            settings.password_generator.avoid_ambiguous =
+                !settings.password_generator.avoid_ambiguous
+        }
+        "6" => settings.passphrase_generator.capitalize = !settings.passphrase_generator.capitalize,
+        "7" => {
+            settings.passphrase_generator.include_number =
+                !settings.passphrase_generator.include_number
+        }
         "+" | "=" => {
-            state.password.length = (state.password.length + 1).min(128);
-            state.passphrase.words = (state.passphrase.words + 1).min(20);
+            settings.password_generator.length = (settings.password_generator.length + 1).min(128);
+            settings.passphrase_generator.words = (settings.passphrase_generator.words + 1).min(20);
         }
         "-" | "_" => {
-            state.password.length = state.password.length.saturating_sub(1).max(4);
-            state.passphrase.words = state.passphrase.words.saturating_sub(1).max(2);
+            settings.password_generator.length =
+                settings.password_generator.length.saturating_sub(1).max(4);
+            settings.passphrase_generator.words =
+                settings.passphrase_generator.words.saturating_sub(1).max(2);
         }
         "," => {
-            state.passphrase.separator = match state.passphrase.separator.as_str() {
-                "-" => ".".into(),
-                "." => "_".into(),
-                "_" => String::new(),
-                _ => "-".into(),
-            };
+            settings.passphrase_generator.separator =
+                match settings.passphrase_generator.separator.as_str() {
+                    "-" => ".".into(),
+                    "." => "_".into(),
+                    "_" => String::new(),
+                    _ => "-".into(),
+                };
         }
         _ => return false,
     }

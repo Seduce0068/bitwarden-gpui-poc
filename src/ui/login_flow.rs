@@ -3,17 +3,17 @@
 use crate::auth::{validate_config, AuthConfig};
 use crate::ui::app::BitwardenApp;
 use crate::ui::mock::mock_vault;
-use crate::ui::state::{AuthField, GeneratorState, Panel, Screen};
+use crate::ui::state::{AuthField, Panel, Screen};
 use gpui_kit::*;
 use openwarden::SecretString;
 
 impl BitwardenApp {
     pub(super) fn auth_config(&self) -> AuthConfig {
         AuthConfig {
-            server_url: self.server_url.clone(),
+            server_url: self.settings.server_url.clone(),
             client_id: self.auth.client_id().to_string(),
             client_secret: SecretString::from(self.auth.client_secret().to_string()),
-            email: self.email.clone(),
+            email: self.settings.email.clone(),
             master_password: SecretString::from(self.auth.master_password().to_string()),
         }
     }
@@ -99,8 +99,8 @@ impl BitwardenApp {
 
     pub(super) fn edit_auth_field(&mut self, text: &str) {
         match self.auth.field() {
-            Some(AuthField::ServerUrl) => self.server_url.push_str(text),
-            Some(AuthField::Email) => self.email.push_str(text),
+            Some(AuthField::ServerUrl) => self.settings.server_url.push_str(text),
+            Some(AuthField::Email) => self.settings.email.push_str(text),
             _ => self.auth.push_text(text),
         }
     }
@@ -108,10 +108,10 @@ impl BitwardenApp {
     pub(super) fn backspace_auth_field(&mut self) {
         match self.auth.field() {
             Some(AuthField::ServerUrl) => {
-                self.server_url.pop();
+                self.settings.server_url.pop();
             }
             Some(AuthField::Email) => {
-                self.email.pop();
+                self.settings.email.pop();
             }
             _ => self.auth.pop_char(),
         }
@@ -121,7 +121,6 @@ impl BitwardenApp {
         // A pending real login must not overwrite the demo vault.
         self.login_generation.invalidate();
         self.view.vault = mock_vault();
-        self.generator = GeneratorState::from_settings(&self.settings);
         self.refresh_audit();
         self.panel = Panel::Vault;
         self.screen = Screen::Unlocked;

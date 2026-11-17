@@ -26,13 +26,13 @@ impl BitwardenApp {
             ))
             .child(auth_row(
                 "1  Server",
-                &self.server_url,
+                &self.settings.server_url,
                 self.auth.field() == Some(AuthField::ServerUrl),
                 false,
             ))
             .child(auth_row(
                 "2  Email",
-                &self.email,
+                &self.settings.email,
                 self.auth.field() == Some(AuthField::Email),
                 false,
             ))
@@ -304,11 +304,10 @@ impl Render for BitwardenApp {
                 None => self.render_unlocked(cx).into_any_element(),
             },
             Screen::Unlocked if self.panel == Panel::Generator => {
-                generator_panel(&self.generator).into_any_element()
+                generator_panel(&self.settings, &self.generator).into_any_element()
             }
             Screen::Unlocked if self.panel == Panel::Settings => {
-                settings_panel(&self.settings, &self.server_url, &self.email, self.editing)
-                    .into_any_element()
+                settings_panel(&self.settings, self.editing).into_any_element()
             }
             Screen::Unlocked => self.render_unlocked(cx).into_any_element(),
         };

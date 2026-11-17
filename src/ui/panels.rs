@@ -102,9 +102,12 @@ pub fn result_row<'a>(label: &'a str, value: Option<&'a str>) -> impl IntoElemen
         )
 }
 
-pub fn generator_panel<'a>(state: &'a GeneratorState) -> impl IntoElement + 'a {
-    let password = &state.password;
-    let passphrase = &state.passphrase;
+pub fn generator_panel<'a>(
+    settings: &'a Settings,
+    state: &'a GeneratorState,
+) -> impl IntoElement + 'a {
+    let password = &settings.password_generator;
+    let passphrase = &settings.passphrase_generator;
     let pw_bits = password_entropy(password);
     let pp_bits = passphrase_entropy(passphrase);
     div()
@@ -189,10 +192,10 @@ pub fn field_row<'a>(label: &'a str, value: &'a str, editing: bool) -> impl Into
 
 pub fn settings_panel<'a>(
     settings: &'a Settings,
-    server_url: &'a str,
-    email: &'a str,
     editing: Option<SettingsField>,
 ) -> impl IntoElement + 'a {
+    let server_url = settings.server_url.as_str();
+    let email = settings.email.as_str();
     let path = Settings::default_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "(設定ディレクトリを特定できません)".to_string());
