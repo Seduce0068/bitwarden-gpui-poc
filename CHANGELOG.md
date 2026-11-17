@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-11-17
+
 ### TOTP テストの分割
 
 - TOTP のテストを `src/totp_tests.rs` に分割し、
