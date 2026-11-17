@@ -6,6 +6,14 @@
 //! settings, and the clipboard policy), plus reusable GPUI view helpers
 //! (`ui`, including the app state), lives in this library, while
 //! `src/main.rs` only starts the application.
+//!
+//! Key modules:
+//! - [`model`] / [`vault_sync`]: vault data and the bridge from `openwarden`
+//! - [`auth`] / [`cache`]: login orchestration and the offline sync cache
+//! - [`generator`] / [`words`]: password and passphrase generation
+//! - [`totp`] / [`health`]: RFC 6238 codes and the vault health audit
+//! - [`settings`]: persisted configuration
+//! - [`ui`]: GPUI view state, input handling and rendering
 
 #![forbid(unsafe_code)]
 
