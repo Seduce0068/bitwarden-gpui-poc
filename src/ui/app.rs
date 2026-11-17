@@ -59,13 +59,22 @@ impl BitwardenApp {
 
     /// Invalidate the cached TOTP snapshot once a second so the countdown
     /// advances. The task ends when the view is dropped.
+    ///
+    /// The loop waits on absolute deadlines rather than `Timer::after(1s)`,
+    /// so processing time does not accumulate into every subsequent tick.
+    /// If a tick overruns its slot, the next deadline is recomputed from the
+    /// current time instead of replaying missed ticks (catch-up limit).
     pub(super) fn start_totp_ticker(&mut self, cx: &mut Context<Self>) {
         cx.spawn(
             |this: gpui_kit::WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
                 let cx = cx.clone();
                 async move {
+                    let interval = std::time::Duration::from_secs(1);
+                    let mut deadline = std::time::Instant::now()
+                        .checked_add(interval)
+                        .unwrap_or_else(std::time::Instant::now);
                     loop {
-                        smol::Timer::after(std::time::Duration::from_secs(1)).await;
+                        smol::Timer::at(deadline).await;
                         let alive = cx.update(|cx| {
                             this.update(cx, |view, cx| {
                                 let instant = std::time::Instant::now();
@@ -109,6 +118,11 @@ impl BitwardenApp {
                         if !alive {
                             break;
                         }
+                        deadline = crate::ui::timing::next_tick_deadline(
+                            deadline,
+                            std::time::Instant::now(),
+                            interval,
+                        );
                     }
                 }
             },

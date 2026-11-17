@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::generator::{entropy_bits, Strength};
+use crate::generator::{entropy_bits, Strength, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::model::{ItemKind, Vault, VaultItem};
 use crate::totp::is_valid_secret;
 
@@ -223,10 +223,11 @@ impl Default for Thresholds {
 
 /// Estimate a password's entropy in bits.
 ///
-/// The model: the character pool the password actually uses, times its length,
-/// with a penalty for the patterns that make a password far weaker than its
-/// pool size suggests (a single repeated character, an all-digit string, a
-/// common word, or a short trailing-digit suffix on a word).
+/// The model: the character pool the password actually uses (the ASCII class
+/// sizes come from the generator's own constants), times its length, with a
+/// penalty for the patterns that make a password far weaker than its pool size
+/// suggests (a single repeated character, an all-digit string, a common word,
+/// or a short trailing-digit suffix on a word).
 pub fn estimate_entropy(password: &str) -> u32 {
     if password.is_empty() {
         return 0;
@@ -240,20 +241,25 @@ pub fn estimate_entropy(password: &str) -> u32 {
         .iter()
         .any(|c| !c.is_ascii_alphanumeric() && c.is_ascii());
     let has_wide = chars.iter().any(|c| !c.is_ascii());
+    // Use the generator's class sizes so the audit and the strength meter
+    // agree with what the generator can actually draw. The wide pool is an
+    // audit-only allowance: the generator emits ASCII only, but vault passwords
+    // may contain non-ASCII characters.
+    const WIDE_POOL: usize = 100;
     if has_lower {
-        pool += 26;
+        pool += LOWERCASE.len();
     }
     if has_upper {
-        pool += 26;
+        pool += UPPERCASE.len();
     }
     if has_digit {
-        pool += 10;
+        pool += DIGITS.len();
     }
     if has_symbol {
-        pool += 33;
+        pool += SYMBOLS.len();
     }
     if has_wide {
-        pool += 100;
+        pool += WIDE_POOL;
     }
     let raw = entropy_bits(pool, chars.len());
 

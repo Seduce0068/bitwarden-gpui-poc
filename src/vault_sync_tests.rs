@@ -49,3 +49,170 @@ fn error_messages_are_present() {
     assert!(!SyncError::Locked.message().is_empty());
     assert!(!SyncError::InvalidLogin("x".into()).message().is_empty());
 }
+
+/// Minimal personal login cipher: no encrypted fields, so a zero test key
+/// is enough for the metadata-only import path.
+fn cipher(id: &str, revision: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "type": 1,
+        "name": null,
+        "login": { "uris": [] },
+        "revisionDate": revision,
+    })
+}
+
+fn unlocked_vault(ciphers: &[serde_json::Value]) -> openwarden::Vault {
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    let body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [],
+        "ciphers": ciphers,
+    })
+    .to_string();
+    let sync = parse_sync(body.as_bytes()).expect("sync JSON should parse");
+    vault.apply_sync(sync).expect("sync should apply");
+    vault
+}
+
+#[test]
+fn duplicate_ids_are_collapsed_before_remove() {
+    let id = "dup-1";
+    let vault = unlocked_vault(&[
+        cipher(id, "2024-01-01T00:00:00Z"),
+        cipher(id, "2024-01-02T00:00:00Z"),
+    ]);
+    let (mut model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    // Without dedup the same id would occupy two slots and a single remove
+    // would wipe both at once.
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].id, id);
+    assert!(audit.contains(&ImportAudit::Updated {
+        id: id.to_string(),
+        old_revision: parse_revision(Some("2024-01-01T00:00:00Z")).unwrap(),
+        new_revision: parse_revision(Some("2024-01-02T00:00:00Z")).unwrap(),
+    }));
+
+    assert!(model.remove(id));
+    assert!(model.items.is_empty());
+}
+
+#[test]
+fn regressed_revision_is_clipped_and_recorded() {
+    let id = "rev-1";
+    let kept = parse_revision(Some("2024-02-01T00:00:00Z")).unwrap();
+    let dropped = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    let vault = unlocked_vault(&[
+        cipher(id, "2024-02-01T00:00:00Z"),
+        cipher(id, "2024-01-01T00:00:00Z"),
+    ]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].revision_date, kept);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: kept,
+            },
+            ImportAudit::Clipped {
+                id: id.to_string(),
+                old_revision: kept,
+                new_revision: dropped,
+            },
+        ]
+    );
+}
+
+#[test]
+fn newer_duplicate_replaces_the_older_revision() {
+    let id = "rev-2";
+    let old = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    let new = parse_revision(Some("2024-03-01T00:00:00Z")).unwrap();
+    let vault = unlocked_vault(&[
+        cipher(id, "2024-01-01T00:00:00Z"),
+        cipher(id, "2024-03-01T00:00:00Z"),
+    ]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].revision_date, new);
+    assert!(audit.contains(&ImportAudit::Updated {
+        id: id.to_string(),
+        old_revision: old,
+        new_revision: new,
+    }));
+}
+
+#[test]
+fn duplicate_with_same_revision_is_ignored() {
+    let id = "rev-3";
+    let revision = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    let vault = unlocked_vault(&[
+        cipher(id, "2024-01-01T00:00:00Z"),
+        cipher(id, "2024-01-01T00:00:00Z"),
+    ]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision,
+            },
+            ImportAudit::Ignored {
+                id: id.to_string(),
+                revision,
+            },
+        ]
+    );
+}
+
+#[test]
+fn audit_log_never_contains_secrets() {
+    let id = "secret-1";
+    let marker = "SHOULD_NOT_APPEAR_IN_AUDIT";
+    let mut secret_cipher = cipher(id, "2024-01-01T00:00:00Z");
+    secret_cipher["name"] = serde_json::json!(marker);
+    secret_cipher["login"]["username"] = serde_json::json!(marker);
+    secret_cipher["login"]["password"] = serde_json::json!(marker);
+    secret_cipher["login"]["totp"] = serde_json::json!(marker);
+    let vault = unlocked_vault(&[secret_cipher, cipher(id, "2024-01-02T00:00:00Z")]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 1);
+    let rendered = format!("{audit:?}");
+    assert!(
+        !rendered.contains(marker),
+        "audit log leaked a secret field"
+    );
+    assert!(rendered.contains(id));
+}
+
+#[test]
+fn plain_import_still_skips_duplicates_and_reports_locked_vault() {
+    let id = "plain-1";
+    let vault = unlocked_vault(&[
+        cipher(id, "2024-01-01T00:00:00Z"),
+        cipher(id, "2024-01-02T00:00:00Z"),
+    ]);
+    let model = import_logins(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+
+    let mut locked = unlocked_vault(&[]);
+    locked.lock();
+    assert!(matches!(
+        import_logins_with_audit(&locked),
+        Err(SyncError::Locked)
+    ));
+}
