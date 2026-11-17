@@ -2,6 +2,11 @@
 
 use crate::vault_sync::*;
 
+const REAL_PASSWORD: &str = "vT7#kQm2!zR9wP4$xL8@";
+const REAL_TOTP: &str =
+    "otpauth://totp/Example:alice@example.com?secret=GEZDGNBVGY3TQOJQ&issuer=Example";
+const TOTP_AT: u64 = 1_700_000_000;
+
 #[test]
 fn sync_body_with_empty_profile_and_folders_parses() {
     let body = br#"{
@@ -354,4 +359,110 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
         .find(|folder| folder.id == "f-bad")
         .unwrap();
     assert_eq!(bad.name, "フォルダ (f-bad)");
+}
+
+/// A personal login whose fields are real `EncString` ciphertexts, matching
+/// what `/api/sync` returns after an actual unlock. The zero user key from
+/// `unlocked_vault` is also the item key when the cipher has no own `key`.
+fn encrypted_login(id: &str, password: &str, totp: &str) -> serde_json::Value {
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        serde_json::json!(openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string())
+    };
+    serde_json::json!({
+        "id": id,
+        "type": 1,
+        "name": enc(b"Example Login"),
+        "login": {
+            "username": enc(b"alice@example.com"),
+            "password": enc(password.as_bytes()),
+            "totp": enc(totp.as_bytes()),
+            "uris": [{ "uri": enc(b"https://example.com") }],
+        },
+        "revisionDate": "2024-01-01T00:00:00Z",
+    })
+}
+
+#[test]
+fn real_login_decrypts_secrets_and_enables_totp_copy() {
+    let vault = unlocked_vault(&[encrypted_login("login-real", REAL_PASSWORD, REAL_TOTP)]);
+    let id = vault.logins()[0].id.clone();
+    let model = import_logins(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 1);
+    let item = &model.items[0];
+    assert_eq!(item.password(), Some(REAL_PASSWORD));
+    assert_eq!(item.totp_secret(), Some(REAL_TOTP));
+    assert_ne!(item.totp_secret(), Some("available"));
+
+    // The UI's copy action calls `code_at` with the model's TOTP field. The
+    // code must match the one openwarden derives from the same ciphertext.
+    let copied = crate::totp::code_at(item.totp_secret().unwrap(), TOTP_AT)
+        .expect("the model's real TOTP secret must generate a code");
+    let direct = vault
+        .totp(&id, TOTP_AT)
+        .expect("vault TOTP should succeed")
+        .expect("the login has a TOTP field");
+    assert_eq!(copied.code(), direct.code.expose_secret());
+    assert_eq!(copied.code().len(), 6);
+}
+
+#[test]
+fn undecryptable_password_keeps_the_vault_and_is_excluded_from_audit() {
+    let mut bad = cipher("login-bad", "2024-01-02T00:00:00Z");
+    bad["name"] = serde_json::json!("plain name");
+    bad["login"]["username"] = serde_json::json!("plain-user");
+    bad["login"]["password"] = serde_json::json!("NEVER_IN_THE_MODEL");
+    bad["login"]["totp"] = serde_json::json!("NEVER_IN_THE_MODEL_TOTP");
+    let vault = unlocked_vault(&[encrypted_login("login-good", REAL_PASSWORD, REAL_TOTP), bad]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("one bad field must not abort");
+
+    assert_eq!(model.items.len(), 2);
+    assert_eq!(audit.len(), 2);
+    let good = model
+        .items
+        .iter()
+        .find(|item| item.id == "login-good")
+        .unwrap();
+    let bad = model
+        .items
+        .iter()
+        .find(|item| item.id == "login-bad")
+        .unwrap();
+    assert_eq!(good.password(), Some(REAL_PASSWORD));
+    assert_eq!(good.totp_secret(), Some(REAL_TOTP));
+    assert!(crate::totp::code_at(good.totp_secret().unwrap(), TOTP_AT).is_ok());
+
+    assert_eq!(bad.password(), Some(UNDECRYPTABLE_PASSWORD));
+    assert_eq!(bad.totp_secret(), Some(""));
+    assert!(crate::totp::code_at(bad.totp_secret().unwrap(), TOTP_AT).is_err());
+
+    // No ciphertext plaintext lands in the model, the audit, or their
+    // debug/serde renderings.
+    let rendered = format!(
+        "{model:?} {audit:?} {}",
+        serde_json::to_string(&model.items).unwrap()
+    );
+    assert!(!rendered.contains("NEVER_IN_THE_MODEL"), "{rendered}");
+
+    // End to end: the health report names exactly the undecryptable login.
+    let report = crate::health::audit(
+        &model,
+        crate::health::Thresholds::default(),
+        i64::try_from(TOTP_AT).unwrap(),
+    );
+    assert_eq!(report.password_uninspectable(), 1);
+    assert_eq!(report.with_totp, 1);
+    assert_eq!(report.logins, 2);
+    assert!(report.summary().contains("パスワード検査対象外: 1 件"));
+}
+
+#[test]
+fn missing_totp_is_empty_instead_of_an_available_marker() {
+    let vault = unlocked_vault(&[cipher("no-totp", "2024-01-01T00:00:00Z")]);
+    let model = import_logins(&vault).expect("import should succeed");
+    assert_eq!(model.items[0].totp_secret(), Some(""));
+    assert!(crate::totp::code_at(model.items[0].totp_secret().unwrap(), TOTP_AT).is_err());
 }

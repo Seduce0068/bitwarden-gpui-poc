@@ -109,6 +109,21 @@ impl BitwardenApp {
                                 .h(px(30.0))
                                 .bg(row_bg)
                                 .text_sm()
+                                // Selection marker lives in its own fixed-width
+                                // column so it never blends into the name,
+                                // username (email), or search query text.
+                                .child(
+                                    div()
+                                        .w(px(14.0))
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(if selected {
+                                            rgb(0xf9e2af)
+                                        } else {
+                                            rgb(0x6c7086)
+                                        })
+                                        .child(if selected { ">" } else { "" }),
+                                )
                                 .child(
                                     div()
                                         .w(px(18.0))
