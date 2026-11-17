@@ -132,7 +132,168 @@ fn load_detailed_distinguishes_missing_and_malformed() {
         SettingsLoadError::NotFound,
         SettingsLoadError::ReadFailed,
         SettingsLoadError::ParseFailed,
+        SettingsLoadError::TooLarge,
     ] {
         assert!(!error.message().is_empty());
     }
+}
+
+// --- Robustness regressions: nested defaults, per-field fallback, size cap ---
+
+#[test]
+fn missing_nested_objects_keep_top_level_fields() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-nested-missing.json");
+    std::fs::write(
+        &path,
+        br#"{"email":"bob@example.com","idle_lock_seconds":120}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    let defaults = Settings::default();
+
+    assert_eq!(loaded.email, "bob@example.com");
+    assert_eq!(loaded.idle_lock_seconds, 120);
+    assert_eq!(loaded.server_url, defaults.server_url);
+    assert_eq!(loaded.password_generator, defaults.password_generator);
+    assert_eq!(loaded.passphrase_generator, defaults.passphrase_generator);
+    assert_eq!(loaded.thresholds, defaults.thresholds);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn partial_nested_objects_fill_only_missing_fields() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-nested-partial.json");
+    std::fs::write(
+        &path,
+        br#"{"server_url":"https://custom.example",
+             "password_generator":{"length":32},
+             "passphrase_generator":{"words":6},
+             "thresholds":{"stale_days":30},
+             "idle_lock_seconds":600}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    let defaults = Settings::default();
+
+    assert_eq!(loaded.server_url, "https://custom.example");
+    assert_eq!(loaded.email, "");
+    assert_eq!(loaded.idle_lock_seconds, 600);
+    assert_eq!(loaded.password_generator.length, 32);
+    assert!(
+        loaded.password_generator.lowercase,
+        "sibling uses its default"
+    );
+    assert_eq!(loaded.passphrase_generator.words, 6);
+    assert_eq!(loaded.passphrase_generator.separator, "-");
+    assert_eq!(loaded.thresholds.stale_days, 30);
+    assert_eq!(loaded.thresholds.weak_bits, defaults.thresholds.weak_bits);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn wrong_typed_fields_fall_back_without_discarding_siblings() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-type-mixed.json");
+    std::fs::write(
+        &path,
+        br#"{"server_url":"https://typed.example",
+             "email":42,
+             "password_generator":{"length":"long","lowercase":false,"symbols":true},
+             "passphrase_generator":{"words":6,"separator":7},
+             "thresholds":{"weak_bits":"oops","stale_days":90},
+             "idle_lock_seconds":600}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    let defaults = Settings::default();
+
+    assert_eq!(loaded.server_url, "https://typed.example");
+    assert_eq!(loaded.email, "", "wrong top-level type falls back");
+    assert_eq!(
+        loaded.password_generator.length,
+        defaults.password_generator.length
+    );
+    assert!(
+        !loaded.password_generator.lowercase,
+        "valid sibling survives"
+    );
+    assert!(loaded.password_generator.symbols, "valid sibling survives");
+    assert!(
+        loaded.password_generator.uppercase,
+        "missing field uses default"
+    );
+    assert_eq!(loaded.passphrase_generator.words, 6);
+    assert_eq!(loaded.passphrase_generator.separator, "-");
+    assert!(loaded.passphrase_generator.capitalize);
+    assert_eq!(loaded.thresholds.weak_bits, defaults.thresholds.weak_bits);
+    assert_eq!(loaded.thresholds.stale_days, 90);
+    assert_eq!(loaded.idle_lock_seconds, 600);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn out_of_range_numbers_fall_back_per_field() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-range-mixed.json");
+    std::fs::write(
+        &path,
+        br#"{"server_url":"https://range.example",
+             "password_generator":{"length":20.5,"lowercase":false},
+             "thresholds":{"weak_bits":-1,"stale_days":120}}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    let defaults = Settings::default();
+
+    assert_eq!(loaded.server_url, "https://range.example");
+    assert_eq!(
+        loaded.password_generator.length,
+        defaults.password_generator.length
+    );
+    assert!(!loaded.password_generator.lowercase);
+    assert_eq!(loaded.thresholds.weak_bits, defaults.thresholds.weak_bits);
+    assert_eq!(loaded.thresholds.stale_days, 120);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn oversized_file_is_rejected() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-oversized.json");
+    let payload = vec![b' '; MAX_SETTINGS_BYTES as usize + 1];
+    std::fs::write(&path, &payload).unwrap();
+
+    assert_eq!(
+        Settings::load_detailed(&path).err(),
+        Some(SettingsLoadError::TooLarge)
+    );
+    assert_eq!(Settings::load(&path), Settings::default());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn file_exactly_at_size_limit_is_parsed() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-at-limit.json");
+    let mut payload = br#"{"email":"limit@example.com"}"#.to_vec();
+    payload.resize(MAX_SETTINGS_BYTES as usize, b' ');
+    std::fs::write(&path, &payload).unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "limit@example.com");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn tolerance_stops_at_syntax_and_root_shape() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-bad-root.json");
+    // Per-field recovery only applies to object-shaped settings; an array
+    // root or invalid JSON still fails the whole file.
+    std::fs::write(&path, b"[]").unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path).err(),
+        Some(SettingsLoadError::ParseFailed)
+    );
+    std::fs::write(&path, b"not json").unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path).err(),
+        Some(SettingsLoadError::ParseFailed)
+    );
+    let _ = std::fs::remove_file(&path);
 }

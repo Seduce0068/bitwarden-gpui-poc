@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::generator::{entropy_bits, Strength};
 use crate::model::{ItemKind, Vault, VaultItem};
+use crate::totp::is_valid_secret;
 
 /// A single finding.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,10 +40,12 @@ pub enum Finding {
         /// The offending URI.
         uri: String,
     },
-    /// A login carries no TOTP secret.
+    /// A login carries no usable TOTP secret.
     NoTotp,
     /// The item has no URI at all, so autofill can't find it.
     NoUri,
+    /// A card item has no card number.
+    NoCardNumber,
     /// The name is empty.
     Unnamed,
 }
@@ -59,6 +62,7 @@ impl Finding {
             }
             Self::NoTotp => "TOTP 未設定".to_string(),
             Self::NoUri => "URI 未設定".to_string(),
+            Self::NoCardNumber => "カード番号が空".to_string(),
             Self::Unnamed => "名前が空".to_string(),
         }
     }
@@ -67,7 +71,7 @@ impl Finding {
     pub const fn severity(&self) -> Severity {
         match self {
             Self::ReusedPassword { .. } | Self::InsecureUri { .. } => Severity::High,
-            Self::WeakPassword { .. } | Self::Stale { .. } => Severity::Medium,
+            Self::WeakPassword { .. } | Self::Stale { .. } | Self::NoCardNumber => Severity::Medium,
             Self::NoTotp | Self::NoUri | Self::Unnamed => Severity::Low,
         }
     }
@@ -122,7 +126,7 @@ pub struct Report {
     pub items: Vec<ItemReport>,
     /// How many items were examined.
     pub examined: usize,
-    /// How many logins carry a TOTP secret.
+    /// How many logins carry a usable TOTP secret.
     pub with_totp: usize,
     /// How many logins were examined (the denominator for TOTP coverage).
     pub logins: usize,
@@ -327,8 +331,12 @@ fn is_common_password(lower: &str) -> bool {
         "asdfghjkl",
         "correcthorsebatterystaple",
     ];
+    // A long random value that merely begins with "password" is not a
+    // dictionary password. Cap the prefix match so those values keep their
+    // real (high) entropy estimate; the same cap already exists for qwerty.
+    const PASSWORD_PREFIX_LIMIT: usize = 16;
     COMMON.contains(&lower)
-        || lower.starts_with("password")
+        || (lower.starts_with("password") && lower.len() <= PASSWORD_PREFIX_LIMIT)
         || (lower.starts_with("qwerty") && lower.len() <= 12)
 }
 
@@ -356,7 +364,7 @@ pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
         audit_item(item, thresholds, now, &passwords, &mut findings);
         if item.kind() == ItemKind::Login {
             report.logins += 1;
-            if item.totp_secret().is_some_and(|s| !s.trim().is_empty()) {
+            if item.totp_secret().is_some_and(is_valid_secret) {
                 report.with_totp += 1;
             }
         }
@@ -402,23 +410,24 @@ fn audit_item(
             totp,
             uris: _,
         } => {
-            if !password.is_empty() {
-                let bits = estimate_entropy(password);
-                if bits < thresholds.weak_bits {
-                    findings.push(Finding::WeakPassword { bits });
-                }
-                if let Some(ids) = passwords.get(password.as_str()) {
-                    if ids.len() > 1 {
-                        findings.push(Finding::ReusedPassword { count: ids.len() });
-                    }
+            // An empty password has zero entropy, so any positive threshold
+            // flags it. It is deliberately excluded from the reuse map in
+            // `audit`, so the lookup below simply finds nothing for it.
+            let bits = estimate_entropy(password);
+            if bits < thresholds.weak_bits {
+                findings.push(Finding::WeakPassword { bits });
+            }
+            if let Some(ids) = passwords.get(password.as_str()) {
+                if ids.len() > 1 {
+                    findings.push(Finding::ReusedPassword { count: ids.len() });
                 }
             }
-            if totp.trim().is_empty() {
+            if !is_valid_secret(totp) {
                 findings.push(Finding::NoTotp);
             }
         }
-        crate::model::ItemData::Card(card) if card.number.is_empty() => {
-            findings.push(Finding::NoUri);
+        crate::model::ItemData::Card(card) if card.number.trim().is_empty() => {
+            findings.push(Finding::NoCardNumber);
         }
         _ => {}
     }
