@@ -307,6 +307,25 @@ fn severity_labels_and_ordering() {
 }
 
 #[::core::prelude::v1::test]
+fn every_finding_has_a_nonempty_message() {
+    let findings = [
+        Finding::WeakPassword { bits: 10 },
+        Finding::ReusedPassword { count: 2 },
+        Finding::Stale { days: 400 },
+        Finding::InsecureUri {
+            uri: "http://example.com".into(),
+        },
+        Finding::NoTotp,
+        Finding::NoUri,
+        Finding::Unnamed,
+    ];
+    for finding in findings {
+        let message = finding.message();
+        assert!(!message.trim().is_empty(), "{finding:?}");
+    }
+}
+
+#[::core::prelude::v1::test]
 fn insecure_uri_messages_never_include_secrets() {
     let finding = Finding::InsecureUri {
         uri: "http://user:token@example.com/path?key=secret".into(),
