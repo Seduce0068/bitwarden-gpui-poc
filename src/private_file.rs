@@ -63,6 +63,23 @@ pub fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[::core::prelude::v1::test]
+    fn write_private_sets_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("bitwarden-gpui-poc-perms-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("data.json");
+
+        write_private(&path, b"secret").unwrap();
+
+        let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "directory must be private");
+        assert_eq!(file_mode, 0o600, "file must be readable only by owner");
+    }
+
     #[::core::prelude::v1::test]
     fn write_private_replaces_existing_content_and_leaves_no_temp() {
         let dir = std::env::temp_dir().join("bitwarden-gpui-poc-atomic-test");
