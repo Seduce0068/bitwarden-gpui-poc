@@ -2,8 +2,28 @@
 
 use zeroize::Zeroizing;
 
+use crate::auth::{
+    truncate_to_limit, MAX_CLIENT_ID_LEN, MAX_CLIENT_SECRET_LEN, MAX_MASTER_PASSWORD_LEN,
+};
 use crate::ui::logic::has_credentials;
 use crate::ui::state::AuthField;
+
+/// Append `text` while keeping `target` within `limit` characters.
+///
+/// Only the part that fits is appended, cutting on a UTF-8 character boundary,
+/// so even a large paste cannot grow the buffer past the cap. Excess input is
+/// dropped rather than reported as an error (see the input-length policy in
+/// `crate::auth`). The final `truncate_to_limit` also guards against a field
+/// that was pre-filled beyond its cap by a caller.
+fn push_capped(target: &mut String, text: &str, limit: usize) {
+    let room = limit.saturating_sub(target.chars().count());
+    let fitting = text
+        .char_indices()
+        .nth(room)
+        .map_or(text, |(index, _)| &text[..index]);
+    target.push_str(fitting);
+    truncate_to_limit(target, limit);
+}
 
 /// Credentials entered on the lock screen and the active edit field.
 ///
@@ -72,15 +92,23 @@ impl AuthState {
         self.login_failed = value;
     }
 
-    /// Append a character to the active credential field.
+    /// Append a character to the active credential field, capped at the
+    /// field's input limit.
     ///
+    /// Over-long input is truncated on a UTF-8 boundary, never rejected with
+    /// an error; the policy and the caps live in `crate::auth`.
     /// `ServerUrl` and `Email` are shared with settings and handled by the
-    /// caller, so they are ignored here.
+    /// caller, so they are ignored here. Their caps are applied by
+    /// `crate::auth::clamp_auth_config` when the `AuthConfig` is built.
     pub fn push_text(&mut self, text: &str) {
         match self.field {
-            Some(AuthField::ClientId) => self.client_id.push_str(text),
-            Some(AuthField::ClientSecret) => self.client_secret.push_str(text),
-            Some(AuthField::MasterPassword) => self.master_password.push_str(text),
+            Some(AuthField::ClientId) => push_capped(&mut self.client_id, text, MAX_CLIENT_ID_LEN),
+            Some(AuthField::ClientSecret) => {
+                push_capped(&mut self.client_secret, text, MAX_CLIENT_SECRET_LEN);
+            }
+            Some(AuthField::MasterPassword) => {
+                push_capped(&mut self.master_password, text, MAX_MASTER_PASSWORD_LEN);
+            }
             _ => {}
         }
     }
@@ -246,6 +274,56 @@ mod tests {
 
             assert_eq!(state.client_id(), "client");
             assert_eq!(state.client_secret(), "secret");
+            assert!(state.master_password().is_empty());
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn push_text_caps_each_owned_field_on_a_character_boundary() {
+        for (field, limit) in [
+            (AuthField::ClientId, MAX_CLIENT_ID_LEN),
+            (AuthField::ClientSecret, MAX_CLIENT_SECRET_LEN),
+            (AuthField::MasterPassword, MAX_MASTER_PASSWORD_LEN),
+        ] {
+            let mut state = AuthState::new();
+            state.set_field(Some(field));
+            // A multibyte paste whose cap lands mid-code-point must be cut on
+            // a UTF-8 boundary, never in the middle of a character.
+            state.push_text(&"あ".repeat(limit + 1));
+
+            let current = match field {
+                AuthField::ClientId => state.client_id(),
+                AuthField::ClientSecret => state.client_secret(),
+                AuthField::MasterPassword => state.master_password(),
+                _ => unreachable!("only the three owned fields are tested"),
+            };
+            assert_eq!(current.chars().count(), limit, "{field:?}");
+            assert_eq!(current, "あ".repeat(limit), "{field:?}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn push_text_ignores_input_once_a_field_is_full() {
+        let mut state = AuthState::new();
+        state.set_field(Some(AuthField::ClientId));
+        state.push_text(&"i".repeat(MAX_CLIENT_ID_LEN));
+        state.push_text("EXTRA");
+
+        assert_eq!(state.client_id().chars().count(), MAX_CLIENT_ID_LEN);
+        assert!(!state.client_id().contains("EXTRA"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn shared_fields_still_ignore_pushes_beyond_any_cap() {
+        // ServerUrl/Email are owned by Settings; their input caps are applied
+        // by clamp_auth_config when the AuthConfig is assembled, not here.
+        let mut state = AuthState::new();
+        for field in [AuthField::ServerUrl, AuthField::Email] {
+            state.set_field(Some(field));
+            state.push_text(&"x".repeat(crate::auth::MAX_SERVER_URL_LEN + 10));
+            state.push_text(&"y".repeat(crate::auth::MAX_EMAIL_LEN + 10));
+            assert!(state.client_id().is_empty());
+            assert!(state.client_secret().is_empty());
             assert!(state.master_password().is_empty());
         }
     }

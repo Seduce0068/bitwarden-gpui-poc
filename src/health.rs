@@ -18,7 +18,10 @@ use crate::model::{ItemKind, Vault, VaultItem};
 use crate::totp::is_valid_secret;
 
 /// A single finding.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Derived `Serialize` is intentional: any serialized form must be safe to
+/// persist or log, so `InsecureUri` stores an already-masked URI (see below).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum Finding {
     /// The password's estimated entropy is below `bits`.
     WeakPassword {
@@ -37,7 +40,9 @@ pub enum Finding {
     },
     /// A URI is `http://`, so the credential can be sent in the clear.
     InsecureUri {
-        /// The offending URI.
+        /// The offending URI reduced to scheme and host by `mask_uri` at the
+        /// moment the finding is created. Never store the raw URI here: this
+        /// field is exposed by `Debug` and by serialization.
         uri: String,
     },
     /// A login carries no usable TOTP secret.
@@ -100,7 +105,7 @@ impl Severity {
 }
 
 /// Everything found for one item.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ItemReport {
     /// The item id.
     pub id: String,
@@ -120,7 +125,7 @@ impl ItemReport {
 }
 
 /// The whole audit.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Report {
     /// One entry per item that has at least one finding, worst first.
     pub items: Vec<ItemReport>,
@@ -444,8 +449,11 @@ fn audit_item(
     }
     for uri in uris {
         if uri.uri.trim().to_lowercase().starts_with("http://") {
+            // Store the same masked form that `message()` shows, so the raw
+            // URI (with credentials, path, query or fragment) never reaches
+            // `Debug` output or a serialized report.
             findings.push(Finding::InsecureUri {
-                uri: uri.uri.clone(),
+                uri: crate::model::mask_uri(&uri.uri),
             });
         }
     }

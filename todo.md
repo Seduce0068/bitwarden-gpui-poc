@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T02:37:09+09:00"
+  at: "2026-11-18T02:55:03+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -55,30 +55,19 @@ stale_after: "2027-05-17T21:04:43+09:00"
     オフライン復元や同期失敗時のキャッシュ活用が行われない。ADR と乖離。
   - 受け入れ条件: auth 層から SyncCache へ接続するか feature ゲート／削除し、
     ADR と実装を一致させる。
-- [ ] 実ログイン・モック遷移時の状態クリアを共通化する
-  - 根拠: INV2
-  - File: src/ui/login_flow.rs:109-124,70-87, src/ui/app.rs:129-147
-  - 現状: lock() は全リセットするが unlock_mock/finish_login は
-    vault/panel/screen/selected_id のみで、auth.field/editing/searching が残存。
-  - 受け入れ条件: enter_unlocked() 等の共通関数で lock() と同じリセットを適用。
 
 ### 優先度: 低
 
 - [ ] デバイス ID を永続化し再同期経路を追加する（A9）
-- [ ] 監査パネル・生成／設定パネルにスクロールを追加する（U6 / UI4）
 - [ ] 選択行をテキストマーカーでも示す（アクセシビリティ、G5）
 - [ ] フォーカスを Tab で外れても復帰可能にする（UI3）
 - [ ] 選択解除経路のスクロール処理を共通化する（INV3 / UI5）
 - [ ] 再コピーで deadline を延長しない／内容を更新する（P2-d、中にも関連）
 - [ ] エントロピー閾値と `starts_with("password")` の長さ上限を整理する（C5、中にも関連）
-- [ ] メール長上限と認証入力の長さ上限を設ける（S9-03 / S9-04）
 - [ ] SSH fingerprint を公開鍵から再計算して検証する（CR1）
 - [ ] エラー表示を TotpError::message() に合わせる（I2 / E6）
 - [ ] カード番号マスキングを数字抽出＋末尾4桁に統一する（S4 / TH2 / V6）
-- [ ] Finding::InsecureUri にマスク済み URI を格納する（TH3 / V7）
 - [ ] link-local 検証を解決先 IP・リダイレクト先まで拡張する（S9-01 / TH5 / API2）
-- [ ] README のゲート順序とドキュメントの記述を揃える（O1 / DOC4）
-- [ ] ADR 索引に log.md への導線を追加する（DOC2）
 - [ ] README のライセンス節からドキュメント導線を分離する（DOC3）
 - [ ] バージョン運用を見直し [Unreleased] を導入する（REL2）
 - [ ] CI バッジ／コントリビューション導線を整備する（REL4 / REL5）
@@ -90,6 +79,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] エージェントチームによる4タスク並列対応・第5弾（2026-11-18）
+  - アンロック遷移の状態リセットを共通化（enter_unlocked / reset_input_state）
+  - メール・認証入力の長さ上限（UTF-8 境界で切り詰め）
+  - 監査 / 生成 / 設定パネルに縦スクロールを追加
+  - `Finding::InsecureUri` にマスク済み URI のみを格納
+  - ルート担当: ADR 索引へ log.md 導線、README のゲート順序を統一
 - [x] エージェントチームによる4タスク並列対応・第4弾（2026-11-18）
   - 部分成功の保持とエラー系統別の案内分岐（vault_sync / login_flow）
   - キーガード分岐のテスト（keys_tests / auth_state / clipboard）

@@ -77,6 +77,70 @@ impl std::error::Error for AuthError {}
 
 pub use crate::cache::SyncCacheError;
 
+// ---------------------------------------------------------------------------
+// Input length limits
+//
+// Policy: a cap is input hygiene, not credential validation. Text beyond a cap
+// is silently truncated at a UTF-8 character boundary by `clamp_auth_config`
+// (and by `AuthState::push_text` at the input source); length alone never
+// produces an `AuthError`. Reporting an error for a long IME composition or a
+// pasted value would be a confusing login failure. Whatever remains is still
+// checked structurally by `validate_config` / `valid_email`, which is the
+// backstop for configs assembled by callers that bypass the input layer.
+// ---------------------------------------------------------------------------
+
+/// Maximum length of an email address, in characters. RFC 5321 caps the local
+/// part at 64 octets and the domain at 255; 254 is the practical ceiling mail
+/// servers enforce, so longer addresses cannot be real deliverable addresses.
+pub const MAX_EMAIL_LEN: usize = 254;
+/// Maximum length of a server URL, in characters. Well above a normal
+/// self-hosted URL, but below the ~2 KiB limit many HTTP stacks apply.
+pub const MAX_SERVER_URL_LEN: usize = 2048;
+/// Maximum length of a Client ID, in characters. Bitwarden keys are short
+/// (`user.<uuid>`); this leaves room for custom installations.
+pub const MAX_CLIENT_ID_LEN: usize = 256;
+/// Maximum length of a Client Secret, in characters.
+pub const MAX_CLIENT_SECRET_LEN: usize = 1024;
+/// Maximum length of a master password, in characters. Long passphrases are
+/// legitimate, but the in-memory buffer still needs a finite bound.
+pub const MAX_MASTER_PASSWORD_LEN: usize = 1024;
+
+/// Byte offset just past `limit` characters, or `None` when `value` fits.
+fn char_boundary_at(value: &str, limit: usize) -> Option<usize> {
+    value.char_indices().nth(limit).map(|(index, _)| index)
+}
+
+/// Shorten `value` to at most `limit` characters without splitting a UTF-8
+/// code point. Following the policy above, this can never fail.
+pub fn truncate_to_limit(value: &mut String, limit: usize) {
+    if let Some(index) = char_boundary_at(value, limit) {
+        value.truncate(index);
+    }
+}
+
+/// Secret counterpart of [`truncate_to_limit`]. Replacing the value drops and
+/// zeroizes the previous secret buffer.
+fn truncate_secret_to_limit(value: &mut SecretString, limit: usize) {
+    let Some(index) = char_boundary_at(value.expose_secret(), limit) else {
+        return;
+    };
+    let prefix = value.expose_secret()[..index].to_string();
+    *value = SecretString::from(prefix);
+}
+
+/// Apply every auth-field cap to a config built from untrusted text.
+///
+/// The caller keeps ownership; only over-long fields are shortened. Server URL
+/// and email live in `Settings`, so their caps are enforced here rather than in
+/// `AuthState`, which owns only the three credential fields.
+pub fn clamp_auth_config(config: &mut AuthConfig) {
+    truncate_to_limit(&mut config.server_url, MAX_SERVER_URL_LEN);
+    truncate_to_limit(&mut config.email, MAX_EMAIL_LEN);
+    truncate_to_limit(&mut config.client_id, MAX_CLIENT_ID_LEN);
+    truncate_secret_to_limit(&mut config.client_secret, MAX_CLIENT_SECRET_LEN);
+    truncate_secret_to_limit(&mut config.master_password, MAX_MASTER_PASSWORD_LEN);
+}
+
 /// Whether `value` contains a Unicode `Cf` (format) character.
 ///
 /// Zero-width spaces, bidi overrides and similar invisible controls can hide
@@ -112,12 +176,16 @@ fn has_format_character(value: &str) -> bool {
     })
 }
 
-/// A minimal structural check: exactly one `@`, no whitespace or format
-/// characters, and a dotted domain. Regex-level RFC 5322 validation is out of
-/// scope for the PoC.
+/// A minimal structural check: at most [`MAX_EMAIL_LEN`] characters, exactly
+/// one `@`, no whitespace or format characters, and a dotted domain.
+/// Regex-level RFC 5322 validation is out of scope for the PoC.
 pub fn valid_email(value: &str) -> bool {
     let value = value.trim();
-    if value.is_empty() || value.chars().any(char::is_whitespace) || has_format_character(value) {
+    if value.is_empty()
+        || value.chars().count() > MAX_EMAIL_LEN
+        || value.chars().any(char::is_whitespace)
+        || has_format_character(value)
+    {
         return false;
     }
     if value.matches('@').count() != 1 {
@@ -165,7 +233,7 @@ pub fn is_blocked_server_url(value: &str) -> bool {
 /// # Errors
 ///
 /// [`AuthError::MissingField`] for an empty field,
-/// [`AuthError::InvalidEmail`] for a malformed address,
+/// [`AuthError::InvalidEmail`] for a malformed or over-long address,
 /// [`AuthError::BlockedServerUrl`] for link-local hosts, or
 /// [`AuthError::InvalidServerUrl`] for a URL `openwarden` rejects.
 pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
@@ -286,6 +354,13 @@ pub async fn authenticate_with_timeout(
     device_identifier: &str,
     timeout: std::time::Duration,
 ) -> Result<AuthenticatedVault, AuthError> {
+    // Callers may pass text from Settings or a persisted config that was never
+    // capped at the input source. Clamp a private copy so every network path
+    // sees bounded fields without mutating the caller's value or erroring on
+    // length alone.
+    let mut bounded = config.clone();
+    clamp_auth_config(&mut bounded);
+    let config = &bounded;
     // Validate before starting the race so bad input fails deterministically
     // without touching the network or the timeout.
     validate_config(config)?;

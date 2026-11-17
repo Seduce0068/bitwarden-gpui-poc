@@ -217,3 +217,102 @@ fn error_messages_are_present() {
         assert!(!error.to_string().is_empty());
     }
 }
+
+#[test]
+fn email_validation_enforces_the_254_character_ceiling() {
+    let suffix = "@example.com";
+    let local_len = MAX_EMAIL_LEN - suffix.len();
+    let at_limit = format!("{}{suffix}", "a".repeat(local_len));
+    assert_eq!(at_limit.chars().count(), MAX_EMAIL_LEN);
+    assert!(valid_email(&at_limit));
+
+    let too_long = format!("{}{suffix}", "a".repeat(local_len + 1));
+    assert_eq!(too_long.chars().count(), MAX_EMAIL_LEN + 1);
+    assert!(!valid_email(&too_long));
+
+    let mut value = config();
+    value.email = too_long;
+    assert_eq!(validate_config(&value), Err(AuthError::InvalidEmail));
+
+    // The ceiling counts characters, not bytes: multibyte letters stay valid.
+    let multibyte = format!("{}@example.com", "あ".repeat(local_len));
+    assert_eq!(multibyte.chars().count(), MAX_EMAIL_LEN);
+    assert!(valid_email(&multibyte));
+}
+
+#[test]
+fn clamp_caps_every_field_without_reporting_an_error() {
+    let mut value = AuthConfig {
+        server_url: format!(
+            "https://vault.example.com/{}",
+            "s".repeat(MAX_SERVER_URL_LEN)
+        ),
+        client_id: "i".repeat(MAX_CLIENT_ID_LEN + 10),
+        client_secret: SecretString::from("x".repeat(MAX_CLIENT_SECRET_LEN + 10)),
+        // Truncation keeps the leading prefix, so put the valid address at the
+        // front and pad the domain tail; the capped result stays deliverable.
+        email: format!("a@example.com{}", "b".repeat(MAX_EMAIL_LEN)),
+        master_password: SecretString::from("p".repeat(MAX_MASTER_PASSWORD_LEN + 10)),
+    };
+
+    clamp_auth_config(&mut value);
+
+    assert_eq!(value.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(value.client_id.chars().count(), MAX_CLIENT_ID_LEN);
+    assert_eq!(
+        value.client_secret.expose_secret().chars().count(),
+        MAX_CLIENT_SECRET_LEN
+    );
+    assert_eq!(value.email.chars().count(), MAX_EMAIL_LEN);
+    assert_eq!(
+        value.master_password.expose_secret().chars().count(),
+        MAX_MASTER_PASSWORD_LEN
+    );
+    // The retained text is the original prefix, not a substituted value.
+    assert!(value.client_id.chars().all(|ch| ch == 'i'));
+    assert!(value
+        .client_secret
+        .expose_secret()
+        .chars()
+        .all(|ch| ch == 'x'));
+    // Truncation keeps the config usable; no length-only AuthError is raised.
+    assert_eq!(validate_config(&value), Ok(()));
+
+    // Re-applying the cap is a no-op.
+    let before = (
+        value.server_url.clone(),
+        value.client_id.clone(),
+        value.client_secret.expose_secret().to_string(),
+        value.email.clone(),
+        value.master_password.expose_secret().to_string(),
+    );
+    clamp_auth_config(&mut value);
+    assert_eq!(
+        (
+            value.server_url.as_str(),
+            value.client_id.as_str(),
+            value.client_secret.expose_secret(),
+            value.email.as_str(),
+            value.master_password.expose_secret(),
+        ),
+        (
+            before.0.as_str(),
+            before.1.as_str(),
+            before.2.as_str(),
+            before.3.as_str(),
+            before.4.as_str(),
+        )
+    );
+}
+
+#[test]
+fn truncation_never_splits_a_utf8_character() {
+    let mut value = "あいうえお".to_string();
+    truncate_to_limit(&mut value, 2);
+    assert_eq!(value, "あい");
+    // A limit past the end is a no-op; zero clears the whole value.
+    truncate_to_limit(&mut value, 10);
+    assert_eq!(value, "あい");
+    truncate_to_limit(&mut value, 0);
+    assert!(value.is_empty());
+}
