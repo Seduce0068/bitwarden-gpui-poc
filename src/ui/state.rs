@@ -99,6 +99,19 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
+    fn from_settings_copies_generator_config_without_results() {
+        let mut settings = Settings::default();
+        settings.password_generator.length = 42;
+        settings.passphrase_generator.words = 7;
+
+        let state = GeneratorState::from_settings(&settings);
+        assert_eq!(state.password.length, 42);
+        assert_eq!(state.passphrase.words, 7);
+        assert!(state.last_password.is_none());
+        assert!(state.last_passphrase.is_none());
+    }
+
+    #[::core::prelude::v1::test]
     fn debug_masks_generated_secrets() {
         let state = GeneratorState {
             last_password: Some("generated-password".into()),
