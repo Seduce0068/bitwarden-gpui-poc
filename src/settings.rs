@@ -1,4 +1,5 @@
-//! Persistent settings: server URL, email, generator defaults, thresholds.
+//! Persistent settings: server URL, email, generator defaults, thresholds and
+//! the installation's stable device identifier.
 //!
 //! The PoC stores settings in JSON under the user's config directory. No
 //! secrets are persisted here: master passwords and keys live only in memory.
@@ -42,6 +43,12 @@ pub struct Settings {
     pub server_url: String,
     /// Last-used email address.
     pub email: String,
+    /// Stable per-installation device identifier sent on login and resync.
+    ///
+    /// A pristine in-memory `Settings` has an empty value; [`Self::ensure_device_id`]
+    /// fills it from the OS CSPRNG on first use and persists it so later
+    /// launches and resync attempts reuse the same identifier.
+    pub device_id: String,
     /// Default password generator settings.
     pub password_generator: PasswordSettings,
     /// Default passphrase generator settings.
@@ -62,6 +69,9 @@ impl Default for Settings {
             schema_version: CURRENT_SCHEMA_VERSION,
             server_url: "https://vault.bitwarden.com".to_string(),
             email: String::new(),
+            // Deliberately empty: generation is an explicit, fallible step so
+            // `Default` stays deterministic for the tolerance pass and tests.
+            device_id: String::new(),
             password_generator: PasswordSettings::default(),
             passphrase_generator: PassphraseSettings::default(),
             thresholds: Thresholds::default(),
@@ -118,6 +128,7 @@ impl core::fmt::Debug for Settings {
                     "[redacted]"
                 },
             )
+            .field("device_id", &self.device_id)
             .field("password_generator", &self.password_generator)
             .field("passphrase_generator", &self.passphrase_generator)
             .field("thresholds", &self.thresholds)
@@ -185,6 +196,62 @@ where
     serde_json::from_value::<T>(Value::Object(candidate)).unwrap_or_default()
 }
 
+/// Length of a canonical, hyphenated UUID (`8-4-4-4-12`) in characters.
+const UUID_TEXT_LEN: usize = 36;
+
+/// Generate a version 4 (random) UUID as canonical lowercase text.
+///
+/// The `uuid` crate is intentionally not added: an installation identifier
+/// only needs 16 CSPRNG bytes with the version/variant bits fixed, and
+/// `getrandom` is already a direct dependency. Randomness is never replaced
+/// by a hardcoded fallback, because that would reintroduce collisions
+/// between installations.
+///
+/// # Errors
+///
+/// Returns [`getrandom::Error`] when the OS random source is unavailable.
+pub fn generate_device_id() -> Result<String, getrandom::Error> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)?;
+    // RFC 9562 version 4 and the RFC 4122 variant (10xx) bit patterns.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(UUID_TEXT_LEN);
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            text.push('-');
+        }
+        text.push(char::from(HEX[usize::from(byte >> 4)]));
+        text.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    Ok(text)
+}
+
+/// Whether `value` is a canonical version 4 UUID in hyphenated form.
+///
+/// Used to decide whether a stored identifier can be safely reused. Anything
+/// else (including the empty string and the old hardcoded PoC value) is
+/// treated as "not yet generated" and replaced on the next sync attempt.
+pub fn is_valid_device_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != UUID_TEXT_LEN {
+        return false;
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            if *byte != b'-' {
+                return false;
+            }
+        } else if !byte.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    // Position 14 is the version nibble, position 19 the variant nibble.
+    bytes[14] == b'4' && matches!(bytes[19], b'8' | b'9' | b'a' | b'b' | b'A' | b'B')
+}
+
 impl Settings {
     /// Clamp editable fields to safe ranges before persisting or applying
     /// them. Bounds match the UI adjusters: 1..=60 minutes for idle lock,
@@ -193,6 +260,11 @@ impl Settings {
     /// audit thresholds.
     pub fn sanitized(&self) -> Self {
         let mut result = self.clone();
+        // A hand-edited, malformed identifier must not be sent to the server;
+        // clearing it makes the next `ensure_device_id` generate a fresh one.
+        if !is_valid_device_id(&result.device_id) {
+            result.device_id.clear();
+        }
         result.idle_lock_seconds = result.idle_lock_seconds.clamp(60, 3600);
         result.login_timeout_seconds = result.login_timeout_seconds.clamp(1, 3600);
         result.clipboard_restore_seconds = result.clipboard_restore_seconds.clamp(1, 3600);
@@ -201,6 +273,34 @@ impl Settings {
         result.thresholds.weak_bits = result.thresholds.weak_bits.clamp(1, 200);
         result.thresholds.stale_days = result.thresholds.stale_days.clamp(1, 3650);
         result
+    }
+
+    /// Return this installation's device identifier, creating and persisting
+    /// one on first use.
+    ///
+    /// The initial login and every resync/retry go through this method, so a
+    /// valid stored value is always reused unchanged. When the value is empty
+    /// or malformed, a version 4 UUID is generated from the OS CSPRNG and,
+    /// if `path` is supplied, written back immediately so later launches see
+    /// the same identifier. A failed write is not fatal: the in-memory value
+    /// is still stable for this process and the next call retries persistence.
+    ///
+    /// # Errors
+    ///
+    /// [`getrandom::Error`] when no random source is available. There is no
+    /// hardcoded fallback because that would defeat per-installation
+    /// uniqueness.
+    pub fn ensure_device_id(
+        &mut self,
+        path: Option<&std::path::Path>,
+    ) -> Result<&str, getrandom::Error> {
+        if !is_valid_device_id(&self.device_id) {
+            self.device_id = generate_device_id()?;
+            if let Some(path) = path {
+                let _ = self.save(path);
+            }
+        }
+        Ok(&self.device_id)
     }
 
     /// The default config file path.

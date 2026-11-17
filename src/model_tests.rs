@@ -544,6 +544,69 @@ fn login_secret_fields_are_zeroizing_buffers() {
     assert!(!debug.contains("JBSWY3DPEHPK3PXP"), "{debug}");
 }
 
+// Generated with `ssh-keygen -t ed25519`; the expected fingerprint was
+// confirmed independently by `ssh-keygen -lf` and Python's hashlib.
+const REFERENCE_PUBLIC_KEY: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMVYTn6DgHoRS29obD0RhrnbKgHhM1eqLvmbTWMGwSmR fp-test@example";
+const REFERENCE_FINGERPRINT: &str = "SHA256:rU5/Ssu4iQF+Dh5DRCbEpCjexkxaSKWYzYW9pUPi7R0";
+
+fn ssh_key(public_key: &str, fingerprint: &str) -> SshKeyData {
+    SshKeyData {
+        public_key: public_key.to_string(),
+        private_key: String::new(),
+        fingerprint: fingerprint.to_string(),
+    }
+}
+
+#[test]
+fn ssh_fingerprint_matches_openssh_reference() {
+    let key = ssh_key(REFERENCE_PUBLIC_KEY, REFERENCE_FINGERPRINT);
+    assert_eq!(key.verify_fingerprint(), FingerprintVerify::Match);
+    assert!(key.fingerprint_matches());
+}
+
+#[test]
+fn ssh_fingerprint_detects_a_stored_value_mismatch() {
+    let key = ssh_key(
+        REFERENCE_PUBLIC_KEY,
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    );
+    assert_eq!(
+        key.verify_fingerprint(),
+        FingerprintVerify::Mismatch {
+            computed: REFERENCE_FINGERPRINT.to_string(),
+        }
+    );
+    assert!(!key.fingerprint_matches());
+}
+
+#[test]
+fn ssh_fingerprint_ignores_comment_and_extra_whitespace() {
+    let key = ssh_key(
+        "  ssh-ed25519   AAAAC3NzaC1lZDI1NTE5AAAAIMVYTn6DgHoRS29obD0RhrnbKgHhM1eqLvmbTWMGwSmR   someone@else  ",
+        REFERENCE_FINGERPRINT,
+    );
+    assert_eq!(key.verify_fingerprint(), FingerprintVerify::Match);
+}
+
+#[test]
+fn ssh_fingerprint_rejects_unparsable_public_keys() {
+    for public_key in [
+        "",
+        "ssh-ed25519",
+        "ssh-ed25519 !!!not-base64!!! comment",
+        "ssh-ed25519 A",
+    ] {
+        let key = ssh_key(public_key, REFERENCE_FINGERPRINT);
+        assert_eq!(
+            key.verify_fingerprint(),
+            FingerprintVerify::InvalidPublicKey,
+            "input: {public_key:?}"
+        );
+        assert!(!key.fingerprint_matches());
+    }
+}
+
 #[test]
 fn login_secret_serde_round_trip_keeps_debug_redacted() {
     let item = VaultItem::new(

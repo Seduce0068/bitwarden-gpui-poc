@@ -492,12 +492,103 @@ fn invalid_totp_is_not_counted_as_configured() {
 #[test]
 fn long_high_entropy_password_prefix_is_not_mistaken_for_common() {
     let long = "passwordVt7#kQm2!zR9wP4$xL8@";
-    assert!(long.len() > 16, "the value must exceed the prefix cap");
+    assert!(
+        long.len() > PASSWORD_PREFIX_LIMIT,
+        "the value must exceed the prefix cap"
+    );
     let bits = estimate_entropy(long);
     assert!(bits >= 50, "{bits}");
     assert!(bits > estimate_entropy("password123"), "{bits}");
     // The classic short value must still take the dictionary shortcut.
     assert!(estimate_entropy("password123") < 20);
+}
+
+#[test]
+fn short_dictionary_passwords_are_weak_at_the_default_threshold() {
+    let weak_bits = Thresholds::default().weak_bits;
+    // Every value here is at or below PASSWORD_PREFIX_LIMIT, so it takes the
+    // dictionary shortcut: the estimate lands far below weak_bits even though
+    // the raw pool x length score of e.g. `password123` is ~57 bit and would
+    // otherwise clear the threshold.
+    for password in [
+        "password",
+        "password1",
+        "password123",
+        "PASSWORD123",
+        "password12345678", // exactly PASSWORD_PREFIX_LIMIT characters
+    ] {
+        assert!(password.len() <= PASSWORD_PREFIX_LIMIT, "{password}");
+        let bits = estimate_entropy(password);
+        assert!(bits < weak_bits, "{password}: {bits} >= {weak_bits}");
+        // The audit path turns the low estimate into a WeakPassword finding.
+        let report = report_of(vec![login(
+            "1",
+            "P",
+            password,
+            "https://a.example",
+            "SECRET",
+        )]);
+        assert!(
+            report.items[0]
+                .findings
+                .contains(&Finding::WeakPassword { bits }),
+            "{password}: {report:?}"
+        );
+    }
+}
+
+#[test]
+fn password_prefix_cap_is_the_boundary_for_the_dictionary_shortcut() {
+    const VALID_TOTP: &str = "GEZDGNBVGY3TQOJQ";
+    let weak_bits = Thresholds::default().weak_bits;
+
+    // Exactly at the cap: still a dictionary guess, hence Weak.
+    let at_cap = format!("password{}", "Vt7#kQm2"); // 8 + 8 = 16 chars
+    assert_eq!(at_cap.len(), PASSWORD_PREFIX_LIMIT);
+    let at_cap_bits = estimate_entropy(&at_cap);
+    assert!(at_cap_bits < weak_bits, "{at_cap}: {at_cap_bits}");
+
+    // One character past the cap: the same kind of value keeps its genuine
+    // entropy and is no longer flagged Weak.
+    let past_cap = format!("{at_cap}!"); // 17 chars
+    assert_eq!(past_cap.len(), PASSWORD_PREFIX_LIMIT + 1);
+    let past_cap_bits = estimate_entropy(&past_cap);
+    assert!(past_cap_bits >= weak_bits, "{past_cap}: {past_cap_bits}");
+    assert!(
+        past_cap_bits > at_cap_bits,
+        "{past_cap_bits} vs {at_cap_bits}"
+    );
+
+    // Confirm the boundary through the report path too: only the at-cap value
+    // produces a WeakPassword finding, with a valid TOTP and https URI so no
+    // other finding can appear.
+    let short_report = report_of(vec![login(
+        "1",
+        "Short",
+        &at_cap,
+        "https://a.example",
+        VALID_TOTP,
+    )]);
+    assert!(
+        short_report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits: at_cap_bits }),
+        "{short_report:?}"
+    );
+    let long_report = report_of(vec![login(
+        "2",
+        "Long",
+        &past_cap,
+        "https://b.example",
+        VALID_TOTP,
+    )]);
+    assert!(
+        !long_report.items.iter().any(|item| item
+            .findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::WeakPassword { .. }))),
+        "a value past the cap must not be Weak: {long_report:?}"
+    );
 }
 
 #[test]

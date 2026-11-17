@@ -336,6 +336,23 @@ fn strip_trailing_digits(value: &str) -> Option<&str> {
     (trimmed.len() != value.len() && !trimmed.is_empty()).then_some(trimmed)
 }
 
+/// The longest `"password"`-prefixed value still treated as a dictionary guess
+/// by `is_common_password`.
+///
+/// The cap is chosen relative to `Thresholds::weak_bits` (50 by default).
+/// Capped values take the dictionary estimate from `entropy_bits(2_000, 1)`
+/// (~11 bit, ~12 with an uppercase letter), well below 50, so short guesses
+/// such as `password123` are flagged `WeakPassword`. Without the cap their raw
+/// pool x length score would already clear the threshold (`password123` scores
+/// ~57 bit), letting them slip through. Longer values keep their real estimate,
+/// so a long high-entropy value that merely starts with "password" is not
+/// mislabelled weak. This is also the boundary asserted by the tests in
+/// `health_tests.rs`.
+pub(crate) const PASSWORD_PREFIX_LIMIT: usize = 16;
+
+/// The equivalent cap for the `"qwerty"` prefix; see [`PASSWORD_PREFIX_LIMIT`].
+const QWERTY_PREFIX_LIMIT: usize = 12;
+
 /// A small list of the passwords that show up first in every breach corpus.
 fn is_common_password(lower: &str) -> bool {
     const COMMON: &[&str] = &[
@@ -378,13 +395,13 @@ fn is_common_password(lower: &str) -> bool {
         "asdfghjkl",
         "correcthorsebatterystaple",
     ];
-    // A long random value that merely begins with "password" is not a
-    // dictionary password. Cap the prefix match so those values keep their
-    // real (high) entropy estimate; the same cap already exists for qwerty.
-    const PASSWORD_PREFIX_LIMIT: usize = 16;
+    // A long random value that merely begins with "password" (or "qwerty")
+    // is not a dictionary password. Cap the prefix matches so those values
+    // keep their real (high) entropy estimate; see PASSWORD_PREFIX_LIMIT for
+    // how the cap relates to the weak-entropy threshold.
     COMMON.contains(&lower)
         || (lower.starts_with("password") && lower.len() <= PASSWORD_PREFIX_LIMIT)
-        || (lower.starts_with("qwerty") && lower.len() <= 12)
+        || (lower.starts_with("qwerty") && lower.len() <= QWERTY_PREFIX_LIMIT)
 }
 
 /// Audit `vault` with `thresholds` at `now` (Unix seconds).

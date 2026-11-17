@@ -84,6 +84,23 @@ fn device_is_stable_and_typed_for_linux() {
 }
 
 #[test]
+fn persisted_installation_id_is_forwarded_verbatim_on_every_sync() {
+    // The identifier stored in Settings must reach openwarden unchanged:
+    // login and resync both build the device from that same persisted string.
+    let id = crate::settings::generate_device_id().unwrap();
+    let first = device_for_installation(&id);
+    let resync = device_for_installation(&id);
+    assert_eq!(first.identifier, id);
+    assert_eq!(resync.identifier, first.identifier);
+    assert_eq!(first.name, resync.name);
+    assert_eq!(first.device_type, resync.device_type);
+
+    let another_installation =
+        device_for_installation(&crate::settings::generate_device_id().unwrap());
+    assert_ne!(another_installation.identifier, first.identifier);
+}
+
+#[test]
 fn debug_output_does_not_leak_secrets() {
     let rendered = format!("{:?}", config());
     assert!(rendered.contains("[REDACTED]"), "{rendered}");

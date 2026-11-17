@@ -182,6 +182,142 @@ pub struct SshKeyData {
     pub fingerprint: String,
 }
 
+/// Result of comparing a stored SSH fingerprint with the one recomputed from
+/// the public key line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FingerprintVerify {
+    /// The stored fingerprint matches the public key.
+    Match,
+    /// The stored fingerprint differs from the public key.
+    Mismatch {
+        /// The fingerprint recomputed from the public key line.
+        computed: String,
+    },
+    /// The public key line could not be parsed, so no comparison was possible.
+    InvalidPublicKey,
+}
+
+impl SshKeyData {
+    /// Compare the stored fingerprint with the one recomputed from
+    /// [`Self::public_key`].
+    ///
+    /// OpenSSH fingerprints the decoded key blob (the second whitespace-
+    /// separated field), so a changed key or a stale stored value is detected.
+    pub fn verify_fingerprint(&self) -> FingerprintVerify {
+        let Some(computed) = ssh_fingerprint::sha256_fingerprint(&self.public_key) else {
+            return FingerprintVerify::InvalidPublicKey;
+        };
+        if self.fingerprint.trim() == computed {
+            FingerprintVerify::Match
+        } else {
+            FingerprintVerify::Mismatch { computed }
+        }
+    }
+
+    /// Convenience wrapper: whether the stored fingerprint is valid.
+    ///
+    /// An unparsable public key is not a match, so callers that must tell
+    /// "invalid" from "mismatch" should use [`Self::verify_fingerprint`].
+    pub fn fingerprint_matches(&self) -> bool {
+        matches!(self.verify_fingerprint(), FingerprintVerify::Match)
+    }
+}
+
+/// Recompute OpenSSH-style SHA256 fingerprints.
+///
+/// SHA-256 uses the existing `sha2` dependency. `base64` is only a transitive
+/// dependency in `Cargo.lock`; a crate cannot `use` a transitive dependency,
+/// and adding it directly would violate the no-new-dependency constraint for
+/// this change, so the small standard base64 codec lives here. The algorithm
+/// mirrors `ssh-keygen -lf`: hash the decoded key blob, base64-encode the
+/// digest, strip padding, and prefix `SHA256:`.
+mod ssh_fingerprint {
+    use sha2::{Digest, Sha256};
+
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    /// Decode standard base64 (with or without `=` padding).
+    fn decode(input: &[u8]) -> Option<Vec<u8>> {
+        let mut out = Vec::with_capacity(input.len() / 4 * 3);
+        let mut acc = 0u32;
+        let mut leftover_bits = 0u32;
+        let mut saw_padding = false;
+        for &byte in input {
+            if byte == b'=' {
+                saw_padding = true;
+                continue;
+            }
+            if saw_padding {
+                return None;
+            }
+            let value = match byte {
+                b'A'..=b'Z' => byte - b'A',
+                b'a'..=b'z' => byte - b'a' + 26,
+                b'0'..=b'9' => byte - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                _ => return None,
+            };
+            acc = (acc << 6) | u32::from(value);
+            leftover_bits += 6;
+            if leftover_bits >= 8 {
+                leftover_bits -= 8;
+                out.push((acc >> leftover_bits) as u8);
+                acc &= (1u32 << leftover_bits) - 1;
+            }
+        }
+        // Six leftover bits mean a single trailing base64 character, which is
+        // not a valid encoding. An empty blob cannot be a key either.
+        if leftover_bits >= 6 || out.is_empty() {
+            return None;
+        }
+        Some(out)
+    }
+
+    /// Encode with the standard base64 alphabet, keeping `=` padding.
+    fn encode(input: &[u8]) -> String {
+        let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+        let (chunks, remainder) = input.as_chunks::<3>();
+        for chunk in chunks {
+            let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
+            push_quad(&mut out, n);
+        }
+        match remainder {
+            [a] => {
+                out.push(char::from(ALPHABET[((u32::from(*a) >> 2) & 0x3F) as usize]));
+                out.push(char::from(ALPHABET[((u32::from(*a) << 4) & 0x3F) as usize]));
+                out.push('=');
+                out.push('=');
+            }
+            [a, b] => {
+                let n = (u32::from(*a) << 16) | (u32::from(*b) << 8);
+                out.push(char::from(ALPHABET[((n >> 18) & 0x3F) as usize]));
+                out.push(char::from(ALPHABET[((n >> 12) & 0x3F) as usize]));
+                out.push(char::from(ALPHABET[((n >> 6) & 0x3F) as usize]));
+                out.push('=');
+            }
+            _ => {}
+        }
+        out
+    }
+
+    fn push_quad(out: &mut String, n: u32) {
+        for shift in [18, 12, 6, 0] {
+            out.push(char::from(ALPHABET[((n >> shift) & 0x3F) as usize]));
+        }
+    }
+
+    /// Fingerprint of a line like `ssh-ed25519 <base64 blob> [comment]`.
+    pub(crate) fn sha256_fingerprint(public_key_line: &str) -> Option<String> {
+        let mut fields = public_key_line.split_whitespace();
+        let _key_type = fields.next()?;
+        let blob = decode(fields.next()?.as_bytes())?;
+        let digest = Sha256::digest(&blob);
+        let encoded = encode(digest.as_slice());
+        Some(format!("SHA256:{}", encoded.trim_end_matches('=')))
+    }
+}
+
 impl core::fmt::Debug for LoginUri {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoginUri")

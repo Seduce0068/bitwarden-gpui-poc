@@ -51,6 +51,23 @@ impl VaultViewState {
         self.vault.view(&self.filter, &self.query, self.sort)
     }
 
+    /// Request that the first row be placed at the top of the viewport.
+    fn scroll_to_top(&mut self) {
+        self.scroll_handle
+            .scroll_to_item(0, gpui_kit::ScrollStrategy::Top);
+    }
+
+    /// Clear the selection and rewind the list to its first row.
+    ///
+    /// This is the single definition of "the selected row is no longer
+    /// valid". Filter and sort changes, search edits and confirmation, item
+    /// removal and vault reset all funnel through here, so every path that
+    /// drops the selection leaves the same visible range behind.
+    pub fn deselect_and_rewind(&mut self) {
+        self.selected_id = None;
+        self.scroll_to_top();
+    }
+
     /// Reset the view when locking the vault.
     pub fn reset(&mut self) {
         self.vault = Vault::new();
@@ -58,10 +75,8 @@ impl VaultViewState {
         self.filter = Filter::All;
         self.sort = SortKey::NameAsc;
         self.searching = false;
-        self.selected_id = None;
         self.audit_report = None;
-        self.scroll_handle
-            .scroll_to_item(0, gpui_kit::ScrollStrategy::Top);
+        self.deselect_and_rewind();
     }
 
     /// Ensure the selected id still names a visible item.
@@ -72,9 +87,7 @@ impl VaultViewState {
             visible.iter().map(|item| item.id.as_str()),
         );
         if !valid {
-            self.selected_id = None;
-            self.scroll_handle
-                .scroll_to_item(0, gpui_kit::ScrollStrategy::Top);
+            self.deselect_and_rewind();
         }
         valid
     }
@@ -108,8 +121,8 @@ impl VaultViewState {
         Some((current as isize + delta).clamp(0, visible.len() as isize - 1) as usize)
     }
 
-    /// Cycle to the next filter and return the row the view should scroll to.
-    pub fn cycle_filter(&mut self) -> usize {
+    /// Cycle to the next filter, clearing the selection and rewinding the list.
+    pub fn cycle_filter(&mut self) {
         self.filter = match self.filter {
             Filter::All => Filter::Favorites,
             Filter::Favorites => Filter::Kind(ItemKind::Login),
@@ -120,15 +133,14 @@ impl VaultViewState {
             Filter::Kind(ItemKind::SshKey) => Filter::NoFolder,
             Filter::NoFolder | Filter::Folder(_) => Filter::All,
         };
-        self.selected_id = None;
-        0
+        self.deselect_and_rewind();
     }
 
     /// Begin a fresh search.
     pub fn start_search(&mut self) {
         self.searching = true;
         self.query.clear();
-        self.selected_id = None;
+        self.deselect_and_rewind();
     }
 
     /// Finish search or settings editing.
@@ -139,13 +151,13 @@ impl VaultViewState {
     /// Append a character to the search query.
     pub fn push_query(&mut self, text: &str) {
         self.query.push_str(text);
-        self.selected_id = None;
+        self.deselect_and_rewind();
     }
 
     /// Remove the last character from the search query.
     pub fn pop_query(&mut self) {
         self.query.pop();
-        self.selected_id = None;
+        self.deselect_and_rewind();
     }
 }
 
@@ -236,13 +248,71 @@ mod tests {
         assert_eq!(state.query, "日本語");
     }
 
+    /// The deferred scroll request queued by `scroll_to_item`.
+    ///
+    /// Reading it keeps these tests window-independent: gpui's scroll handle
+    /// stores the request in a public `RefCell`, so no layout pass is needed.
+    fn scroll_request(state: &VaultViewState) -> Option<(usize, gpui_kit::ScrollStrategy)> {
+        state
+            .scroll_handle
+            .0
+            .borrow()
+            .deferred_scroll_to_item
+            .map(|request| (request.item_index, request.strategy))
+    }
+
     #[::core::prelude::v1::test]
     fn cycle_filter_clears_selection() {
         let mut state = state_with_items();
         state.selected_id = Some("a".into());
-        assert_eq!(state.cycle_filter(), 0);
+        state.cycle_filter();
         assert_eq!(state.selected_id, None);
         assert_eq!(state.filter, Filter::Favorites);
+    }
+
+    #[::core::prelude::v1::test]
+    fn every_deselection_path_rewinds_to_the_first_row() {
+        // One observable result shared by all deselection paths: no selection
+        // and a deferred scroll to row 0 with the Top strategy.
+        let expected = Some((0, gpui_kit::ScrollStrategy::Top));
+
+        type DeselectPath = (&'static str, fn(&mut VaultViewState));
+        let paths: Vec<DeselectPath> = vec![
+            ("reset", |state| state.reset()),
+            ("revalidate_selection", |state| {
+                // "a" drops out of the visible set, invalidating the selection.
+                state.query = "Beta".into();
+                assert!(!state.revalidate_selection());
+            }),
+            ("cycle_filter", |state| state.cycle_filter()),
+            ("start_search", |state| state.start_search()),
+            ("push_query", |state| state.push_query("B")),
+            ("pop_query", |state| state.pop_query()),
+        ];
+
+        for (name, apply) in paths {
+            let mut state = state_with_items();
+            state.selected_id = Some("a".into());
+            // Start away from the top so the assertion proves the path really
+            // rewinds instead of merely leaving an old request in place.
+            state
+                .scroll_handle
+                .scroll_to_item(1, gpui_kit::ScrollStrategy::Nearest);
+            assert_eq!(
+                scroll_request(&state),
+                Some((1, gpui_kit::ScrollStrategy::Nearest)),
+                "{name}: dirty scroll setup"
+            );
+
+            apply(&mut state);
+
+            assert_eq!(state.selected_id, None, "{name}: selection must be cleared");
+            assert_eq!(
+                scroll_request(&state),
+                expected,
+                "{name}: scroll must rewind"
+            );
+        }
     }
 
     #[::core::prelude::v1::test]
