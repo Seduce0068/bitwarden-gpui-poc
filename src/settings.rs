@@ -40,7 +40,7 @@ impl Default for Settings {
             passphrase_generator: PassphraseSettings::default(),
             thresholds: Thresholds::default(),
             idle_lock_seconds: 300,
-            login_timeout_seconds: 30,
+            login_timeout_seconds: crate::auth::DEFAULT_LOGIN_TIMEOUT.as_secs(),
             clipboard_restore_seconds: 30,
         }
     }
