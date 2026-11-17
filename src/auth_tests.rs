@@ -112,6 +112,9 @@ fn link_local_servers_are_blocked() {
     assert!(is_blocked_server_url("http://169.254.169.254"));
     assert!(is_blocked_server_url("http://169.254.1.1:8080"));
     assert!(is_blocked_server_url("http://[fe80::1]"));
+    // fe80::/10 spans fe80:: through febf::; fe7f is outside the range.
+    assert!(is_blocked_server_url("http://[febf::1]"));
+    assert!(!is_blocked_server_url("http://[fe7f::1]"));
     assert!(is_blocked_server_url("http://[::ffff:169.254.169.254]"));
     assert!(is_blocked_server_url("http://0xa9fea9fe"));
     assert!(!is_blocked_server_url("https://vault.example.com"));
