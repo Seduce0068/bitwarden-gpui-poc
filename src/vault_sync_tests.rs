@@ -31,6 +31,10 @@ fn revision_dates_convert_to_unix_seconds() {
     );
     assert_eq!(parse_revision(Some("not-a-date")), None);
     assert_eq!(parse_revision(None), None);
+    // Out-of-range month/day and too-short strings are rejected.
+    assert_eq!(parse_revision(Some("2023-13-01T00:00:00Z")), None);
+    assert_eq!(parse_revision(Some("2023-01-32T00:00:00Z")), None);
+    assert_eq!(parse_revision(Some("2023-1-01")), None);
 }
 
 #[test]
