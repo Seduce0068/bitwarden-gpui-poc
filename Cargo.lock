@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "bitwarden-gpui-poc"
-version = "0.1.72"
+version = "0.1.73"
 dependencies = [
  "data-encoding",
  "dirs 6.0.0",
