@@ -5,6 +5,7 @@ use crate::totp;
 use crate::ui::app::BitwardenApp;
 use crate::ui::state::SettingsField;
 use gpui_kit::*;
+use zeroize::Zeroizing;
 
 impl BitwardenApp {
     pub(super) fn copy_totp(&mut self, cx: &mut Context<Self>) {
@@ -97,7 +98,7 @@ impl BitwardenApp {
     pub(super) fn generate_password(&mut self, cx: &mut Context<Self>) {
         match self.settings.password_generator.generate() {
             Ok(value) => {
-                self.generator.last_password = Some(value);
+                self.generator.last_password = Some(Zeroizing::new(value));
                 self.status = "パスワードを生成しました".to_string();
             }
             Err(error) => self.status = error.message().to_string(),
@@ -108,7 +109,7 @@ impl BitwardenApp {
     pub(super) fn generate_passphrase(&mut self, cx: &mut Context<Self>) {
         match self.settings.passphrase_generator.generate() {
             Ok(value) => {
-                self.generator.last_passphrase = Some(value);
+                self.generator.last_passphrase = Some(Zeroizing::new(value));
                 self.status = "パスフレーズを生成しました".to_string();
             }
             Err(error) => self.status = error.message().to_string(),

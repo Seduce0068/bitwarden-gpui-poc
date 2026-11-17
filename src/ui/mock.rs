@@ -3,6 +3,7 @@
 use crate::model::{
     CardData, Folder, IdentityData, ItemData, LoginUri, SshKeyData, Vault, VaultItem,
 };
+use zeroize::Zeroizing;
 
 /// A small personal vault used until real sync is wired up.
 pub(super) fn mock_vault() -> Vault {
@@ -19,8 +20,8 @@ pub(super) fn mock_vault() -> Vault {
             name,
             ItemData::Login {
                 username: username.to_string(),
-                password: password.to_string(),
-                totp: totp.to_string(),
+                password: Zeroizing::new(password.to_string()),
+                totp: Zeroizing::new(totp.to_string()),
                 uris: vec![LoginUri::new(uri)],
             },
         )

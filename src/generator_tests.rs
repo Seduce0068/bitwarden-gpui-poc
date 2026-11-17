@@ -121,15 +121,24 @@ fn a_length_smaller_than_the_class_count_is_rejected() {
 }
 
 #[test]
-fn passwords_are_not_all_the_same() {
+fn generated_passwords_are_diverse_and_well_formed() {
     let settings = PasswordSettings::default();
+    let pool = settings.alphabet();
     let first = settings.generate().unwrap();
+    // Deterministic invariants for the first draw: it is a real password
+    // under these settings, not an unrelated sample behind a short circuit.
+    assert_eq!(first.chars().count(), settings.length);
+    assert!(first.chars().all(|c| pool.contains(c)));
+
     let mut distinct = std::collections::HashSet::new();
     for _ in 0..32 {
         distinct.insert(settings.generate().unwrap());
     }
+    // This is a diversity check, not a collision-free guarantee.
     assert!(distinct.len() > 30, "only {} distinct", distinct.len());
-    assert!(distinct.contains(&first) || distinct.len() == 32);
+    assert!(distinct.iter().all(|password| {
+        password.chars().count() == settings.length && password.chars().all(|c| pool.contains(c))
+    }));
 }
 
 #[test]

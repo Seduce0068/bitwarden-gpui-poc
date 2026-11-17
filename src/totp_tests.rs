@@ -139,9 +139,30 @@ fn code_equality_uses_only_the_validity_window() {
     assert_eq!(a, b);
     // A different remaining time is not equal.
     assert_ne!(a, c);
+
+    // A different secret at the same instant yields a different code value
+    // but the same validity window. This is the case that proves the code
+    // value is not part of PartialEq; comparing one secret against itself
+    // cannot detect a regression to value-based equality.
+    const OTHER_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJR";
+    let other = code_at(OTHER_SECRET, 40).unwrap();
+    assert_ne!(
+        a.code(),
+        other.code(),
+        "different secrets must not share a code"
+    );
+    assert_eq!(a.period(), other.period());
+    assert_eq!(a.remaining(), other.remaining());
+    assert_eq!(
+        a, other,
+        "Eq compares only period + remaining, not the code"
+    );
+    assert_eq!(other, a);
+
     // Equality never exposes the code value.
     let debug = format!("{a:?}");
     assert!(debug.contains("redacted"), "{debug}");
+    assert!(!debug.contains(a.code()), "{debug}");
 }
 
 #[test]

@@ -133,7 +133,10 @@ pub fn generator_panel<'a>(
             Strength::from_bits(pw_bits).label(),
             pw_bits
         )))
-        .child(result_row("p  生成", state.last_password.as_deref()))
+        .child(result_row(
+            "p  生成",
+            state.last_password.as_ref().map(|value| value.as_str()),
+        ))
         .child(
             div()
                 .mt_4()
@@ -150,7 +153,10 @@ pub fn generator_panel<'a>(
             Strength::from_bits(pp_bits).label(),
             pp_bits
         )))
-        .child(result_row("h  生成", state.last_passphrase.as_deref()))
+        .child(result_row(
+            "h  生成",
+            state.last_passphrase.as_ref().map(|value| value.as_str()),
+        ))
         .child(
             div().mt_4().text_xs().text_color(rgb(0x6c7086)).child(
                 "p/h: 生成 / y/Y: コピー（30秒で復元） / n: 一覧に戻る / l: ロック / Esc: 終了",

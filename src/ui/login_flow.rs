@@ -114,6 +114,8 @@ impl BitwardenApp {
             }
         };
         self.view.vault = vault;
+        // 認証情報はログイン成功時点で不要になったので、メモリ上から消去する。
+        self.auth.clear_secrets();
         self.refresh_audit();
         self.last_activity = std::time::Instant::now();
         self.screen = Screen::Unlocked;

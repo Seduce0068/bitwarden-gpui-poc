@@ -297,3 +297,131 @@ fn tolerance_stops_at_syntax_and_root_shape() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// --- Schema version regressions: current marker, legacy files, future rejection ---
+
+#[test]
+fn default_carries_current_schema_version() {
+    const { assert!(CURRENT_SCHEMA_VERSION > 0) };
+    assert_eq!(Settings::default().schema_version, CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn legacy_file_without_schema_version_is_compatible() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-legacy.json");
+    // No schema_version key: an old settings file must still load, with the
+    // marker filled in as the current version and every known field honoured.
+    std::fs::write(
+        &path,
+        br#"{"email":"legacy@example.com","idle_lock_seconds":120}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    let defaults = Settings::default();
+
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.email, "legacy@example.com");
+    assert_eq!(loaded.idle_lock_seconds, 120);
+    assert_eq!(loaded.server_url, defaults.server_url);
+    assert_eq!(loaded.password_generator, defaults.password_generator);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn current_and_older_schema_versions_are_accepted() {
+    let defaults = Settings::default();
+    for version in [0, CURRENT_SCHEMA_VERSION] {
+        let path = std::env::temp_dir().join(format!("bitwarden-gpui-poc-schema-v{version}.json"));
+        std::fs::write(
+            &path,
+            format!(r#"{{"schema_version":{version},"email":"v{version}@example.com"}}"#),
+        )
+        .unwrap();
+        let loaded = Settings::load_detailed(&path).unwrap();
+
+        assert_eq!(loaded.email, format!("v{version}@example.com"));
+        assert_eq!(loaded.server_url, defaults.server_url);
+        assert_eq!(loaded.schema_version, version);
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn unknown_future_schema_version_falls_back_to_defaults() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-future.json");
+    let future = CURRENT_SCHEMA_VERSION + 1;
+    // A newer writer may have changed what these familiar keys mean, so none
+    // of them may survive: the file is rejected wholesale, not field by field.
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"schema_version":{future},"email":"future@example.com",
+                 "server_url":"https://future.example","idle_lock_seconds":42}}"#
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(Settings::load_detailed(&path).unwrap(), Settings::default());
+    assert_eq!(Settings::load(&path), Settings::default());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn extremely_large_schema_version_is_rejected_too() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-huge.json");
+    // u64::MAX no longer fits the u32 field: the raw JSON check must catch it
+    // before the tolerance pass can silently replace it with the default.
+    std::fs::write(
+        &path,
+        br#"{"schema_version":18446744073709551615,"email":"huge@example.com"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(Settings::load_detailed(&path).unwrap(), Settings::default());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn wrong_typed_schema_version_cannot_claim_a_future_version() {
+    let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-wrong-type.json");
+    std::fs::write(
+        &path,
+        br#"{"schema_version":"9999","email":"typed@example.com","idle_lock_seconds":180}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.email, "typed@example.com", "siblings survive");
+    assert_eq!(loaded.idle_lock_seconds, 180);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn save_stamps_current_schema_version() {
+    let dir = std::env::temp_dir().join("bitwarden-gpui-poc-schema-save");
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("settings.json");
+
+    // Even an in-memory struct still carrying a legacy marker must be
+    // upgraded when written; the original value is left untouched.
+    let legacy = Settings {
+        schema_version: 0,
+        email: "save@example.com".to_string(),
+        ..Default::default()
+    };
+    legacy.save(&path).unwrap();
+    assert_eq!(legacy.schema_version, 0, "save must not mutate self");
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        raw["schema_version"],
+        serde_json::json!(CURRENT_SCHEMA_VERSION)
+    );
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.email, "save@example.com");
+    let _ = std::fs::remove_dir_all(&dir);
+}

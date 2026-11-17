@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use crate::model::*;
+use zeroize::Zeroizing;
 
 #[::core::prelude::v1::test]
 fn debug_never_reveals_item_secrets() {
@@ -9,8 +10,8 @@ fn debug_never_reveals_item_secrets() {
         "Sample",
         ItemData::Login {
             username: "alice".into(),
-            password: "super-secret-pw".into(),
-            totp: "JBSWY3DPEHPK3PXP".into(),
+            password: Zeroizing::new("super-secret-pw".into()),
+            totp: Zeroizing::new("JBSWY3DPEHPK3PXP".into()),
             uris: vec![],
         },
     );
@@ -73,8 +74,8 @@ fn login(id: &str, name: &str, username: &str, password: &str, uri: &str) -> Vau
         name,
         ItemData::Login {
             username: username.to_string(),
-            password: password.to_string(),
-            totp: String::new(),
+            password: Zeroizing::new(password.to_string()),
+            totp: Zeroizing::new(String::new()),
             uris: vec![LoginUri::new(uri)],
         },
     )
@@ -228,8 +229,8 @@ fn debug_masks_identity_and_uri_details() {
         "Site",
         ItemData::Login {
             username: "u".into(),
-            password: "p".into(),
-            totp: String::new(),
+            password: Zeroizing::new("p".into()),
+            totp: Zeroizing::new(String::new()),
             uris: vec![LoginUri::new("https://user:token@example.com/secret")],
         },
     );
@@ -249,7 +250,8 @@ fn password_and_totp_secrets_are_not_searchable() {
     );
     let mut secret_item = item;
     if let ItemData::Login { totp, .. } = &mut secret_item.data {
-        *totp = "JBSWY3DPEHPK3PXP".into();
+        // Reassignment drops (and zeroizes) the previous secret buffer.
+        *totp = Zeroizing::new("JBSWY3DPEHPK3PXP".into());
     }
     // matches_query expects a lowercased needle; Vault::view() normalizes it.
     assert!(secret_item.matches_query("alice"));
@@ -402,4 +404,50 @@ fn kind_counts_covers_every_kind() {
     assert_eq!(counts[0], (ItemKind::Login, 2));
     assert_eq!(counts[1], (ItemKind::SecureNote, 1));
     assert_eq!(counts[4], (ItemKind::SshKey, 0));
+}
+
+#[::core::prelude::v1::test]
+fn login_secret_fields_are_zeroizing_buffers() {
+    let mut item = login("1", "Site", "alice", "old-pw", "https://example.com");
+    if let ItemData::Login { password, totp, .. } = &mut item.data {
+        // Assigning a `Zeroizing<String>` compiles only because both fields
+        // now have that exact type; the old buffer is wiped on replacement.
+        *password = Zeroizing::new("replacement-pw".to_string());
+        *totp = Zeroizing::new("JBSWY3DPEHPK3PXP".to_string());
+    }
+    assert_eq!(item.password(), Some("replacement-pw"));
+    assert_eq!(item.totp_secret(), Some("JBSWY3DPEHPK3PXP"));
+    let (username, password, totp, uris) = item.login().unwrap();
+    assert_eq!(username, "alice");
+    assert_eq!(password, "replacement-pw");
+    assert_eq!(totp, "JBSWY3DPEHPK3PXP");
+    assert_eq!(uris.len(), 1);
+    let debug = format!("{item:?}");
+    assert!(!debug.contains("old-pw"), "{debug}");
+    assert!(!debug.contains("replacement-pw"), "{debug}");
+    assert!(!debug.contains("JBSWY3DPEHPK3PXP"), "{debug}");
+}
+
+#[test]
+fn login_secret_serde_round_trip_keeps_debug_redacted() {
+    let item = VaultItem::new(
+        "1",
+        "Site",
+        ItemData::Login {
+            username: "alice".into(),
+            password: Zeroizing::new("super-secret-pw".into()),
+            totp: Zeroizing::new("JBSWY3DPEHPK3PXP".into()),
+            uris: vec![LoginUri::new("https://example.com")],
+        },
+    );
+    let json = serde_json::to_string(&item).unwrap();
+    // The wire format stays a plain string; deserialization re-wraps it.
+    assert!(json.contains("super-secret-pw"), "{json}");
+    let restored: VaultItem = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, item);
+    assert_eq!(restored.password(), Some("super-secret-pw"));
+    assert_eq!(restored.totp_secret(), Some("JBSWY3DPEHPK3PXP"));
+    let debug = format!("{restored:?}");
+    assert!(!debug.contains("super-secret-pw"), "{debug}");
+    assert!(!debug.contains("JBSWY3DPEHPK3PXP"), "{debug}");
 }

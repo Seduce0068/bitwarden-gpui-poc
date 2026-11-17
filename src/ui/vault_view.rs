@@ -176,14 +176,47 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn next_index_clamps_at_the_ends() {
+        // Two visible rows: indices 0 and 1. A step far past either end must
+        // land on a real row, not outside the list.
         let state = state_with_items();
+        assert_eq!(state.visible_items().len(), 2);
+        assert_eq!(state.next_index(0), Some(0));
         assert_eq!(state.next_index(1), Some(1));
-        assert_eq!(state.next_index(-1), Some(0));
+        assert_eq!(state.next_index(1_000), Some(1), "upper clamp");
+        assert_eq!(state.next_index(-1_000), Some(0), "lower clamp");
 
+        // From the last row, a further step down stays on the last row.
+        let mut state = state_with_items();
+        state.selected_id = Some("b".into());
+        assert_eq!(state.next_index(0), Some(1));
+        assert_eq!(
+            state.next_index(1),
+            Some(1),
+            "last row + 1 stays on the last row"
+        );
+        assert_eq!(state.next_index(1_000), Some(1));
+        assert_eq!(state.next_index(-1), Some(0));
+        assert_eq!(state.next_index(-1_000), Some(0));
+
+        // From the first row, a step up stays on the first row.
         let mut state = state_with_items();
         state.selected_id = Some("a".into());
-        assert_eq!(state.next_index(1), Some(1));
         assert_eq!(state.next_index(-1), Some(0));
+        assert_eq!(state.next_index(1), Some(1));
+
+        // A single row clamps to itself; an empty view has no index at all.
+        let mut single = VaultViewState::new();
+        single.vault.items.push(VaultItem::new(
+            "s",
+            "Solo",
+            ItemData::SecureNote {
+                text: String::new(),
+            },
+        ));
+        assert_eq!(single.next_index(1), Some(0));
+        assert_eq!(single.next_index(-1), Some(0));
+        assert_eq!(VaultViewState::new().next_index(1), None);
+        assert_eq!(VaultViewState::new().next_index(-1), None);
     }
 
     #[::core::prelude::v1::test]
