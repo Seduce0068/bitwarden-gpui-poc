@@ -75,4 +75,12 @@ mod tests {
         assert!(!state.due(Instant::now()));
         assert!(state.due(Instant::now() + Duration::from_secs(2)));
     }
+
+    #[::core::prelude::v1::test]
+    fn zero_delay_is_due_immediately() {
+        let mut state = ClipboardState::new();
+        let now = Instant::now();
+        state.clear_at = Some(now + Duration::from_secs(0));
+        assert!(state.due(now), "a zero-second delay must restore at once");
+    }
 }
