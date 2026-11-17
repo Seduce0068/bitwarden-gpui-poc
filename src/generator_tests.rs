@@ -161,6 +161,13 @@ fn entropy_and_strength_buckets() {
     // 64 symbols * 16 chars = 96 bits.
     assert!((entropy_bits(64, 16) - 96.0).abs() < 1e-9);
 
+    // Exact thresholds belong to the upper bucket.
+    assert_eq!(Strength::from_bits(39.9), Strength::Weak);
+    assert_eq!(Strength::from_bits(40.0), Strength::Fair);
+    assert_eq!(Strength::from_bits(63.9), Strength::Fair);
+    assert_eq!(Strength::from_bits(64.0), Strength::Good);
+    assert_eq!(Strength::from_bits(89.9), Strength::Good);
+    assert_eq!(Strength::from_bits(90.0), Strength::Strong);
     assert_eq!(Strength::from_bits(10.0), Strength::Weak);
     assert_eq!(Strength::from_bits(50.0), Strength::Fair);
     assert_eq!(Strength::from_bits(70.0), Strength::Good);
