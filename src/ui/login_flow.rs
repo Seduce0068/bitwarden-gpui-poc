@@ -1,6 +1,6 @@
 //! Authentication flow helpers on the app state.
 
-use crate::auth::{validate_config, AuthConfig};
+use crate::auth::{validate_config, AuthConfig, AuthError, UnlockError};
 use crate::ui::app::BitwardenApp;
 use crate::ui::mock::mock_vault;
 use crate::ui::state::{AuthField, Panel, Screen};
@@ -12,9 +12,35 @@ pub(super) enum LoginResult {
     /// A decrypted vault ready for display.
     Vault(crate::model::Vault),
     /// The network login failed.
-    AuthFailed(crate::auth::AuthError),
+    AuthFailed(AuthError),
     /// Unlock/import of the authenticated vault failed.
-    UnlockFailed(crate::auth::UnlockError),
+    UnlockFailed(UnlockError),
+}
+
+/// A failed login attempt, tagged by the family that decides the guidance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LoginFailure {
+    /// A network/authentication failure: `r` re-runs the pipeline and may
+    /// recover from a transient problem.
+    Auth(AuthError),
+    /// An unlock/import failure after a successful login: the same
+    /// credentials will fail again, so the user is asked to correct them.
+    Unlock(UnlockError),
+}
+
+impl LoginFailure {
+    /// Status-bar guidance. "r で再試行" is shown only for retryable failures.
+    fn status(&self) -> String {
+        match self {
+            Self::Auth(error) => {
+                format!("ログイン失敗: {}（r で再試行）", error.message())
+            }
+            Self::Unlock(error) => format!(
+                "ログイン失敗: {}（認証情報を確認してください）",
+                error.message()
+            ),
+        }
+    }
 }
 
 impl BitwardenApp {
@@ -102,13 +128,13 @@ impl BitwardenApp {
             LoginResult::Vault(vault) => vault,
             LoginResult::AuthFailed(error) => {
                 self.auth.set_login_failed(true);
-                self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
+                self.status = LoginFailure::Auth(error).status();
                 cx.notify();
                 return;
             }
             LoginResult::UnlockFailed(error) => {
                 self.auth.set_login_failed(true);
-                self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
+                self.status = LoginFailure::Unlock(error).status();
                 cx.notify();
                 return;
             }
@@ -164,5 +190,46 @@ impl BitwardenApp {
             self.view.vault.len()
         );
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn auth_failures_advertise_retry() {
+        for error in [
+            AuthError::Prelogin,
+            AuthError::Login,
+            AuthError::Sync,
+            AuthError::Timeout,
+        ] {
+            let status = LoginFailure::Auth(error).status();
+            assert!(status.contains("r で再試行"), "{status}");
+            assert!(status.contains(error.message()), "{status}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn unlock_failures_do_not_advertise_retry() {
+        for error in [
+            UnlockError::MissingProtectedKey,
+            UnlockError::UnlockFailed("detail".into()),
+            UnlockError::ApplySyncFailed("detail".into()),
+            UnlockError::ImportFailed("detail".into()),
+        ] {
+            let status = LoginFailure::Unlock(error).status();
+            assert!(!status.contains("r で再試行"), "{status}");
+            assert!(status.contains("認証情報を確認してください"), "{status}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn failure_guidance_differs_by_family() {
+        let auth = LoginFailure::Auth(AuthError::Login).status();
+        let unlock = LoginFailure::Unlock(UnlockError::MissingProtectedKey).status();
+        assert_ne!(auth, unlock);
     }
 }

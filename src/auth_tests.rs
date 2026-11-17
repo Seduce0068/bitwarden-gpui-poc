@@ -151,6 +151,47 @@ fn validation_fails_before_the_timeout_race() {
 }
 
 #[test]
+fn whitespace_only_secrets_are_rejected() {
+    let mut value = config();
+    value.client_secret = SecretString::from(" \t\n\u{3000}".to_string());
+    assert_eq!(
+        validate_config(&value),
+        Err(AuthError::MissingField("client_secret"))
+    );
+
+    let mut value = config();
+    value.master_password = SecretString::from(" \t\n\u{3000}".to_string());
+    assert_eq!(
+        validate_config(&value),
+        Err(AuthError::MissingField("master_password"))
+    );
+}
+
+#[test]
+fn email_validation_rejects_format_characters() {
+    // Zero-width space/joiner, word joiner, BOM, bidi controls, Arabic letter
+    // mark and soft hyphen are all in the Unicode Cf category.
+    for invisible in [
+        '\u{200b}', '\u{200d}', '\u{2060}', '\u{feff}', '\u{202a}', '\u{202e}', '\u{061c}',
+        '\u{ad}',
+    ] {
+        let email = format!("alice{invisible}@example.com");
+        assert!(
+            !valid_email(&email),
+            "Cf character U+{:04X} was accepted",
+            invisible as u32
+        );
+        let mut value = config();
+        value.email = email;
+        assert_eq!(validate_config(&value), Err(AuthError::InvalidEmail));
+    }
+    // A format character in the domain is rejected as well.
+    assert!(!valid_email("alice@exa\u{200d}mple.com"));
+    // Ordinary non-ASCII letters are still fine.
+    assert!(valid_email("\u{e4}lice@example.com"));
+}
+
+#[test]
 fn error_messages_are_present() {
     for error in [
         UnlockError::MissingProtectedKey,

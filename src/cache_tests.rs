@@ -143,3 +143,145 @@ fn error_messages_are_present() {
     assert!(!cache_error_message(SyncCacheError::UserMismatch).is_empty());
     assert!(!cache_error_message(SyncCacheError::ServerMismatch).is_empty());
 }
+
+// --- Cache-directory migration (default path -> XDG cache, legacy read-only) ---
+
+/// Environment variables are process-global; serialize tests that change them.
+#[cfg(target_os = "linux")]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(target_os = "linux")]
+struct EnvGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+#[cfg(target_os = "linux")]
+impl EnvGuard {
+    fn set(key: &'static str, value: &std::path::Path) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+#[test]
+fn default_path_uses_cache_dir_and_legacy_path_uses_config_dir() {
+    let cache_name = std::path::Path::new("bitwarden-gpui-poc").join("sync-cache.json");
+    assert_eq!(
+        default_path(),
+        dirs::cache_dir().map(|dir| dir.join(&cache_name))
+    );
+    assert_eq!(
+        legacy_path(),
+        dirs::config_dir().map(|dir| dir.join(&cache_name))
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn xdg_cache_home_selects_cache_dir_and_new_writes_land_there() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-xdg-cache-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let xdg = root.join("xdg-cache-home");
+    let _env = EnvGuard::set("XDG_CACHE_HOME", &xdg);
+
+    let expected = xdg.join("bitwarden-gpui-poc").join("sync-cache.json");
+    assert_eq!(default_path(), Some(expected.clone()));
+    // The legacy path is config-based and must not follow XDG_CACHE_HOME.
+    assert_eq!(
+        legacy_path(),
+        dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("sync-cache.json"))
+    );
+    assert_ne!(default_path(), legacy_path());
+
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save_default(&cache).unwrap();
+    assert!(expected.is_file(), "new writes must go under the cache dir");
+    assert_eq!(load_default(), Ok(cache));
+}
+
+#[test]
+fn legacy_cache_is_read_but_never_rewritten() {
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-migration-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let new = root.join("cache").join("sync-cache.json");
+    let old = root.join("config").join("sync-cache.json");
+
+    let legacy = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&old, &legacy).unwrap();
+    let legacy_bytes = std::fs::read(&old).unwrap();
+
+    // A file left under the old config dir is still readable. Reading it must
+    // not copy/move it: a load has no filesystem side effects.
+    assert_eq!(load_with_fallback(&new, &old), Ok(legacy.clone()));
+    assert!(
+        !new.exists(),
+        "reading legacy data must not create a new cache"
+    );
+
+    // A fresh write goes only to the cache-dir path.
+    save(&new, &legacy).unwrap();
+    assert!(new.is_file());
+    assert_eq!(
+        std::fs::read(&old).unwrap(),
+        legacy_bytes,
+        "the legacy file must remain untouched"
+    );
+
+    // Once the new file exists it wins, even if the legacy file now differs.
+    let other = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-2".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: body(),
+    };
+    save(&old, &other).unwrap();
+    assert_eq!(load_with_fallback(&new, &old), Ok(legacy));
+}
+
+#[test]
+fn corrupt_primary_does_not_silently_fall_back_to_legacy() {
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-fallback-error-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let new = root.join("cache").join("sync-cache.json");
+    let old = root.join("config").join("sync-cache.json");
+
+    save(
+        &old,
+        &SyncCache::from_body(body(), "https://vault.example.com").unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+    std::fs::write(&new, b"not json").unwrap();
+
+    assert_eq!(
+        load_with_fallback(&new, &old).err(),
+        Some(CacheLoadError::ParseFailed)
+    );
+}
+
+#[test]
+fn fallback_returns_not_found_when_both_locations_are_missing() {
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-fallback-missing-test");
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(
+        load_with_fallback(
+            root.join("cache/sync-cache.json"),
+            root.join("config/sync-cache.json")
+        )
+        .err(),
+        Some(CacheLoadError::NotFound)
+    );
+}

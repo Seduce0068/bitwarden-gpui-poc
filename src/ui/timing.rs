@@ -5,8 +5,12 @@
 use std::time::{Duration, Instant};
 
 /// Whether an unlocked session has been idle long enough to auto-lock.
+///
+/// `checked_duration_since` avoids a panic if the clock appears to move
+/// backwards (for example across a suspended session).
 pub fn idle_lock_due(last_activity: Instant, now: Instant, timeout: Duration) -> bool {
-    now.duration_since(last_activity) >= timeout
+    now.checked_duration_since(last_activity)
+        .is_some_and(|elapsed| elapsed >= timeout)
 }
 
 /// The next wake-up instant for a fixed-rate ticker.
@@ -98,6 +102,14 @@ mod tests {
             start + timeout + Duration::from_secs(1),
             timeout
         ));
+    }
+
+    #[test]
+    fn idle_lock_does_not_panic_when_the_clock_moves_backwards() {
+        let now = Instant::now();
+        let timeout = Duration::from_secs(300);
+        assert!(!idle_lock_due(now + Duration::from_secs(1), now, timeout));
+        assert!(!idle_lock_due(now, now, timeout));
     }
 
     #[test]

@@ -106,8 +106,67 @@ fn redact_profile_keys(body: &[u8]) -> Result<Vec<u8>, SyncCacheError> {
 }
 
 /// The default cache file path.
+///
+/// The sync cache is disposable (it can be rebuilt from the server), so it
+/// belongs under the platform cache directory rather than the config
+/// directory. On Linux this is
+/// `$XDG_CACHE_HOME/bitwarden-gpui-poc/sync-cache.json`, falling back to
+/// `$HOME/.cache/bitwarden-gpui-poc/sync-cache.json` when `XDG_CACHE_HOME`
+/// is unset. All new writes must use this path (see [`save_default`]).
 pub fn default_path() -> Option<PathBuf> {
+    dirs::cache_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("sync-cache.json"))
+}
+
+/// The legacy cache path under the config directory, kept **read-only**.
+///
+/// Older releases stored the sync cache in `dirs::config_dir()`. A file left
+/// there by such a release is still readable through [`load_default`] and
+/// [`load_with_fallback`], so upgrading does not lose the offline cache. It
+/// is never written to again: the legacy file is left untouched, and the next
+/// write goes to [`default_path`] (see [`save_default`]), which then takes
+/// precedence on subsequent reads. No automatic copy/move is performed on
+/// read, so loading a cache has no filesystem side effects.
+pub fn legacy_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("sync-cache.json"))
+}
+
+/// Read a cache from `primary`, falling back to `fallback` only when the
+/// primary file does not exist.
+///
+/// This is the read side of the cache-directory migration: the fallback is
+/// purely for backward compatibility and is never copied, moved or rewritten.
+/// A primary file that exists but is unreadable, malformed or outdated is
+/// reported as-is instead of silently falling back to potentially stale
+/// legacy data.
+///
+/// # Errors
+///
+/// [`CacheLoadError`] when neither location holds a usable cache.
+pub fn load_with_fallback(
+    primary: impl AsRef<std::path::Path>,
+    fallback: impl AsRef<std::path::Path>,
+) -> Result<SyncCache, CacheLoadError> {
+    match load_detailed(primary) {
+        Ok(cache) => Ok(cache),
+        Err(CacheLoadError::NotFound) => load_detailed(fallback),
+        Err(error) => Err(error),
+    }
+}
+
+/// Read the cache from [`default_path`], falling back to the read-only
+/// [`legacy_path`] when no cache-dir file exists yet.
+///
+/// # Errors
+///
+/// [`CacheLoadError`] when no usable cache exists, or when no platform
+/// cache/config directory is available at all.
+pub fn load_default() -> Result<SyncCache, CacheLoadError> {
+    match (default_path(), legacy_path()) {
+        (Some(primary), Some(fallback)) => load_with_fallback(primary, fallback),
+        (Some(primary), None) => load_detailed(primary),
+        (None, Some(fallback)) => load_detailed(fallback),
+        (None, None) => Err(CacheLoadError::NotFound),
+    }
 }
 
 /// Why a cache entry could not be loaded.
@@ -170,7 +229,12 @@ pub fn load(path: impl AsRef<std::path::Path>) -> Option<SyncCache> {
     load_detailed(path).ok()
 }
 
-/// Write a cache entry.
+/// Write a cache entry to an explicit path.
+///
+/// Callers should pass [`default_path`] (or use [`save_default`]) so that new
+/// data is written under the cache directory. [`legacy_path`] must never be
+/// used for writes: an old config-dir file is left in place and simply stops
+/// being read once a cache-dir file exists.
 ///
 /// # Errors
 ///
@@ -179,6 +243,26 @@ pub fn save(path: impl AsRef<std::path::Path>, cache: &SyncCache) -> Result<(), 
     let path = path.as_ref();
     let contents = serde_json::to_vec_pretty(cache)?;
     crate::private_file::write_private(path, &contents)
+}
+
+/// Write a cache entry to [`default_path`] only.
+///
+/// This never creates or updates [`legacy_path`], enforcing the migration
+/// policy: existing config-dir caches remain readable, but all new writes go
+/// exclusively under the cache directory.
+///
+/// # Errors
+///
+/// Returns `std::io::Error` when no platform cache directory is available,
+/// or on a filesystem/serialization failure.
+pub fn save_default(cache: &SyncCache) -> Result<(), std::io::Error> {
+    let path = default_path().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no platform cache directory available",
+        )
+    })?;
+    save(path, cache)
 }
 
 /// Validate a cache before it is used for the given account and server.

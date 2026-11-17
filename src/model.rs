@@ -7,6 +7,27 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+/// Unicode normalization for vault-name comparison.
+///
+/// Reuses the mature `unicode-normalization` crate (unicode-rs, MIT OR
+/// Apache-2.0) instead of a hand-maintained decomposition table, so every
+/// Unicode code point is covered. NFKD is used rather than NFKC because
+/// canonically or compatibility-equivalent strings share the same NFKD, so
+/// comparing keys absorbs NFC/NFD and full-/half-width differences.
+mod unicode_normalize {
+    use unicode_normalization::UnicodeNormalization;
+
+    pub(crate) fn nfkd(input: &str) -> String {
+        input.chars().nfkd().collect()
+    }
+
+    /// Case-folded NFKD key shared by search and duplicate-name detection.
+    pub(crate) fn comparison_key(input: &str) -> String {
+        nfkd(input).to_lowercase()
+    }
+}
+pub(crate) use unicode_normalize::comparison_key;
+
 /// Reduce a URI to scheme and host so embedded credentials or tokens in the
 /// path/query are never shown in the UI or copied into reports.
 ///
@@ -382,7 +403,7 @@ impl VaultItem {
         self.uris().iter().any(|uri| uri.matches(page, opts))
     }
 
-    /// Every searchable text field, lowercased lazily by the caller.
+    /// Every searchable text field, NFKD-normalized lazily by the caller.
     fn haystacks(&self) -> Vec<std::borrow::Cow<'_, str>> {
         use std::borrow::Cow;
         let mut out: Vec<Cow<'_, str>> = vec![
@@ -423,11 +444,12 @@ impl VaultItem {
         out
     }
 
-    /// Whether any searchable field contains `needle` (already lowercased).
+    /// Whether any searchable field contains `needle` (already normalized
+    /// and lowercased by [`Vault::view`]).
     pub fn matches_query(&self, needle: &str) -> bool {
         self.haystacks()
             .iter()
-            .any(|field| field.to_lowercase().contains(needle))
+            .any(|field| comparison_key(field.as_ref()).contains(needle))
     }
 }
 
@@ -594,7 +616,7 @@ impl Vault {
 
     /// The items passing `filter` and matching `query`, in `sort` order.
     pub fn view(&self, filter: &Filter, query: &str, sort: SortKey) -> Vec<&VaultItem> {
-        let needle = query.trim().to_lowercase();
+        let needle = comparison_key(query.trim());
         let mut matched: Vec<&VaultItem> = self
             .items
             .iter()
@@ -674,11 +696,16 @@ impl Vault {
         before != self.items.len()
     }
 
-    /// Duplicate names (case-insensitive), each with its item ids.
+    /// Duplicate names (NFKC-equivalent and case-insensitive), each with its
+    /// item ids. Blank names are ignored: an unnamed item is not a duplicate
+    /// of every other unnamed item.
     pub fn duplicate_names(&self) -> Vec<(String, Vec<String>)> {
         let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for item in &self.items {
-            let key = item.name.trim().to_lowercase();
+            let key = comparison_key(item.name.trim());
+            if key.is_empty() {
+                continue;
+            }
             match groups.iter_mut().find(|(name, _)| *name == key) {
                 Some((_, ids)) => {
                     if !ids.contains(&item.id) {

@@ -77,11 +77,47 @@ impl std::error::Error for AuthError {}
 
 pub use crate::cache::SyncCacheError;
 
-/// A minimal structural check: exactly one `@`, no whitespace, and a dotted
-/// domain. Regex-level RFC 5322 validation is out of scope for the PoC.
+/// Whether `value` contains a Unicode `Cf` (format) character.
+///
+/// Zero-width spaces, bidi overrides and similar invisible controls can hide
+/// lookalike addresses or change how an address is rendered, so they are
+/// rejected explicitly instead of being silently tolerated by the structural
+/// check below. The list is the `Cf` category of Unicode 16.0.
+fn has_format_character(value: &str) -> bool {
+    value.chars().any(|ch| {
+        matches!(
+            ch,
+            '\u{ad}'
+                | '\u{600}'..='\u{605}'
+                | '\u{61c}'
+                | '\u{6dd}'
+                | '\u{70f}'
+                | '\u{890}'..='\u{891}'
+                | '\u{8e2}'
+                | '\u{180e}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{206f}'
+                | '\u{feff}'
+                | '\u{fff9}'..='\u{fffb}'
+                | '\u{110bd}'
+                | '\u{110cd}'
+                | '\u{13430}'..='\u{1343f}'
+                | '\u{1bca0}'..='\u{1bca3}'
+                | '\u{1d173}'..='\u{1d17a}'
+                | '\u{e0001}'
+                | '\u{e0020}'..='\u{e007f}'
+        )
+    })
+}
+
+/// A minimal structural check: exactly one `@`, no whitespace or format
+/// characters, and a dotted domain. Regex-level RFC 5322 validation is out of
+/// scope for the PoC.
 pub fn valid_email(value: &str) -> bool {
     let value = value.trim();
-    if value.is_empty() || value.chars().any(char::is_whitespace) {
+    if value.is_empty() || value.chars().any(char::is_whitespace) || has_format_character(value) {
         return false;
     }
     if value.matches('@').count() != 1 {
@@ -139,7 +175,7 @@ pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
     if config.client_id.trim().is_empty() {
         return Err(AuthError::MissingField("client_id"));
     }
-    if config.client_secret.expose_secret().is_empty() {
+    if config.client_secret.expose_secret().trim().is_empty() {
         return Err(AuthError::MissingField("client_secret"));
     }
     if config.email.trim().is_empty() {
@@ -148,7 +184,7 @@ pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
     if !valid_email(&config.email) {
         return Err(AuthError::InvalidEmail);
     }
-    if config.master_password.expose_secret().is_empty() {
+    if config.master_password.expose_secret().trim().is_empty() {
         return Err(AuthError::MissingField("master_password"));
     }
     if is_blocked_server_url(config.server_url.trim()) {

@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T02:15:46+09:00"
+  at: "2026-11-18T02:37:09+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -35,12 +35,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 中
 
-- [ ] 部分成功と再試行案内を区別する
-  - 根拠: E3 / E4
-  - File: src/vault_sync.rs:55-57, src/ui/login_flow.rs:81-84
-  - 現状: フォルダ名1件の復号失敗でボールト全体を破棄（名前 None は継続するのに
-    一貫しない）。UnlockError 系なのに「r で再試行」を案内する。
-  - 受け入れ条件: 復号失敗もプレースホルダで継続、エラー種別ごとに案内を分岐。
 - [ ] エラー型を集約し source チェーンを保持する
   - 根拠: E5
   - File: src/auth.rs:182-190, src/vault_sync.rs:45, src/cache.rs:71-105, src/totp.rs:117
@@ -61,21 +55,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     オフライン復元や同期失敗時のキャッシュ活用が行われない。ADR と乖離。
   - 受け入れ条件: auth 層から SyncCache へ接続するか feature ゲート／削除し、
     ADR と実装を一致させる。
-- [ ] キーガード分岐のテストを追加する
-  - 根拠: T11 / R7 / R6
-  - File: src/ui/keys_tests.rs:107-120,143-156, src/ui/auth_state.rs:79-102,
-    src/ui/clipboard.rs:34-55
-  - 現状: has_audit_report=false、query_nonempty=false、ServerUrl/Email の
-    no-op、copy() の初回のみ保存分岐が未検証。
-  - 受け入れ条件: 各ガード分岐を通すテストを追加し、クリップボード分岐は
-    App 非依存の純粋関数へ切り出して検証。
-- [ ] 検索の Unicode 正規化と空名の扱いを修正する
-  - 根拠: ED1 / ED6 / ED2 / ED3
-  - File: src/model.rs:399-403,650-665, src/auth.rs:82-99,142,151
-  - 現状: NFC/NFD・全角/半角が一致しない、空名が重複名として誤検出、
-    空白のみの秘密が検証を通過、Cf 系文字（ゼロ幅・RTL）がメールを通過。
-  - 受け入れ条件: NFC/NFKC 正規化、空キーの分组除外、秘密も trim().is_empty()、
-    Cf 系を明示拒否。
 - [ ] 実ログイン・モック遷移時の状態クリアを共通化する
   - 根拠: INV2
   - File: src/ui/login_flow.rs:109-124,70-87, src/ui/app.rs:129-147
@@ -85,13 +64,11 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 低
 
-- [ ] 同期キャッシュを XDG_CACHE_HOME 配下へ移す（FS4）
 - [ ] デバイス ID を永続化し再同期経路を追加する（A9）
 - [ ] 監査パネル・生成／設定パネルにスクロールを追加する（U6 / UI4）
 - [ ] 選択行をテキストマーカーでも示す（アクセシビリティ、G5）
 - [ ] フォーカスを Tab で外れても復帰可能にする（UI3）
 - [ ] 選択解除経路のスクロール処理を共通化する（INV3 / UI5）
-- [ ] idle_lock_due を checked_duration_since に変更する（O7-f）
 - [ ] 再コピーで deadline を延長しない／内容を更新する（P2-d、中にも関連）
 - [ ] エントロピー閾値と `starts_with("password")` の長さ上限を整理する（C5、中にも関連）
 - [ ] メール長上限と認証入力の長さ上限を設ける（S9-03 / S9-04）
@@ -113,6 +90,13 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] エージェントチームによる4タスク並列対応・第4弾（2026-11-18）
+  - 部分成功の保持とエラー系統別の案内分岐（vault_sync / login_flow）
+  - キーガード分岐のテスト（keys_tests / auth_state / clipboard）
+  - 検索の NFKD 正規化・空名除外・Cf 文字拒否（model / auth）
+  - キャッシュの XDG_CACHE_HOME 移動（cache）
+  - ルート担当: idle_lock_due の checked_duration_since 化
+  - 正規化は自作テーブルを廃し `unicode-normalization` クレートへ委譲
 - [x] エージェントチームによる4タスク並列対応・第3弾（2026-11-18）
   - 機密の Zeroizing 化（model / ui state / login_flow ほか機械的追従）
   - 日付時刻パースの堅牢化（うるう年・RFC3339 オフセット・checked 算術）

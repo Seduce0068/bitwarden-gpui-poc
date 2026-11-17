@@ -296,4 +296,62 @@ fn plain_import_still_skips_duplicates_and_reports_locked_vault() {
         import_logins_with_audit(&locked),
         Err(SyncError::Locked)
     ));
+    assert!(matches!(folders_from(&locked), Err(SyncError::Locked)));
+}
+
+/// A folder whose `name` is not a valid `EncString` is stored as `None` by
+/// `SyncData::from_json`, which makes `folder_name` fail at read time with
+/// `MalformedEncString`.
+fn vault_with_folders(
+    folders: &[serde_json::Value],
+    ciphers: &[serde_json::Value],
+) -> openwarden::Vault {
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    let body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": folders,
+        "ciphers": ciphers,
+    })
+    .to_string();
+    let sync = parse_sync(body.as_bytes()).expect("sync JSON should parse");
+    vault.apply_sync(sync).expect("sync should apply");
+    vault
+}
+
+#[test]
+fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
+    let symmetric = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).unwrap();
+    let good_name = openwarden::EncString::encrypt(&symmetric, b"Work")
+        .unwrap()
+        .to_string();
+    let vault = vault_with_folders(
+        &[
+            serde_json::json!({ "id": "f-good", "name": good_name }),
+            serde_json::json!({ "id": "f-bad", "name": "not-an-enc-string" }),
+        ],
+        &[cipher("login-1", "2024-01-01T00:00:00Z")],
+    );
+
+    // Before the fix, the single bad name aborted the whole import.
+    let model = import_logins(&vault).expect("a bad folder name must not abort the import");
+    assert_eq!(model.items.len(), 1, "login items must survive");
+    assert_eq!(model.folders.len(), 2, "both folders must be kept");
+
+    let good = model
+        .folders
+        .iter()
+        .find(|folder| folder.id == "f-good")
+        .unwrap();
+    assert_eq!(good.name, "Work");
+    let bad = model
+        .folders
+        .iter()
+        .find(|folder| folder.id == "f-bad")
+        .unwrap();
+    assert_eq!(bad.name, "フォルダ (f-bad)");
 }
