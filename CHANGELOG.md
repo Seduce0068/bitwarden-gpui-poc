@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### エラー型
+
+- `CacheLoadError` / `SettingsLoadError` に `Display` / `Error` を実装し
+  他エラー型と一貫性を確保
+
 ## [0.1.93] - 2026-11-17
 
 ### 読み込みの検証

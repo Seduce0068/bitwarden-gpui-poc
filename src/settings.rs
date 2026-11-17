@@ -57,6 +57,14 @@ pub enum SettingsLoadError {
     ParseFailed,
 }
 
+impl core::fmt::Display for SettingsLoadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for SettingsLoadError {}
+
 impl SettingsLoadError {
     /// A message for the UI status bar.
     pub const fn message(&self) -> &'static str {

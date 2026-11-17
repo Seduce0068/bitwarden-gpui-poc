@@ -123,6 +123,14 @@ pub enum CacheLoadError {
     VersionMismatch,
 }
 
+impl core::fmt::Display for CacheLoadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for CacheLoadError {}
+
 impl CacheLoadError {
     /// A message for the UI status bar.
     pub const fn message(self) -> &'static str {
