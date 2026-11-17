@@ -89,6 +89,8 @@ fn debug_output_does_not_leak_secrets() {
 #[test]
 fn email_validation_rejects_malformed_addresses() {
     assert!(valid_email("alice@example.com"));
+    // Surrounding whitespace from copy-paste is tolerated.
+    assert!(valid_email("  alice@example.com  "));
     assert!(!valid_email(""));
     assert!(!valid_email("alice"));
     assert!(!valid_email("alice@"));
