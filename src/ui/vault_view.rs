@@ -205,6 +205,18 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn cycling_from_a_folder_or_nofolder_returns_to_all() {
+        let mut state = state_with_items();
+        state.filter = Filter::Folder("f1".into());
+        state.cycle_filter();
+        assert_eq!(state.filter, Filter::All);
+
+        state.filter = Filter::NoFolder;
+        state.cycle_filter();
+        assert_eq!(state.filter, Filter::All);
+    }
+
+    #[::core::prelude::v1::test]
     fn search_editing_updates_query_and_selection() {
         let mut state = state_with_items();
         state.selected_id = Some("a".into());
