@@ -319,6 +319,17 @@ fn severity_labels_and_ordering() {
 }
 
 #[::core::prelude::v1::test]
+fn item_without_findings_has_no_worst_severity() {
+    let item = ItemReport {
+        id: "x".into(),
+        name: "Clean".into(),
+        kind: ItemKind::Login,
+        findings: Vec::new(),
+    };
+    assert_eq!(item.worst(), None);
+}
+
+#[::core::prelude::v1::test]
 fn every_finding_has_a_nonempty_message() {
     let findings = [
         Finding::WeakPassword { bits: 10 },
