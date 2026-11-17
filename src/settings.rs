@@ -102,7 +102,8 @@ impl Settings {
     /// Clamp editable fields to safe ranges before persisting or applying
     /// them. Bounds match the UI adjusters: 1..=60 minutes for idle lock,
     /// 1..=3600 seconds for login/clipboard delays, 4..=128 characters and
-    /// 2..=20 words for the generators.
+    /// 2..=20 words for the generators, 1..=200 bits / 1..=3650 days for the
+    /// audit thresholds.
     pub fn sanitized(&self) -> Self {
         let mut result = self.clone();
         result.idle_lock_seconds = result.idle_lock_seconds.clamp(60, 3600);
@@ -110,6 +111,8 @@ impl Settings {
         result.clipboard_restore_seconds = result.clipboard_restore_seconds.clamp(1, 3600);
         result.password_generator.length = result.password_generator.length.clamp(4, 128);
         result.passphrase_generator.words = result.passphrase_generator.words.clamp(2, 20);
+        result.thresholds.weak_bits = result.thresholds.weak_bits.clamp(1, 200);
+        result.thresholds.stale_days = result.thresholds.stale_days.clamp(1, 3650);
         result
     }
 

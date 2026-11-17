@@ -62,6 +62,10 @@ fn sanitized_clamps_editable_fields() {
             words: 100,
             ..Default::default()
         },
+        thresholds: crate::health::Thresholds {
+            weak_bits: u32::MAX,
+            stale_days: -1,
+        },
         ..Default::default()
     };
     let safe = settings.sanitized();
@@ -70,7 +74,10 @@ fn sanitized_clamps_editable_fields() {
     assert_eq!(safe.clipboard_restore_seconds, 3600);
     assert_eq!(safe.password_generator.length, 128);
     assert_eq!(safe.passphrase_generator.words, 20);
+    assert_eq!(safe.thresholds.weak_bits, 200);
+    assert_eq!(safe.thresholds.stale_days, 1);
     assert_eq!(settings.idle_lock_seconds, 0, "sanitized must not mutate");
+    assert_eq!(settings.thresholds.weak_bits, u32::MAX);
 }
 
 #[::core::prelude::v1::test]
@@ -78,13 +85,16 @@ fn load_sanitizes_hand_edited_values() {
     let path = std::env::temp_dir().join("bitwarden-gpui-poc-sanitize.json");
     std::fs::write(
         &path,
-        br#"{"idle_lock_seconds":0,"login_timeout_seconds":0,"clipboard_restore_seconds":99999}"#,
+        br#"{"idle_lock_seconds":0,"login_timeout_seconds":0,"clipboard_restore_seconds":99999,
+             "thresholds":{"weak_bits":4294967295,"stale_days":-1}}"#,
     )
     .unwrap();
     let loaded = Settings::load_detailed(&path).unwrap();
     assert_eq!(loaded.idle_lock_seconds, 60);
     assert_eq!(loaded.login_timeout_seconds, 1);
     assert_eq!(loaded.clipboard_restore_seconds, 3600);
+    assert_eq!(loaded.thresholds.weak_bits, 200);
+    assert_eq!(loaded.thresholds.stale_days, 1);
 }
 
 #[test]

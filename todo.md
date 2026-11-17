@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-17T21:04:43+09:00"
+  at: "2026-11-17T22:29:55+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -32,13 +32,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     監査もパスワードを検査対象外として扱うため「問題なし」と誤信させる。
   - 受け入れ条件: 実ログイン後に TOTP コピーが成功し、監査サマリーがパスワード検査
     対象外件数を明示する（またはオンデマンド復号で実際に検査する）。
-- [ ] Settings::sanitized() で Thresholds もクランプする
-  - 根拠: T1 / A8 / O7-c / D3 / Q6 / ED5（Runtime Proof 裏付け）
-  - File: src/settings.rs:106-114, src/ui/logic.rs:43-67
-  - 現状: 手編集の `weak_bits: 4294967295` / `stale_days: -1` がそのまま採用され、
-    監査が静かに無効化／全項目 Stale になる。UI 側クランプを迂回する。
-  - 受け入れ条件: weak_bits を 1..=200、stale_days を 1..=3650 にクランプし、
-    load 経由の壊れた値を検証する回帰テストを追加。
 - [ ] 非同期ログインに試行世代（generation）を導入し古い結果の適用を防ぐ
   - 根拠: A2 / C9-1 / G1 / P3
   - File: src/ui/login_flow.rs:39-52,61-80, src/ui/input.rs:38-40
@@ -257,6 +250,9 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] `Settings::sanitized()` で `Thresholds` をクランプ（2026-11-17）
+  - `weak_bits` を 1..=200、`stale_days` を 1..=3650 に丸め、
+    手編集ファイルを `load_detailed()` で読み込む経路の回帰テストを追加。
 - [x] `todo.md` をプロジェクト内へ配置（2026-11-17）
 - [x] 5ラウンドの全体クロスレビュー（25エージェント、約169件の生指摘）を実施。
 - [x] 重複クラスタ 16 を吸収し、妥当性を Runtime Proof で裏付け。
