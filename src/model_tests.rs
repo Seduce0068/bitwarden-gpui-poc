@@ -251,9 +251,14 @@ fn password_and_totp_secrets_are_not_searchable() {
     if let ItemData::Login { totp, .. } = &mut secret_item.data {
         *totp = "JBSWY3DPEHPK3PXP".into();
     }
+    // matches_query expects a lowercased needle; Vault::view() normalizes it.
+    assert!(secret_item.matches_query("alice"));
+    assert!(
+        !secret_item.matches_query("ALICE"),
+        "needle must be lowercased"
+    );
     assert!(!secret_item.matches_query("super-secret-pw"));
     assert!(!secret_item.matches_query("jbswy3dpehpk3pxp"));
-    assert!(secret_item.matches_query("alice"));
 }
 
 #[test]
