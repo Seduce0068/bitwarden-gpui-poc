@@ -96,6 +96,23 @@ fn passphrases_use_words_and_the_separator() {
     assert!(parts.iter().all(|part| WORDS.contains(part)));
 }
 
+#[::core::prelude::v1::test]
+fn empty_separator_concatenates_words() {
+    let settings = PassphraseSettings {
+        words: 3,
+        separator: String::new(),
+        capitalize: false,
+        include_number: false,
+    };
+    let phrase = settings.generate().unwrap();
+    // Three words joined with no separator; each word is still in WORDS.
+    assert!(phrase.len() >= 9, "{phrase}");
+    assert!(
+        WORDS.iter().any(|word| phrase.starts_with(word)),
+        "{phrase}"
+    );
+}
+
 #[test]
 fn passphrases_capitalize_and_append_a_digit() {
     let settings = PassphraseSettings {
