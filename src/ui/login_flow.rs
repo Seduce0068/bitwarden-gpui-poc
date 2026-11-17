@@ -7,6 +7,16 @@ use crate::ui::state::{AuthField, Panel, Screen};
 use gpui_kit::*;
 use openwarden::SecretString;
 
+/// Outcome of the whole login pipeline, ready to apply on the UI thread.
+pub(super) enum LoginResult {
+    /// A decrypted vault ready for display.
+    Vault(crate::model::Vault),
+    /// The network login failed.
+    AuthFailed(crate::auth::AuthError),
+    /// Unlock/import of the authenticated vault failed.
+    UnlockFailed(crate::auth::UnlockError),
+}
+
 impl BitwardenApp {
     pub(super) fn auth_config(&self) -> AuthConfig {
         AuthConfig {
@@ -44,7 +54,26 @@ impl BitwardenApp {
                 let cx = cx.clone();
                 async move {
                     let result =
-                        crate::auth::authenticate_with_timeout(&config, &device_id, timeout).await;
+                        match crate::auth::authenticate_with_timeout(&config, &device_id, timeout)
+                            .await
+                        {
+                            Ok(authenticated) => {
+                                // Decryption and import scale with the number of items;
+                                // keep them off the UI thread and the 1s ticker.
+                                // The generation token discards a stale result, but
+                                // a job already running on the blocking pool is not
+                                // cancelled; repeated logins can overlap here.
+                                match smol::unblock(move || {
+                                    crate::auth::unlock_and_import(authenticated)
+                                })
+                                .await
+                                {
+                                    Ok(vault) => LoginResult::Vault(vault),
+                                    Err(error) => LoginResult::UnlockFailed(error),
+                                }
+                            }
+                            Err(error) => LoginResult::AuthFailed(error),
+                        };
                     cx.update(|cx| {
                         this.update(cx, |view, cx| view.finish_login(result, generation, cx))
                             .ok();
@@ -60,7 +89,7 @@ impl BitwardenApp {
     /// Results from a cancelled or superseded attempt are discarded.
     pub(super) fn finish_login(
         &mut self,
-        result: Result<crate::auth::AuthenticatedVault, crate::auth::AuthError>,
+        result: LoginResult,
         generation: crate::ui::login_generation::LoginGeneration,
         cx: &mut Context<Self>,
     ) {
@@ -69,32 +98,30 @@ impl BitwardenApp {
         }
         // Consume the token so a duplicate callback cannot apply twice.
         self.login_generation.invalidate();
-        let authenticated = match result {
-            Ok(value) => value,
-            Err(error) => {
+        let vault = match result {
+            LoginResult::Vault(vault) => vault,
+            LoginResult::AuthFailed(error) => {
+                self.auth.set_login_failed(true);
+                self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
+                cx.notify();
+                return;
+            }
+            LoginResult::UnlockFailed(error) => {
                 self.auth.set_login_failed(true);
                 self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
                 cx.notify();
                 return;
             }
         };
-        match crate::auth::unlock_and_import(authenticated) {
-            Ok(vault) => {
-                self.view.vault = vault;
-                self.refresh_audit();
-                self.screen = Screen::Unlocked;
-                self.panel = Panel::Vault;
-                self.view.selected_id = None;
-                self.status = format!(
-                    "ログイン成功: {} 件のログインを読み込みました",
-                    self.view.vault.len()
-                );
-            }
-            Err(error) => {
-                self.auth.set_login_failed(true);
-                self.status = format!("ログイン失敗: {}（r で再試行）", error.message());
-            }
-        }
+        self.view.vault = vault;
+        self.refresh_audit();
+        self.screen = Screen::Unlocked;
+        self.panel = Panel::Vault;
+        self.view.selected_id = None;
+        self.status = format!(
+            "ログイン成功: {} 件のログインを読み込みました",
+            self.view.vault.len()
+        );
         cx.notify();
     }
 
