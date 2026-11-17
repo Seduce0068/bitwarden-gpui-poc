@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T01:48:58+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-17T13:24:49+09:00"
+  at: "2026-11-17T14:00:44+09:00"
 status: "approved"
 stale_after: "2027-05-17T01:48:58+09:00"
 ---
