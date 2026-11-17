@@ -7,7 +7,7 @@
 
 /// Monotonic token identifying one login attempt.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LoginGeneration(u64);
+pub(super) struct LoginGeneration(u64);
 
 impl LoginGeneration {
     /// Advance past the current value, skipping the `0` sentinel on wrap.
@@ -19,18 +19,18 @@ impl LoginGeneration {
     }
 
     /// Start a new attempt and return its token.
-    pub fn begin(&mut self) -> Self {
+    pub(super) fn begin(&mut self) -> Self {
         self.advance();
         *self
     }
 
     /// Cancel any in-flight attempt without starting a new one.
-    pub fn invalidate(&mut self) {
+    pub(super) fn invalidate(&mut self) {
         self.advance();
     }
 
     /// Whether `token` still refers to the current, unconsumed attempt.
-    pub fn is_current(self, token: Self) -> bool {
+    pub(super) fn is_current(self, token: Self) -> bool {
         token.0 != 0 && self.0 == token.0
     }
 }

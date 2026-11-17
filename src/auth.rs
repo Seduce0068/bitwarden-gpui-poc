@@ -11,10 +11,14 @@
 //! tagged with [`AuthenticatedVault::from_cache`] so callers know the data may
 //! be stale. See the ADR for why the cache has no production writer yet.
 
+use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
+
 use openwarden::{
     ApiKey, Client, Device, ExposeSecret as _, KdfPolicy, MasterKey, SecretString, ServerUrls,
     Session, SyncData,
 };
+
+use crate::error::{AppError, BoxedCause};
 
 /// Credentials supplied by the user at unlock time.
 #[derive(Clone, Debug)]
@@ -32,6 +36,11 @@ pub struct AuthConfig {
 }
 
 /// Errors the authentication layer can report.
+///
+/// This stays a small `Copy` enum because the UI matches and formats it
+/// directly. The underlying failure is kept in [`AppError`], which this type
+/// converts to and from, so `Error::source()` remains available to callers that
+/// need the cause chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthError {
     /// A required field was empty.
@@ -209,30 +218,149 @@ pub fn valid_email(value: &str) -> bool {
         && !domain.contains("..")
 }
 
-/// Reject link-local addresses, including the cloud metadata endpoint
-/// `169.254.169.254`. Private LAN addresses remain allowed so self-hosted
-/// Vaultwarden instances keep working.
-pub fn is_blocked_server_url(value: &str) -> bool {
-    let Ok(url) = url::Url::parse(value) else {
-        return false;
-    };
-    match url.host() {
-        Some(url::Host::Ipv4(ip)) => {
+// ---------------------------------------------------------------------------
+// URL-level SSRF guard
+//
+// Scope / residual risk (also reported to the reviewer):
+// * `openwarden` 0.1.0 builds its `reqwest::Client` with
+//   `redirect::Policy::none()` in `Client::new`, which is the constructor used
+//   below, so this code path never follows a redirect and there is no redirect
+//   target to inspect. `Client::with_http` is public but takes a `reqwest::Client`
+//   that is not a direct dependency here (adding one is forbidden), and the
+//   crate exposes no hook for per-hop or per-address inspection. This module
+//   therefore validates only the configured URL plus a best-effort DNS snapshot.
+// * The DNS snapshot is a TOCTOU check: a rebinding resolver can return a
+//   public answer here and a link-local answer to the HTTP client later. Pinning
+//   the resolved address would require replacing openwarden's transport, which
+//   is not possible through its public API in this PoC.
+// * Cloud metadata endpoints reachable only through a non-link-local address
+//   (e.g. Alibaba's 100.100.100.200) are not covered: private/LAN-style ranges
+//   stay allowed so self-hosted Vaultwarden instances keep working.
+// Do not treat this guard as a complete SSRF boundary.
+// ---------------------------------------------------------------------------
+
+/// Hostnames that resolve to a cloud metadata service. Listed literally so
+/// they are rejected even when DNS is unavailable or returns a different
+/// answer; matching is case-insensitive and tolerates a trailing dot.
+const BLOCKED_METADATA_HOSTS: &[&str] = &[
+    "metadata.google.internal",   // GCP
+    "metadata.goog",              // GCP short alias
+    "metadata",                   // GCP guest-local short name
+    "instance-data",              // AWS EC2
+    "instance-data.ec2.internal", // AWS EC2
+];
+
+/// Whether a single resolved address is in a link-local range.
+///
+/// Only `169.254.0.0/16`, `fe80::/10` and IPv4-mapped forms of the former are
+/// blocked. Private LAN addresses remain allowed so self-hosted Vaultwarden
+/// instances keep working.
+fn is_link_local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
             let octets = ip.octets();
             octets[0] == 169 && octets[1] == 254
         }
-        Some(url::Host::Ipv6(ip)) => {
+        IpAddr::V6(ip) => {
             // IPv4-mapped addresses (::ffff:a.b.c.d) must be checked as IPv4,
             // otherwise they bypass the link-local filter.
             if let Some(mapped) = ip.to_ipv4_mapped() {
-                let octets = mapped.octets();
-                return octets[0] == 169 && octets[1] == 254;
+                return is_link_local_ip(IpAddr::V4(mapped));
             }
             // fe80::/10 link-local
             (ip.segments()[0] & 0xffc0) == 0xfe80
         }
-        _ => false,
     }
+}
+
+fn is_blocked_metadata_host(host: &str) -> bool {
+    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+    BLOCKED_METADATA_HOSTS.contains(&normalized.as_str())
+}
+
+/// Wildcard DNS services encode an address in the hostname, for example
+/// `169.254.169.254.nip.io`. Recognizing the embedded literal here keeps the
+/// canonical bypass blocked even when resolution is offline; the general case
+/// is handled by the resolver-backed check.
+fn hostname_embeds_link_local(host: &str) -> bool {
+    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+    let labels: Vec<&str> = normalized.split('.').collect();
+    // Dotted quad as leading labels: 169.254.1.1.nip.io
+    for window in labels.windows(4) {
+        if let Ok(ip) = window.join(".").parse::<Ipv4Addr>() {
+            if is_link_local_ip(IpAddr::V4(ip)) {
+                return true;
+            }
+        }
+    }
+    // Hyphenated quad inside one label: 169-254-1-1.nip.io
+    for label in &labels {
+        let parts: Vec<&str> = label.split('-').collect();
+        if parts.len() == 4 {
+            if let Ok(ip) = parts.join(".").parse::<Ipv4Addr>() {
+                if is_link_local_ip(IpAddr::V4(ip)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Shared classifier. `resolve` is invoked only for DNS host names, so the
+/// literal and known-host rules stay network-free and the DNS path can be
+/// tested with an injected resolver (no real DNS, no new dependencies).
+fn is_blocked_server_url_with<F>(value: &str, resolve: F) -> bool
+where
+    F: Fn(&str) -> Vec<IpAddr>,
+{
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => is_link_local_ip(IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => is_link_local_ip(IpAddr::V6(ip)),
+        Some(url::Host::Domain(_)) => {
+            let Some(host) = url.host_str() else {
+                return false;
+            };
+            if is_blocked_metadata_host(host) || hostname_embeds_link_local(host) {
+                return true;
+            }
+            // Any link-local A/AAAA answer blocks the whole name: a rebinding
+            // or split-horizon resolver may mix it with a public address.
+            resolve(host).iter().copied().any(is_link_local_ip)
+        }
+        None => false,
+    }
+}
+
+/// Resolve a DNS name with the standard library only. Resolution failures are
+/// not treated as proof of safety, but openwarden will fail to connect too;
+/// the deterministic rules above have already run at that point.
+fn resolve_host(host: &str) -> Vec<IpAddr> {
+    let Ok(addresses) = (host, 0).to_socket_addrs() else {
+        return Vec::new();
+    };
+    addresses.into_iter().map(|socket| socket.ip()).collect()
+}
+
+/// Reject link-local servers: literal addresses, known cloud metadata
+/// hostnames, wildcard-DNS aliases with an embedded link-local literal, and
+/// any DNS name whose current A/AAAA answers include a link-local address.
+///
+/// This is the network-capable form used on the login path (off the async
+/// executor). Config validation uses the DNS-free variant directly so
+/// it stays deterministic and offline. See the scope comment above for the
+/// DNS-rebinding and redirect limitations.
+pub fn is_blocked_server_url(value: &str) -> bool {
+    is_blocked_server_url_with(value, resolve_host)
+}
+
+/// Network-free subset of [`is_blocked_server_url`]: everything except the
+/// live DNS lookup. Used by [`validate_config`] and deterministic tests.
+fn is_blocked_server_url_without_dns(value: &str) -> bool {
+    is_blocked_server_url_with(value, |_| Vec::new())
 }
 
 /// Validate everything that does not require a network round trip.
@@ -262,10 +390,14 @@ pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
     if config.master_password.expose_secret().trim().is_empty() {
         return Err(AuthError::MissingField("master_password"));
     }
-    if is_blocked_server_url(config.server_url.trim()) {
+    if is_blocked_server_url_without_dns(config.server_url.trim()) {
         return Err(AuthError::BlockedServerUrl);
     }
-    ServerUrls::self_hosted(config.server_url.trim()).map_err(|_| AuthError::InvalidServerUrl)?;
+    ServerUrls::self_hosted(config.server_url.trim()).map_err(|error| {
+        AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::text(
+            error.to_string(),
+        )))
+    })?;
     Ok(())
 }
 
@@ -293,6 +425,9 @@ pub struct AuthenticatedVault {
 }
 
 /// Failures while turning a successful login into a usable vault.
+///
+/// Kept as its own enum for the UI's status formatting; [`AppError`] carries the
+/// original cause and `From` converts between the two.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UnlockError {
     /// The token response contained no protected key.
@@ -340,12 +475,27 @@ pub fn unlock_and_import(
     }
     let kdf = authenticated.session.kdf();
     let mut open_vault = OpenVault::unlock(&authenticated.master_key, &protected_key, kdf)
-        .map_err(|error| UnlockError::UnlockFailed(error.to_string()))?;
-    open_vault
-        .apply_sync(authenticated.sync)
-        .map_err(|error| UnlockError::ApplySyncFailed(error.to_string()))?;
-    crate::vault_sync::import_logins(&open_vault)
-        .map_err(|error| UnlockError::ImportFailed(error.to_string()))
+        .map_err(|error| {
+            let detail = error.to_string();
+            UnlockError::from(AppError::unlock_failed_cause(
+                detail.clone(),
+                BoxedCause::text(detail),
+            ))
+        })?;
+    open_vault.apply_sync(authenticated.sync).map_err(|error| {
+        let detail = error.to_string();
+        UnlockError::from(AppError::apply_sync_failed_cause(
+            detail.clone(),
+            BoxedCause::text(detail),
+        ))
+    })?;
+    crate::vault_sync::import_logins(&open_vault).map_err(|error| {
+        let detail = error.to_string();
+        UnlockError::from(AppError::import_failed_cause(
+            detail.clone(),
+            BoxedCause::text(detail),
+        ))
+    })
 }
 
 /// Default time budget for the whole login sequence.
@@ -396,33 +546,56 @@ async fn authenticate_inner(
     device_identifier: &str,
 ) -> Result<AuthenticatedVault, AuthError> {
     validate_config(config)?;
-    let urls = ServerUrls::self_hosted(config.server_url.trim())
-        .map_err(|_| AuthError::InvalidServerUrl)?;
-    let client = Client::new(urls, device_for_installation(device_identifier))
-        .map_err(|_| AuthError::ClientSetup)?;
+    // DNS names can resolve to a link-local address even when the URL string
+    // looks harmless. Re-check with resolution immediately before the client
+    // is built. `smol::unblock` keeps the blocking standard-library resolver
+    // off the async executor; the call still runs inside the login timeout.
+    // This is a snapshot only - see the scope comment above for TOCTOU /
+    // redirect limitations that the public openwarden API cannot close.
+    let server_url = config.server_url.trim().to_string();
+    if smol::unblock(move || is_blocked_server_url(&server_url)).await {
+        return Err(AuthError::BlockedServerUrl);
+    }
+    let urls = ServerUrls::self_hosted(config.server_url.trim()).map_err(|error| {
+        AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::text(
+            error.to_string(),
+        )))
+    })?;
+    let client =
+        Client::new(urls, device_for_installation(device_identifier)).map_err(|error| {
+            AuthError::from(AppError::ClientSetupCause(BoxedCause::text(
+                error.to_string(),
+            )))
+        })?;
     let kdf = client
         .prelogin(config.email.trim())
         .await
-        .map_err(|_| AuthError::Prelogin)?;
+        .map_err(|error| {
+            AuthError::from(AppError::PreloginCause(BoxedCause::text(error.to_string())))
+        })?;
     let api_key = ApiKey {
         client_id: config.client_id.trim().to_string(),
         client_secret: config.client_secret.clone(),
     };
-    let session = client
-        .login_api_key(&api_key)
-        .await
-        .map_err(|_| AuthError::Login)?;
+    let session = client.login_api_key(&api_key).await.map_err(|error| {
+        AuthError::from(AppError::LoginCause(BoxedCause::text(error.to_string())))
+    })?;
     // A successful login gives us the protected key, so an encrypted cache can
     // still be unlocked when /api/sync is unreachable. The cache never supplies
     // key material (keys are stripped on write), and a missing/mismatched cache
-    // leaves the original AuthError::Sync intact. No production code writes the
-    // cache yet: openwarden 0.1.0 exposes neither the raw sync body nor the
-    // bearer token, so this is a best-effort restore of a pre-existing file.
+    // reports the original sync failure with its cause attached. No production
+    // code writes the cache yet: openwarden 0.1.0 exposes neither the raw sync
+    // body nor the bearer token, so this is a best-effort restore of a
+    // pre-existing file.
     let (sync, from_cache) = match client.sync(&session).await {
         Ok(sync) => (sync, false),
-        Err(_) => match crate::cache::cached_sync_for(config.server_url.trim()) {
+        Err(error) => match crate::cache::cached_sync_for(config.server_url.trim()) {
             Some(sync) => (sync, true),
-            None => return Err(AuthError::Sync),
+            None => {
+                return Err(AuthError::from(AppError::SyncCause(BoxedCause::text(
+                    error.to_string(),
+                ))));
+            }
         },
     };
     // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
@@ -431,7 +604,11 @@ async fn authenticate_inner(
     let policy = KdfPolicy::default();
     let master_key = smol::unblock(move || MasterKey::derive(&password, &email, &kdf, &policy))
         .await
-        .map_err(|_| AuthError::KdfRejected)?;
+        .map_err(|error| {
+            AuthError::from(AppError::KdfRejectedCause(BoxedCause::text(
+                error.to_string(),
+            )))
+        })?;
     Ok(AuthenticatedVault {
         session,
         sync,

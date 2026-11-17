@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::net::IpAddr;
+
+use super::{is_blocked_server_url_with, is_blocked_server_url_without_dns, is_link_local_ip};
 use crate::auth::*;
 
 /// A unique, non-production canary so a leak of the client secret can be
@@ -146,13 +149,115 @@ fn link_local_servers_are_blocked() {
     assert!(!is_blocked_server_url("http://[fe7f::1]"));
     assert!(is_blocked_server_url("http://[::ffff:169.254.169.254]"));
     assert!(is_blocked_server_url("http://0xa9fea9fe"));
-    assert!(!is_blocked_server_url("https://vault.example.com"));
+    // Literal rules are network-free; use the pure form for DNS-looking names
+    // so the deterministic test suite never performs a real lookup.
+    assert!(!is_blocked_server_url_without_dns(
+        "https://vault.example.com"
+    ));
     assert!(!is_blocked_server_url(" http://127.0.0.1:8080".trim()));
     assert!(!is_blocked_server_url("http://192.168.1.10"));
 
     let mut value = config();
     value.server_url = "http://169.254.169.254".into();
     assert_eq!(validate_config(&value), Err(AuthError::BlockedServerUrl));
+}
+
+#[test]
+fn link_local_ip_classification_covers_mapped_and_v6_forms() {
+    assert!(is_link_local_ip("169.254.0.1".parse().unwrap()));
+    assert!(is_link_local_ip("169.254.169.254".parse().unwrap()));
+    assert!(!is_link_local_ip("169.255.0.1".parse().unwrap()));
+    assert!(is_link_local_ip("fe80::1".parse().unwrap()));
+    assert!(is_link_local_ip("febf::ffff".parse().unwrap()));
+    assert!(!is_link_local_ip("fec0::1".parse().unwrap()));
+    assert!(is_link_local_ip("::ffff:169.254.169.254".parse().unwrap()));
+    assert!(!is_link_local_ip("::ffff:192.168.1.1".parse().unwrap()));
+}
+
+#[test]
+fn known_metadata_hostnames_are_blocked_without_dns() {
+    for value in [
+        "http://metadata.google.internal",
+        "https://metadata.google.internal/",
+        "http://metadata.google.internal.:80",
+        "http://METADATA.GOOGLE.INTERNAL",
+        "http://metadata.goog",
+        "http://metadata",
+        "http://instance-data",
+        "http://instance-data.ec2.internal/latest/meta-data",
+    ] {
+        assert!(is_blocked_server_url(value), "{value}");
+        assert!(is_blocked_server_url_without_dns(value), "{value}");
+    }
+    // A name that merely ends with / contains the blocked name stays allowed.
+    assert!(!is_blocked_server_url_without_dns(
+        "https://not-metadata.google.internal"
+    ));
+    assert!(!is_blocked_server_url_without_dns(
+        "https://metadata.google.internal.example.com"
+    ));
+
+    let mut value = config();
+    value.server_url = "http://metadata.google.internal".into();
+    assert_eq!(validate_config(&value), Err(AuthError::BlockedServerUrl));
+}
+
+#[test]
+fn wildcard_dns_aliases_with_embedded_link_local_literals_are_blocked() {
+    // No DNS is needed: the address encoded in the hostname is enough.
+    for value in [
+        "http://169.254.169.254.nip.io",
+        "https://169.254.1.1.sslip.io",
+        "http://169-254-169-254.nip.io",
+    ] {
+        assert!(is_blocked_server_url_without_dns(value), "{value}");
+    }
+    assert!(!is_blocked_server_url_without_dns("https://1.1.1.1.nip.io"));
+    assert!(!is_blocked_server_url_without_dns(
+        "https://192.168.1.10.nip.io"
+    ));
+}
+
+#[test]
+fn dns_answers_are_checked_for_link_local_addresses() {
+    let public: IpAddr = "93.184.216.34".parse().unwrap();
+    let lan: IpAddr = "192.168.1.10".parse().unwrap();
+    let metadata: IpAddr = "169.254.169.254".parse().unwrap();
+    let v6_link_local: IpAddr = "fe80::1".parse().unwrap();
+
+    // A split-horizon / rebinding answer mixing public and link-local is
+    // rejected as a whole.
+    assert!(is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| { vec![public, metadata] }
+    ));
+    // IPv6 link-local answers are rejected too.
+    assert!(is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| { vec![public, v6_link_local] }
+    ));
+    // Public-only or LAN answers stay allowed, as does a failed lookup.
+    assert!(!is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| { vec![public] }
+    ));
+    assert!(!is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| { vec![lan] }
+    ));
+    assert!(!is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| { Vec::new() }
+    ));
+
+    // Literal / known-metadata hosts are classified before any resolver call.
+    assert!(is_blocked_server_url_with("http://169.254.1.1", |_| {
+        panic!("literal host must not trigger DNS")
+    }));
+    assert!(is_blocked_server_url_with(
+        "http://metadata.google.internal",
+        |_| panic!("metadata hostname must not trigger DNS")
+    ));
 }
 
 #[test]

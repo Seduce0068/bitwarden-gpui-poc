@@ -7,7 +7,7 @@ use crate::ui::state::{AuthField, Panel, Screen, SettingsField};
 ///
 /// Returns whether the key was recognised, so the caller can decide whether
 /// to redraw.
-pub fn apply_generator_key(settings: &mut Settings, key: &str) -> bool {
+pub(super) fn apply_generator_key(settings: &mut Settings, key: &str) -> bool {
     match key {
         "1" => settings.password_generator.lowercase = !settings.password_generator.lowercase,
         "2" => settings.password_generator.uppercase = !settings.password_generator.uppercase,
@@ -51,23 +51,23 @@ pub fn apply_generator_key(settings: &mut Settings, key: &str) -> bool {
 /// `shift` is deliberately absent: it is required for uppercase letters and
 /// symbols such as `+` and `_`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct KeyModifiers {
-    pub control: bool,
-    pub platform: bool,
-    pub alt: bool,
-    pub function: bool,
+pub(super) struct KeyModifiers {
+    pub(super) control: bool,
+    pub(super) platform: bool,
+    pub(super) alt: bool,
+    pub(super) function: bool,
 }
 
 impl KeyModifiers {
     /// Whether a command-like modifier was held.
-    pub fn has_command(self) -> bool {
+    pub(super) fn has_command(self) -> bool {
         self.control || self.platform || self.function
     }
 }
 
 /// A UI intent derived from a keystroke, independent of GPUI types.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum KeyAction {
+pub(super) enum KeyAction {
     /// Leave the application.
     Quit,
     /// Attempt a real login with the entered credentials.
@@ -147,29 +147,29 @@ pub enum KeyAction {
 
 /// The state needed to classify a keystroke, without GPUI types.
 #[derive(Clone, Copy, Debug)]
-pub struct KeyContext<'a> {
+pub(super) struct KeyContext<'a> {
     /// Current screen.
-    pub screen: Screen,
+    pub(super) screen: Screen,
     /// Active panel while unlocked.
-    pub panel: Panel,
+    pub(super) panel: Panel,
     /// The pressed key (physical/ASCII equivalent).
-    pub key: &'a str,
+    pub(super) key: &'a str,
     /// The text the keystroke would insert; may be multi-character with IME.
-    pub key_char: Option<&'a str>,
+    pub(super) key_char: Option<&'a str>,
     /// Command-like modifiers held during the keystroke.
-    pub modifiers: KeyModifiers,
+    pub(super) modifiers: KeyModifiers,
     /// A lock-screen credential field is being edited.
-    pub editing_auth: bool,
+    pub(super) editing_auth: bool,
     /// The vault search box is active.
-    pub searching: bool,
+    pub(super) searching: bool,
     /// A settings field is being edited.
-    pub editing_settings: bool,
+    pub(super) editing_settings: bool,
     /// The last login attempt failed.
-    pub login_failed: bool,
+    pub(super) login_failed: bool,
     /// A health report is available.
-    pub has_audit_report: bool,
+    pub(super) has_audit_report: bool,
     /// The search query is not empty.
-    pub query_nonempty: bool,
+    pub(super) query_nonempty: bool,
 }
 
 /// Text produced by a keystroke, if any.
@@ -207,7 +207,7 @@ fn text_action(text: &str, action: fn(String) -> KeyAction) -> KeyAction {
 /// Editing modes take priority so that typing `l` into a password field does
 /// not lock the vault. Keybindings with command-like modifiers are ignored so
 /// they can be handled by the platform (e.g. Ctrl+C).
-pub fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
+pub(super) fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
     if ctx.modifiers.has_command() {
         return KeyAction::None;
     }

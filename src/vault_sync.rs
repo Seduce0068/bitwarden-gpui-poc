@@ -56,31 +56,10 @@ pub enum ImportAudit {
 }
 
 /// Errors produced while converting a synced vault.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SyncError {
-    /// The vault is still locked, so fields cannot be decrypted.
-    Locked,
-    /// A login's id or fields could not be read.
-    InvalidLogin(String),
-}
-
-impl SyncError {
-    /// A short message for the status bar.
-    pub const fn message(&self) -> &'static str {
-        match self {
-            Self::Locked => "vault がロックされています",
-            Self::InvalidLogin(_) => "ログイン項目を読み取れませんでした",
-        }
-    }
-}
-
-impl core::fmt::Display for SyncError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.message())
-    }
-}
-
-impl std::error::Error for SyncError {}
+///
+/// Alias of [`AppError`](crate::error::AppError); `parse_sync` attaches the
+/// original `openwarden` failure as the `Error::source()` of its error.
+pub type SyncError = crate::error::AppError;
 
 /// Parse a `/api/sync` response body, including folder names.
 ///
@@ -88,8 +67,10 @@ impl std::error::Error for SyncError {}
 ///
 /// [`SyncError::InvalidLogin`] when `openwarden` rejects the body.
 pub fn parse_sync(body: &[u8]) -> Result<openwarden::SyncData, SyncError> {
-    openwarden::SyncData::from_json(body)
-        .map_err(|error| SyncError::InvalidLogin(error.to_string()))
+    openwarden::SyncData::from_json(body).map_err(|error| {
+        let detail = error.to_string();
+        SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
+    })
 }
 
 /// Folder id and decrypted name from an unlocked `openwarden` vault.

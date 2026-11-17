@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::io::Read;
 use std::path::PathBuf;
 
+use crate::error::{AppError, BoxedCause};
 use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::health::Thresholds;
 
@@ -83,6 +84,10 @@ impl Default for Settings {
 }
 
 /// Why settings could not be loaded.
+///
+/// Kept as its own type so the UI's `&'static str` status messages stay valid.
+/// Read and parse failures are also converted into [`AppError`], which retains
+/// the original `std::io::Error` / `serde_json::Error` in `Error::source()`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingsLoadError {
     /// The file does not exist yet; defaults are expected on first launch.
@@ -95,14 +100,6 @@ pub enum SettingsLoadError {
     TooLarge,
 }
 
-impl core::fmt::Display for SettingsLoadError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.message())
-    }
-}
-
-impl std::error::Error for SettingsLoadError {}
-
 impl SettingsLoadError {
     /// A message for the UI status bar.
     pub const fn message(&self) -> &'static str {
@@ -114,6 +111,14 @@ impl SettingsLoadError {
         }
     }
 }
+
+impl core::fmt::Display for SettingsLoadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for SettingsLoadError {}
 
 impl core::fmt::Debug for Settings {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -322,10 +327,12 @@ impl Settings {
             if error.kind() == std::io::ErrorKind::NotFound {
                 SettingsLoadError::NotFound
             } else {
-                SettingsLoadError::ReadFailed
+                SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
             }
         })?;
-        let metadata = file.metadata().map_err(|_| SettingsLoadError::ReadFailed)?;
+        let metadata = file.metadata().map_err(|error| {
+            SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
+        })?;
         if metadata.is_dir() {
             return Err(SettingsLoadError::ReadFailed);
         }
@@ -337,7 +344,9 @@ impl Settings {
         let mut contents = String::new();
         file.take(MAX_SETTINGS_BYTES.saturating_add(1))
             .read_to_string(&mut contents)
-            .map_err(|_| SettingsLoadError::ReadFailed)?;
+            .map_err(|error| {
+                SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
+            })?;
         if contents.len() as u64 > MAX_SETTINGS_BYTES {
             return Err(SettingsLoadError::TooLarge);
         }
@@ -358,8 +367,9 @@ impl Settings {
     /// with the same rule. Invalid JSON syntax and a non-object root are the
     /// only cases that still fail as a whole.
     fn parse_settings(contents: &str) -> Result<Self, SettingsLoadError> {
-        let mut value: Value =
-            serde_json::from_str(contents).map_err(|_| SettingsLoadError::ParseFailed)?;
+        let mut value: Value = serde_json::from_str(contents).map_err(|error| {
+            SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::new(error)))
+        })?;
         let Some(obj) = value.as_object_mut() else {
             return Err(SettingsLoadError::ParseFailed);
         };
@@ -372,15 +382,20 @@ impl Settings {
         }
         if let Some(nested) = obj.get_mut("password_generator") {
             *nested = serde_json::to_value(tolerant_struct::<PasswordSettings>(nested.clone()))
-                .map_err(|_| SettingsLoadError::ParseFailed)?;
+                .map_err(|error| {
+                    SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::new(error)))
+                })?;
         }
         if let Some(nested) = obj.get_mut("passphrase_generator") {
             *nested = serde_json::to_value(tolerant_struct::<PassphraseSettings>(nested.clone()))
-                .map_err(|_| SettingsLoadError::ParseFailed)?;
+                .map_err(|error| {
+                SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::new(error)))
+            })?;
         }
         if let Some(nested) = obj.get_mut("thresholds") {
-            *nested = serde_json::to_value(tolerant_struct::<Thresholds>(nested.clone()))
-                .map_err(|_| SettingsLoadError::ParseFailed)?;
+            *nested = serde_json::to_value(tolerant_struct::<Thresholds>(nested.clone())).map_err(
+                |error| SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::new(error))),
+            )?;
         }
         Ok(tolerant_struct::<Settings>(value))
     }

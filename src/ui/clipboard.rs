@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 /// The contents are restored after the delay configured in `Settings`
 /// (default 30 seconds) or on lock.
 #[derive(Default)]
-pub struct ClipboardState {
+pub(super) struct ClipboardState {
     restore: Option<String>,
     clear_at: Option<Instant>,
 }
@@ -23,7 +23,7 @@ pub struct ClipboardState {
 /// pending: keeping an older snapshot would restore a previously copied secret
 /// after consecutive copies. `None` means the clipboard text could not be read,
 /// so restoration is skipped instead of writing an empty string.
-pub fn next_restore_state(
+pub(super) fn next_restore_state(
     current: Option<String>,
     now: Instant,
     restore_seconds: u64,
@@ -33,17 +33,18 @@ pub fn next_restore_state(
 
 impl ClipboardState {
     /// Create an empty state.
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::default()
     }
 
     /// Whether the previous contents should be restored at `now`.
-    pub fn due(&self, now: Instant) -> bool {
+    pub(super) fn due(&self, now: Instant) -> bool {
         self.clear_at.is_some_and(|deadline| now >= deadline)
     }
 
     /// Whether a secret is currently pending restoration.
-    pub fn is_pending(&self) -> bool {
+    #[cfg(test)]
+    pub(super) fn is_pending(&self) -> bool {
         self.clear_at.is_some()
     }
 
@@ -52,7 +53,12 @@ impl ClipboardState {
     /// Each copy starts a fresh restoration window. When the clipboard could
     /// not be read, `restore` stays empty and restoration is a no-op rather
     /// than overwriting the clipboard with an empty string.
-    pub fn begin_copy(&mut self, current: Option<String>, now: Instant, restore_seconds: u64) {
+    pub(super) fn begin_copy(
+        &mut self,
+        current: Option<String>,
+        now: Instant,
+        restore_seconds: u64,
+    ) {
         let (snapshot, deadline) = next_restore_state(current, now, restore_seconds);
         self.restore = snapshot;
         self.clear_at = Some(deadline);
@@ -62,7 +68,7 @@ impl ClipboardState {
     ///
     /// Returns `None` when no copy is pending or the original text was
     /// unavailable; callers must not write to the clipboard in that case.
-    pub fn take_restore(&mut self) -> Option<String> {
+    pub(super) fn take_restore(&mut self) -> Option<String> {
         self.clear_at.take()?;
         self.restore.take()
     }

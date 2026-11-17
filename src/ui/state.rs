@@ -4,7 +4,7 @@ use zeroize::Zeroizing;
 
 /// Which top-level screen is visible.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Screen {
+pub(super) enum Screen {
     /// Credentials are entered here.
     Locked,
     /// The vault is available.
@@ -13,7 +13,7 @@ pub enum Screen {
 
 /// Which panel occupies the main area while unlocked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Panel {
+pub(super) enum Panel {
     /// Vault item list.
     Vault,
     /// Health audit report.
@@ -26,7 +26,7 @@ pub enum Panel {
 
 /// A text field being edited in the settings panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SettingsField {
+pub(super) enum SettingsField {
     /// Server URL.
     ServerUrl,
     /// Account email.
@@ -35,7 +35,7 @@ pub enum SettingsField {
 
 /// A credential field being edited on the lock screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuthField {
+pub(super) enum AuthField {
     /// Server URL.
     ServerUrl,
     /// Account email.
@@ -57,11 +57,11 @@ pub enum AuthField {
 ///
 /// `Debug` masks the generated values so secrets are not printed.
 #[derive(Clone, Default)]
-pub struct GeneratorState {
+pub(super) struct GeneratorState {
     /// Last generated password.
-    pub last_password: Option<Zeroizing<String>>,
+    pub(super) last_password: Option<Zeroizing<String>>,
     /// Last generated passphrase.
-    pub last_passphrase: Option<Zeroizing<String>>,
+    pub(super) last_passphrase: Option<Zeroizing<String>>,
 }
 
 impl core::fmt::Debug for GeneratorState {

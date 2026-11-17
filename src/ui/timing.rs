@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 ///
 /// `checked_duration_since` avoids a panic if the clock appears to move
 /// backwards (for example across a suspended session).
-pub fn idle_lock_due(last_activity: Instant, now: Instant, timeout: Duration) -> bool {
+pub(super) fn idle_lock_due(last_activity: Instant, now: Instant, timeout: Duration) -> bool {
     now.checked_duration_since(last_activity)
         .is_some_and(|elapsed| elapsed >= timeout)
 }
@@ -23,7 +23,7 @@ pub fn idle_lock_due(last_activity: Instant, now: Instant, timeout: Duration) ->
 /// work overruns the following slot, the next deadline is recomputed from
 /// `now` instead of replaying the missed ticks — this is the catch-up limit
 /// that keeps a slow tick from turning into a burst of back-to-back ticks.
-pub fn next_tick_deadline(deadline: Instant, now: Instant, interval: Duration) -> Instant {
+pub(super) fn next_tick_deadline(deadline: Instant, now: Instant, interval: Duration) -> Instant {
     match deadline.checked_add(interval) {
         Some(scheduled) if now <= scheduled => scheduled,
         // Overrun (or an unrepresentable instant): resync from now, no catch-up.
@@ -33,7 +33,7 @@ pub fn next_tick_deadline(deadline: Instant, now: Instant, interval: Duration) -
 
 /// What the once-a-second UI tick should do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TickEffect {
+pub(super) enum TickEffect {
     /// Restore the clipboard to its pre-copy contents.
     RestoreClipboard,
     /// Invalidate the cached TOTP code so the countdown advances.
@@ -46,7 +46,7 @@ pub enum TickEffect {
 /// rules. Auto-lock suppresses the other actions because the vault is no
 /// longer usable; otherwise clipboard restoration and TOTP refresh can both
 /// run in the same tick.
-pub fn evaluate_tick(
+pub(super) fn evaluate_tick(
     clipboard_due: bool,
     idle_due: bool,
     totp_refresh_due: bool,

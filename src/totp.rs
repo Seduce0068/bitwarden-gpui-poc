@@ -83,23 +83,10 @@ impl Code {
 }
 
 /// Why a code could not be produced.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TotpError {
-    /// The item has no `totp` field.
-    Missing,
-    /// The field is not a readable secret.
-    Invalid,
-}
-
-impl TotpError {
-    /// A message for the detail pane.
-    pub const fn message(self) -> &'static str {
-        match self {
-            Self::Missing => "この項目には TOTP が設定されていません",
-            Self::Invalid => "TOTP シークレットを解釈できません",
-        }
-    }
-}
+///
+/// Alias of [`AppError`](crate::error::AppError); a secret that `openwarden`
+/// rejects carries the original error in `Error::source()`.
+pub type TotpError = crate::error::AppError;
 
 /// Generate the code for a login's `totp` field at `unix_time`.
 ///
@@ -114,7 +101,7 @@ pub fn code_at(secret: &str, unix_time: u64) -> Result<Code, TotpError> {
     let secret = SecretString::from(secret.trim().to_string());
     openwarden::totp::generate(&secret, unix_time)
         .map(|inner| Code { inner })
-        .map_err(|_| TotpError::Invalid)
+        .map_err(|error| TotpError::InvalidCause(crate::error::BoxedCause::text(error.to_string())))
 }
 
 /// Whether `secret` is a well-formed `totp` field, without exposing the code.
