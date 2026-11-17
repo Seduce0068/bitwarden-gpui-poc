@@ -4,9 +4,36 @@
 //! demand. This module keeps those field reads in one place and turns the
 //! result into the same [`VaultItem`]s the UI and tests already use.
 
+use std::collections::{HashMap, HashSet};
+
 use openwarden::{ExposeSecret as _, LoginInfo, Vault as OpenVault};
 
 use crate::model::{Folder, ItemData, LoginUri, Vault, VaultItem};
+
+/// A secret-free record of a decision made while importing a login row.
+///
+/// Only item ids and revision timestamps are kept: names, usernames, URIs,
+/// passwords and TOTP secrets never enter the audit log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImportAudit {
+    /// The first row for this id was accepted.
+    Added { id: String, revision: i64 },
+    /// A duplicate id had a newer revision and replaced the previous row.
+    Updated {
+        id: String,
+        old_revision: i64,
+        new_revision: i64,
+    },
+    /// A duplicate id had an older revision and was clipped; the accepted
+    /// row is unchanged.
+    Clipped {
+        id: String,
+        old_revision: i64,
+        new_revision: i64,
+    },
+    /// A duplicate id had the same revision and needed no change.
+    Ignored { id: String, revision: i64 },
+}
 
 /// Errors produced while converting a synced vault.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,13 +170,31 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 /// Build a model vault from an unlocked `openwarden` vault.
 ///
 /// Only login items are imported for now; other item kinds stay on the mock
-/// path until their decryptors are mapped.
+/// path until their decryptors are mapped. Use
+/// [`import_logins_with_audit`] to also receive the change log.
 ///
 /// # Errors
 ///
 /// [`SyncError::Locked`] when the source vault has no decryption key, or
 /// [`SyncError::InvalidLogin`] when a field read fails.
 pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
+    let (model, _) = import_logins_with_audit(vault)?;
+    Ok(model)
+}
+
+/// Build a model vault from an unlocked `openwarden` vault and return the
+/// secret-free audit log alongside it.
+///
+/// Duplicate ciphers with the same id are collapsed into a single item, so a
+/// later `Vault::remove` cannot delete two rows at once. For each id the
+/// highest revision wins: an out-of-order (regressed) row is clipped and
+/// recorded in the audit log instead of overwriting the accepted item.
+///
+/// # Errors
+///
+/// [`SyncError::Locked`] when the source vault has no decryption key, or
+/// [`SyncError::InvalidLogin`] when a field read fails.
+pub fn import_logins_with_audit(vault: &OpenVault) -> Result<(Vault, Vec<ImportAudit>), SyncError> {
     if vault.is_locked() {
         return Err(SyncError::Locked);
     }
@@ -158,10 +203,46 @@ pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
         unlocked: true,
         ..Vault::default()
     };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut revisions: HashMap<String, i64> = HashMap::new();
+    let mut audit = Vec::new();
+
     for info in vault.logins() {
+        let id = info.id.as_str().to_string();
+        let revision = parse_revision(info.revision_date.as_deref()).unwrap_or(0);
+
+        if !seen.insert(id.clone()) {
+            let old_revision = revisions.get(&id).copied().unwrap_or(0);
+            if revision < old_revision {
+                audit.push(ImportAudit::Clipped {
+                    id,
+                    old_revision,
+                    new_revision: revision,
+                });
+                continue;
+            }
+            if revision == old_revision {
+                audit.push(ImportAudit::Ignored { id, revision });
+                continue;
+            }
+            if let Some(existing) = model.items.iter_mut().find(|item| item.id == id) {
+                *existing = login_item(vault, &info);
+            }
+            revisions.insert(id.clone(), revision);
+            audit.push(ImportAudit::Updated {
+                id,
+                old_revision,
+                new_revision: revision,
+            });
+            continue;
+        }
+
         model.items.push(login_item(vault, &info));
+        revisions.insert(id.clone(), revision);
+        audit.push(ImportAudit::Added { id, revision });
     }
-    Ok(model)
+
+    Ok((model, audit))
 }
 
 #[cfg(test)]

@@ -77,42 +77,56 @@ impl PasswordSettings {
     /// The pool is the concatenation of the enabled classes, so its length and
     /// therefore the entropy estimate only depend on which classes are on.
     pub fn alphabet(&self) -> String {
-        let mut pool = String::new();
-        if self.lowercase {
-            pool.push_str(LOWERCASE);
-        }
-        if self.uppercase {
-            pool.push_str(UPPERCASE);
-        }
-        if self.digits {
-            pool.push_str(DIGITS);
-        }
-        if self.symbols {
-            pool.push_str(SYMBOLS);
-        }
-        if self.avoid_ambiguous {
-            pool.retain(|c| !AMBIGUOUS.contains(&c));
-        }
-        pool
+        self.class_pools().into_iter().flatten().collect()
     }
 
-    /// Draw one password.
+    /// The non-empty character pools of the enabled classes, in a stable order.
+    /// Generation and the entropy estimate both derive from these pools.
+    fn class_pools(&self) -> Vec<Vec<char>> {
+        [
+            (self.lowercase, LOWERCASE),
+            (self.uppercase, UPPERCASE),
+            (self.digits, DIGITS),
+            (self.symbols, SYMBOLS),
+        ]
+        .into_iter()
+        .filter(|(enabled, _)| *enabled)
+        .map(|(_, class)| {
+            class
+                .chars()
+                .filter(|c| !self.avoid_ambiguous || !AMBIGUOUS.contains(c))
+                .collect::<Vec<char>>()
+        })
+        .filter(|pool| !pool.is_empty())
+        .collect()
+    }
+
+    /// Draw one password containing at least one character from every enabled
+    /// class. The mandatory characters are shuffled into random positions.
     ///
     /// # Errors
     ///
-    /// [`GeneratorError::InvalidSettings`] when no class is enabled or the
-    /// length is zero; [`GeneratorError::RandomUnavailable`] if the OS source
-    /// fails.
+    /// [`GeneratorError::InvalidSettings`] when no class is enabled, the length
+    /// is zero, or the length is smaller than the number of enabled classes;
+    /// [`GeneratorError::RandomUnavailable`] if the OS source fails.
     pub fn generate(&self) -> Result<String, GeneratorError> {
-        let pool: Vec<char> = self.alphabet().chars().collect();
-        if pool.is_empty() || self.length == 0 {
+        let pools = self.class_pools();
+        if pools.is_empty() || self.length == 0 || self.length < pools.len() {
             return Err(GeneratorError::InvalidSettings);
         }
-        let mut out = String::with_capacity(self.length);
-        for _ in 0..self.length {
+        let full: Vec<char> = pools.iter().flat_map(|pool| pool.iter().copied()).collect();
+        let mut out: Vec<char> = Vec::with_capacity(self.length);
+        for pool in &pools {
             out.push(pool[usize::from(draw_below(pool.len() as u16)?)]);
         }
-        Ok(out)
+        while out.len() < self.length {
+            out.push(full[usize::from(draw_below(full.len() as u16)?)]);
+        }
+        for i in (1..out.len()).rev() {
+            let j = usize::from(draw_below((i + 1) as u16)?);
+            out.swap(i, j);
+        }
+        Ok(out.into_iter().collect())
     }
 }
 
@@ -120,7 +134,9 @@ impl PasswordSettings {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PassphraseSettings {
-    /// Number of words.
+    /// Number of words. Four is the default: the prefix-free list in
+    /// [`crate::words::WORDS`] has more than 1024 entries, so a four-word
+    /// passphrase is above the 40-bit `Weak` boundary.
     pub words: usize,
     /// Separator between words.
     pub separator: String,

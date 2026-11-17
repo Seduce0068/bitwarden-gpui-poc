@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use crate::generator::{entropy_bits, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::health::*;
 use crate::model::{CardData, Folder, ItemData, LoginUri, VaultItem};
 
@@ -50,6 +51,33 @@ fn non_ascii_passwords_use_the_wide_pool() {
     );
     // The same non-ASCII character repeated has no entropy.
     assert_eq!(estimate_entropy("あああああ"), 0);
+}
+
+#[test]
+fn entropy_pool_matches_the_generator_classes() {
+    // The estimator must not inflate a symbol-only password with a generic
+    // 33-symbol pool: the generator's SYMBOLS has exactly eight characters.
+    let symbols = "!@#$%^&*!@#$%^&*";
+    assert_eq!(
+        estimate_entropy(symbols),
+        entropy_bits(SYMBOLS.len(), 16).round() as u32
+    );
+    let lower = "abcdefghijklmnop";
+    assert_eq!(
+        estimate_entropy(lower),
+        entropy_bits(LOWERCASE.len(), 16).round() as u32
+    );
+    let upper = "ABCDEFGHIJKLMNOP";
+    assert_eq!(
+        estimate_entropy(upper),
+        entropy_bits(UPPERCASE.len(), 16).round() as u32
+    );
+    let mixed = "aB3!aB3!aB3!aB3!";
+    let pool = LOWERCASE.len() + UPPERCASE.len() + DIGITS.len() + SYMBOLS.len();
+    assert_eq!(
+        estimate_entropy(mixed),
+        entropy_bits(pool, 16).round() as u32
+    );
 }
 
 #[test]

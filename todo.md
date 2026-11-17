@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T01:30:10+09:00"
+  at: "2026-11-18T01:56:54+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -35,14 +35,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 中
 
-- [ ] パスワード生成とエントロピー推定を整合させる
-  - 根拠: C1 / C2 / C3 / D5 / R4
-  - File: src/generator.rs:105-115,131-140,285-296, src/health.rs:235-253, src/words.rs
-  - 現状: 選択クラスの最低1文字保証なし、デフォルト4語で 39.8bit（Weak 判定）、
-    prefix を持つ単語が separator="" で境界を崩す、推定プール（+33/+100）が
-    生成ロジック（SYMBOLS 8文字）と食い違う。
-  - 受け入れ条件: 各クラス最低1文字、デフォルト語数見直し、prefix-free 化または
-    テスト名の修正、推定プールを生成側と共有。
 - [ ] 機密の zeroize 範囲を拡大する
   - 根拠: S1 / S2 / S6
   - File: src/ui/auth_state.rs:106-112, src/model.rs:218-222,
@@ -52,13 +44,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     last_password/last_passphrase も平文 `Option<String>`。
   - 受け入れ条件: 成功時に clear_secrets()、暗号化対象フィールドを Zeroizing 化、
     生成結果も Zeroizing に変更。（V3 の再確保前コピーは既知制約として除外）
-- [ ] 1秒 ticker のドリフトを解消する
-  - 根拠: P2-a / P2-c
-  - File: src/ui/app.rs:69-98
-  - 現状: Timer::after(1s) の繰り返しで実間隔が 1秒＋処理時間。TOTP 未表示でも
-    毎秒 notify() が発火する。
-  - 受け入れ条件: Timer::at(deadline) または経過時間を evaluate_tick へ渡す。
-    表示対象がある場合のみ invalidate。
 - [ ] 部分成功と再試行案内を区別する
   - 根拠: E3 / E4
   - File: src/vault_sync.rs:55-57, src/ui/login_flow.rs:81-84
@@ -92,13 +77,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     「暗号層→UI」ラウンドトリップが未検証。テストアカウント利用の注意も無い。
   - 受け入れ条件: オンデマンド復号＋既存クリップボード復元を再利用するか、
     ADR に検証範囲の限定を明記。README に権限範囲と専用アカウントの注意を追記。
-- [ ] 同期データの完全性検証と重複排除を追加する
-  - 根拠: D6 / TH6
-  - File: src/vault_sync.rs:43-46,152-165
-  - 現状: 署名・ハッシュ・revision 単調性・変更監査ログが皆無。同一 ID の
-    cipher が重複行になり remove が両方削除する。
-  - 受け入れ条件: import 時に ID を HashSet で追跡、revision 単調性を検証、
-    変更監査ログを記録（秘密は除去）。
 - [ ] cache モジュールを本番フローへ接続するか削除する
   - 根拠: A4 / C9-6 / C9-7 / TH6
   - File: src/cache.rs:70-200, src/lib.rs:21, src/auth.rs:272-306
@@ -146,7 +124,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 低
 
-- [ ] 起動失敗時に cx.quit() を呼び GUI 通知する（O7-a）
 - [ ] 設定にスキーマバージョンを追加する（O7-d）
 - [ ] 同期キャッシュを XDG_CACHE_HOME 配下へ移す（FS4）
 - [ ] デバイス ID を永続化し再同期経路を追加する（A9）
@@ -176,6 +153,11 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] エージェントチームによる4タスク並列対応（2026-11-18）
+  - パスワード生成とエントロピー推定を整合（generator / health / words）
+  - 同期データの重複排除・revision 検証・監査ログ（vault_sync）
+  - 1秒 ticker のドリフト解消（Timer::at + 純粋 deadline 計算）
+  - ウィンドウ生成失敗時に cx.quit()（main.rs、ルートが担当）
 - [x] エージェントチームによる3タスク並列対応（2026-11-18）
   - 最終操作時刻の更新（src/ui/login_flow.rs）
   - 監査誤判定の修正（src/health.rs / health_tests.rs）

@@ -40,6 +40,8 @@ fn main() {
             view
         }) {
             eprintln!("ウィンドウを開けませんでした: {error:?}");
+            // No window exists, so `on_window_closed` can never fire.
+            cx.quit();
             return;
         }
 

@@ -71,6 +71,56 @@ fn zero_length_is_rejected() {
 }
 
 #[test]
+fn generated_passwords_include_every_enabled_class() {
+    // Every non-empty combination of the four classes, with and without the
+    // ambiguous-character filter, must contribute at least one character.
+    for mask in 1u8..=0b1111 {
+        let settings = PasswordSettings {
+            length: 12,
+            lowercase: mask & 0b0001 != 0,
+            uppercase: mask & 0b0010 != 0,
+            digits: mask & 0b0100 != 0,
+            symbols: mask & 0b1000 != 0,
+            avoid_ambiguous: mask % 2 == 0,
+        };
+        let classes = [
+            (settings.lowercase, LOWERCASE),
+            (settings.uppercase, UPPERCASE),
+            (settings.digits, DIGITS),
+            (settings.symbols, SYMBOLS),
+        ];
+        for _ in 0..64 {
+            let password = settings.generate().unwrap();
+            let chars: Vec<char> = password.chars().collect();
+            assert_eq!(chars.len(), 12);
+            for (enabled, class) in classes {
+                let present = chars.iter().any(|c| class.contains(*c));
+                assert_eq!(present, enabled, "{password} / mask {mask:04b}");
+            }
+            assert!(chars.iter().all(|c| settings.alphabet().contains(*c)));
+        }
+    }
+}
+
+#[test]
+fn a_length_smaller_than_the_class_count_is_rejected() {
+    let settings = PasswordSettings {
+        length: 3,
+        ..PasswordSettings::default()
+    };
+    assert_eq!(settings.generate(), Err(GeneratorError::InvalidSettings));
+    let one_class = PasswordSettings {
+        length: 1,
+        lowercase: true,
+        uppercase: false,
+        digits: false,
+        symbols: false,
+        ..PasswordSettings::default()
+    };
+    assert!(one_class.generate().is_ok());
+}
+
+#[test]
 fn passwords_are_not_all_the_same() {
     let settings = PasswordSettings::default();
     let first = settings.generate().unwrap();
@@ -96,7 +146,7 @@ fn passphrases_use_words_and_the_separator() {
     assert!(parts.iter().all(|part| WORDS.contains(part)));
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn empty_separator_concatenates_words() {
     let settings = PassphraseSettings {
         words: 3,
@@ -104,13 +154,23 @@ fn empty_separator_concatenates_words() {
         capitalize: false,
         include_number: false,
     };
-    let phrase = settings.generate().unwrap();
-    // Three words joined with no separator; each word is still in WORDS.
-    assert!(phrase.len() >= 9, "{phrase}");
-    assert!(
-        WORDS.iter().any(|word| phrase.starts_with(word)),
-        "{phrase}"
-    );
+    // With a prefix-free list the concatenation has exactly one possible
+    // parse; prefix matching must recover all three words.
+    for _ in 0..32 {
+        let phrase = settings.generate().unwrap();
+        let mut rest = phrase.as_str();
+        let mut parsed = Vec::new();
+        while !rest.is_empty() {
+            let word = WORDS
+                .iter()
+                .find(|word| rest.starts_with(**word))
+                .unwrap_or_else(|| panic!("unparsable fragment in {phrase}: {rest}"));
+            parsed.push(*word);
+            rest = &rest[word.len()..];
+        }
+        assert_eq!(parsed.len(), 3, "{phrase}");
+        assert!(parsed.iter().all(|word| WORDS.contains(word)), "{phrase}");
+    }
 }
 
 #[test]
@@ -142,8 +202,8 @@ fn zero_words_is_rejected() {
 }
 
 #[test]
-fn word_list_is_clean_and_prefix_free_enough() {
-    assert!(!WORDS.is_empty(), "empty word list");
+fn word_list_is_clean_and_prefix_free() {
+    assert!(WORDS.len() > 1024, "only {} words", WORDS.len());
     let mut sorted: Vec<&str> = WORDS.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
@@ -151,6 +211,26 @@ fn word_list_is_clean_and_prefix_free_enough() {
     assert!(WORDS.iter().all(|word| {
         !word.is_empty() && word.len() >= 3 && word.chars().all(|c| c.is_ascii_lowercase())
     }));
+    for first in WORDS {
+        for second in WORDS {
+            assert!(
+                first == second || !second.starts_with(first),
+                "{first} is a prefix of {second}"
+            );
+        }
+    }
+}
+
+#[test]
+fn default_passphrase_is_not_weak() {
+    let settings = PassphraseSettings::default();
+    let bits = passphrase_entropy(&settings);
+    assert!(bits >= 40.0, "default passphrase has only {bits} bits");
+    assert_ne!(
+        Strength::from_bits(bits),
+        Strength::Weak,
+        "default passphrase is Weak at {bits} bits"
+    );
 }
 
 #[test]
@@ -178,6 +258,27 @@ fn entropy_and_strength_buckets() {
     assert_eq!(Strength::Strong.score(128.0), 100);
     assert_eq!(Strength::Good.score(1000.0), 100);
     assert_eq!(Strength::Good.label(), "良い");
+}
+
+#[test]
+fn password_entropy_uses_the_shared_alphabet() {
+    let settings = PasswordSettings {
+        length: 16,
+        ..PasswordSettings::default()
+    };
+    let expected = entropy_bits(
+        LOWERCASE.len() + UPPERCASE.len() + DIGITS.len() + SYMBOLS.len(),
+        settings.length,
+    );
+    assert!((password_entropy(&settings) - expected).abs() < 1e-9);
+    let symbols_only = PasswordSettings {
+        lowercase: false,
+        uppercase: false,
+        digits: false,
+        symbols: true,
+        ..settings
+    };
+    assert!((password_entropy(&symbols_only) - entropy_bits(SYMBOLS.len(), 16)).abs() < 1e-9);
 }
 
 #[test]
@@ -220,7 +321,7 @@ fn passphrase_entropy_follows_word_count() {
 
 #[test]
 fn random_index_respects_the_bound() {
-    for bound in [1u16, 2, 10, 62, 256, 994] {
+    for bound in [1u16, 2, 10, 62, 256, WORDS.len() as u16] {
         for _ in 0..256 {
             let value = random_index(bound).unwrap();
             assert!(value < bound, "{value} >= {bound}");
