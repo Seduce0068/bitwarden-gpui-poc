@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T00:48:56+09:00"
+  at: "2026-11-18T01:05:23+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -35,12 +35,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 中
 
-- [ ] unlock_and_import を UI スレッドからオフロードする
-  - 根拠: C9-3 / P1-a
-  - File: src/ui/login_flow.rs:70, src/auth.rs:213-234
-  - 現状: 全アイテムの復号が cx.update 内で同期実行され、アイテム数に比例して
-    UI と 1秒 ticker が停止する（auth.rs のコメントと矛盾）。
-  - 受け入れ条件: smol::unblock 等でオフロードし、UI スレッドでは結果の代入のみ。
 - [ ] ログイン成功時に last_activity と監査を更新する
   - 根拠: C9-4 / C9-2
   - File: src/ui/login_flow.rs:70-86
@@ -202,6 +196,11 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 復号処理を UI スレッドからオフロード（2026-11-18）
+  - `smol::unblock` で `unlock_and_import` をブロッキングプールへ移動。
+  - `LoginResult` で認証失敗 / 復号失敗 / 成功を区別し、UI 側は結果適用のみ。
+  - 敵対的レビューで機能回帰なしと判定。残存: 実行中の unblock ジョブは
+    generation ではキャンセルされない（結果の適用のみ破棄）。コードに明記。
 - [x] 監査ボタンとキー状態を整合（2026-11-18）
   - `effective_panel()` でレポート未生成時の Audit 遷移を Vault に戻し、
     描画と `KeyContext.panel` の不一致を解消。
