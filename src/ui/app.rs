@@ -156,7 +156,7 @@ impl BitwardenApp {
         self.editing = None;
         self.auth.take_field();
         self.view.finish_search();
-        self.panel = panel;
+        self.panel = crate::ui::logic::effective_panel(panel, self.view.audit_report.is_some());
         cx.notify();
     }
 

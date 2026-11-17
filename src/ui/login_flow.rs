@@ -81,6 +81,7 @@ impl BitwardenApp {
         match crate::auth::unlock_and_import(authenticated) {
             Ok(vault) => {
                 self.view.vault = vault;
+                self.refresh_audit();
                 self.screen = Screen::Unlocked;
                 self.panel = Panel::Vault;
                 self.view.selected_id = None;
