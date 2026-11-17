@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.94] - 2026-11-17
+
 ### エラー型
 
 - `CacheLoadError` / `SettingsLoadError` に `Display` / `Error` を実装し
