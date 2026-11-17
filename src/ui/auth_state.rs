@@ -142,6 +142,23 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn backspace_on_empty_fields_is_a_no_op() {
+        let mut state = AuthState::new();
+        for field in [
+            AuthField::ClientId,
+            AuthField::ClientSecret,
+            AuthField::MasterPassword,
+        ] {
+            state.set_field(Some(field));
+            state.pop_char();
+            assert!(state.client_id().is_empty());
+            assert!(state.client_secret().is_empty());
+            assert!(state.master_password().is_empty());
+        }
+        assert!(!state.has_credentials());
+    }
+
+    #[::core::prelude::v1::test]
     fn clear_secrets_replaces_secret_buffers() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientSecret));
