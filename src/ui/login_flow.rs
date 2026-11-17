@@ -71,9 +71,21 @@ impl BitwardenApp {
         let generation = self.login_generation.begin();
         self.status = "ログイン中…".to_string();
         cx.notify();
-        // A fixed identifier is enough for the PoC; a real installation would
-        // persist a UUID in Settings.
-        let device_id = "bitwarden-gpui-poc-install".to_string();
+        // The initial login and the resync/retry path (the `r` key maps to
+        // this same method) both resolve the identifier here, so every
+        // attempt sends the same persisted value. A fresh UUID is generated
+        // and saved only on first use.
+        let device_id = match self
+            .settings
+            .ensure_device_id(crate::settings::Settings::default_path().as_deref())
+        {
+            Ok(id) => id.to_string(),
+            Err(error) => {
+                self.status = format!("デバイス ID を生成できませんでした（{error}）");
+                cx.notify();
+                return;
+            }
+        };
         let timeout = std::time::Duration::from_secs(self.settings.login_timeout_seconds);
         cx.spawn(
             move |this: gpui_kit::WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {

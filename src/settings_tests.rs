@@ -425,3 +425,109 @@ fn save_stamps_current_schema_version() {
     assert_eq!(loaded.email, "save@example.com");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// --- Stable device identifier: CSPRNG generation, persistence, resync reuse ---
+
+#[test]
+fn generated_device_id_is_a_canonical_v4_uuid() {
+    let first = generate_device_id().expect("CSPRNG should be available");
+    let second = generate_device_id().expect("CSPRNG should be available");
+
+    for id in [&first, &second] {
+        assert!(is_valid_device_id(id), "invalid UUID: {id}");
+        assert_eq!(id.len(), 36);
+        for (index, ch) in id.chars().enumerate() {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                assert_eq!(ch, '-', "bad hyphen position in {id}");
+            } else {
+                assert!(ch.is_ascii_hexdigit(), "bad hex digit in {id}");
+                assert!(!ch.is_ascii_uppercase(), "UUID must be lowercase: {id}");
+            }
+        }
+        // Version 4 nibble and RFC 4122 variant nibble.
+        assert_eq!(id.as_bytes()[14], b'4');
+        assert!(matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
+    }
+    assert_ne!(first, second, "two independent draws must not collide");
+}
+
+#[test]
+fn malformed_device_ids_are_not_reused() {
+    let valid = generate_device_id().unwrap();
+    assert!(!is_valid_device_id(""));
+    assert!(!is_valid_device_id("bitwarden-gpui-poc-install"));
+    assert!(!is_valid_device_id(&valid.replace('-', "")));
+    assert!(!is_valid_device_id(&valid[..35]));
+
+    let mut wrong_version = valid.clone().into_bytes();
+    wrong_version[14] = b'5';
+    assert!(!is_valid_device_id(
+        std::str::from_utf8(&wrong_version).unwrap()
+    ));
+
+    let mut wrong_variant = valid.into_bytes();
+    wrong_variant[19] = b'c';
+    assert!(!is_valid_device_id(
+        std::str::from_utf8(&wrong_variant).unwrap()
+    ));
+}
+
+#[test]
+fn device_id_is_generated_once_and_reused_on_resync() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let mut settings = Settings::default();
+    assert!(settings.device_id.is_empty());
+
+    // First sync: generate and persist.
+    let first = settings.ensure_device_id(Some(&path)).unwrap().to_string();
+    assert!(is_valid_device_id(&first));
+    assert_eq!(Settings::load(&path).device_id, first);
+
+    // Resync in the same session must not rotate the identifier.
+    let again = settings.ensure_device_id(Some(&path)).unwrap().to_string();
+    assert_eq!(again, first);
+
+    // Resync after a restart loads the persisted value and keeps it.
+    let mut restarted = Settings::load(&path);
+    let after_restart = restarted.ensure_device_id(Some(&path)).unwrap().to_string();
+    assert_eq!(after_restart, first);
+    assert_eq!(Settings::load(&path).device_id, first);
+}
+
+#[test]
+fn malformed_stored_device_id_is_replaced_on_next_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let legacy = Settings {
+        device_id: "bitwarden-gpui-poc-install".to_string(),
+        ..Default::default()
+    };
+    legacy.save(&path).unwrap();
+
+    let mut loaded = Settings::load(&path);
+    assert!(
+        loaded.device_id.is_empty(),
+        "sanitized() must clear the old hardcoded value"
+    );
+    let fresh = loaded.ensure_device_id(Some(&path)).unwrap().to_string();
+    assert!(is_valid_device_id(&fresh));
+    assert_ne!(fresh, "bitwarden-gpui-poc-install");
+    assert_eq!(Settings::load(&path).device_id, fresh);
+}
+
+#[test]
+fn device_id_is_not_a_secret_but_is_serialized() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let mut settings = Settings::default();
+    let id = settings.ensure_device_id(Some(&path)).unwrap().to_string();
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(raw["device_id"], serde_json::json!(id));
+    assert!(
+        format!("{settings:?}").contains(&id),
+        "device id is an identifier, not a credential"
+    );
+}

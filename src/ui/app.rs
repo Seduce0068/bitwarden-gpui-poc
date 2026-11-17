@@ -1,6 +1,6 @@
 //! The main application state and GPUI wiring.
 
-use crate::model::{Filter, ItemData, ItemKind, SortKey, Vault, VaultItem};
+use crate::model::{Filter, ItemData, SortKey, Vault, VaultItem};
 use crate::settings::Settings;
 use crate::totp;
 use crate::ui::auth_state::AuthState;
@@ -53,7 +53,7 @@ fn apply_state_reset(
     view.filter = Filter::All;
     view.sort = SortKey::NameAsc;
     view.searching = false;
-    view.selected_id = None;
+    view.deselect_and_rewind();
     // Both lock and unlock count as activity: an idle lock must not fire
     // immediately after a successful transition.
     *last_activity = now;
@@ -244,25 +244,6 @@ impl BitwardenApp {
         cx.notify();
     }
 
-    /// Keep the selected row inside the current filtered view.
-    ///
-    /// Called after any mutation that can change which items are visible,
-    /// such as toggling a favorite while the Favorites filter is active.
-    pub(super) fn revalidate_selection(&mut self) -> bool {
-        let visible = self.visible_items();
-        let valid = crate::ui::logic::selection_in_view(
-            self.view.selected_id.as_deref(),
-            visible.iter().map(|item| item.id.as_str()),
-        );
-        if !valid {
-            self.view.selected_id = None;
-            self.view
-                .scroll_handle
-                .scroll_to_item(0, ScrollStrategy::Top);
-        }
-        valid
-    }
-
     pub(super) fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let visible = self.visible_items();
         if visible.is_empty() {
@@ -286,20 +267,7 @@ impl BitwardenApp {
     }
 
     pub(super) fn cycle_filter(&mut self, cx: &mut Context<Self>) {
-        self.view.filter = match self.view.filter {
-            Filter::All => Filter::Favorites,
-            Filter::Favorites => Filter::Kind(ItemKind::Login),
-            Filter::Kind(ItemKind::Login) => Filter::Kind(ItemKind::SecureNote),
-            Filter::Kind(ItemKind::SecureNote) => Filter::Kind(ItemKind::Card),
-            Filter::Kind(ItemKind::Card) => Filter::Kind(ItemKind::Identity),
-            Filter::Kind(ItemKind::Identity) => Filter::Kind(ItemKind::SshKey),
-            Filter::Kind(ItemKind::SshKey) => Filter::NoFolder,
-            Filter::NoFolder | Filter::Folder(_) => Filter::All,
-        };
-        self.view.selected_id = None;
-        self.view
-            .scroll_handle
-            .scroll_to_item(0, ScrollStrategy::Top);
+        self.view.cycle_filter();
         cx.notify();
     }
 
@@ -318,7 +286,7 @@ impl BitwardenApp {
                 if favorite { "設定" } else { "解除" }
             );
             // Under the Favorites filter the item may have just left the view.
-            self.revalidate_selection();
+            self.view.revalidate_selection();
             cx.notify();
         }
     }
@@ -481,6 +449,27 @@ mod tests {
         assert!(state.generator.last_passphrase.is_none());
         assert!(!state.totp.has_secret());
         assert_eq!(state.last_activity, now);
+    }
+
+    #[::core::prelude::v1::test]
+    fn state_reset_rewinds_scroll_like_every_other_deselection_path() {
+        let now = Instant::now();
+        let mut state = dirty_state(now);
+        state
+            .view
+            .scroll_handle
+            .scroll_to_item(7, ScrollStrategy::Nearest);
+
+        reset(&mut state, now);
+
+        assert_eq!(state.view.selected_id, None);
+        let request = state.view.scroll_handle.0.borrow().deferred_scroll_to_item;
+        assert_eq!(
+            request.map(|request| (request.item_index, request.strategy)),
+            Some((0, ScrollStrategy::Top)),
+            "the lock/unlock reset must land on the same visible range as \
+             filter, search and revalidation paths"
+        );
     }
 
     #[::core::prelude::v1::test]
