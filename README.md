@@ -91,6 +91,9 @@ cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo audit
+markdownlint README.md CHANGELOG.md docs/index.md \
+  docs/adr/index.md docs/adr/log.md docs/adr/*.md docs/review-report.md
 cargo run
 ```
 
