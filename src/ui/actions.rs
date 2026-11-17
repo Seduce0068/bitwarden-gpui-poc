@@ -40,14 +40,26 @@ impl BitwardenApp {
     /// Copy `value` to the clipboard with automatic restoration.
     pub(super) fn copy_to_clipboard(&mut self, value: &str, cx: &mut Context<Self>) {
         let seconds = self.settings.clipboard_restore_seconds;
-        self.clipboard.copy(value, seconds, cx);
+        let current = cx.read_from_clipboard().and_then(|item| {
+            item.entries.into_iter().find_map(|entry| match entry {
+                ClipboardEntry::String(text) => Some(text.text),
+                _ => None,
+            })
+        });
+        self.clipboard
+            .begin_copy(current, std::time::Instant::now(), seconds);
+        cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
         self.status = format!("クリップボードにコピーしました（{seconds}秒後に復元）");
         cx.notify();
     }
 
     /// Put the clipboard back the way it was before the last copy.
     pub(super) fn restore_clipboard(&mut self, cx: &mut Context<Self>) {
-        self.clipboard.restore(cx);
+        if let Some(previous) = self.clipboard.take_restore() {
+            cx.write_to_clipboard(ClipboardItem::new_string(previous));
+            self.status = "クリップボードを復元しました".to_string();
+            cx.notify();
+        }
     }
 
     pub(super) fn save_settings(&mut self, cx: &mut Context<Self>) {

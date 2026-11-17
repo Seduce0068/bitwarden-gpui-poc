@@ -1,12 +1,14 @@
 //! Clipboard state with automatic restoration of the previous contents.
+//!
+//! State transitions are pure; the GPUI clipboard I/O lives in the callers so
+//! they can be tested independently.
 
 use std::time::{Duration, Instant};
 
-use gpui_kit::*;
-
-/// Remembers the clipboard contents from before a secret was copied and
-/// restores them after the delay configured in `Settings` (default 30
-/// seconds) or on lock.
+/// Tracks the clipboard contents from before the most recent secret copy.
+///
+/// The contents are restored after the delay configured in `Settings`
+/// (default 30 seconds) or on lock.
 #[derive(Default)]
 pub struct ClipboardState {
     restore: Option<String>,
@@ -29,29 +31,23 @@ impl ClipboardState {
         self.clear_at.is_some()
     }
 
-    /// Copy `value` and remember the original clipboard text if this is the
-    /// first pending copy. `restore_seconds` controls when it is put back.
-    pub fn copy(&mut self, value: &str, restore_seconds: u64, cx: &mut App) {
-        if self.clear_at.is_none() {
-            self.restore = cx.read_from_clipboard().and_then(|item| {
-                item.entries.into_iter().find_map(|entry| match entry {
-                    ClipboardEntry::String(text) => Some(text.text),
-                    _ => None,
-                })
-            });
-        }
-        cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
-        self.clear_at = Some(Instant::now() + Duration::from_secs(restore_seconds));
+    /// Record a copy made at `now`, capturing the clipboard text it replaced.
+    ///
+    /// Each copy starts a fresh restoration window. When the clipboard could
+    /// not be read, `restore` stays empty and restoration is a no-op rather
+    /// than overwriting the clipboard with an empty string.
+    pub fn begin_copy(&mut self, current: Option<String>, now: Instant, restore_seconds: u64) {
+        self.restore = current;
+        self.clear_at = Some(now + Duration::from_secs(restore_seconds));
     }
 
-    /// Put the clipboard back if a copy is pending.
-    pub fn restore(&mut self, cx: &mut App) {
-        if self.clear_at.is_none() {
-            return;
-        }
-        let previous = self.restore.take().unwrap_or_default();
-        cx.write_to_clipboard(ClipboardItem::new_string(previous));
-        self.clear_at = None;
+    /// Take the text to restore, consuming the pending state.
+    ///
+    /// Returns `None` when no copy is pending or the original text was
+    /// unavailable; callers must not write to the clipboard in that case.
+    pub fn take_restore(&mut self) -> Option<String> {
+        self.clear_at.take()?;
+        self.restore.take()
     }
 }
 
@@ -67,17 +63,42 @@ mod tests {
         assert!(!state.is_pending());
 
         let mut state = ClipboardState::new();
-        state.clear_at = Some(Instant::now() + Duration::from_secs(1));
+        let now = Instant::now();
+        state.begin_copy(Some("original".into()), now, 1);
         assert!(state.is_pending());
-        assert!(!state.due(Instant::now()));
-        assert!(state.due(Instant::now() + Duration::from_secs(2)));
+        assert!(!state.due(now));
+        assert!(state.due(now + Duration::from_secs(2)));
     }
 
     #[::core::prelude::v1::test]
     fn zero_delay_is_due_immediately() {
         let mut state = ClipboardState::new();
         let now = Instant::now();
-        state.clear_at = Some(now + Duration::from_secs(0));
-        assert!(state.due(now), "a zero-second delay must restore at once");
+        state.begin_copy(Some("original".into()), now, 0);
+        assert!(state.due(now));
+    }
+
+    #[::core::prelude::v1::test]
+    fn consecutive_copies_restore_the_text_they_replaced() {
+        let mut state = ClipboardState::new();
+        let now = Instant::now();
+        state.begin_copy(Some("original".into()), now, 30);
+        state.begin_copy(Some("first secret".into()), now, 30);
+        assert_eq!(state.take_restore(), Some("first secret".into()));
+        assert!(!state.is_pending());
+    }
+
+    #[::core::prelude::v1::test]
+    fn unreadable_original_does_not_erase_the_clipboard() {
+        let mut state = ClipboardState::new();
+        state.begin_copy(None, Instant::now(), 30);
+        assert_eq!(state.take_restore(), None);
+        assert!(!state.is_pending());
+    }
+
+    #[::core::prelude::v1::test]
+    fn restore_without_a_pending_copy_is_a_no_op() {
+        let mut state = ClipboardState::new();
+        assert_eq!(state.take_restore(), None);
     }
 }

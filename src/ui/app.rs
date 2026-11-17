@@ -127,7 +127,9 @@ impl BitwardenApp {
     pub(super) fn lock(&mut self, cx: &mut Context<Self>) {
         // A login finishing after this point must not unlock the vault again.
         self.login_generation.invalidate();
-        self.clipboard.restore(cx);
+        if let Some(previous) = self.clipboard.take_restore() {
+            cx.write_to_clipboard(ClipboardItem::new_string(previous));
+        }
         self.view.vault = Vault::new();
         self.view.audit_report = None;
         self.panel = Panel::Vault;
