@@ -234,7 +234,7 @@ pub fn settings_panel<'a>(
                 .child(format!("保存先: {path}")),
         )
         .child(div().mt_4().text_xs().text_color(rgb(0x6c7086)).child(
-            "1,2: 編集 / enter: 確定 / +/-: 閾値 / i/u: 自動ロック / w: 保存 / c: 戻る / l: ロック / Esc: 終了",
+            "1,2: 編集 / enter: 確定 / +/-: 閾値 / i/u: 自動ロック / w: 保存 / c: 戻る / l: ロック / Esc: 確定/終了",
         ))
 }
 

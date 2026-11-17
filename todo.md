@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-17T23:18:32+09:00"
+  at: "2026-11-17T23:33:06+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -38,13 +38,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
   - 現状: `self.server_url/email` と `settings` の双方向ミラー。ロック画面の編集が
     `w` 保存なしで失われ、lock() が generator を settings から再構築し巻き戻る。
   - 受け入れ条件: Settings を単一真実源にするか、全編集経路が通る単一更新コマンドを設ける。
-- [ ] パネル切替時に editing/searching フラグをクリアしデッドキーを解消する
-  - 根拠: U1 / INV1（Runtime Proof 裏付け）/ U4 / G4
-  - File: src/ui/input.rs:90-93, src/ui/keys.rs:189-192, src/ui/render.rs:242-279
-  - 現状: 設定編集中にマウスで他パネルへ移ると全キーが無効になり、
-    searching 残存で他パネルのキーが検索文字として吸われる。
-  - 受け入れ条件: SetPanel を共通遷移へ集約し editing=None / searching=false を強制。
-    Esc のセマンティクス（確定 vs キャンセル）を README と画面に明記。
 - [ ] 修飾キーと IME 入力を正しく扱う
   - 根拠: UI1 / UI2
   - File: src/ui/input.rs:19-30, src/ui/keys.rs:146-170
@@ -236,6 +229,11 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] パネル切替時に入力モードをクリア（2026-11-17）
+  - `BitwardenApp::set_panel()` に集約し、設定編集 / 認証フィールド /
+    検索状態を必ず解除。マウスのパネルボタンも同じ経路を通る。
+  - Esc が「キャンセルではなく確定」である旨を README と設定パネルの
+    ヘルプに明記。
 - [x] 一時ファイルを一意名＋適切な権限で管理（2026-11-17）
   - `tempfile::NamedTempFile` を再利用（create_new / 0600 / RAII 後始末 /
     atomic persist）。既存ファイルの権限も 0600 に是正。
