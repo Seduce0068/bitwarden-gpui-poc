@@ -31,11 +31,15 @@ smol = "2"
 zeroize = "1.9"
 
 [profile.dev]
-# GPUI + wgpu の debuginfo は巨大になりやすいため抑える
-debug = 1
+# GPUI + wgpu の debuginfo は巨大（debug=1 でも target/ が 30GiB）。
+# バックトレースは残しつつ行テーブルのみに抑制する。
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
-debug = 0
+debug = false
+
+[profile.release]
+strip = true
 
 [lints.clippy]
 unwrap_used = "deny"
