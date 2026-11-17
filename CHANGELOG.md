@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 既定値の整理
+
+- ログインタイムアウト既定値を `auth::DEFAULT_LOGIN_TIMEOUT` から参照
+- 未使用になった `clipboard::CLEAR_SECONDS` を削除
+
 ## [0.1.75] - 2026-11-17
 
 ### 復元の境界

@@ -4,11 +4,8 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 
-/// Seconds before a copied secret is restored.
-pub const CLEAR_SECONDS: u64 = 30;
-
 /// Remembers the clipboard contents from before a secret was copied and
-/// restores them after the configured delay (default [`CLEAR_SECONDS`]
+/// restores them after the delay configured in `Settings` (default 30
 /// seconds) or on lock.
 #[derive(Default)]
 pub struct ClipboardState {
