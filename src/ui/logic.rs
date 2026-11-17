@@ -102,7 +102,7 @@ mod tests {
         assert!(!selection_in_view(Some("1"), []));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn audit_is_deterministic_for_a_given_clock() {
         let vault = Vault::new();
         let thresholds = Thresholds::default();
@@ -113,7 +113,7 @@ mod tests {
         assert!(first.items.is_empty());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn audit_panel_falls_back_without_a_report() {
         assert_eq!(
             effective_panel(Panel::Audit, false),
@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(effective_panel(Panel::Generator, false), Panel::Generator);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn idle_lock_adjustment_clamps_to_one_and_sixty_minutes() {
         assert_eq!(adjust_idle_lock(300, 1), 360);
         assert_eq!(adjust_idle_lock(300, -1), 240);
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(adjust_idle_lock(10_000, 0), 3600);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn threshold_adjustment_steps_and_clamps() {
         let base = Thresholds::default();
         let up = adjust_thresholds(base, 1);

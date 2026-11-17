@@ -43,7 +43,7 @@ fn longer_and_wider_passwords_score_higher() {
     assert!(wide > narrow, "{wide} vs {narrow}");
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn non_ascii_passwords_use_the_wide_pool() {
     let japanese = estimate_entropy("あいうえおかきくけこ");
     let ascii_same_length = estimate_entropy("abcdefghij");
@@ -350,7 +350,7 @@ fn severity_labels_and_ordering() {
     assert!(Finding::Unnamed.message().contains("名前"));
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn item_without_findings_has_no_worst_severity() {
     let item = ItemReport {
         id: "x".into(),
@@ -361,7 +361,7 @@ fn item_without_findings_has_no_worst_severity() {
     assert_eq!(item.worst(), None);
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn every_finding_has_a_nonempty_message() {
     let findings = [
         Finding::WeakPassword { bits: 10 },
@@ -382,7 +382,7 @@ fn every_finding_has_a_nonempty_message() {
     }
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn insecure_uri_messages_never_include_secrets() {
     let finding = Finding::InsecureUri {
         uri: "http://user:token@example.com/path?key=secret".into(),
@@ -393,7 +393,7 @@ fn insecure_uri_messages_never_include_secrets() {
     assert!(!message.contains("secret"), "{message}");
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn insecure_uri_stores_only_scheme_and_host() {
     const RAW: &str = "http://user:token@example.com:8080/path?key=secret#frag";
     const MASKED: &str = "http://example.com:8080";

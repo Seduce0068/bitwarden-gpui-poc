@@ -21,5 +21,9 @@ jobs:
     uses: Seduce0068/workflows/.github/workflows/rust-gates.yml@v1
     with:
       audit: true
-      extra_gates: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+      extra_gates: |
+        RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+        # cargo-deny は共通ワークフローにまだ組み込まれていないため、ここで導入する。
+        cargo install cargo-deny --version 0.21.0 --locked
+        cargo deny check
       # Clippy lints (unwrap/expect/panic/unsafe) are denied via Cargo.toml [lints.clippy].

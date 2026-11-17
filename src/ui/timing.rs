@@ -69,7 +69,7 @@ pub fn evaluate_tick(
 mod tests {
     use super::*;
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn tick_actions_are_independent_except_for_auto_lock() {
         assert!(evaluate_tick(false, false, false).is_empty());
         assert_eq!(

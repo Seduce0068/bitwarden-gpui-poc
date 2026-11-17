@@ -3,6 +3,16 @@
 //! Only the raw `/api/sync` JSON and the user id are stored. Decryption keys,
 //! master passwords and API secrets are never written to disk: keeping the
 //! protected key alone would allow an offline master-password guess.
+//!
+//! Wiring (see [`cached_sync_for`]): the auth layer reads this cache when
+//! `/api/sync` fails *after* a successful login, then unlocks with the
+//! protected key from the live `Session`. This is a read-only, best-effort
+//! restore. There is currently no production writer: `openwarden` 0.1.0's
+//! `Client::sync()` returns a parsed `SyncData` without the raw body and keeps
+//! `Session::access_token` private, so `from_body`/`save_default` cannot be
+//! fed from the login flow. A cache file therefore exists only if a legacy
+//! release wrote one or it was provisioned out of band; a first-ever offline
+//! failure still reports `AuthError::Sync`.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -263,6 +273,27 @@ pub fn save_default(cache: &SyncCache) -> Result<(), std::io::Error> {
         )
     })?;
     save(path, cache)
+}
+
+/// Load the encrypted cache for a best-effort offline restore.
+///
+/// The auth layer calls this when `/api/sync` fails but the API-key login has
+/// already succeeded. Only the server URL can be checked here: a failed sync
+/// supplies no fresh user id, so a cross-account cache cannot be detected.
+/// Key material is never taken from the cache — its
+/// `profile.key` / `privateKey` are stripped by [`SyncCache::from_body`] and
+/// the live `Session` supplies the protected key at unlock time. A key change
+/// since the cache was written can therefore leave cached items undecryptable.
+///
+/// Returns `None` when the cache is missing, unreadable, outdated, belongs to
+/// another server or no longer parses; the caller then reports the original
+/// sync failure instead of masking it.
+pub fn cached_sync_for(server_url: &str) -> Option<openwarden::SyncData> {
+    let cache = load_default().ok()?;
+    if cache.server_url != server_url {
+        return None;
+    }
+    cache.sync().ok()
 }
 
 /// Validate a cache before it is used for the given account and server.

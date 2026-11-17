@@ -3,6 +3,13 @@
 //! Network calls are isolated in [`authenticate`]. Everything that can be
 //! checked without a server lives in [`validate_config`], so the important
 //! input rules are covered by deterministic tests.
+//!
+//! When `Client::sync()` fails after a successful login, the internal
+//! authentication routine falls back to the encrypted offline cache
+//! ([`crate::cache::cached_sync_for`])
+//! and unlocks with the protected key from the live `Session`. The result is
+//! tagged with [`AuthenticatedVault::from_cache`] so callers know the data may
+//! be stale. See the ADR for why the cache has no production writer yet.
 
 use openwarden::{
     ApiKey, Client, Device, ExposeSecret as _, KdfPolicy, MasterKey, SecretString, ServerUrls,
@@ -279,6 +286,10 @@ pub struct AuthenticatedVault {
     pub sync: SyncData,
     /// The master key derived from the password and the account's KDF.
     pub master_key: MasterKey,
+    /// Whether `sync` came from the offline cache instead of a fresh response.
+    ///
+    /// The UI does not surface this yet; the ADR records it as an open item.
+    pub from_cache: bool,
 }
 
 /// Failures while turning a successful login into a usable vault.
@@ -401,7 +412,19 @@ async fn authenticate_inner(
         .login_api_key(&api_key)
         .await
         .map_err(|_| AuthError::Login)?;
-    let sync = client.sync(&session).await.map_err(|_| AuthError::Sync)?;
+    // A successful login gives us the protected key, so an encrypted cache can
+    // still be unlocked when /api/sync is unreachable. The cache never supplies
+    // key material (keys are stripped on write), and a missing/mismatched cache
+    // leaves the original AuthError::Sync intact. No production code writes the
+    // cache yet: openwarden 0.1.0 exposes neither the raw sync body nor the
+    // bearer token, so this is a best-effort restore of a pre-existing file.
+    let (sync, from_cache) = match client.sync(&session).await {
+        Ok(sync) => (sync, false),
+        Err(_) => match crate::cache::cached_sync_for(config.server_url.trim()) {
+            Some(sync) => (sync, true),
+            None => return Err(AuthError::Sync),
+        },
+    };
     // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
     let password = config.master_password.clone();
     let email = config.email.trim().to_string();
@@ -413,6 +436,7 @@ async fn authenticate_inner(
         session,
         sync,
         master_key,
+        from_cache,
     })
 }
 

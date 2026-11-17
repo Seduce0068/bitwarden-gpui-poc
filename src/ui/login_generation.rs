@@ -39,14 +39,14 @@ impl LoginGeneration {
 mod tests {
     use super::*;
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn new_generation_has_no_current_attempt() {
         let generation = LoginGeneration::default();
         assert!(!generation.is_current(LoginGeneration(0)));
         assert!(!generation.is_current(LoginGeneration(1)));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn begin_returns_the_only_accepted_token() {
         let mut generation = LoginGeneration::default();
         let token = generation.begin();
@@ -54,7 +54,7 @@ mod tests {
         assert!(!generation.is_current(LoginGeneration(0)));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn a_new_attempt_invalidates_the_previous_one() {
         let mut generation = LoginGeneration::default();
         let first = generation.begin();
@@ -64,7 +64,7 @@ mod tests {
         assert!(generation.is_current(second));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn competing_action_invalidates_the_attempt() {
         let mut generation = LoginGeneration::default();
         let token = generation.begin();
@@ -72,7 +72,7 @@ mod tests {
         assert!(!generation.is_current(token));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn consuming_a_token_prevents_duplicate_application() {
         let mut generation = LoginGeneration::default();
         let token = generation.begin();
@@ -81,7 +81,7 @@ mod tests {
         assert!(!generation.is_current(token));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn wrapping_does_not_resurrect_the_zero_sentinel() {
         let mut generation = LoginGeneration(u64::MAX);
         let token = generation.begin();

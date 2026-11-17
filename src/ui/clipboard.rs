@@ -73,7 +73,7 @@ impl ClipboardState {
 mod tests {
     use super::*;
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn due_requires_a_pending_copy_and_elapsed_deadline() {
         let state = ClipboardState::new();
         assert!(!state.due(Instant::now()));
@@ -87,7 +87,7 @@ mod tests {
         assert!(state.due(now + Duration::from_secs(2)));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn zero_delay_is_due_immediately() {
         let mut state = ClipboardState::new();
         let now = Instant::now();
@@ -95,7 +95,7 @@ mod tests {
         assert!(state.due(now));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn consecutive_copies_restore_the_text_they_replaced() {
         let mut state = ClipboardState::new();
         let now = Instant::now();
@@ -105,7 +105,7 @@ mod tests {
         assert!(!state.is_pending());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn unreadable_original_does_not_erase_the_clipboard() {
         let mut state = ClipboardState::new();
         state.begin_copy(None, Instant::now(), 30);
@@ -113,13 +113,13 @@ mod tests {
         assert!(!state.is_pending());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn restore_without_a_pending_copy_is_a_no_op() {
         let mut state = ClipboardState::new();
         assert_eq!(state.take_restore(), None);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn next_restore_state_uses_the_pre_copy_read_and_refreshes_the_deadline() {
         let now = Instant::now();
 
@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(deadline, now + Duration::from_secs(30));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn pending_copy_does_not_suppress_recapture_or_deadline_refresh() {
         let mut state = ClipboardState::new();
         let now = Instant::now();
@@ -149,7 +149,7 @@ mod tests {
         assert!(!state.is_pending());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn unreadable_second_copy_skips_restoration_without_an_empty_write() {
         let mut state = ClipboardState::new();
         let now = Instant::now();

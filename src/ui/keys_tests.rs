@@ -19,7 +19,7 @@ fn ctx(key: &str) -> KeyContext<'_> {
     }
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn text_editing_actions_are_mode_specific() {
     let mut value = ctx("a");
     value.searching = true;
@@ -54,7 +54,7 @@ fn text_editing_actions_are_mode_specific() {
     assert_eq!(classify_key(&value), KeyAction::BackspaceQuery);
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn finish_actions_are_mode_specific() {
     let mut value = ctx("enter");
     value.searching = true;
@@ -91,7 +91,7 @@ fn lock_screen_keys_and_retry_gate() {
     );
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn generator_keys_toggle_options_and_clamp_lengths() {
     let mut state = Settings::default();
     assert!(apply_generator_key(&mut state, "1"));
@@ -199,7 +199,7 @@ fn editing_mode_swallows_shortcut_keys() {
     assert_eq!(classify_key(&value), KeyAction::BackspaceSearch);
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn command_modifiers_suppress_key_actions() {
     let mut value = ctx("l");
     for modifier in [
@@ -225,7 +225,7 @@ fn command_modifiers_suppress_key_actions() {
     }
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn ime_composed_text_is_inserted_whole() {
     let mut value = ctx("unknown");
     value.key_char = Some("日本語");
@@ -253,7 +253,7 @@ fn ime_composed_text_is_inserted_whole() {
     );
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn key_char_is_preferred_over_ascii_key() {
     let mut value = ctx("a");
     value.key_char = Some("ä");
@@ -264,7 +264,7 @@ fn key_char_is_preferred_over_ascii_key() {
     );
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn shift_characters_are_matched_through_key_char() {
     let mut value = ctx("y");
     value.key_char = Some("Y");
@@ -276,7 +276,7 @@ fn shift_characters_are_matched_through_key_char() {
     assert_eq!(classify_key(&value), KeyAction::AdjustLength(1));
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn alt_produced_text_is_inserted() {
     let mut value = ctx("s");
     value.key_char = Some("ß");
@@ -288,7 +288,7 @@ fn alt_produced_text_is_inserted() {
     );
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn space_key_name_inserts_a_space() {
     let mut value = ctx("space");
     value.searching = true;
@@ -298,7 +298,7 @@ fn space_key_name_inserts_a_space() {
     );
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn audit_shortcut_requires_an_available_report() {
     let mut value = ctx("g");
     assert_eq!(classify_key(&value), KeyAction::OpenAudit);
@@ -315,7 +315,7 @@ fn audit_shortcut_requires_an_available_report() {
     assert_eq!(classify_key(&value), KeyAction::CopyTotp);
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn backspace_query_requires_a_nonempty_query() {
     let mut value = ctx("backspace");
     assert_eq!(classify_key(&value), KeyAction::None);

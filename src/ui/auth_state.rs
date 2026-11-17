@@ -145,14 +145,14 @@ impl AuthState {
 mod tests {
     use super::*;
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn empty_state_has_no_credentials() {
         let state = AuthState::new();
         assert!(!state.has_credentials());
         assert!(!state.login_failed());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn edits_target_the_active_field() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientId));
@@ -169,7 +169,7 @@ mod tests {
         assert!(state.client_secret().is_empty());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn push_text_appends_a_whole_ime_string() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientSecret));
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(state.client_secret(), "日本語abc");
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn take_field_returns_and_clears_the_active_field() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::MasterPassword));
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(state.take_field(), None);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn backspace_on_empty_fields_is_a_no_op() {
         let mut state = AuthState::new();
         for field in [
@@ -204,7 +204,7 @@ mod tests {
         assert!(!state.has_credentials());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn clear_secrets_replaces_secret_buffers() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientSecret));
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(state.client_secret(), "n");
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn clear_secrets_keeps_client_id() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientId));
@@ -242,7 +242,7 @@ mod tests {
         assert_eq!(state.field(), None);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn server_url_and_email_fields_ignore_all_edits() {
         let mut state = AuthState::new();
         for field in [AuthField::ServerUrl, AuthField::Email] {
@@ -259,7 +259,7 @@ mod tests {
         }
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn shared_fields_leave_existing_credentials_untouched() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientId));
@@ -278,7 +278,7 @@ mod tests {
         }
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn push_text_caps_each_owned_field_on_a_character_boundary() {
         for (field, limit) in [
             (AuthField::ClientId, MAX_CLIENT_ID_LEN),
@@ -302,7 +302,7 @@ mod tests {
         }
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn push_text_ignores_input_once_a_field_is_full() {
         let mut state = AuthState::new();
         state.set_field(Some(AuthField::ClientId));
@@ -313,7 +313,7 @@ mod tests {
         assert!(!state.client_id().contains("EXTRA"));
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn shared_fields_still_ignore_pushes_beyond_any_cap() {
         // ServerUrl/Email are owned by Settings; their input caps are applied
         // by clamp_auth_config when the AuthConfig is assembled, not here.

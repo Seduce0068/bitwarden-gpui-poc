@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T03:34:10+09:00"
+  at: "2026-11-18T03:50:45+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -31,31 +31,21 @@ stale_after: "2027-05-17T21:04:43+09:00"
   - 現状: 6ファイルに分散、source() 未実装、String 化で原因チェーンが切れる。
   - 受け入れ条件: 共通 AppError（#[from]）または `Box<dyn Error>` で source 保持、
     キャッシュは parse/redact/serialize で別バリアント。
-- [ ] 依存更新・ライセンスゲートを自動化する
-  - 根拠: DEP1 / DEP2
-  - File: .github/（ci.yml のみ）, Cargo.toml:26
-  - 現状: cargo audit は有効だが Dependabot/Renovate と cargo deny が無い。
-    sha2 直接依存は未使用で openwarden の推移依存と重複。
-  - 受け入れ条件: .github/dependabot.yml（cargo 週次）、deny.toml と
-    extra_gates への cargo deny check、未使用 sha2 の削除。
-- [ ] cache モジュールを本番フローへ接続するか削除する
-  - 根拠: A4 / C9-6 / C9-7 / TH6
-  - File: src/cache.rs:70-200, src/lib.rs:21, src/auth.rs:272-306
-  - 現状: cache の読み書き・検証が cache_tests.rs からしか呼ばれず、
-    オフライン復元や同期失敗時のキャッシュ活用が行われない。ADR と乖離。
-  - 受け入れ条件: auth 層から SyncCache へ接続するか feature ゲート／削除し、
-    ADR と実装を一致させる。
 
 ### 優先度: 低
 
 - [ ] link-local 検証を解決先 IP・リダイレクト先まで拡張する（S9-01 / TH5 / API2）
-- [ ] バージョン運用を見直し [Unreleased] を導入する（REL2）
-- [ ] テスト属性を `#[test]` に統一し allow の理由を明記する（T13 / Q7）
 - [ ] デッドコード・過剰な pub を整理する（A7 / A10）
-- [ ] 変更時に docs/adr/log.md を `## YYYY-MM-DD` 形式で追記する（共通指示 §8）
 
 ## 完了
 
+- [x] エージェントチームによる3タスク並列対応・第8弾（2026-11-18）
+  - Dependabot（cargo 週次）/ deny.toml / CI の cargo deny check を追加
+  - sha2 直接依存は SSH fingerprint で使用中と確認し維持（古い記述を修正）
+  - 同期失敗時に暗号化キャッシュから復元する経路を auth 層へ接続（writer は未接続）
+  - テスト属性を `#[test]` に統一（69箇所）。shadowing で不可な3ファイルは理由を明記
+  - ルート担当: `## [Unreleased]` 運用と ADR ログ追記ルールを README に明記
+  - ルート修正: プライベート項目への rustdoc リンクを通常表記へ変更
 - [x] エージェントチームによる4タスク並列対応・第7弾（2026-11-18）
   - デバイス ID を UUID v4 で永続化し再ログイン / 再同期で再利用
   - SSH 公開鍵から SHA-256 fingerprint を再計算して照合

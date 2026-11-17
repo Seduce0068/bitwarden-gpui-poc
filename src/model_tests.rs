@@ -5,7 +5,7 @@ use zeroize::Zeroizing;
 
 use super::unicode_normalize::nfkd;
 
-#[::core::prelude::v1::test]
+#[test]
 fn debug_never_reveals_item_secrets() {
     let item = VaultItem::new(
         "1",
@@ -200,7 +200,7 @@ fn page_matching_uses_bitwarden_rules() {
     assert!(vault.matches_page("http://github.com/", &opts).is_empty());
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn debug_masks_identity_and_uri_details() {
     let identity = VaultItem::new(
         "1",
@@ -241,7 +241,7 @@ fn debug_masks_identity_and_uri_details() {
     assert!(!debug.contains("token"), "{debug}");
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn password_and_totp_secrets_are_not_searchable() {
     let item = login(
         "1",
@@ -522,7 +522,7 @@ fn kind_counts_covers_every_kind() {
     assert_eq!(counts[4], (ItemKind::SshKey, 0));
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn login_secret_fields_are_zeroizing_buffers() {
     let mut item = login("1", "Site", "alice", "old-pw", "https://example.com");
     if let ItemData::Login { password, totp, .. } = &mut item.data {

@@ -285,3 +285,33 @@ fn fallback_returns_not_found_when_both_locations_are_missing() {
         Some(CacheLoadError::NotFound)
     );
 }
+
+// --- Auth-facing restore path (cache is no longer test-only) ---
+
+/// Uses the same process-global env lock as the XDG test above.
+#[cfg(target_os = "linux")]
+#[test]
+fn cached_sync_for_restores_only_a_usable_cache_for_this_server() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-restore-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let cache_home = root.join("xdg-cache-home");
+    let config_home = root.join("xdg-config-home");
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
+
+    // No file: restore is a silent no-op so auth reports the sync failure.
+    assert!(cached_sync_for("https://vault.example.com").is_none());
+
+    save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
+    let restored = cached_sync_for("https://vault.example.com").expect("cache should restore");
+    assert_eq!(restored.user_id(), "user-1");
+
+    // A cache from another server must never be restored.
+    assert!(cached_sync_for("https://other.example.com").is_none());
+
+    // A corrupted cache is ignored just like a missing one.
+    let path = default_path().expect("cache path");
+    std::fs::write(&path, b"not json").unwrap();
+    assert!(cached_sync_for("https://vault.example.com").is_none());
+}

@@ -9,7 +9,8 @@
 //!
 //! Key modules:
 //! - [`model`] / [`vault_sync`]: vault data and the bridge from `openwarden`
-//! - [`auth`] / [`cache`]: login orchestration and the offline sync cache
+//! - [`auth`] / [`cache`]: login orchestration and best-effort offline restore
+//!   from the encrypted sync cache when `/api/sync` fails
 //! - [`generator`] / [`words`]: password and passphrase generation
 //! - [`totp`] / [`health`]: RFC 6238 codes and the vault health audit
 //! - [`settings`]: persisted configuration
