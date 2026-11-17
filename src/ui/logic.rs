@@ -106,6 +106,9 @@ mod tests {
         assert_eq!(adjust_idle_lock(300, -1), 240);
         assert_eq!(adjust_idle_lock(60, -1), 60);
         assert_eq!(adjust_idle_lock(3600, 1), 3600);
+        // Hand-edited / stale values are clamped back into the valid range.
+        assert_eq!(adjust_idle_lock(0, 0), 60);
+        assert_eq!(adjust_idle_lock(10_000, 0), 3600);
     }
 
     #[::core::prelude::v1::test]
