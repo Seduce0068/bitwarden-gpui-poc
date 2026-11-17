@@ -110,6 +110,14 @@ fn load_detailed_distinguishes_missing_and_malformed() {
         Some(SettingsLoadError::ParseFailed)
     );
 
+    // Reading a directory as a file fails (EISDIR on Unix).
+    let directory = std::env::temp_dir().join("bitwarden-gpui-poc-load-dir");
+    std::fs::create_dir_all(&directory).unwrap();
+    assert_eq!(
+        Settings::load_detailed(&directory).err(),
+        Some(SettingsLoadError::ReadFailed)
+    );
+
     for error in [
         SettingsLoadError::NotFound,
         SettingsLoadError::ReadFailed,
