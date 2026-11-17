@@ -139,18 +139,33 @@ impl BitwardenApp {
                 return;
             }
         };
+        let status = format!("ログイン成功: {} 件のログインを読み込みました", vault.len());
+        self.enter_unlocked(vault, status, cx);
+    }
+
+    /// Enter the unlocked screen with a freshly loaded vault.
+    ///
+    /// Both the real login and the mock path go through here, so every
+    /// transition applies the same input reset as `lock`: no auth field,
+    /// settings edit, search query, generated secret or stale selection
+    /// survives. Audit recomputation, `last_activity` and any pending
+    /// clipboard restore keep their existing behaviour.
+    pub(super) fn enter_unlocked(
+        &mut self,
+        vault: crate::model::Vault,
+        status: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.reset_input_state();
         self.view.vault = vault;
-        // 認証情報はログイン成功時点で不要になったので、メモリ上から消去する。
-        self.auth.clear_secrets();
+        // Recomputed from the new vault, as both unlock paths did before.
         self.refresh_audit();
-        self.last_activity = std::time::Instant::now();
-        self.screen = Screen::Unlocked;
         self.panel = Panel::Vault;
-        self.view.selected_id = None;
-        self.status = format!(
-            "ログイン成功: {} 件のログインを読み込みました",
-            self.view.vault.len()
-        );
+        self.screen = Screen::Unlocked;
+        self.view
+            .scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Top);
+        self.status = status;
         cx.notify();
     }
 
@@ -177,19 +192,12 @@ impl BitwardenApp {
     pub(super) fn unlock_mock(&mut self, cx: &mut Context<Self>) {
         // A pending real login must not overwrite the demo vault.
         self.login_generation.invalidate();
-        self.view.vault = mock_vault();
-        self.refresh_audit();
-        self.panel = Panel::Vault;
-        self.screen = Screen::Unlocked;
-        self.view.selected_id = None;
-        self.view
-            .scroll_handle
-            .scroll_to_item(0, ScrollStrategy::Top);
-        self.status = format!(
+        let vault = mock_vault();
+        let status = format!(
             "{} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / y TOTPコピー / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",
-            self.view.vault.len()
+            vault.len()
         );
-        cx.notify();
+        self.enter_unlocked(vault, status, cx);
     }
 }
 

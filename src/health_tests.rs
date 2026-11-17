@@ -391,6 +391,49 @@ fn insecure_uri_messages_never_include_secrets() {
     assert!(!message.contains("secret"), "{message}");
 }
 
+#[::core::prelude::v1::test]
+fn insecure_uri_stores_only_scheme_and_host() {
+    const RAW: &str = "http://user:token@example.com:8080/path?key=secret#frag";
+    const MASKED: &str = "http://example.com:8080";
+
+    let report = report_of(vec![login("1", "A", "vT7#kQm2!zR9wP4$xL8@", RAW, "")]);
+    let (finding, uri) = report.items[0]
+        .findings
+        .iter()
+        .find_map(|f| match f {
+            Finding::InsecureUri { uri } => Some((f, uri)),
+            _ => None,
+        })
+        .expect("the http URI must be reported");
+
+    // The field itself holds the masked form, not the raw URI.
+    assert_eq!(uri, MASKED, "stored uri must be masked");
+    assert_eq!(finding.message(), format!("http の URI（{MASKED}）"));
+
+    // Debug output and serde serialization must not leak credentials, path,
+    // query or fragment -- neither for the finding nor for the whole report.
+    let debug = format!("{finding:?}");
+    let json = serde_json::to_string(finding).expect("serialize finding");
+    let report_debug = format!("{report:?}");
+    let report_json = serde_json::to_string(&report).expect("serialize report");
+    for rendered in [&debug, &json, &report_debug, &report_json] {
+        assert!(rendered.contains(MASKED), "{rendered}");
+        for secret in [
+            "user:token",
+            "token",
+            "/path",
+            "key=secret",
+            "secret",
+            "#frag",
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "leaked {secret:?} in {rendered}"
+            );
+        }
+    }
+}
+
 #[test]
 fn empty_passwords_are_reported_as_weak() {
     let report = report_of(vec![

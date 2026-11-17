@@ -8,13 +8,20 @@ use crate::health::{Report, Severity};
 use crate::settings::Settings;
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
 
+// Scrollable panel roots share the same pattern: a stable id keeps the scroll
+// offset in element state across frames, min_h_0 lets the flex item shrink
+// below its content height, and overflow_y_scroll keeps every row reachable
+// when the window is short.
 pub fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
     let mut panel = div()
+        .id("audit-panel-scroll")
         .flex()
         .flex_col()
         .gap_2()
         .p_4()
         .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
         .child(
             div()
                 .text_lg()
@@ -111,11 +118,14 @@ pub fn generator_panel<'a>(
     let pw_bits = password_entropy(password);
     let pp_bits = passphrase_entropy(passphrase);
     div()
+        .id("generator-panel-scroll")
         .flex()
         .flex_col()
         .gap_2()
         .p_4()
         .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
         .child(
             div()
                 .text_lg()
@@ -206,11 +216,14 @@ pub fn settings_panel<'a>(
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "(設定ディレクトリを特定できません)".to_string());
     div()
+        .id("settings-panel-scroll")
         .flex()
         .flex_col()
         .gap_2()
         .p_4()
         .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
         .child(div().text_lg().font_weight(FontWeight::BOLD).child("設定"))
         .child(field_row(
             "1  サーバー URL",

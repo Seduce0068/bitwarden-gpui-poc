@@ -3,7 +3,10 @@
 use crate::model::{Filter, ItemData, ItemKind, SortKey, Vault, VaultItem};
 use crate::settings::Settings;
 use crate::totp;
+use crate::ui::auth_state::AuthState;
 use crate::ui::state::{GeneratorState, Panel, Screen, SettingsField};
+use crate::ui::totp_state::TotpState;
+use crate::ui::vault_view::VaultViewState;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -21,6 +24,39 @@ pub struct BitwardenApp {
     pub(super) clipboard: crate::ui::clipboard::ClipboardState,
     pub(super) last_activity: std::time::Instant,
     pub focus_handle: FocusHandle,
+}
+
+/// Clear every transient input mode that must not survive a screen change.
+///
+/// This is shared by `lock`, `unlock_mock` and `finish_login` so the same
+/// reset is applied on every transition. It is a free function over the plain
+/// state pieces so it can be tested without a GPUI window (this crate does not
+/// enable gpui's `test-support` feature). Clipboard restoration, vault data
+/// and the audit report belong to the individual transitions and are left
+/// untouched here.
+fn apply_state_reset(
+    editing: &mut Option<SettingsField>,
+    auth: &mut AuthState,
+    view: &mut VaultViewState,
+    generator: &mut GeneratorState,
+    totp: &mut TotpState,
+    last_activity: &mut std::time::Instant,
+    now: std::time::Instant,
+) {
+    *editing = None;
+    // clear_secrets() also drops the active auth field and the failure flag,
+    // and wipes the client secret / master password buffers.
+    auth.clear_secrets();
+    *generator = GeneratorState::default();
+    totp.clear();
+    view.query.clear();
+    view.filter = Filter::All;
+    view.sort = SortKey::NameAsc;
+    view.searching = false;
+    view.selected_id = None;
+    // Both lock and unlock count as activity: an idle lock must not fire
+    // immediately after a successful transition.
+    *last_activity = now;
 }
 
 impl BitwardenApp {
@@ -137,27 +173,34 @@ impl BitwardenApp {
             .view(&self.view.filter, &self.view.query, self.view.sort)
     }
 
-    /// Build an [`AuthConfig`] from the current lock-screen fields.
+    /// Apply the input-mode reset shared by all lock/unlock transitions.
+    ///
+    /// Also stamps `last_activity`; the caller keeps ownership of the vault,
+    /// audit report, clipboard, screen, panel and status message.
+    pub(super) fn reset_input_state(&mut self) {
+        apply_state_reset(
+            &mut self.editing,
+            &mut self.auth,
+            &mut self.view,
+            &mut self.generator,
+            &mut self.totp,
+            &mut self.last_activity,
+            std::time::Instant::now(),
+        );
+    }
+
+    /// Lock the vault: discard the data and clear every transient input mode.
     pub(super) fn lock(&mut self, cx: &mut Context<Self>) {
         // A login finishing after this point must not unlock the vault again.
         self.login_generation.invalidate();
         if let Some(previous) = self.clipboard.take_restore() {
             cx.write_to_clipboard(ClipboardItem::new_string(previous));
         }
+        self.reset_input_state();
         self.view.vault = Vault::new();
         self.view.audit_report = None;
         self.panel = Panel::Vault;
-        self.generator = GeneratorState::default();
-        self.editing = None;
-        self.auth.clear_secrets();
-        self.totp.clear();
-        self.view.query.clear();
-        self.view.filter = Filter::All;
-        self.view.sort = SortKey::NameAsc;
-        self.view.searching = false;
-        self.view.selected_id = None;
         self.screen = Screen::Locked;
-        self.last_activity = std::time::Instant::now();
         self.status = "ロックしました（Enter: ログイン / m: モック）".to_string();
         cx.notify();
     }
@@ -318,5 +361,144 @@ impl BitwardenApp {
             self.settings.thresholds,
             i64::try_from(totp::now_unix()).unwrap_or(i64::MAX),
         ));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::health::Report;
+    use crate::ui::clipboard::ClipboardState;
+    use crate::ui::state::AuthField;
+    use std::time::{Duration, Instant};
+    use zeroize::Zeroizing;
+
+    const TOTP_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    struct DirtyState {
+        editing: Option<SettingsField>,
+        auth: AuthState,
+        view: VaultViewState,
+        generator: GeneratorState,
+        totp: TotpState,
+        last_activity: Instant,
+    }
+
+    /// Every input mode left active by a lock screen, settings panel or
+    /// vault search before a transition.
+    fn dirty_state(now: Instant) -> DirtyState {
+        let mut auth = AuthState::new();
+        auth.set_field(Some(AuthField::MasterPassword));
+        auth.push_text("secret");
+        auth.set_login_failed(true);
+
+        let mut view = VaultViewState::new();
+        view.start_search();
+        view.push_query("term");
+        view.filter = Filter::Folder("folder".into());
+        view.sort = SortKey::NameDesc;
+        view.selected_id = Some("item".into());
+
+        let generator = GeneratorState {
+            last_password: Some(Zeroizing::new("generated".into())),
+            last_passphrase: Some(Zeroizing::new("generated passphrase".into())),
+        };
+
+        let mut totp = TotpState::new();
+        let _ = totp.display(TOTP_SECRET, 40);
+        assert!(totp.has_secret());
+
+        DirtyState {
+            editing: Some(SettingsField::Email),
+            auth,
+            view,
+            generator,
+            totp,
+            last_activity: now.checked_sub(Duration::from_secs(60)).unwrap_or(now),
+        }
+    }
+
+    fn reset(state: &mut DirtyState, now: Instant) {
+        apply_state_reset(
+            &mut state.editing,
+            &mut state.auth,
+            &mut state.view,
+            &mut state.generator,
+            &mut state.totp,
+            &mut state.last_activity,
+            now,
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn state_reset_clears_every_transient_input_mode() {
+        let now = Instant::now();
+        let mut state = dirty_state(now);
+        assert!(state.auth.field().is_some());
+        assert!(state.auth.login_failed());
+
+        reset(&mut state, now);
+
+        assert_eq!(state.editing, None);
+        assert_eq!(state.auth.field(), None);
+        assert!(!state.auth.login_failed());
+        assert!(state.auth.client_secret().is_empty());
+        assert!(state.auth.master_password().is_empty());
+        assert_eq!(state.view.query, "");
+        assert_eq!(state.view.filter, Filter::All);
+        assert_eq!(state.view.sort, SortKey::NameAsc);
+        assert!(!state.view.searching);
+        assert_eq!(state.view.selected_id, None);
+        assert!(state.generator.last_password.is_none());
+        assert!(state.generator.last_passphrase.is_none());
+        assert!(!state.totp.has_secret());
+        assert_eq!(state.last_activity, now);
+    }
+
+    #[::core::prelude::v1::test]
+    fn state_reset_leaves_transition_owned_state_alone() {
+        let now = Instant::now();
+        let mut state = dirty_state(now);
+        state.view.audit_report = Some(Report {
+            items: Vec::new(),
+            examined: 3,
+            with_totp: 1,
+            logins: 2,
+        });
+        let mut clipboard = ClipboardState::new();
+        clipboard.begin_copy(Some("original".into()), now, 30);
+
+        reset(&mut state, now);
+
+        assert_eq!(
+            state
+                .view
+                .audit_report
+                .as_ref()
+                .map(|report| report.examined),
+            Some(3),
+            "the unlock path recomputes the audit report after the reset"
+        );
+        assert!(
+            clipboard.is_pending(),
+            "clipboard restore must survive the reset"
+        );
+        assert_eq!(clipboard.take_restore(), Some("original".into()));
+    }
+
+    #[::core::prelude::v1::test]
+    fn state_reset_is_idempotent() {
+        let now = Instant::now();
+        let mut state = dirty_state(now);
+        reset(&mut state, now);
+        reset(&mut state, now);
+
+        assert_eq!(state.editing, None);
+        assert_eq!(state.auth.field(), None);
+        assert!(!state.view.searching);
+        assert!(state.generator.last_password.is_none());
+        assert!(!state.totp.has_secret());
+        assert_eq!(state.last_activity, now);
     }
 }
