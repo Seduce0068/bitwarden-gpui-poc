@@ -3,11 +3,19 @@
 //! The PoC stores settings in JSON under the user's config directory. No
 //! secrets are persisted here: master passwords and keys live only in memory.
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::io::Read;
 use std::path::PathBuf;
 
 use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::health::Thresholds;
+
+/// Maximum accepted size of `settings.json` (1 MiB). Anything larger is
+/// rejected before parsing so a truncated/garbled file cannot consume memory
+/// or hide a single bad field behind a flood of data.
+pub const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 
 /// Top-level settings object.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +63,8 @@ pub enum SettingsLoadError {
     ReadFailed,
     /// The file exists but is not valid settings JSON.
     ParseFailed,
+    /// The file is larger than [`MAX_SETTINGS_BYTES`].
+    TooLarge,
 }
 
 impl core::fmt::Display for SettingsLoadError {
@@ -72,6 +82,7 @@ impl SettingsLoadError {
             Self::NotFound => "設定ファイルが未作成です（既定値を使用）",
             Self::ReadFailed => "設定ファイルを読み込めません（既定値を使用）",
             Self::ParseFailed => "設定ファイルが破損しています（既定値を使用）",
+            Self::TooLarge => "設定ファイルがサイズ上限（1 MiB）を超えています（既定値を使用）",
         }
     }
 }
@@ -98,6 +109,63 @@ impl core::fmt::Debug for Settings {
     }
 }
 
+/// Whether two JSON values share a type tag. Numbers of different widths or
+/// ranges share a tag; the per-field trial parse below rejects those.
+fn same_json_type(left: &Value, right: &Value) -> bool {
+    matches!(
+        (left, right),
+        (Value::Null, Value::Null)
+            | (Value::Bool(_), Value::Bool(_))
+            | (Value::Number(_), Value::Number(_))
+            | (Value::String(_), Value::String(_))
+            | (Value::Array(_), Value::Array(_))
+            | (Value::Object(_), Value::Object(_))
+    )
+}
+
+/// Deserialize `T` from `input`, falling back to the default **per field**.
+///
+/// `#[serde(default)]` supplies missing fields, but a single field with a
+/// wrong type (or an out-of-range number) still makes `serde_json` reject the
+/// whole struct. Here each input field is offered to a fresh copy of
+/// `T::default()` and kept only when the candidate struct still parses. That
+/// preserves every correctly typed sibling while replacing only the bad field.
+fn tolerant_struct<T>(input: Value) -> T
+where
+    T: DeserializeOwned + Serialize + Default,
+{
+    if let Ok(value) = serde_json::from_value::<T>(input.clone()) {
+        return value;
+    }
+    let Some(input_obj) = input.as_object() else {
+        return T::default();
+    };
+    let Ok(default_value) = serde_json::to_value(T::default()) else {
+        return T::default();
+    };
+    let Some(default_obj) = default_value.as_object() else {
+        return T::default();
+    };
+
+    let mut candidate = default_obj.clone();
+    for (key, input_field) in input_obj {
+        // Unknown keys are ignored; a field whose JSON type differs from its
+        // default cannot be represented by `T` and is replaced by that default.
+        let Some(default_field) = candidate.get(key) else {
+            continue;
+        };
+        if !same_json_type(input_field, default_field) {
+            continue;
+        }
+        let mut trial = candidate.clone();
+        trial.insert(key.clone(), input_field.clone());
+        if serde_json::from_value::<T>(Value::Object(trial.clone())).is_ok() {
+            candidate = trial;
+        }
+    }
+    serde_json::from_value::<T>(Value::Object(candidate)).unwrap_or_default()
+}
+
 impl Settings {
     /// Clamp editable fields to safe ranges before persisting or applying
     /// them. Bounds match the UI adjusters: 1..=60 minutes for idle lock,
@@ -121,23 +189,67 @@ impl Settings {
         dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("settings.json"))
     }
 
-    /// Load settings from `path`, distinguishing missing, unreadable and
-    /// malformed files.
+    /// Load settings from `path`, distinguishing missing, unreadable,
+    /// oversized and malformed files.
+    ///
+    /// Reading is capped at [`MAX_SETTINGS_BYTES`] so a runaway file cannot be
+    /// parsed. Valid fields are kept even when a sibling has the wrong type.
     ///
     /// # Errors
     ///
     /// [`SettingsLoadError`] when the file cannot be used as settings.
     pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<Self, SettingsLoadError> {
-        let contents = std::fs::read_to_string(path).map_err(|error| {
+        let file = std::fs::File::open(path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 SettingsLoadError::NotFound
             } else {
                 SettingsLoadError::ReadFailed
             }
         })?;
-        let settings: Self =
-            serde_json::from_str(&contents).map_err(|_| SettingsLoadError::ParseFailed)?;
-        Ok(settings.sanitized())
+        let metadata = file.metadata().map_err(|_| SettingsLoadError::ReadFailed)?;
+        if metadata.is_dir() {
+            return Err(SettingsLoadError::ReadFailed);
+        }
+        if metadata.len() > MAX_SETTINGS_BYTES {
+            return Err(SettingsLoadError::TooLarge);
+        }
+        // Read at most one byte past the limit to detect files that grew
+        // between the metadata call and the read without loading everything.
+        let mut contents = String::new();
+        file.take(MAX_SETTINGS_BYTES.saturating_add(1))
+            .read_to_string(&mut contents)
+            .map_err(|_| SettingsLoadError::ReadFailed)?;
+        if contents.len() as u64 > MAX_SETTINGS_BYTES {
+            return Err(SettingsLoadError::TooLarge);
+        }
+        Ok(Self::parse_settings(&contents)?.sanitized())
+    }
+
+    /// Parse JSON with per-field tolerance, including the nested structs.
+    ///
+    /// The nested objects are repaired first so that a single bad leaf does
+    /// not discard its correctly typed siblings; the top level is then parsed
+    /// with the same rule. Invalid JSON syntax and a non-object root are the
+    /// only cases that still fail as a whole.
+    fn parse_settings(contents: &str) -> Result<Self, SettingsLoadError> {
+        let mut value: Value =
+            serde_json::from_str(contents).map_err(|_| SettingsLoadError::ParseFailed)?;
+        let Some(obj) = value.as_object_mut() else {
+            return Err(SettingsLoadError::ParseFailed);
+        };
+        if let Some(nested) = obj.get_mut("password_generator") {
+            *nested = serde_json::to_value(tolerant_struct::<PasswordSettings>(nested.clone()))
+                .map_err(|_| SettingsLoadError::ParseFailed)?;
+        }
+        if let Some(nested) = obj.get_mut("passphrase_generator") {
+            *nested = serde_json::to_value(tolerant_struct::<PassphraseSettings>(nested.clone()))
+                .map_err(|_| SettingsLoadError::ParseFailed)?;
+        }
+        if let Some(nested) = obj.get_mut("thresholds") {
+            *nested = serde_json::to_value(tolerant_struct::<Thresholds>(nested.clone()))
+                .map_err(|_| SettingsLoadError::ParseFailed)?;
+        }
+        Ok(tolerant_struct::<Settings>(value))
     }
 
     /// Load settings from `path`, or fall back to defaults on any error.

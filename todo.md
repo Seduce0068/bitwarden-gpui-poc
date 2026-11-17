@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T01:05:23+09:00"
+  at: "2026-11-18T01:30:10+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -35,26 +35,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 中
 
-- [ ] ログイン成功時に last_activity と監査を更新する
-  - 根拠: C9-4 / C9-2
-  - File: src/ui/login_flow.rs:70-86
-  - 現状: 60秒閾値＋30秒認証だと Unlocked 直後に自動ロック。監査も None のまま。
-  - 受け入れ条件: 成功ブランチで last_activity を更新し監査を生成（対象外件数を表示）。
-- [ ] 監査関連の誤判定を修正する（空パスワード・不正 TOTP・カード番号）
-  - 根拠: C4 / C6 / C7 / Q3 / D2
-  - File: src/health.rs:330-333,357-361,405-422
-  - 現状: 空パスワードが WeakPassword として報告されず、不正 TOTP が設定済みとして
-    カウントされ、カード番号空に「URI 未設定」を出す。starts_with("password") が
-    長い高エントロピー値まで誤判定（qwerty 側には上限があるのに不整合）。
-  - 受け入れ条件: is_valid_secret() を利用、カード専用 Finding を追加、
-    password _PREFIX 判定に長さ上限を設ける。
-- [ ] 設定ファイルの読み込みを堅牢化する
-  - 根拠: D1 / ED4 / FS2 / FS3
-  - File: src/settings.rs:128-154, src/generator.rs:44-45,119-120
-  - 現状: ネスト型の serde(default) 欠如・型混在・巨大ファイルで 1フィールドの
-    問題が全設定の既定値化を招き、破損ファイルは退避されず次回保存で失われる。
-  - 受け入れ条件: ネスト型に serde(default)、フィールド単位のフォールバック、
-    サイズ上限、破損ファイルのタイムスタンプ付き退避。
 - [ ] パスワード生成とエントロピー推定を整合させる
   - 根拠: C1 / C2 / C3 / D5 / R4
   - File: src/generator.rs:105-115,131-140,285-296, src/health.rs:235-253, src/words.rs
@@ -196,6 +176,11 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] エージェントチームによる3タスク並列対応（2026-11-18）
+  - 最終操作時刻の更新（src/ui/login_flow.rs）
+  - 監査誤判定の修正（src/health.rs / health_tests.rs）
+  - 設定読み込みの堅牢化（src/settings.rs / settings_tests.rs / generator.rs）
+  - 未着手: 破損ファイルのタイムスタンプ付き退避は別タスクとして残す。
 - [x] 復号処理を UI スレッドからオフロード（2026-11-18）
   - `smol::unblock` で `unlock_and_import` をブロッキングプールへ移動。
   - `LoginResult` で認証失敗 / 復号失敗 / 成功を区別し、UI 側は結果適用のみ。

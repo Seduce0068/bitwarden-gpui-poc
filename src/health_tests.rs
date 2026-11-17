@@ -301,7 +301,8 @@ fn cards_without_a_number_are_flagged_and_notes_are_not() {
     let report = report_of(vec![card, note]);
     assert_eq!(report.items.len(), 1);
     assert_eq!(report.items[0].id, "1");
-    assert!(report.items[0].findings.contains(&Finding::NoUri));
+    assert!(report.items[0].findings.contains(&Finding::NoCardNumber));
+    assert!(!report.items[0].findings.contains(&Finding::NoUri));
     let _ = Folder {
         id: "f".into(),
         name: "F".into(),
@@ -315,6 +316,7 @@ fn severity_labels_and_ordering() {
     assert_eq!(Severity::Low.label(), "低");
     assert!(Finding::NoTotp.message().contains("TOTP"));
     assert!(Finding::NoUri.message().contains("URI"));
+    assert!(Finding::NoCardNumber.message().contains("カード番号"));
     assert!(Finding::Unnamed.message().contains("名前"));
 }
 
@@ -340,6 +342,7 @@ fn every_finding_has_a_nonempty_message() {
         },
         Finding::NoTotp,
         Finding::NoUri,
+        Finding::NoCardNumber,
         Finding::Unnamed,
     ];
     for finding in findings {
@@ -357,6 +360,70 @@ fn insecure_uri_messages_never_include_secrets() {
     assert!(message.contains("http://example.com"), "{message}");
     assert!(!message.contains("token"), "{message}");
     assert!(!message.contains("secret"), "{message}");
+}
+
+#[test]
+fn empty_passwords_are_reported_as_weak() {
+    let report = report_of(vec![
+        login("1", "Empty", "", "https://a.example", "SECRET"),
+        login("2", "Another", "", "https://b.example", "SECRET"),
+    ]);
+    assert_eq!(report.items.len(), 2);
+    for item in &report.items {
+        assert!(
+            item.findings.contains(&Finding::WeakPassword { bits: 0 }),
+            "{item:?}"
+        );
+        // Two empty passwords are not a reused password: they carry no
+        // guessable value to share.
+        assert!(!item
+            .findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::ReusedPassword { .. })));
+    }
+}
+
+#[test]
+fn invalid_totp_is_not_counted_as_configured() {
+    const VALID: &str = "GEZDGNBVGY3TQOJQ";
+    let report = report_of(vec![
+        login(
+            "1",
+            "Broken",
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            "not base32!",
+        ),
+        login(
+            "2",
+            "Good",
+            "wU8$kRl3#aS0yM7&tD2!",
+            "https://b.example",
+            VALID,
+        ),
+    ]);
+    let broken = report.items.iter().find(|item| item.id == "1").unwrap();
+    assert!(broken.findings.contains(&Finding::NoTotp));
+    // The good login is clean, so it has no ItemReport at all.
+    assert!(
+        !report.items.iter().any(|item| item.id == "2"),
+        "a valid TOTP must not create a finding: {:?}",
+        report.items
+    );
+    assert_eq!(report.logins, 2);
+    assert_eq!(report.with_totp, 1);
+    assert!((report.totp_coverage() - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn long_high_entropy_password_prefix_is_not_mistaken_for_common() {
+    let long = "passwordVt7#kQm2!zR9wP4$xL8@";
+    assert!(long.len() > 16, "the value must exceed the prefix cap");
+    let bits = estimate_entropy(long);
+    assert!(bits >= 50, "{bits}");
+    assert!(bits > estimate_entropy("password123"), "{bits}");
+    // The classic short value must still take the dictionary shortcut.
+    assert!(estimate_entropy("password123") < 20);
 }
 
 #[test]

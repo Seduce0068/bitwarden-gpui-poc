@@ -115,6 +115,7 @@ impl BitwardenApp {
         };
         self.view.vault = vault;
         self.refresh_audit();
+        self.last_activity = std::time::Instant::now();
         self.screen = Screen::Unlocked;
         self.panel = Panel::Vault;
         self.view.selected_id = None;

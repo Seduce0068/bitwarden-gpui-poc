@@ -42,6 +42,7 @@ impl GeneratorError {
 
 /// Password generator settings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PasswordSettings {
     /// Length in characters.
     pub length: usize,
@@ -117,6 +118,7 @@ impl PasswordSettings {
 
 /// Passphrase generator settings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PassphraseSettings {
     /// Number of words.
     pub words: usize,
