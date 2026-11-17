@@ -26,7 +26,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - 単体テストは `#[path]` で別ファイルに分割:
   `src/model_tests.rs` / `src/health_tests.rs` /
   `src/generator_tests.rs` / `src/auth_tests.rs` /
-  `src/ui/keys_tests.rs`
+  `src/totp_tests.rs` / `src/ui/keys_tests.rs`
 - `src/main.rs`: アプリケーションの起動のみ
 - 一覧のフィルタ・ソート・検索は `Vault::view()` に委譲しており、テストと同じロジックを通る
 - TOTP は実際の6桁コードを生成し、1秒ごとのカウントダウンを表示する
