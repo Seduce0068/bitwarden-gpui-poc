@@ -24,11 +24,9 @@ impl BitwardenApp {
             };
             item.totp_secret().unwrap_or("").to_string()
         };
-        if secret.trim().is_empty() {
-            self.status = "この項目には TOTP が設定されていません".to_string();
-            cx.notify();
-            return;
-        }
+        // Do not classify an empty secret here: code_at already maps it to
+        // TotpError::Missing. Letting the actual error decide keeps the status
+        // derived from TotpError::message() in every failure path.
         match totp::code_at(&secret, totp::now_unix()) {
             Ok(code) => self.copy_to_clipboard(code.code(), cx),
             Err(error) => {

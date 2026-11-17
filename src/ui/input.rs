@@ -8,6 +8,23 @@ use crate::ui::keys::{classify_key, KeyAction, KeyContext, KeyModifiers};
 use crate::ui::state::Panel;
 use gpui_kit::*;
 
+/// The dedicated key that re-acquires the view's focus handle after focus has
+/// moved elsewhere (for example via Tab).
+///
+/// `F1` is chosen deliberately: [`crate::ui::keys::classify_key`] maps it to
+/// [`KeyAction::None`] on every screen and in every editing mode, and the
+/// default keymaps do not bind it. The global observer that watches this key
+/// therefore cannot change normal key classification or editing behaviour.
+pub(super) const FOCUS_RECOVERY_KEY: &str = "f1";
+
+/// Whether `key` is the dedicated focus-recovery key.
+///
+/// Kept as a pure helper so the invariant that this key is inert in the normal
+/// key classification can be exercised without a GPUI window.
+pub(super) fn is_focus_recovery_key(key: &str) -> bool {
+    key == FOCUS_RECOVERY_KEY
+}
+
 impl BitwardenApp {
     pub(super) fn key_down(
         &mut self,
@@ -161,5 +178,81 @@ impl BitwardenApp {
             }
             KeyAction::None => {}
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::ui::state::Screen;
+
+    fn context(screen: Screen, panel: Panel, key: &str) -> KeyContext<'_> {
+        KeyContext {
+            screen,
+            panel,
+            key,
+            key_char: None,
+            modifiers: KeyModifiers::default(),
+            editing_auth: false,
+            searching: false,
+            editing_settings: false,
+            login_failed: false,
+            has_audit_report: false,
+            query_nonempty: false,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn focus_recovery_key_is_recognised() {
+        assert!(is_focus_recovery_key(FOCUS_RECOVERY_KEY));
+        assert!(is_focus_recovery_key("f1"));
+        assert!(!is_focus_recovery_key("F1"));
+        assert!(!is_focus_recovery_key("f2"));
+        assert!(!is_focus_recovery_key(""));
+    }
+
+    #[::core::prelude::v1::test]
+    fn focus_recovery_key_never_changes_normal_classification() {
+        // Every screen and panel must keep mapping the dedicated recovery key
+        // to `None`, so the global observer cannot trigger a UI action.
+        let mut contexts = vec![
+            context(Screen::Locked, Panel::Vault, FOCUS_RECOVERY_KEY),
+            context(Screen::Unlocked, Panel::Vault, FOCUS_RECOVERY_KEY),
+            context(Screen::Unlocked, Panel::Audit, FOCUS_RECOVERY_KEY),
+            context(Screen::Unlocked, Panel::Generator, FOCUS_RECOVERY_KEY),
+            context(Screen::Unlocked, Panel::Settings, FOCUS_RECOVERY_KEY),
+        ];
+        // Editing modes (search, auth field, settings field) as well.
+        let mut searching = context(Screen::Unlocked, Panel::Vault, FOCUS_RECOVERY_KEY);
+        searching.searching = true;
+        contexts.push(searching);
+        let mut editing_auth = context(Screen::Locked, Panel::Vault, FOCUS_RECOVERY_KEY);
+        editing_auth.editing_auth = true;
+        contexts.push(editing_auth);
+        let mut editing_settings = context(Screen::Unlocked, Panel::Settings, FOCUS_RECOVERY_KEY);
+        editing_settings.editing_settings = true;
+        contexts.push(editing_settings);
+
+        for ctx in &contexts {
+            assert_eq!(
+                classify_key(ctx),
+                KeyAction::None,
+                "the recovery key must stay inert in {ctx:?}"
+            );
+        }
+
+        // A stray `key_char` must not turn F1 into inserted text either.
+        let mut with_char = context(Screen::Unlocked, Panel::Vault, FOCUS_RECOVERY_KEY);
+        with_char.key_char = Some("\u{f1}");
+        assert_eq!(classify_key(&with_char), KeyAction::None);
+
+        // Sanity check: the helper only fires for the dedicated key, and a
+        // normal command key stays classified as before.
+        assert!(!is_focus_recovery_key("l"));
+        assert_eq!(
+            classify_key(&context(Screen::Unlocked, Panel::Vault, "l")),
+            KeyAction::Lock
+        );
     }
 }

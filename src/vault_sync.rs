@@ -2,7 +2,10 @@
 //!
 //! `openwarden` exposes login metadata and decrypts individual fields on
 //! demand. This module keeps those field reads in one place and turns the
-//! result into the same [`VaultItem`]s the UI and tests already use.
+//! result into the same [`VaultItem`]s the UI and tests already use. Passwords
+//! and TOTP secrets are decrypted here and copied into the model's `Zeroizing`
+//! buffers, so the UI can actually audit passwords and generate TOTP codes
+//! after a real login.
 
 use std::collections::{HashMap, HashSet};
 
@@ -10,6 +13,22 @@ use openwarden::{ExposeSecret as _, LoginInfo, Vault as OpenVault};
 use zeroize::Zeroizing;
 
 use crate::model::{Folder, ItemData, LoginUri, Vault, VaultItem};
+
+/// Status marker written to the model's password field when `openwarden`
+/// cannot decrypt a login's password.
+///
+/// It is never a real password and never a secret: the health audit recognises
+/// it and excludes the item from password checks instead of mistaking an empty
+/// buffer for a weak password. The NUL prefix makes a collision with a real
+/// password practically impossible. Keeping the marker in this module (rather
+/// than a new model field) preserves the model's `Debug`/serde contract: the
+/// password is still redacted by `ItemData`'s manual `Debug` implementation.
+pub const UNDECRYPTABLE_PASSWORD: &str = "\u{0}openwarden:undecryptable";
+
+/// Whether a model password is the undecryptable status marker.
+pub fn is_undecryptable_password(value: &str) -> bool {
+    value == UNDECRYPTABLE_PASSWORD
+}
 
 /// A secret-free record of a decision made while importing a login row.
 ///
@@ -98,11 +117,15 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
     Ok(folders)
 }
 
-/// Convert one `openwarden` login into a model item, decrypting the
-/// non-secret fields through the public API.
+/// Convert one `openwarden` login into a model item, decrypting every field
+/// through the public API.
 ///
-/// Passwords and TOTP secrets stay blank: the UI only needs their presence
-/// and length, so we avoid holding every decrypted secret in the model.
+/// The password and TOTP secret are copied into the model's `Zeroizing`
+/// buffers so the audit and the TOTP copy action work on real values. A field
+/// that fails to decrypt never discards the rest of the vault: the password is
+/// replaced with the [`UNDECRYPTABLE_PASSWORD`] status marker (which the health
+/// audit counts as excluded) and an unusable TOTP field is left empty (which
+/// the audit reports as `NoTotp`).
 fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
     let id = info.id.as_str().to_string();
     let name = vault
@@ -125,15 +148,28 @@ fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
             match_type: uri.match_type.map(|kind| kind.to_wire()),
         })
         .collect();
+    let password = match vault.password(&info.id) {
+        Ok(Some(secret)) => Zeroizing::new(secret.expose_secret().to_string()),
+        // No password field at all: genuinely empty, so the audit scores it
+        // as a weak password instead of excluding it.
+        Ok(None) => Zeroizing::new(String::new()),
+        // Decryption failed: mark it as uninspectable rather than pretending
+        // the row has no password.
+        Err(_) => Zeroizing::new(UNDECRYPTABLE_PASSWORD.to_string()),
+    };
+    let totp = match vault.totp_secret(&info.id) {
+        Ok(Some(secret)) => Zeroizing::new(secret.expose_secret().to_string()),
+        // A missing or undecryptable TOTP leaves no usable secret; the audit
+        // reports `NoTotp` for it and no TOTP code can be generated.
+        Ok(None) | Err(_) => Zeroizing::new(String::new()),
+    };
     let mut item = VaultItem::new(
         id.clone(),
         name,
         ItemData::Login {
             username,
-            password: Zeroizing::new(String::new()),
-            // The UI only checks whether the secret is present; keeping the
-            // marker avoids decrypting every TOTP secret up front.
-            totp: Zeroizing::new(if info.has_totp { "available" } else { "" }.to_string()),
+            password,
+            totp,
             uris,
         },
     );
@@ -303,8 +339,8 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
 /// # Errors
 ///
 /// [`SyncError::Locked`] when the source vault has no decryption key.
-/// Individual field decryption failures degrade to placeholder values
-/// instead of failing the import.
+/// Individual field decryption failures are recorded as uninspectable (see
+/// [`UNDECRYPTABLE_PASSWORD`]) instead of failing the import.
 pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
     let (model, _) = import_logins_with_audit(vault)?;
     Ok(model)
@@ -321,8 +357,8 @@ pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
 /// # Errors
 ///
 /// [`SyncError::Locked`] when the source vault has no decryption key.
-/// Individual field decryption failures degrade to placeholder values
-/// instead of failing the import.
+/// Individual field decryption failures are recorded as uninspectable (see
+/// [`UNDECRYPTABLE_PASSWORD`]) instead of failing the import.
 pub fn import_logins_with_audit(vault: &OpenVault) -> Result<(Vault, Vec<ImportAudit>), SyncError> {
     if vault.is_locked() {
         return Err(SyncError::Locked);

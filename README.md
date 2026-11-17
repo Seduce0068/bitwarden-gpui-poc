@@ -131,6 +131,16 @@ cargo run
 
 Linux では Wayland/X11 と GPU ドライバが必要です（`gpui-kit` / wgpu 経由）。
 
+Kubuntu 2026.04 での導入例（未検証のため環境に応じて調整してください）:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential pkg-config libssl-dev \
+  libwayland-dev libxkbcommon-dev
+# mise を利用する場合（rust-version 1.88 以上）
+mise use rust@1.88
+```
+
 ## CI
 
 `.github/workflows/ci.yml` から共通ワークフロー
@@ -142,12 +152,19 @@ clippy の `unwrap_used` / `expect_used` / `panic` /
 一元管理しています（unsafe は crate root の `forbid` でも禁止）。
 監査は脆弱性検出時に失敗し、unmaintained の warning は失敗させません。
 
+変更を送る前に、上記のローカルゲートを同じ順序で実行してください。
+CI バッジは upstream（push 先）が未設定のため記載していません。設定後に
+`.github/workflows/ci.yml` のステータスバッジを追加できます。
+
+## ドキュメント
+
+- 設計記録・レビュー結果: [docs/index.md](docs/index.md)
+- ADR とその更新履歴: [docs/adr/index.md](docs/adr/index.md)
+- 変更履歴: [CHANGELOG.md](CHANGELOG.md)
+
 ## ライセンス
 
 [AGPL-3.0-or-later](LICENSE)（[GNU 公式文書](https://www.gnu.org/licenses/agpl-3.0.txt)）。
-
-設計記録・レビュー結果は [docs/index.md](docs/index.md)、
-変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ## 既知の制約
 

@@ -89,8 +89,35 @@ impl BitwardenApp {
             last_activity: std::time::Instant::now(),
             focus_handle: cx.focus_handle(),
         };
+        this.install_focus_recovery(cx);
         this.start_totp_ticker(cx);
         this
+    }
+
+    /// Install a global keystroke observer that re-acquires this view's focus
+    /// handle after focus has left it (for example via Tab).
+    ///
+    /// The root element owns the `on_key_down` listener (see `render.rs`), so
+    /// when focus moves to another element the normal key path no longer sees
+    /// key presses. A keystroke observer fires regardless of which element is
+    /// focused. It watches only `FOCUS_RECOVERY_KEY`, which `classify_key`
+    /// maps to `KeyAction::None` in every screen and editing mode, so key
+    /// classification and editing behaviour are left completely untouched.
+    pub(super) fn install_focus_recovery(&mut self, cx: &mut Context<Self>) {
+        cx.observe_keystrokes(|view: &mut Self, event, window, cx| {
+            if !crate::ui::input::is_focus_recovery_key(&event.keystroke.key) {
+                return;
+            }
+            // A focused descendant already bubbles keys to the root's handler;
+            // only reclaim focus when it is outside this view.
+            if view.focus_handle.contains_focused(window, cx) {
+                return;
+            }
+            view.focus_handle.focus(window, cx);
+            // Regaining focus is user activity, just like `key_down`.
+            view.last_activity = std::time::Instant::now();
+        })
+        .detach();
     }
 
     /// Invalidate the cached TOTP snapshot once a second so the countdown

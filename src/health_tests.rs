@@ -3,6 +3,7 @@
 use crate::generator::{entropy_bits, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::health::*;
 use crate::model::{CardData, Folder, ItemData, LoginUri, VaultItem};
+use crate::vault_sync::{is_undecryptable_password, UNDECRYPTABLE_PASSWORD};
 use zeroize::Zeroizing;
 
 const NOW: i64 = 1_700_000_000;
@@ -370,6 +371,7 @@ fn every_finding_has_a_nonempty_message() {
             uri: "http://example.com".into(),
         },
         Finding::NoTotp,
+        Finding::PasswordUninspectable,
         Finding::NoUri,
         Finding::NoCardNumber,
         Finding::Unnamed,
@@ -496,6 +498,81 @@ fn long_high_entropy_password_prefix_is_not_mistaken_for_common() {
     assert!(bits > estimate_entropy("password123"), "{bits}");
     // The classic short value must still take the dictionary shortcut.
     assert!(estimate_entropy("password123") < 20);
+}
+
+#[test]
+fn undecryptable_passwords_are_excluded_from_checks_and_counted_in_summary() {
+    // Two identical status markers must not be mistaken for a reused password,
+    // and a marker must never be scored against a real password.
+    let first = login(
+        "1",
+        "Undecryptable A",
+        UNDECRYPTABLE_PASSWORD,
+        "https://a.example",
+        "SECRET",
+    );
+    let second = login(
+        "2",
+        "Undecryptable B",
+        UNDECRYPTABLE_PASSWORD,
+        "https://b.example",
+        "SECRET",
+    );
+    let weak = login("3", "Weak", "1234", "https://c.example", "SECRET");
+    let report = report_of(vec![first, second, weak]);
+
+    assert_eq!(report.password_uninspectable(), 2);
+    for id in ["1", "2"] {
+        let item = report.items.iter().find(|item| item.id == id).unwrap();
+        assert!(item.findings.contains(&Finding::PasswordUninspectable));
+        assert!(
+            !item.findings.iter().any(|finding| matches!(
+                finding,
+                Finding::WeakPassword { .. } | Finding::ReusedPassword { .. }
+            )),
+            "an undecryptable password must not be scored: {item:?}"
+        );
+    }
+    let weak_item = report.items.iter().find(|item| item.id == "3").unwrap();
+    assert!(
+        !weak_item
+            .findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::ReusedPassword { .. })),
+        "the status marker must not create a false reuse match: {weak_item:?}"
+    );
+
+    let summary = report.summary();
+    assert!(summary.contains("パスワード検査対象外: 2 件"), "{summary}");
+    let text = report.to_text();
+    assert!(text.contains("パスワード検査対象外: 2 件"), "{text}");
+    // The marker is still a password field value in the model, so the helper
+    // must be the single source of truth for detecting it.
+    assert!(is_undecryptable_password(UNDECRYPTABLE_PASSWORD));
+    assert!(!is_undecryptable_password("1234"));
+    assert!(!is_undecryptable_password(""));
+}
+
+#[test]
+fn uninspectable_marker_never_reaches_report_debug_serde_or_messages() {
+    let report = report_of(vec![login(
+        "1",
+        "Undecryptable",
+        UNDECRYPTABLE_PASSWORD,
+        "https://a.example",
+        "SECRET",
+    )]);
+    let finding = Finding::PasswordUninspectable;
+    for rendered in [
+        format!("{report:?}"),
+        serde_json::to_string(&report).expect("serialize report"),
+        format!("{finding:?}"),
+        serde_json::to_string(&finding).expect("serialize finding"),
+        finding.message(),
+    ] {
+        assert!(!rendered.contains("undecryptable"), "{rendered}");
+        assert!(!rendered.contains('\0'), "{rendered:?}");
+    }
 }
 
 #[test]

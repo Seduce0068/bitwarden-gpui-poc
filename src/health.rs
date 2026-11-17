@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::generator::{entropy_bits, Strength, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::model::{ItemKind, Vault, VaultItem};
 use crate::totp::is_valid_secret;
+use crate::vault_sync::is_undecryptable_password;
 
 /// A single finding.
 ///
@@ -47,6 +48,9 @@ pub enum Finding {
     },
     /// A login carries no usable TOTP secret.
     NoTotp,
+    /// The encrypted password could not be decrypted, so no strength or reuse
+    /// check was possible. This is informational, not a weak password.
+    PasswordUninspectable,
     /// The item has no URI at all, so autofill can't find it.
     NoUri,
     /// A card item has no card number.
@@ -66,6 +70,9 @@ impl Finding {
                 format!("http の URI（{}）", crate::model::mask_uri(uri))
             }
             Self::NoTotp => "TOTP 未設定".to_string(),
+            Self::PasswordUninspectable => {
+                "パスワード検査対象外（復号できませんでした）".to_string()
+            }
             Self::NoUri => "URI 未設定".to_string(),
             Self::NoCardNumber => "カード番号が空".to_string(),
             Self::Unnamed => "名前が空".to_string(),
@@ -77,7 +84,9 @@ impl Finding {
         match self {
             Self::ReusedPassword { .. } | Self::InsecureUri { .. } => Severity::High,
             Self::WeakPassword { .. } | Self::Stale { .. } | Self::NoCardNumber => Severity::Medium,
-            Self::NoTotp | Self::NoUri | Self::Unnamed => Severity::Low,
+            Self::NoTotp | Self::PasswordUninspectable | Self::NoUri | Self::Unnamed => {
+                Severity::Low
+            }
         }
     }
 }
@@ -157,6 +166,23 @@ impl Report {
             .count()
     }
 
+    /// How many logins had a password that could not be decrypted, so no
+    /// strength or reuse check could run on them.
+    ///
+    /// Derived from the per-item findings instead of stored as a new `Report`
+    /// field: `Report` literals also live in the UI module, so adding a field
+    /// would break code outside this change's write scope.
+    pub fn password_uninspectable(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| {
+                item.findings
+                    .iter()
+                    .any(|finding| matches!(finding, Finding::PasswordUninspectable))
+            })
+            .count()
+    }
+
     /// The share of logins with a TOTP secret, 0.0..=1.0.
     pub fn totp_coverage(&self) -> f32 {
         if self.logins == 0 {
@@ -167,18 +193,24 @@ impl Report {
 
     /// A one-line summary for the panel header.
     pub fn summary(&self) -> String {
-        if self.items.is_empty() {
-            return format!("{} 件を検査: 問題は見つかりませんでした", self.examined);
-        }
-        format!(
-            "{} 件を検査: {} 件に {} 個の問題（高 {} / 中 {} / 低 {}）",
-            self.examined,
-            self.affected(),
-            self.total_findings(),
-            self.count_of(Severity::High),
-            self.count_of(Severity::Medium),
-            self.count_of(Severity::Low)
-        )
+        let mut out = if self.items.is_empty() {
+            format!("{} 件を検査: 問題は見つかりませんでした", self.examined)
+        } else {
+            format!(
+                "{} 件を検査: {} 件に {} 個の問題（高 {} / 中 {} / 低 {}）",
+                self.examined,
+                self.affected(),
+                self.total_findings(),
+                self.count_of(Severity::High),
+                self.count_of(Severity::Medium),
+                self.count_of(Severity::Low)
+            )
+        };
+        out.push_str(&format!(
+            " / パスワード検査対象外: {} 件",
+            self.password_uninspectable()
+        ));
+        out
     }
 
     /// A plain-text rendering of the report (currently used by tests).
@@ -191,6 +223,10 @@ impl Report {
             self.with_totp,
             self.logins,
             self.totp_coverage() * 100.0
+        ));
+        out.push_str(&format!(
+            "パスワード検査対象外: {} 件\n",
+            self.password_uninspectable()
         ));
         for item in &self.items {
             out.push_str(&format!(
@@ -359,7 +395,9 @@ pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
     let mut passwords: HashMap<&str, Vec<&str>> = HashMap::new();
     for item in &vault.items {
         if let Some(password) = item.password() {
-            if !password.is_empty() {
+            // Empty passwords have no guessable value, and undecryptable ones
+            // are excluded from every password check (including reuse).
+            if !password.is_empty() && !is_undecryptable_password(password) {
                 passwords.entry(password).or_default().push(&item.id);
             }
         }
@@ -421,16 +459,23 @@ fn audit_item(
             totp,
             uris: _,
         } => {
-            // An empty password has zero entropy, so any positive threshold
-            // flags it. It is deliberately excluded from the reuse map in
-            // `audit`, so the lookup below simply finds nothing for it.
-            let bits = estimate_entropy(password);
-            if bits < thresholds.weak_bits {
-                findings.push(Finding::WeakPassword { bits });
-            }
-            if let Some(ids) = passwords.get(password.as_str()) {
-                if ids.len() > 1 {
-                    findings.push(Finding::ReusedPassword { count: ids.len() });
+            if is_undecryptable_password(password) {
+                // The ciphertext could not be opened, so there is nothing to
+                // score. Report the exclusion itself instead of a misleading
+                // "weak password" or a fake reuse match.
+                findings.push(Finding::PasswordUninspectable);
+            } else {
+                // An empty password has zero entropy, so any positive
+                // threshold flags it. It is deliberately excluded from the
+                // reuse map in `audit`, so the lookup finds nothing for it.
+                let bits = estimate_entropy(password);
+                if bits < thresholds.weak_bits {
+                    findings.push(Finding::WeakPassword { bits });
+                }
+                if let Some(ids) = passwords.get(password.as_str()) {
+                    if ids.len() > 1 {
+                        findings.push(Finding::ReusedPassword { count: ids.len() });
+                    }
                 }
             }
             if !is_valid_secret(totp) {

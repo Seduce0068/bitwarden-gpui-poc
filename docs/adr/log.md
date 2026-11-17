@@ -6,6 +6,7 @@
 - 監査・設定読み込み・生成・同期・ticker の挙動変更を反映
 - Unicode 正規化を `unicode-normalization` クレートへ委譲した旨を記録
 - 本ログへの導線を `index.md` に追加
+- 暗号層 → UI の往復（パスワード / TOTP 実復号）を実装した旨を記録
 - 実接続と API key の注意を README に追記し、本 ADR の実装結果を更新
 
 ## 2026-11-17
