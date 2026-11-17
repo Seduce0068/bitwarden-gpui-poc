@@ -87,7 +87,7 @@ zeroize 側の制約で保証外）、TOTP シークレットの検索除外、�
 
 - `cargo fmt --all -- --check`
 - `cargo check --all-targets --locked`
-- `cargo test --all-targets --locked`（129 passed、並列 / `--test-threads=1` の
+- `cargo test --all-targets --locked`（131 passed、並列 / `--test-threads=1` の
   両方で同一結果、flaky なし）
 - `cargo clippy --all-targets --locked -- -D warnings -D clippy::unwrap_used
   -D clippy::expect_used -D clippy::panic`
