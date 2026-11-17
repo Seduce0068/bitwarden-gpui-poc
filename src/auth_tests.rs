@@ -136,6 +136,14 @@ fn validation_fails_before_the_timeout_race() {
 #[test]
 fn error_messages_are_present() {
     for error in [
+        UnlockError::MissingProtectedKey,
+        UnlockError::UnlockFailed("detail".into()),
+        UnlockError::ApplySyncFailed("detail".into()),
+        UnlockError::ImportFailed("detail".into()),
+    ] {
+        assert!(!error.message().is_empty(), "{error:?}");
+    }
+    for error in [
         AuthError::MissingField("email"),
         AuthError::InvalidServerUrl,
         AuthError::BlockedServerUrl,
