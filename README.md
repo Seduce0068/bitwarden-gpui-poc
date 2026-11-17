@@ -18,7 +18,8 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   健全性監査、設定の永続化を提供。すべて単体テスト付き
 - `src/ui/`: アプリ状態（`app.rs`）、Vault ビュー状態（`vault_view.rs`）、
   アクション（`actions.rs`）、認証フロー
-  （`login_flow.rs`）と認証状態（`auth_state.rs`）、クリップボード状態
+  （`login_flow.rs` / `login_generation.rs`）と認証状態（`auth_state.rs`）、
+  クリップボード状態
   （`clipboard.rs`）、キー入力（`input.rs`）、
   モックデータ（`mock.rs`）、GPUI 描画（`render.rs`）、純粋判定ロジック（`logic.rs`）、
   キー分類（`keys.rs`）、時刻判定（`timing.rs`）、TOTP 表示状態

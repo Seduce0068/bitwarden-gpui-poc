@@ -8,6 +8,7 @@ pub mod input;
 pub mod keys;
 pub mod logic;
 pub mod login_flow;
+pub mod login_generation;
 pub mod mock;
 pub mod panels;
 pub mod render;

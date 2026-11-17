@@ -19,6 +19,7 @@ pub struct BitwardenApp {
     pub(super) settings: Settings,
     pub(super) editing: Option<SettingsField>,
     pub(super) auth: crate::ui::auth_state::AuthState,
+    pub(super) login_generation: crate::ui::login_generation::LoginGeneration,
     pub(super) clipboard: crate::ui::clipboard::ClipboardState,
     pub(super) last_activity: std::time::Instant,
     pub focus_handle: FocusHandle,
@@ -51,6 +52,7 @@ impl BitwardenApp {
             settings,
             editing: None,
             auth: crate::ui::auth_state::AuthState::new(),
+            login_generation: crate::ui::login_generation::LoginGeneration::default(),
             clipboard: crate::ui::clipboard::ClipboardState::new(),
             last_activity: std::time::Instant::now(),
             focus_handle: cx.focus_handle(),
@@ -127,6 +129,8 @@ impl BitwardenApp {
 
     /// Build an [`AuthConfig`] from the current lock-screen fields.
     pub(super) fn lock(&mut self, cx: &mut Context<Self>) {
+        // A login finishing after this point must not unlock the vault again.
+        self.login_generation.invalidate();
         self.clipboard.restore(cx);
         self.view.vault = Vault::new();
         self.view.audit_report = None;
