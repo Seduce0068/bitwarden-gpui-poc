@@ -40,6 +40,18 @@ fn longer_and_wider_passwords_score_higher() {
     assert!(wide > narrow, "{wide} vs {narrow}");
 }
 
+#[::core::prelude::v1::test]
+fn non_ascii_passwords_use_the_wide_pool() {
+    let japanese = estimate_entropy("あいうえおかきくけこ");
+    let ascii_same_length = estimate_entropy("abcdefghij");
+    assert!(
+        japanese > ascii_same_length,
+        "{japanese} vs {ascii_same_length}"
+    );
+    // The same non-ASCII character repeated has no entropy.
+    assert_eq!(estimate_entropy("あああああ"), 0);
+}
+
 #[test]
 fn numeric_pins_are_charged_the_digit_pool() {
     // 10 digits * 4 chars = ~13 bits, not 33 bits.
