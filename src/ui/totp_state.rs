@@ -59,13 +59,13 @@ mod tests {
 
     const SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn empty_state_has_no_secret() {
         let state = TotpState::new();
         assert!(!state.has_secret());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn display_caches_then_reuses_and_invalidates() {
         let mut state = TotpState::new();
         let first = state.display(SECRET, 40);
@@ -84,7 +84,7 @@ mod tests {
         assert!(!state.has_secret());
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn clear_then_display_a_different_secret() {
         let mut state = TotpState::new();
         let first = state.display(SECRET, 40);
@@ -99,7 +99,7 @@ mod tests {
         assert_ne!(second, first, "a new secret must not reuse the old code");
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn invalid_secret_reports_failure() {
         let mut state = TotpState::new();
         let value = state.display("not base32!", 0);

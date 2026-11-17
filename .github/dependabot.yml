@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # Cargo 依存を週次でチェックし、更新 PR を作成する。
+  # gpui-kit / openwarden は Cargo.toml で `=` ピン留めしているため、
+  # 更新 PR が来た場合は API 互換性を確認してからマージする。
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10

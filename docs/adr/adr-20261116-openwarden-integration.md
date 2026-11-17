@@ -52,6 +52,9 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
    から既存の `model::Vault` / `VaultItem` へ変換する
 3. `src/main.rs`: ロック画面から API key とマスターパスワードを入力させ、
    統合層を非同期で呼ぶ。認証情報は `Settings` に保存しない
+4. `cache` モジュール（新設）: 暗号化済み同期 body を保持し、`/api/sync`
+   失敗時に auth 層がオフライン復元する。詳細は
+   「Implementation Result」のオフラインキャッシュの項を参照
 
 ## Consequences
 
@@ -71,6 +74,11 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 暗号処理と API クライアントを自前実装する案は、暗号学的な誤実装リスクが
 高く採用しない。`bitwarden-cli` などの外部プロセスへ委譲する案は、
 インストール済みバイナリへの依存とプロセス間通信が増えるため採用しない。
+
+キャッシュの feature ゲート／削除も検討した。しかし `openwarden` 0.1.0 は
+`SyncData::from_json` を公開しており、同期失敗時の復元経路は接続可能である。
+テスト専用のまま残すより復元を接続する方が目的に合うため、削除は採用しない。
+書き込み側だけは下記のとおり API 制約で接続できない。
 
 ## Implementation Plan
 
@@ -95,15 +103,36 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 device identifier は固定値であり、インストールごとの一意性は未保証。
 API key はテスト専用アカウントで使用すること（権限範囲の注意は README 参照）。
 
-オフラインキャッシュについて: `src/cache.rs` は暗号化済み同期データの
-保存・読み込みを実装済みだが、`openwarden` 0.1.0 の `Client::sync()` は
-レスポンス body を返さず、`Session::access_token` も private なため、
-認証フローからキャッシュを保存できない。実装するには openwarden 側の
-API 拡張（sync body の公開）または独自 HTTP クライアントが必要。
+オフラインキャッシュについて: `src/cache.rs` の読み込み・検証を認証フローへ
+接続した。`authenticate_inner` は `Client::sync()` が失敗した場合、
+`cache::cached_sync_for` でプラットフォームのキャッシュディレクトリ
+（旧設定ディレクトリは読み取り専用フォールバック）から暗号化済み body を
+読み出し、サーバー URL を照合して `SyncData` に戻す。復号には生セッションの
+protected key を使うため、キャッシュは鍵素材を一切提供しない
+（保存前に `profile.key` / `privateKey` を除去済み）。復元したかどうかは
+`AuthenticatedVault::from_cache` に記録する。
+
+ただし書き込み側は接続していない。`openwarden` 0.1.0 の `Client::sync()` は
+解析済み `SyncData` のみ返して raw body を公開せず、`Session::access_token`
+も private、`SyncData` のフィールドも `pub(crate)` である。したがって
+ログインフローから `SyncCache::from_body` に渡す body を取得できず、
+`save_default` を呼ぶ本番経路が無い。キャッシュファイルが存在するのは
+旧リリースが書いた既存ファイル、または外部から配置した場合に限られる。
+初回からオフラインの場合は従来どおり `AuthError::Sync` を返す。
+書き込みを有効化するには openwarden 側の API 拡張（sync body の公開）または
+独自 HTTP クライアントとトークン管理が必要である。
+
+オフライン復元の未解決点: `from_cache` は UI のステータスにまだ反映されず、
+復元データが古いことを利用者に通知できない。同期失敗時には新しい user id が
+得られないためキャッシュのアカウント照合ができず、同一サーバーの別アカウント
+のキャッシュを読んでも検出できない（鍵が一致しないため復号側で失敗する）。
+キャッシュに有効期限は無く、鍵ローテーション後は復号できない。
 
 ## Status
 
 Self-reviewed by agent at 2026-11-17T00:27:33+09:00.
+Cache restore wiring re-reviewed against the current implementation at
+2026-11-18T03:44:54+09:00.
 
 ## Links
 

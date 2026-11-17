@@ -73,7 +73,7 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
-    #[::core::prelude::v1::test]
+    #[test]
     fn write_private_sets_restrictive_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -89,7 +89,7 @@ mod tests {
         assert_eq!(file_mode, 0o600, "file must be readable only by owner");
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn write_private_corrects_permissions_of_an_existing_file() {
         #[cfg(unix)]
         {
@@ -110,7 +110,7 @@ mod tests {
         }
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn write_private_replaces_existing_content_and_leaves_no_temp() {
         let dir = std::env::temp_dir().join("bitwarden-gpui-poc-atomic-test");
         let _ = std::fs::remove_dir_all(&dir);
@@ -125,7 +125,7 @@ mod tests {
         assert_only_file(&dir.join("nested"), "data.json");
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn parallel_writes_to_the_same_path_are_atomic() {
         let dir = std::env::temp_dir().join("bitwarden-gpui-poc-parallel-test");
         let _ = std::fs::remove_dir_all(&dir);
@@ -144,7 +144,7 @@ mod tests {
         assert_only_file(&dir, "shared.json");
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn parent_dir_handles_bare_relative_names() {
         assert_eq!(parent_dir(Path::new("foo.json")), Path::new("."));
         assert_eq!(

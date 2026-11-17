@@ -129,7 +129,7 @@ fn debug_never_reveals_the_code() {
     assert!(rendered.contains("redacted"));
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn code_equality_uses_only_the_validity_window() {
     let a = code_at(RFC_SECRET, 40).unwrap();
     let b = code_at(RFC_SECRET, 40).unwrap();

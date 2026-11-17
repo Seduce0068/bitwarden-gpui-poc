@@ -36,7 +36,7 @@ fn round_trip_through_temp_file() {
     assert_eq!(loaded, settings);
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn debug_masks_email() {
     let settings = Settings {
         email: "alice@example.com".into(),
@@ -48,7 +48,7 @@ fn debug_masks_email() {
     assert!(debug.contains("vault.bitwarden.com"), "{debug}");
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn sanitized_clamps_editable_fields() {
     let settings = Settings {
         idle_lock_seconds: 0,
@@ -80,7 +80,7 @@ fn sanitized_clamps_editable_fields() {
     assert_eq!(settings.thresholds.weak_bits, u32::MAX);
 }
 
-#[::core::prelude::v1::test]
+#[test]
 fn load_sanitizes_hand_edited_values() {
     let path = std::env::temp_dir().join("bitwarden-gpui-poc-sanitize.json");
     std::fs::write(

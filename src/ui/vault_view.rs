@@ -186,7 +186,7 @@ mod tests {
         state
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn next_index_clamps_at_the_ends() {
         // Two visible rows: indices 0 and 1. A step far past either end must
         // land on a real row, not outside the list.
@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(VaultViewState::new().next_index(-1), None);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn selection_is_revalidated_after_filtering() {
         let mut state = state_with_items();
         state.selected_id = Some("a".into());
@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(state.selected_id, None);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn push_query_appends_a_whole_ime_string() {
         let mut state = state_with_items();
         state.push_query("日本");
@@ -261,7 +261,7 @@ mod tests {
             .map(|request| (request.item_index, request.strategy))
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn cycle_filter_clears_selection() {
         let mut state = state_with_items();
         state.selected_id = Some("a".into());
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(state.filter, Filter::Favorites);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn every_deselection_path_rewinds_to_the_first_row() {
         // One observable result shared by all deselection paths: no selection
         // and a deferred scroll to row 0 with the Top strategy.
@@ -315,7 +315,7 @@ mod tests {
         }
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn cycling_from_a_folder_or_nofolder_returns_to_all() {
         let mut state = state_with_items();
         state.filter = Filter::Folder("f1".into());
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(state.filter, Filter::All);
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn search_editing_updates_query_and_selection() {
         let mut state = state_with_items();
         state.selected_id = Some("a".into());

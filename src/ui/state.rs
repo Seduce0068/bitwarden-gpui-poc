@@ -84,7 +84,7 @@ impl core::fmt::Debug for GeneratorState {
 mod tests {
     use super::*;
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn debug_masks_generated_secrets() {
         let state = GeneratorState {
             last_password: Some(Zeroizing::new("generated-password".into())),
@@ -101,7 +101,7 @@ mod tests {
         assert!(debug.contains("None"), "{debug}");
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn generated_secrets_have_str_views_and_replacement_stays_redacted() {
         let mut state = GeneratorState {
             last_password: Some(Zeroizing::new("old-password".into())),

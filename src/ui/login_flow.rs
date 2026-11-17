@@ -216,6 +216,10 @@ impl BitwardenApp {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    // `use gpui_kit::*` at module scope brings gpui's `test` attribute macro
+    // into this module through `use super::*`. A bare `#[test]` resolves to
+    // that macro instead of the built-in one and expands recursively, so
+    // these tests name the built-in attribute by its absolute path.
     use super::*;
 
     #[::core::prelude::v1::test]

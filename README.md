@@ -162,6 +162,10 @@ CI バッジは upstream（push 先）が未設定のため記載していませ
 - ADR とその更新履歴: [docs/adr/index.md](docs/adr/index.md)
 - 変更履歴: [CHANGELOG.md](CHANGELOG.md)
 
+変更を加えたコミットでは、[CHANGELOG.md](CHANGELOG.md) の `## [Unreleased]`
+に差分を積み、ADR に影響する場合は
+[docs/adr/log.md](docs/adr/log.md) へ `## YYYY-MM-DD` 形式で追記します。
+
 ## ライセンス
 
 [AGPL-3.0-or-later](LICENSE)（[GNU 公式文書](https://www.gnu.org/licenses/agpl-3.0.txt)）。
