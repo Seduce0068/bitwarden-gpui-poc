@@ -8,29 +8,29 @@ use crate::totp::Tick;
 ///
 /// The secret buffer is wiped when replaced or on lock.
 #[derive(Default)]
-pub struct TotpState {
+pub(super) struct TotpState {
     secret: Zeroizing<String>,
     tick: Option<Tick>,
 }
 
 impl TotpState {
     /// Create an empty state.
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::default()
     }
 
     /// Whether a secret is currently being displayed.
-    pub fn has_secret(&self) -> bool {
+    pub(super) fn has_secret(&self) -> bool {
         !self.secret.is_empty()
     }
 
     /// Drop the cached code so the next display samples a fresh one.
-    pub fn invalidate(&mut self) {
+    pub(super) fn invalidate(&mut self) {
         self.tick = None;
     }
 
     /// Forget the secret entirely, e.g. when the vault is locked.
-    pub fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         // Replacing the value drops (and wipes) the old secret buffer.
         self.secret = Zeroizing::new(String::new());
         self.tick = None;
@@ -38,7 +38,7 @@ impl TotpState {
 
     /// Return the display string for `secret` at `now`, refreshing the
     /// cached code when the secret or time period changed.
-    pub fn display(&mut self, secret: &str, now: u64) -> String {
+    pub(super) fn display(&mut self, secret: &str, now: u64) -> String {
         if self.secret.as_str() != secret
             || self.tick.as_ref().is_none_or(|tick| !tick.is_fresh(now))
         {

@@ -12,7 +12,7 @@ use crate::ui::state::{GeneratorState, Panel, SettingsField};
 // offset in element state across frames, min_h_0 lets the flex item shrink
 // below its content height, and overflow_y_scroll keeps every row reachable
 // when the window is short.
-pub fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
+pub(super) fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
     let mut panel = div()
         .id("audit-panel-scroll")
         .flex()
@@ -73,7 +73,7 @@ pub fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
     panel
 }
 
-pub fn setting_row<'a>(label: &'a str, enabled: bool) -> impl IntoElement + 'a {
+pub(super) fn setting_row<'a>(label: &'a str, enabled: bool) -> impl IntoElement + 'a {
     div()
         .flex()
         .gap_3()
@@ -90,7 +90,7 @@ pub fn setting_row<'a>(label: &'a str, enabled: bool) -> impl IntoElement + 'a {
         )
 }
 
-pub fn result_row<'a>(label: &'a str, value: Option<&'a str>) -> impl IntoElement + 'a {
+pub(super) fn result_row<'a>(label: &'a str, value: Option<&'a str>) -> impl IntoElement + 'a {
     div()
         .flex()
         .gap_3()
@@ -109,7 +109,7 @@ pub fn result_row<'a>(label: &'a str, value: Option<&'a str>) -> impl IntoElemen
         )
 }
 
-pub fn generator_panel<'a>(
+pub(super) fn generator_panel<'a>(
     settings: &'a Settings,
     state: &'a GeneratorState,
 ) -> impl IntoElement + 'a {
@@ -174,7 +174,11 @@ pub fn generator_panel<'a>(
         )
 }
 
-pub fn field_row<'a>(label: &'a str, value: &'a str, editing: bool) -> impl IntoElement + 'a {
+pub(super) fn field_row<'a>(
+    label: &'a str,
+    value: &'a str,
+    editing: bool,
+) -> impl IntoElement + 'a {
     div()
         .flex()
         .gap_3()
@@ -206,7 +210,7 @@ pub fn field_row<'a>(label: &'a str, value: &'a str, editing: bool) -> impl Into
         )
 }
 
-pub fn settings_panel<'a>(
+pub(super) fn settings_panel<'a>(
     settings: &'a Settings,
     editing: Option<SettingsField>,
 ) -> impl IntoElement + 'a {
@@ -260,7 +264,7 @@ pub fn settings_panel<'a>(
         ))
 }
 
-pub fn panel_button<V: 'static>(
+pub(super) fn panel_button<V: 'static>(
     label: &str,
     panel: Panel,
     current: Panel,
@@ -284,7 +288,7 @@ pub fn panel_button<V: 'static>(
         .into_any_element()
 }
 
-pub fn auth_row<'a>(
+pub(super) fn auth_row<'a>(
     label: &'a str,
     value: &'a str,
     editing: bool,

@@ -6,23 +6,23 @@ use crate::ui::logic::selection_in_view;
 use gpui_kit::UniformListScrollHandle;
 
 /// Everything that describes what the vault list currently shows.
-pub struct VaultViewState {
+pub(super) struct VaultViewState {
     /// The vault data.
-    pub vault: Vault,
+    pub(super) vault: Vault,
     /// Active sidebar filter.
-    pub filter: Filter,
+    pub(super) filter: Filter,
     /// Search query.
-    pub query: String,
+    pub(super) query: String,
     /// Sort order.
-    pub sort: SortKey,
+    pub(super) sort: SortKey,
     /// Whether the search box is active.
-    pub searching: bool,
+    pub(super) searching: bool,
     /// Stable id of the selected item.
-    pub selected_id: Option<String>,
+    pub(super) selected_id: Option<String>,
     /// Last health audit result.
-    pub audit_report: Option<Report>,
+    pub(super) audit_report: Option<Report>,
     /// Scroll position of the item list.
-    pub scroll_handle: UniformListScrollHandle,
+    pub(super) scroll_handle: UniformListScrollHandle,
 }
 
 impl Default for VaultViewState {
@@ -33,7 +33,7 @@ impl Default for VaultViewState {
 
 impl VaultViewState {
     /// Create an empty, locked view.
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             vault: Vault::new(),
             filter: Filter::All,
@@ -47,7 +47,7 @@ impl VaultViewState {
     }
 
     /// Items passing the current filter and query, in sort order.
-    pub fn visible_items(&self) -> Vec<&VaultItem> {
+    pub(super) fn visible_items(&self) -> Vec<&VaultItem> {
         self.vault.view(&self.filter, &self.query, self.sort)
     }
 
@@ -63,13 +63,14 @@ impl VaultViewState {
     /// valid". Filter and sort changes, search edits and confirmation, item
     /// removal and vault reset all funnel through here, so every path that
     /// drops the selection leaves the same visible range behind.
-    pub fn deselect_and_rewind(&mut self) {
+    pub(super) fn deselect_and_rewind(&mut self) {
         self.selected_id = None;
         self.scroll_to_top();
     }
 
     /// Reset the view when locking the vault.
-    pub fn reset(&mut self) {
+    #[cfg(test)]
+    pub(super) fn reset(&mut self) {
         self.vault = Vault::new();
         self.query.clear();
         self.filter = Filter::All;
@@ -80,7 +81,7 @@ impl VaultViewState {
     }
 
     /// Ensure the selected id still names a visible item.
-    pub fn revalidate_selection(&mut self) -> bool {
+    pub(super) fn revalidate_selection(&mut self) -> bool {
         let visible = self.visible_items();
         let valid = selection_in_view(
             self.selected_id.as_deref(),
@@ -93,7 +94,7 @@ impl VaultViewState {
     }
 
     /// Select a row by its index, returning whether it changed.
-    pub fn select_index(&mut self, index: usize) -> bool {
+    pub(super) fn select_index(&mut self, index: usize) -> bool {
         let visible = self.visible_items();
         let Some(item) = visible.get(index) else {
             return false;
@@ -108,7 +109,8 @@ impl VaultViewState {
 
     /// Compute the next selection index for a relative move, without mutating
     /// the selection itself.
-    pub fn next_index(&self, delta: isize) -> Option<usize> {
+    #[cfg(test)]
+    pub(super) fn next_index(&self, delta: isize) -> Option<usize> {
         let visible = self.visible_items();
         if visible.is_empty() {
             return None;
@@ -122,7 +124,7 @@ impl VaultViewState {
     }
 
     /// Cycle to the next filter, clearing the selection and rewinding the list.
-    pub fn cycle_filter(&mut self) {
+    pub(super) fn cycle_filter(&mut self) {
         self.filter = match self.filter {
             Filter::All => Filter::Favorites,
             Filter::Favorites => Filter::Kind(ItemKind::Login),
@@ -137,25 +139,26 @@ impl VaultViewState {
     }
 
     /// Begin a fresh search.
-    pub fn start_search(&mut self) {
+    #[cfg(test)]
+    pub(super) fn start_search(&mut self) {
         self.searching = true;
         self.query.clear();
         self.deselect_and_rewind();
     }
 
     /// Finish search or settings editing.
-    pub fn finish_search(&mut self) {
+    pub(super) fn finish_search(&mut self) {
         self.searching = false;
     }
 
     /// Append a character to the search query.
-    pub fn push_query(&mut self, text: &str) {
+    pub(super) fn push_query(&mut self, text: &str) {
         self.query.push_str(text);
         self.deselect_and_rewind();
     }
 
     /// Remove the last character from the search query.
-    pub fn pop_query(&mut self) {
+    pub(super) fn pop_query(&mut self) {
         self.query.pop();
         self.deselect_and_rewind();
     }

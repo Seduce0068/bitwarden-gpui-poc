@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T03:50:45+09:00"
+  at: "2026-11-18T04:23:07+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -23,22 +23,16 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 未着手
 
-### 優先度: 中
-
-- [ ] エラー型を集約し source チェーンを保持する
-  - 根拠: E5
-  - File: src/auth.rs:182-190, src/vault_sync.rs:45, src/cache.rs:71-105, src/totp.rs:117
-  - 現状: 6ファイルに分散、source() 未実装、String 化で原因チェーンが切れる。
-  - 受け入れ条件: 共通 AppError（#[from]）または `Box<dyn Error>` で source 保持、
-    キャッシュは parse/redact/serialize で別バリアント。
-
-### 優先度: 低
-
-- [ ] link-local 検証を解決先 IP・リダイレクト先まで拡張する（S9-01 / TH5 / API2）
-- [ ] デッドコード・過剰な pub を整理する（A7 / A10）
+なし（2026-11-18 時点）。
 
 ## 完了
 
+- [x] 残り3タスクを依存関係付きチーム並列で完結（2026-11-18）
+  - 共通 `AppError` と `source()` チェーン、cache の parse/redact/serialize 分離
+  - link-local: メタデータホスト・DNS 解決先 IP・埋め込みリテラルを拒否
+  - UI モジュールの過剰な pub を整理（114箇所、テスト専用は `#[cfg(test)]`）
+  - 未解決（既知制約）: リダイレクト先検査と DNS rebinding 防止は openwarden
+    0.1.0 の公開 API では不可能なため未対応。README に明記。
 - [x] エージェントチームによる3タスク並列対応・第8弾（2026-11-18）
   - Dependabot（cargo 週次）/ deny.toml / CI の cargo deny check を追加
   - sha2 直接依存は SSH fingerprint で使用中と確認し維持（古い記述を修正）

@@ -22,23 +22,10 @@ pub const SYMBOLS: &str = "!@#$%^&*";
 const AMBIGUOUS: &[char] = &['l', 'I', '1', 'O', '0', 'o'];
 
 /// Failures the generator can report.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GeneratorError {
-    /// The OS random source failed.
-    RandomUnavailable,
-    /// The settings would produce an empty character set or result.
-    InvalidSettings,
-}
-
-impl GeneratorError {
-    /// A message for the UI.
-    pub const fn message(self) -> &'static str {
-        match self {
-            Self::RandomUnavailable => "OS の乱数源を利用できません",
-            Self::InvalidSettings => "生成設定が不正です（文字種または長さを確認）",
-        }
-    }
-}
+///
+/// Alias of [`AppError`](crate::error::AppError); a failed OS random draw keeps
+/// the `getrandom::Error` in `Error::source()`.
+pub type GeneratorError = crate::error::AppError;
 
 /// Password generator settings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,7 +196,9 @@ fn draw_below(bound: u16) -> Result<u16, GeneratorError> {
     // avoid discarding too many draws; the loop retries up to 1024 times.
     let mut buf = [0u8; 4];
     for _ in 0..1024 {
-        getrandom::fill(&mut buf).map_err(|_| GeneratorError::RandomUnavailable)?;
+        getrandom::fill(&mut buf).map_err(|error| {
+            GeneratorError::RandomUnavailableCause(crate::error::BoxedCause::new(error))
+        })?;
         // Pack four bytes into a u32 so `bound << 8` still fits comfortably.
         let value = u32::from_le_bytes(buf);
         if bound <= 256 {

@@ -20,6 +20,7 @@
 
 pub mod auth;
 pub mod cache;
+pub mod error;
 pub mod generator;
 pub mod health;
 pub mod model;

@@ -5,6 +5,7 @@ use zeroize::Zeroizing;
 use crate::auth::{
     truncate_to_limit, MAX_CLIENT_ID_LEN, MAX_CLIENT_SECRET_LEN, MAX_MASTER_PASSWORD_LEN,
 };
+#[cfg(test)]
 use crate::ui::logic::has_credentials;
 use crate::ui::state::AuthField;
 
@@ -33,7 +34,7 @@ fn push_capped(target: &mut String, text: &str, limit: usize) {
 /// Like all `Vec`/`String`-based zeroization, this cannot wipe copies left
 /// behind by earlier reallocations while characters were appended one by one.
 #[derive(Default)]
-pub struct AuthState {
+pub(super) struct AuthState {
     field: Option<AuthField>,
     client_id: String,
     client_secret: Zeroizing<String>,
@@ -43,52 +44,53 @@ pub struct AuthState {
 
 impl AuthState {
     /// Create empty state.
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::default()
     }
 
     /// The field currently being edited, if any.
-    pub fn field(&self) -> Option<AuthField> {
+    pub(super) fn field(&self) -> Option<AuthField> {
         self.field
     }
 
     /// Start or stop editing a field.
-    pub fn set_field(&mut self, field: Option<AuthField>) {
+    pub(super) fn set_field(&mut self, field: Option<AuthField>) {
         self.field = field;
     }
 
     /// Stop editing and return the previous field.
-    pub fn take_field(&mut self) -> Option<AuthField> {
+    pub(super) fn take_field(&mut self) -> Option<AuthField> {
         self.field.take()
     }
 
     /// Whether any credential field has input.
-    pub fn has_credentials(&self) -> bool {
+    #[cfg(test)]
+    pub(super) fn has_credentials(&self) -> bool {
         has_credentials(&self.client_id, &self.client_secret, &self.master_password)
     }
 
     /// The API key client id.
-    pub fn client_id(&self) -> &str {
+    pub(super) fn client_id(&self) -> &str {
         &self.client_id
     }
 
     /// The API key client secret.
-    pub fn client_secret(&self) -> &str {
+    pub(super) fn client_secret(&self) -> &str {
         &self.client_secret
     }
 
     /// The master password.
-    pub fn master_password(&self) -> &str {
+    pub(super) fn master_password(&self) -> &str {
         &self.master_password
     }
 
     /// Whether the last login attempt failed.
-    pub fn login_failed(&self) -> bool {
+    pub(super) fn login_failed(&self) -> bool {
         self.login_failed
     }
 
     /// Set the login-failure flag.
-    pub fn set_login_failed(&mut self, value: bool) {
+    pub(super) fn set_login_failed(&mut self, value: bool) {
         self.login_failed = value;
     }
 
@@ -100,7 +102,7 @@ impl AuthState {
     /// `ServerUrl` and `Email` are shared with settings and handled by the
     /// caller, so they are ignored here. Their caps are applied by
     /// `crate::auth::clamp_auth_config` when the `AuthConfig` is built.
-    pub fn push_text(&mut self, text: &str) {
+    pub(super) fn push_text(&mut self, text: &str) {
         match self.field {
             Some(AuthField::ClientId) => push_capped(&mut self.client_id, text, MAX_CLIENT_ID_LEN),
             Some(AuthField::ClientSecret) => {
@@ -114,7 +116,7 @@ impl AuthState {
     }
 
     /// Remove the last character from the active credential field.
-    pub fn pop_char(&mut self) {
+    pub(super) fn pop_char(&mut self) {
         match self.field {
             Some(AuthField::ClientId) => {
                 self.client_id.pop();
@@ -131,7 +133,7 @@ impl AuthState {
 
     /// Clear secrets and the failure flag on lock, keeping the client id as a
     /// convenience for the next unlock attempt.
-    pub fn clear_secrets(&mut self) {
+    pub(super) fn clear_secrets(&mut self) {
         // Replacing the value drops the old Zeroizing buffer, which wipes it.
         self.client_secret = Zeroizing::new(String::new());
         self.master_password = Zeroizing::new(String::new());

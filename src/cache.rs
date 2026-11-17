@@ -20,23 +20,11 @@ use std::path::PathBuf;
 use crate::vault_sync;
 
 /// Errors produced while reading an offline sync cache.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SyncCacheError {
-    /// The cached body is missing or cannot be parsed.
-    InvalidCache,
-    /// The cache belongs to a different account.
-    UserMismatch,
-    /// The cache was fetched from a different server.
-    ServerMismatch,
-}
-
-impl core::fmt::Display for SyncCacheError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(cache_error_message(*self))
-    }
-}
-
-impl std::error::Error for SyncCacheError {}
+///
+/// Alias of [`AppError`](crate::error::AppError). Parsing, redaction and
+/// serialization have separate `CacheParse` / `CacheRedact` / `CacheSerialize`
+/// variants, each retaining the underlying error through `Error::source()`.
+pub type SyncCacheError = crate::error::AppError;
 
 /// A cached sync response, still encrypted.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +66,8 @@ impl SyncCache {
     /// [`SyncCacheError::InvalidCache`] when the body is not a valid sync
     /// response.
     pub fn from_body(body: Vec<u8>, server_url: &str) -> Result<Self, SyncCacheError> {
-        let sync = vault_sync::parse_sync(&body).map_err(|_| SyncCacheError::InvalidCache)?;
+        let sync = vault_sync::parse_sync(&body)
+            .map_err(|error| SyncCacheError::CacheParse(crate::error::BoxedCause::new(error)))?;
         let user_id = sync.user_id().to_string();
         let sanitized = redact_profile_keys(&body)?;
         Ok(Self {
@@ -95,15 +84,16 @@ impl SyncCache {
     ///
     /// [`SyncCacheError::InvalidCache`] when the body no longer parses.
     pub fn sync(&self) -> Result<openwarden::SyncData, SyncCacheError> {
-        vault_sync::parse_sync(&self.body).map_err(|_| SyncCacheError::InvalidCache)
+        vault_sync::parse_sync(&self.body)
+            .map_err(|error| SyncCacheError::CacheParse(crate::error::BoxedCause::new(error)))
     }
 }
 
 /// Remove key material from a raw sync body, keeping the rest of the
 /// encrypted ciphers and folders intact.
 fn redact_profile_keys(body: &[u8]) -> Result<Vec<u8>, SyncCacheError> {
-    let mut value: serde_json::Value =
-        serde_json::from_slice(body).map_err(|_| SyncCacheError::InvalidCache)?;
+    let mut value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| SyncCacheError::CacheRedact(crate::error::BoxedCause::new(error)))?;
     if let Some(profile) = value
         .get_mut("profile")
         .and_then(|entry| entry.as_object_mut())
@@ -112,7 +102,8 @@ fn redact_profile_keys(body: &[u8]) -> Result<Vec<u8>, SyncCacheError> {
         profile.remove("privateKey");
         profile.remove("private_key");
     }
-    serde_json::to_vec(&value).map_err(|_| SyncCacheError::InvalidCache)
+    serde_json::to_vec(&value)
+        .map_err(|error| SyncCacheError::CacheSerialize(crate::error::BoxedCause::new(error)))
 }
 
 /// The default cache file path.
@@ -180,37 +171,10 @@ pub fn load_default() -> Result<SyncCache, CacheLoadError> {
 }
 
 /// Why a cache entry could not be loaded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CacheLoadError {
-    /// The cache file does not exist yet.
-    NotFound,
-    /// The file exists but could not be read.
-    ReadFailed,
-    /// The file exists but is not valid cache JSON.
-    ParseFailed,
-    /// The cache was written by an incompatible version.
-    VersionMismatch,
-}
-
-impl core::fmt::Display for CacheLoadError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.message())
-    }
-}
-
-impl std::error::Error for CacheLoadError {}
-
-impl CacheLoadError {
-    /// A message for the UI status bar.
-    pub const fn message(self) -> &'static str {
-        match self {
-            Self::NotFound => "キャッシュが未作成です",
-            Self::ReadFailed => "キャッシュを読み込めません",
-            Self::ParseFailed => "キャッシュが破損しています",
-            Self::VersionMismatch => "キャッシュのバージョンが古いです",
-        }
-    }
-}
+///
+/// Alias of [`AppError`](crate::error::AppError); read and parse failures keep
+/// the original `std::io::Error` / `serde_json::Error` in `Error::source()`.
+pub type CacheLoadError = crate::error::AppError;
 
 /// Read a cache entry, distinguishing missing, unreadable, malformed and
 /// outdated files.
@@ -223,11 +187,11 @@ pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<SyncCache, Cac
         if error.kind() == std::io::ErrorKind::NotFound {
             CacheLoadError::NotFound
         } else {
-            CacheLoadError::ReadFailed
+            CacheLoadError::ReadFailedCause(crate::error::BoxedCause::new(error))
         }
     })?;
-    let cache: SyncCache =
-        serde_json::from_slice(&contents).map_err(|_| CacheLoadError::ParseFailed)?;
+    let cache: SyncCache = serde_json::from_slice(&contents)
+        .map_err(|error| CacheLoadError::ParseFailedCause(crate::error::BoxedCause::new(error)))?;
     if cache.version != SyncCache::VERSION {
         return Err(CacheLoadError::VersionMismatch);
     }
@@ -315,11 +279,15 @@ pub fn validate(cache: &SyncCache, user_id: &str, server_url: &str) -> Result<()
 }
 
 /// Map a cache error to the status-bar error type used by the auth layer.
-pub const fn cache_error_message(error: SyncCacheError) -> &'static str {
+pub fn cache_error_message(error: SyncCacheError) -> &'static str {
     match error {
         SyncCacheError::InvalidCache => "キャッシュが破損しています",
         SyncCacheError::UserMismatch => "キャッシュが別のアカウントのものです",
         SyncCacheError::ServerMismatch => "キャッシュが別のサーバーのものです",
+        // The cache/load variants and the new parse/redact/serialize variants
+        // all use the same status text; keep the message for every other error
+        // stable instead of panicking on a variant from another layer.
+        _ => "キャッシュが破損しています",
     }
 }
 

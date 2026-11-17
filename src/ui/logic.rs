@@ -9,14 +9,15 @@ use crate::ui::state::Panel;
 /// The server URL and email may be pre-filled from settings, so they are not
 /// considered here. An empty client id, secret or master password means the
 /// demo vault is opened instead.
-pub fn has_credentials(client_id: &str, client_secret: &str, master_password: &str) -> bool {
+#[cfg(test)]
+pub(super) fn has_credentials(client_id: &str, client_secret: &str, master_password: &str) -> bool {
     !client_id.is_empty() || !client_secret.is_empty() || !master_password.is_empty()
 }
 
 /// Whether `selected_id` still names an item in the current view.
 ///
 /// `None` is valid: the UI falls back to showing the first item.
-pub fn selection_in_view<'a>(
+pub(super) fn selection_in_view<'a>(
     selected_id: Option<&str>,
     ids: impl IntoIterator<Item = &'a str>,
 ) -> bool {
@@ -29,7 +30,7 @@ pub fn selection_in_view<'a>(
 /// Run the vault health audit with an explicit clock value.
 ///
 /// Keeping the clock as a parameter makes the audit reproducible in tests.
-pub fn compute_audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
+pub(super) fn compute_audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
     audit(vault, thresholds, now)
 }
 
@@ -37,7 +38,7 @@ pub fn compute_audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report 
 ///
 /// The audit panel needs a generated report; falling back to the vault list
 /// here keeps `KeyContext.panel` in sync with what is drawn.
-pub fn effective_panel(requested: Panel, has_audit_report: bool) -> Panel {
+pub(super) fn effective_panel(requested: Panel, has_audit_report: bool) -> Panel {
     if requested == Panel::Audit && !has_audit_report {
         Panel::Vault
     } else {
@@ -47,7 +48,7 @@ pub fn effective_panel(requested: Panel, has_audit_report: bool) -> Panel {
 
 /// Adjust the idle auto-lock timeout in one-minute steps, clamped to 1..=60
 /// minutes.
-pub fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
+pub(super) fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
     let current_minutes = (current_seconds / 60).clamp(1, 60) as i64;
     let next = (current_minutes + i64::from(delta_minutes)).clamp(1, 60);
     (next * 60) as u64
@@ -57,7 +58,7 @@ pub fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
 /// 1..=200 bits and 1..=3650 days.
 ///
 /// `delta` is +1 for `+`/`=` and -1 for `-`/`_`.
-pub fn adjust_thresholds(current: Thresholds, delta: i32) -> Thresholds {
+pub(super) fn adjust_thresholds(current: Thresholds, delta: i32) -> Thresholds {
     let weak_step = delta.saturating_mul(5);
     let day_step = delta.saturating_mul(30);
     Thresholds {
