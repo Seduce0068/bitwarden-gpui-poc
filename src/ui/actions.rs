@@ -71,10 +71,10 @@ impl BitwardenApp {
         cx.notify();
     }
 
-    pub(super) fn push_editing(&mut self, character: char) {
+    pub(super) fn push_editing(&mut self, text: &str) {
         match self.editing {
-            Some(SettingsField::ServerUrl) => self.server_url.push(character),
-            Some(SettingsField::Email) => self.email.push(character),
+            Some(SettingsField::ServerUrl) => self.server_url.push_str(text),
+            Some(SettingsField::Email) => self.email.push_str(text),
             None => {}
         }
     }

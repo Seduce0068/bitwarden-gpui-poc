@@ -97,11 +97,11 @@ impl BitwardenApp {
         cx.notify();
     }
 
-    pub(super) fn edit_auth_field(&mut self, character: char) {
+    pub(super) fn edit_auth_field(&mut self, text: &str) {
         match self.auth.field() {
-            Some(AuthField::ServerUrl) => self.server_url.push(character),
-            Some(AuthField::Email) => self.email.push(character),
-            _ => self.auth.push_char(character),
+            Some(AuthField::ServerUrl) => self.server_url.push_str(text),
+            Some(AuthField::Email) => self.email.push_str(text),
+            _ => self.auth.push_text(text),
         }
     }
 

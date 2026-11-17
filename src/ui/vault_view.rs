@@ -137,8 +137,8 @@ impl VaultViewState {
     }
 
     /// Append a character to the search query.
-    pub fn push_query(&mut self, character: char) {
-        self.query.push(character);
+    pub fn push_query(&mut self, text: &str) {
+        self.query.push_str(text);
         self.selected_id = None;
     }
 
@@ -196,6 +196,14 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn push_query_appends_a_whole_ime_string() {
+        let mut state = state_with_items();
+        state.push_query("日本");
+        state.push_query("語");
+        assert_eq!(state.query, "日本語");
+    }
+
+    #[::core::prelude::v1::test]
     fn cycle_filter_clears_selection() {
         let mut state = state_with_items();
         state.selected_id = Some("a".into());
@@ -223,8 +231,8 @@ mod tests {
         state.start_search();
         assert!(state.searching);
         assert_eq!(state.selected_id, None);
-        state.push_query('B');
-        state.push_query('e');
+        state.push_query("B");
+        state.push_query("e");
         assert_eq!(state.query, "Be");
         // view() lowercases the query before matches_query sees it.
         assert_eq!(state.visible_items().len(), 1);
