@@ -1,8 +1,5 @@
 //! Shared view state types.
 
-use crate::generator::{PassphraseSettings, PasswordSettings};
-use crate::settings::Settings;
-
 /// Which top-level screen is visible.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
@@ -49,15 +46,11 @@ pub enum AuthField {
     MasterPassword,
 }
 
-/// Editable generator settings and the last values drawn from them.
+/// Last values drawn from the generator; configuration lives in `Settings`.
 ///
-/// `Debug` masks the last generated values so secrets are not printed.
+/// `Debug` masks the generated values so secrets are not printed.
 #[derive(Clone, Default)]
 pub struct GeneratorState {
-    /// Password generator settings.
-    pub password: PasswordSettings,
-    /// Passphrase generator settings.
-    pub passphrase: PassphraseSettings,
     /// Last generated password.
     pub last_password: Option<String>,
     /// Last generated passphrase.
@@ -67,8 +60,6 @@ pub struct GeneratorState {
 impl core::fmt::Debug for GeneratorState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GeneratorState")
-            .field("password", &self.password)
-            .field("passphrase", &self.passphrase)
             .field(
                 "last_password",
                 &self.last_password.as_ref().map(|_| "[redacted]"),
@@ -81,42 +72,16 @@ impl core::fmt::Debug for GeneratorState {
     }
 }
 
-impl GeneratorState {
-    /// Build generator state from persisted settings.
-    pub fn from_settings(settings: &Settings) -> Self {
-        Self {
-            password: settings.password_generator.clone(),
-            passphrase: settings.passphrase_generator.clone(),
-            last_password: None,
-            last_passphrase: None,
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
-    fn from_settings_copies_generator_config_without_results() {
-        let mut settings = Settings::default();
-        settings.password_generator.length = 42;
-        settings.passphrase_generator.words = 7;
-
-        let state = GeneratorState::from_settings(&settings);
-        assert_eq!(state.password.length, 42);
-        assert_eq!(state.passphrase.words, 7);
-        assert!(state.last_password.is_none());
-        assert!(state.last_passphrase.is_none());
-    }
-
-    #[::core::prelude::v1::test]
     fn debug_masks_generated_secrets() {
         let state = GeneratorState {
             last_password: Some("generated-password".into()),
             last_passphrase: Some("correct-horse-battery".into()),
-            ..Default::default()
         };
         let debug = format!("{state:?}");
         assert!(!debug.contains("generated-password"), "{debug}");

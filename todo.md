@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T00:01:26+09:00"
+  at: "2026-11-18T00:24:56+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -32,12 +32,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     監査もパスワードを検査対象外として扱うため「問題なし」と誤信させる。
   - 受け入れ条件: 実ログイン後に TOTP コピーが成功し、監査サマリーがパスワード検査
     対象外件数を明示する（またはオンデマンド復号で実際に検査する）。
-- [ ] 設定の真実源を一本化する
-  - 根拠: A1（Runtime Proof 裏付け）
-  - File: src/ui/app.rs:12-13,40-43,134, src/ui/actions.rs:53-63, src/ui/login_flow.rs:89-106
-  - 現状: `self.server_url/email` と `settings` の双方向ミラー。ロック画面の編集が
-    `w` 保存なしで失われ、lock() が generator を settings から再構築し巻き戻る。
-  - 受け入れ条件: Settings を単一真実源にするか、全編集経路が通る単一更新コマンドを設ける。
 
 ### 優先度: 中
 
@@ -222,6 +216,13 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 設定の真実源を `Settings` に一本化（2026-11-18）
+  - `server_url` / `email` / 生成設定のミラーを廃止し、全読み書きを
+    `Settings` へ直接化。`sync_settings_from_ui()` と
+    `GeneratorState::from_settings()` を削除。
+  - `GeneratorState` は生成結果のみを保持し、lock() でクリア。
+  - 敵対的レビューで機能バグなしと判定。配線レベルのテスト欠如と
+    権限範囲（apply_generator_key が &mut Settings を受け取る点）は残存。
 - [x] 修飾キーと IME 入力を扱う（2026-11-18）
   - `KeyModifiers` / `key_char` を `KeyContext` へ追加。Ctrl/Cmd/Fn は常に
     除外、Alt は編集中に文字が生成された場合のみ許可。
