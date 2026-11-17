@@ -23,6 +23,8 @@ impl BitwardenApp {
     /// The demo vault is opened only through the explicit `OpenDemoVault`
     /// action, so `Enter` always means a real login attempt.
     pub(super) fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
+        // Any new attempt cancels an in-flight one, even when validation fails.
+        self.login_generation.invalidate();
         let config = self.auth_config();
         if let Err(error) = validate_config(&config) {
             self.status = error.message().to_string();
@@ -30,6 +32,7 @@ impl BitwardenApp {
             return;
         }
         self.auth.set_login_failed(false);
+        let generation = self.login_generation.begin();
         self.status = "ログイン中…".to_string();
         cx.notify();
         // A fixed identifier is enough for the PoC; a real installation would
@@ -43,7 +46,7 @@ impl BitwardenApp {
                     let result =
                         crate::auth::authenticate_with_timeout(&config, &device_id, timeout).await;
                     cx.update(|cx| {
-                        this.update(cx, |view, cx| view.finish_login(result, cx))
+                        this.update(cx, |view, cx| view.finish_login(result, generation, cx))
                             .ok();
                     });
                 }
@@ -53,11 +56,19 @@ impl BitwardenApp {
     }
 
     /// Apply the result of an asynchronous login on the UI thread.
+    ///
+    /// Results from a cancelled or superseded attempt are discarded.
     pub(super) fn finish_login(
         &mut self,
         result: Result<crate::auth::AuthenticatedVault, crate::auth::AuthError>,
+        generation: crate::ui::login_generation::LoginGeneration,
         cx: &mut Context<Self>,
     ) {
+        if !self.login_generation.is_current(generation) {
+            return;
+        }
+        // Consume the token so a duplicate callback cannot apply twice.
+        self.login_generation.invalidate();
         let authenticated = match result {
             Ok(value) => value,
             Err(error) => {
@@ -107,6 +118,8 @@ impl BitwardenApp {
     }
 
     pub(super) fn unlock_mock(&mut self, cx: &mut Context<Self>) {
+        // A pending real login must not overwrite the demo vault.
+        self.login_generation.invalidate();
         self.view.vault = mock_vault();
         self.generator = GeneratorState::from_settings(&self.settings);
         self.refresh_audit();

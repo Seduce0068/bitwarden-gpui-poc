@@ -39,6 +39,8 @@ impl BitwardenApp {
             KeyAction::Authenticate | KeyAction::RetryLogin => self.unlock_with_auth(cx),
             KeyAction::OpenDemoVault => self.unlock_mock(cx),
             KeyAction::EditAuthField(field) => {
+                // Changing credentials invalidates any in-flight attempt.
+                self.login_generation.invalidate();
                 self.auth.set_field(Some(field));
                 cx.notify();
             }
@@ -47,6 +49,7 @@ impl BitwardenApp {
                 cx.notify();
             }
             KeyAction::FinishAuthEdit => {
+                self.login_generation.invalidate();
                 self.auth.take_field();
                 cx.notify();
             }
@@ -60,6 +63,7 @@ impl BitwardenApp {
                 cx.notify();
             }
             KeyAction::InsertAuthChar(character) => {
+                self.login_generation.invalidate();
                 self.edit_auth_field(character);
                 cx.notify();
             }
@@ -72,6 +76,7 @@ impl BitwardenApp {
                 cx.notify();
             }
             KeyAction::BackspaceAuth => {
+                self.login_generation.invalidate();
                 self.backspace_auth_field();
                 cx.notify();
             }
