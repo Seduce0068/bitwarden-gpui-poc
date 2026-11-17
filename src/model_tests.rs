@@ -3,6 +3,8 @@
 use crate::model::*;
 use zeroize::Zeroizing;
 
+use super::unicode_normalize::nfkd;
+
 #[::core::prelude::v1::test]
 fn debug_never_reveals_item_secrets() {
     let item = VaultItem::new(
@@ -360,6 +362,120 @@ fn duplicate_names_group_case_insensitively() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].0, "github");
     assert_eq!(groups[0].1, vec!["1".to_string(), "4".to_string()]);
+}
+
+#[test]
+fn nfkd_absorbs_canonical_and_compatibility_differences() {
+    // NFC vs NFD (precomposed vs base + combining mark).
+    assert_eq!(nfkd("Caf\u{e9}"), nfkd("Cafe\u{301}"));
+    // Canonical ordering of combining marks with different combining classes.
+    assert_eq!(nfkd("a\u{301}\u{327}"), nfkd("a\u{327}\u{301}"));
+    // Full-width ASCII vs ASCII.
+    assert_eq!(nfkd("\u{ff21}\u{ff22}\u{ff23}"), "ABC");
+    // Ideographic space vs ASCII space.
+    assert_eq!(nfkd("\u{3000}"), " ");
+    // Half-width katakana (with a half-width voiced mark) vs full-width ガ.
+    assert_eq!(nfkd("\u{ff76}\u{ff9e}"), nfkd("\u{30ac}"));
+}
+
+#[test]
+fn search_absorbs_unicode_form_differences() {
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "Caf\u{e9}", "user", "pw", "https://a.example"));
+    // An NFD query must find an NFC name.
+    assert_eq!(
+        vault
+            .view(&Filter::All, "cafe\u{301}", SortKey::NameAsc)
+            .len(),
+        1
+    );
+    // The NFC query must find the same item.
+    assert_eq!(
+        vault
+            .view(&Filter::All, "caf\u{e9}", SortKey::NameAsc)
+            .len(),
+        1
+    );
+
+    vault
+        .items
+        .push(login("2", "GitHub", "user", "pw", "https://b.example"));
+    // A full-width query must find the ASCII name.
+    assert_eq!(
+        vault
+            .view(
+                &Filter::All,
+                "\u{ff47}\u{ff49}\u{ff54}\u{ff48}\u{ff55}\u{ff42}",
+                SortKey::NameAsc,
+            )
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn search_absorbs_halfwidth_katakana() {
+    let mut vault = Vault::new();
+    vault.items.push(login(
+        "1",
+        "\u{30ab}\u{30bf}\u{30ab}\u{30ca}",
+        "user",
+        "pw",
+        "https://example.com",
+    ));
+    assert_eq!(
+        vault
+            .view(
+                &Filter::All,
+                "\u{ff76}\u{ff80}\u{ff76}\u{ff85}",
+                SortKey::NameAsc,
+            )
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn duplicate_names_normalize_forms_and_skip_blanks() {
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "Caf\u{e9}", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("2", "Cafe\u{301}", "u", "p", "https://b.example"));
+    vault.items.push(login(
+        "3",
+        "\u{ff21}\u{ff42}\u{ff43}",
+        "u",
+        "p",
+        "https://c.example",
+    ));
+    vault
+        .items
+        .push(login("4", "abc", "u", "p", "https://d.example"));
+    // Blank names (empty, ASCII spaces, ideographic space) must not be
+    // reported as duplicates of each other.
+    vault
+        .items
+        .push(login("5", "", "u", "p", "https://e.example"));
+    vault
+        .items
+        .push(login("6", "   ", "u", "p", "https://f.example"));
+    vault
+        .items
+        .push(login("7", "\u{3000}", "u", "p", "https://g.example"));
+
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 2, "{groups:?}");
+    let keys: Vec<&str> = groups.iter().map(|(key, _)| key.as_str()).collect();
+    assert!(keys.contains(&"cafe\u{301}"), "{keys:?}");
+    assert!(keys.contains(&"abc"), "{keys:?}");
+    for (_, ids) in &groups {
+        assert_eq!(ids.len(), 2, "{groups:?}");
+    }
 }
 
 #[test]

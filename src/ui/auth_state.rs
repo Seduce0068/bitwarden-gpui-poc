@@ -213,4 +213,40 @@ mod tests {
         assert!(!state.login_failed());
         assert_eq!(state.field(), None);
     }
+
+    #[::core::prelude::v1::test]
+    fn server_url_and_email_fields_ignore_all_edits() {
+        let mut state = AuthState::new();
+        for field in [AuthField::ServerUrl, AuthField::Email] {
+            state.set_field(Some(field));
+            state.push_text("https://vault.example.com");
+            state.push_text("user@example.com");
+            state.pop_char();
+
+            assert_eq!(state.field(), Some(field));
+            assert!(state.client_id().is_empty());
+            assert!(state.client_secret().is_empty());
+            assert!(state.master_password().is_empty());
+            assert!(!state.has_credentials());
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn shared_fields_leave_existing_credentials_untouched() {
+        let mut state = AuthState::new();
+        state.set_field(Some(AuthField::ClientId));
+        state.push_text("client");
+        state.set_field(Some(AuthField::ClientSecret));
+        state.push_text("secret");
+
+        for field in [AuthField::ServerUrl, AuthField::Email] {
+            state.set_field(Some(field));
+            state.push_text("ignored");
+            state.pop_char();
+
+            assert_eq!(state.client_id(), "client");
+            assert_eq!(state.client_secret(), "secret");
+            assert!(state.master_password().is_empty());
+        }
+    }
 }

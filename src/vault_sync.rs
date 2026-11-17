@@ -74,21 +74,25 @@ pub fn parse_sync(body: &[u8]) -> Result<openwarden::SyncData, SyncError> {
 }
 
 /// Folder id and decrypted name from an unlocked `openwarden` vault.
+///
+/// A folder whose name cannot be decrypted keeps its id and gets a
+/// placeholder name, so one bad field never discards the rest of the vault.
 pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
     if vault.is_locked() {
         return Err(SyncError::Locked);
     }
     let mut folders = Vec::new();
     for id in vault.folders() {
-        let name = vault
-            .folder_name(&id)
-            .map_err(|error| SyncError::InvalidLogin(error.to_string()))?;
+        let name = match vault.folder_name(&id) {
+            Ok(Some(value)) => value.expose_secret().to_string(),
+            Ok(None) => "(名前なし)".to_string(),
+            // Partial decryption failure: keep the folder with a placeholder
+            // instead of aborting the whole import.
+            Err(_) => format!("フォルダ ({id})"),
+        };
         folders.push(Folder {
             id: id.as_str().to_string(),
-            name: name.map_or_else(
-                || "(名前なし)".to_string(),
-                |value| value.expose_secret().to_string(),
-            ),
+            name,
         });
     }
     Ok(folders)
@@ -298,8 +302,9 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
 ///
 /// # Errors
 ///
-/// [`SyncError::Locked`] when the source vault has no decryption key, or
-/// [`SyncError::InvalidLogin`] when a field read fails.
+/// [`SyncError::Locked`] when the source vault has no decryption key.
+/// Individual field decryption failures degrade to placeholder values
+/// instead of failing the import.
 pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
     let (model, _) = import_logins_with_audit(vault)?;
     Ok(model)
@@ -315,8 +320,9 @@ pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
 ///
 /// # Errors
 ///
-/// [`SyncError::Locked`] when the source vault has no decryption key, or
-/// [`SyncError::InvalidLogin`] when a field read fails.
+/// [`SyncError::Locked`] when the source vault has no decryption key.
+/// Individual field decryption failures degrade to placeholder values
+/// instead of failing the import.
 pub fn import_logins_with_audit(vault: &OpenVault) -> Result<(Vault, Vec<ImportAudit>), SyncError> {
     if vault.is_locked() {
         return Err(SyncError::Locked);

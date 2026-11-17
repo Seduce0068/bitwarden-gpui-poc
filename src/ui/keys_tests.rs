@@ -297,3 +297,34 @@ fn space_key_name_inserts_a_space() {
         KeyAction::InsertSearchText(" ".into())
     );
 }
+
+#[::core::prelude::v1::test]
+fn audit_shortcut_requires_an_available_report() {
+    let mut value = ctx("g");
+    assert_eq!(classify_key(&value), KeyAction::OpenAudit);
+
+    value.has_audit_report = false;
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::None,
+        "'g' must not open the audit panel when no report exists"
+    );
+
+    // The guard is local to that shortcut; other vault keys stay available.
+    value.key = "y";
+    assert_eq!(classify_key(&value), KeyAction::CopyTotp);
+}
+
+#[::core::prelude::v1::test]
+fn backspace_query_requires_a_nonempty_query() {
+    let mut value = ctx("backspace");
+    assert_eq!(classify_key(&value), KeyAction::None);
+
+    value.query_nonempty = true;
+    assert_eq!(classify_key(&value), KeyAction::BackspaceQuery);
+
+    // Editing modes keep their own backspace action even with an empty query.
+    value.query_nonempty = false;
+    value.searching = true;
+    assert_eq!(classify_key(&value), KeyAction::BackspaceSearch);
+}

@@ -15,6 +15,22 @@ pub struct ClipboardState {
     clear_at: Option<Instant>,
 }
 
+/// Compute the restore snapshot and deadline for a new secret copy.
+///
+/// This is a pure transition: it performs no clipboard or GPUI I/O. `current`
+/// is the text read from the clipboard *immediately before* the new secret is
+/// written. It is used on **every** copy, even when another copy is already
+/// pending: keeping an older snapshot would restore a previously copied secret
+/// after consecutive copies. `None` means the clipboard text could not be read,
+/// so restoration is skipped instead of writing an empty string.
+pub fn next_restore_state(
+    current: Option<String>,
+    now: Instant,
+    restore_seconds: u64,
+) -> (Option<String>, Instant) {
+    (current, now + Duration::from_secs(restore_seconds))
+}
+
 impl ClipboardState {
     /// Create an empty state.
     pub fn new() -> Self {
@@ -37,8 +53,9 @@ impl ClipboardState {
     /// not be read, `restore` stays empty and restoration is a no-op rather
     /// than overwriting the clipboard with an empty string.
     pub fn begin_copy(&mut self, current: Option<String>, now: Instant, restore_seconds: u64) {
-        self.restore = current;
-        self.clear_at = Some(now + Duration::from_secs(restore_seconds));
+        let (snapshot, deadline) = next_restore_state(current, now, restore_seconds);
+        self.restore = snapshot;
+        self.clear_at = Some(deadline);
     }
 
     /// Take the text to restore, consuming the pending state.
@@ -100,5 +117,47 @@ mod tests {
     fn restore_without_a_pending_copy_is_a_no_op() {
         let mut state = ClipboardState::new();
         assert_eq!(state.take_restore(), None);
+    }
+
+    #[::core::prelude::v1::test]
+    fn next_restore_state_uses_the_pre_copy_read_and_refreshes_the_deadline() {
+        let now = Instant::now();
+
+        let (snapshot, deadline) = next_restore_state(Some("user text".into()), now, 30);
+        assert_eq!(snapshot.as_deref(), Some("user text"));
+        assert_eq!(deadline, now + Duration::from_secs(30));
+
+        // An unreadable clipboard yields no snapshot, so restore writes nothing.
+        let (snapshot, deadline) = next_restore_state(None, now, 30);
+        assert_eq!(snapshot, None);
+        assert_eq!(deadline, now + Duration::from_secs(30));
+    }
+
+    #[::core::prelude::v1::test]
+    fn pending_copy_does_not_suppress_recapture_or_deadline_refresh() {
+        let mut state = ClipboardState::new();
+        let now = Instant::now();
+
+        state.begin_copy(Some("original".into()), now, 30);
+        state.begin_copy(Some("secret A".into()), now + Duration::from_secs(20), 30);
+
+        // The first deadline has passed, but the second copy opened a new
+        // window and replaced the snapshot with its own pre-copy read.
+        assert!(!state.due(now + Duration::from_secs(30)));
+        assert!(state.due(now + Duration::from_secs(50)));
+        assert_eq!(state.take_restore(), Some("secret A".into()));
+        assert!(!state.is_pending());
+    }
+
+    #[::core::prelude::v1::test]
+    fn unreadable_second_copy_skips_restoration_without_an_empty_write() {
+        let mut state = ClipboardState::new();
+        let now = Instant::now();
+        state.begin_copy(Some("original".into()), now, 30);
+        state.begin_copy(None, now, 30);
+
+        assert!(state.is_pending());
+        assert_eq!(state.take_restore(), None);
+        assert!(!state.is_pending());
     }
 }
