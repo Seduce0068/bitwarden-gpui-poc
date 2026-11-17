@@ -19,7 +19,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   （`login_flow.rs`）と認証状態（`auth_state.rs`）、クリップボード状態
   （`clipboard.rs`）、キー入力（`input.rs`）、
   モックデータ（`mock.rs`）、GPUI 描画（`render.rs`）、純粋判定ロジック（`logic.rs`）、
-  キー分類・そのテスト（`keys.rs`）、時刻判定（`timing.rs`）、TOTP 表示状態
+  キー分類（`keys.rs`）、時刻判定（`timing.rs`）、TOTP 表示状態
   （`totp_state.rs`）、画面状態の型（`state.rs`）、パネル描画ヘルパー
   （`panels.rs`）
 - `src/words.rs`: passphrase 用の単語リスト
