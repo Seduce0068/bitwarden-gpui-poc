@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T20:11:47+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T00:36:43+09:00"
+  at: "2026-11-18T00:48:56+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -35,13 +35,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度: 中
 
-- [ ] ヘッダー[監査]ボタンとキー状態を整合させる
-  - 根拠: G3 / C9-2
-  - File: src/ui/render.rs:249-260,302-305, src/ui/keys.rs:183-188, src/ui/login_flow.rs:70-86
-  - 現状: audit_report=None でも SetPanel(Audit) が発行され、描画は一覧へ
-    フォールバックするが KeyContext.panel は Audit のままで操作が死ぬ。
-    実ログインは refresh_audit() を呼ばない。
-  - 受け入れ条件: レポート存在時のみ遷移、またはフォールバック時に panel を Vault へ戻す。
 - [ ] unlock_and_import を UI スレッドからオフロードする
   - 根拠: C9-3 / P1-a
   - File: src/ui/login_flow.rs:70, src/auth.rs:213-234
@@ -209,6 +202,10 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 監査ボタンとキー状態を整合（2026-11-18）
+  - `effective_panel()` でレポート未生成時の Audit 遷移を Vault に戻し、
+    描画と `KeyContext.panel` の不一致を解消。
+  - 実ログイン成功時に `refresh_audit()` を呼ぶようにした。
 - [x] クリップボードの連続コピーを修正（2026-11-18）
   - 毎回コピー直前の内容を保存し、復元時にその内容を書き戻す。
   - 読み取り失敗時は空文字で上書きせず no-op。復元時にステータス更新。

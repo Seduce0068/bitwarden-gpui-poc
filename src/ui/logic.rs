@@ -2,6 +2,7 @@
 
 use crate::health::{audit, Report, Thresholds};
 use crate::model::Vault;
+use crate::ui::state::Panel;
 
 /// Whether the lock screen has enough credential input to attempt a login.
 ///
@@ -30,6 +31,18 @@ pub fn selection_in_view<'a>(
 /// Keeping the clock as a parameter makes the audit reproducible in tests.
 pub fn compute_audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
     audit(vault, thresholds, now)
+}
+
+/// Resolve a requested panel to one that can actually be rendered.
+///
+/// The audit panel needs a generated report; falling back to the vault list
+/// here keeps `KeyContext.panel` in sync with what is drawn.
+pub fn effective_panel(requested: Panel, has_audit_report: bool) -> Panel {
+    if requested == Panel::Audit && !has_audit_report {
+        Panel::Vault
+    } else {
+        requested
+    }
 }
 
 /// Adjust the idle auto-lock timeout in one-minute steps, clamped to 1..=60
@@ -98,6 +111,18 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.examined, 0);
         assert!(first.items.is_empty());
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_panel_falls_back_without_a_report() {
+        assert_eq!(
+            effective_panel(Panel::Audit, false),
+            Panel::Vault,
+            "the key context must match the rendered panel"
+        );
+        assert_eq!(effective_panel(Panel::Audit, true), Panel::Audit);
+        assert_eq!(effective_panel(Panel::Settings, false), Panel::Settings);
+        assert_eq!(effective_panel(Panel::Generator, false), Panel::Generator);
     }
 
     #[::core::prelude::v1::test]
