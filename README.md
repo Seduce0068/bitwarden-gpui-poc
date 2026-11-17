@@ -6,14 +6,16 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 ## 目的
 
 - GPUI で Bitwarden クライアント UI を構築できるか検証する
-- Rust クレート [`openwarden`](https://crates.io/crates/openwarden) を vault API/暗号層として利用する構成を試す
+- Rust クレート [`openwarden`](https://crates.io/crates/openwarden) を
+  vault API/暗号層として利用する構成を試す
 
 いずれも PoC として実装し、Linux 上での起動と単体テストで確認済みです。
 設計判断は [ADR](docs/adr/adr-20261116-openwarden-integration.md) に記録しています。
 
 ## 現状
 
-- `src/lib.rs`: vault モデル、パスワード / passphrase 生成、TOTP（RFC 6238）、健全性監査、設定の永続化を提供。すべて単体テスト付き
+- `src/lib.rs`: vault モデル、パスワード / passphrase 生成、TOTP（RFC 6238）、
+  健全性監査、設定の永続化を提供。すべて単体テスト付き
 - `src/ui/`: アプリ状態（`app.rs`）、Vault ビュー状態（`vault_view.rs`）、
   アクション（`actions.rs`）、認証フロー
   （`login_flow.rs`）と認証状態（`auth_state.rs`）、クリップボード状態
