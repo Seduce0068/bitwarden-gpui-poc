@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.72] - 2026-11-17
+
 ### 検証手順
 
 - README の検証手順に `cargo audit` と markdownlint を追加し CI と整合
