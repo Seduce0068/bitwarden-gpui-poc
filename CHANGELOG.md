@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.76] - 2026-11-17
+
 ### 既定値の整理
 
 - ログインタイムアウト既定値を `auth::DEFAULT_LOGIN_TIMEOUT` から参照
