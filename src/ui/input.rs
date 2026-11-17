@@ -92,17 +92,11 @@ impl BitwardenApp {
                 self.view.pop_query();
                 cx.notify();
             }
-            KeyAction::SetPanel(panel) => {
-                self.panel = panel;
-                cx.notify();
-            }
+            KeyAction::SetPanel(panel) => self.set_panel(panel, cx),
             KeyAction::Lock => self.lock(cx),
             KeyAction::MoveSelection(delta) => self.move_selection(delta, cx),
             KeyAction::ToggleFavorite => self.toggle_favorite(cx),
-            KeyAction::OpenAudit => {
-                self.panel = Panel::Audit;
-                cx.notify();
-            }
+            KeyAction::OpenAudit => self.set_panel(Panel::Audit, cx),
             KeyAction::GeneratePassword => self.generate_password(cx),
             KeyAction::GeneratePassphrase => self.generate_passphrase(cx),
             KeyAction::CopyPassword => {

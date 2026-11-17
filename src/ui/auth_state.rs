@@ -142,6 +142,15 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn take_field_returns_and_clears_the_active_field() {
+        let mut state = AuthState::new();
+        state.set_field(Some(AuthField::MasterPassword));
+        assert_eq!(state.take_field(), Some(AuthField::MasterPassword));
+        assert_eq!(state.field(), None);
+        assert_eq!(state.take_field(), None);
+    }
+
+    #[::core::prelude::v1::test]
     fn backspace_on_empty_fields_is_a_no_op() {
         let mut state = AuthState::new();
         for field in [

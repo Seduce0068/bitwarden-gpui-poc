@@ -150,6 +150,18 @@ impl BitwardenApp {
         cx.notify();
     }
 
+    /// Switch panels through one path so no input mode survives the change.
+    ///
+    /// Leaving a settings field, auth field or search active would swallow
+    /// every key in the destination panel ("dead keys").
+    pub(super) fn set_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
+        self.editing = None;
+        self.auth.take_field();
+        self.view.finish_search();
+        self.panel = panel;
+        cx.notify();
+    }
+
     /// Keep the selected row inside the current filtered view.
     ///
     /// Called after any mutation that can change which items are visible,
