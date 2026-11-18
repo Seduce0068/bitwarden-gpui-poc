@@ -96,7 +96,15 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 取り込みは blocking thread）→ `import_logins_with_audit` の順で実 vault を
 読み込み、UI スレッドでは結果の適用のみを行う。
 
-未解決事項: 実サーバーへの接続テストは認証情報がないため未実施。
+実サーバー接続の検証（2026-11-19、ローカル Vaultwarden）:
+`tests/real_server_e2e.rs`（opt-in、`E2E_*` 環境変数＋`--ignored`）を追加。
+ローカル Vaultwarden 1.30.2 に対して API key 認証、`/api/sync` の HTTP 200
+までは到達した。ただし同サーバーが返す sync JSON は `Profile` / `Ciphers`
+等の PascalCase で、openwarden 0.1.0 の `SyncWire`（`#[serde(rename_all =
+"camelCase")]`、`profile` / `ciphers` を要求）と不一致のため復号前の
+パースに失敗した。認証経路自体の動作は確認できたが、E2E は未成功。
+
+未解決事項: 実サーバーへの接続テストは上記の case 互換性が未解消のため完了していない。
 ログイン項目以外の kind はまだ model に変換されない。パスワードと TOTP
 シークレットは復号してメモリ上のモデルに保持するが、UI へは平文を出さず、
 監査と TOTP コード生成に限定して使用する。

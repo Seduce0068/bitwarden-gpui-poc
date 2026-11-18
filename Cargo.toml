@@ -34,6 +34,11 @@ unicode-normalization = "0.1"
 # as a transitive dependency of secrecy/openwarden).
 zeroize = "1.9"
 
+[dev-dependencies]
+# The opt-in real-server E2E test needs a Tokio runtime because openwarden's
+# HTTP client is reqwest-based; tokio is already in the lockfile via gpui.
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
 [profile.dev]
 # GPUI + wgpu の debuginfo は巨大（debug=1 でも target/ が 30GiB）。
 # バックトレースは残しつつ行テーブルのみに抑制する。

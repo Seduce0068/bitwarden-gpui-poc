@@ -2,6 +2,9 @@
 
 ## 2026-11-19
 
+- 実サーバー E2E の opt-in テストを追加。ローカル Vaultwarden 1.30.2 で
+  認証・sync HTTP 200 まで到達したが、sync JSON の PascalCase と
+  openwarden の camelCase パーサーの不一致を確認
 - キャッシュに取得時刻と 7 日の有効期限を追加（旧ファイルは best-effort で許可）
 
 ## 2026-11-18

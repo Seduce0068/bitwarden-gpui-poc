@@ -29,9 +29,15 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] 復号失敗 URI が `NoUri` として誤報告される問題を修正 — 根拠 `src/vault_sync.rs:123-125`,
-      `src/health.rs:508-511` / R2-ER02-F1, R5-VU02-F1 / 重大度 medium
-  - `vault.uris()` の `Err` が `unwrap_or_default()` で空となり、監査が「URI なし」と誤判定する。
+- [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
+      問題を解消 — 根拠 `tests/real_server_e2e.rs`,
+      `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium
+  - ローカル Vaultwarden 1.30.2 では API key 認証と `/api/sync` の HTTP 200 まで
+    到達したが、レスポンスが `Profile` / `Ciphers` 等の PascalCase で、
+    openwarden 0.1.0 の `SyncWire`（camelCase 要求）がパースに失敗。
+    対応方針: camelCase を返すサーバーバージョンへ固定するか、取り込み前に
+    camelCase へ正規化する層を追加する。
+
 - [ ] `settings.json` のスキーマ・全フィールド・既定値を README へ文書化 — 根拠
       `README.md:38-39,178-184`, `src/settings.rs:260-281` / R2-CF01-F3 / 重大度
       medium
