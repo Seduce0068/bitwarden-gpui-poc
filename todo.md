@@ -29,11 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] 暗号化キャッシュの writer 未接続を解消する方針を決定する — 根拠 `src/auth.rs:583-589`,
-      `docs/adr/adr-20261116-openwarden-integration.md:115-123` / R2-ST01-F2,
-      R2-FG01-F1 / 重大度 medium
-  - reader は接続済みだが `save_default` を呼ぶ本番経路が無い。openwarden 0.1.0 の API 拡張待ち／
-    独自 HTTP クライアント化の判断が必要（既知制約として README/ADR に明記済み）。
 - [ ] `from_cache` を UI ステータスへ反映し復元データの鮮度を通知する — 根拠 `src/auth.rs:616`,
       `docs/adr/adr-20261116-openwarden-integration.md:125-126` / R1-ST02-F1,
       R4-DR01-F1 / 重大度 medium
@@ -111,6 +106,16 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 暗号化キャッシュ writer の方針を決定（2026-11-18・第17弾）
+  - 根拠: `src/auth.rs:583-589` / R2-ST01-F2, R2-FG01-F1 / 重大度 medium
+  - 決定: PoC では読み取り専用を維持し writer は接続しない。上流
+    openwarden 0.1.0 の `Client::sync()` が解析済み `SyncData` のみ返し、
+    `Session::access_token` が private、`SyncData` フィールドが `pub(crate)`
+    であることをローカル展開ソースで確認（Runtime Proof）。独自 HTTP
+    クライアント化は攻撃面の拡大に見合わないと裁定し、再検討トリガを
+    ADR に明記。実装変更なし。
+  - R4 独立レビュー6件を反映（上流の行番号、MD032、verified 日時、
+    初期 Decision との緊張、log の重複、Decision 見出しの分散）。
 - [x] `ensure_device_id` の保存失敗を呼び出し側へ伝える（2026-11-18・第16弾）
   - 根拠: `src/settings.rs:298-306` / R2-ER01-F1, R3-DI02-F1 / 重大度 medium
   - 保存失敗時に未保存の ID を破棄して再試行可能化。乱数生成・保存の失敗を

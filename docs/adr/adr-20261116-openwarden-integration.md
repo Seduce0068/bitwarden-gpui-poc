@@ -13,8 +13,8 @@ generated:
 status: "approved"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-18T20:45:00+09:00"
-stale_after: "2027-05-18T20:45:00+09:00"
+  at: "2026-11-18T21:28:00+09:00"
+stale_after: "2027-05-18T21:28:00+09:00"
 ---
 
 ## Context
@@ -53,8 +53,8 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 3. `src/main.rs`: ロック画面から API key とマスターパスワードを入力させ、
    統合層を非同期で呼ぶ。認証情報は `Settings` に保存しない
 4. `cache` モジュール（新設）: 暗号化済み同期 body を保持し、`/api/sync`
-   失敗時に auth 層がオフライン復元する。詳細は
-   「Implementation Result」のオフラインキャッシュの項を参照
+   失敗時に auth 層がオフライン復元する。書き出しは未接続で読み取り専用の
+   復元に限る（後述「Decision Update (2026-11-18)」を参照）
 
 ## Consequences
 
@@ -131,11 +131,35 @@ protected key を使うため、キャッシュは鍵素材を一切提供しな
 のキャッシュを読んでも検出できない（鍵が一致しないため復号側で失敗する）。
 キャッシュに有効期限は無く、鍵ローテーション後は復号できない。
 
+## Decision Update (2026-11-18): キャッシュ writer は PoC では接続しない
+
+**決定**: オフラインキャッシュは読み取り専用の best-effort 復元として維持し、
+書き込み経路（`SyncCache::from_body` → `save_default`）は本 PoC では接続しない。
+
+**根拠（Runtime Proof）**: ローカルに展開された `openwarden 0.1.0` の
+`src/client.rs` を確認した。`Client::sync()`（:418）は解析済み `SyncData` のみを
+返し、`Session::access_token`（:129）は private、`SyncData` のフィールド
+（:252-256）は `pub(crate)` で、生の `/api/sync` body を外部から取得する
+公開 API は存在しない。
+
+**裁定**: 独自 HTTP クライアントとトークン管理を追加して body を自前取得する
+案は、認証・トークン処理の重複と攻撃面の拡大を伴い、PoC 目的（GPUI UI と
+openwarden 統合の検証）に見合わないため採用しない。既定値は「現状維持」。
+
+**再検討のトリガ**: 以下を満たしたときにのみ見直す。
+
+1. openwarden が raw body または `Session` のトークンアクセサを公開する
+   （例: `SyncData::raw_body()` / `Session::access_token()`）。
+2. 実サーバー（Vaultwarden）との E2E 検証で、オフライン復元の価値が
+   独自 HTTP 実装の保守コストを上回ると測定された場合。
+
 ## Status
 
 Self-reviewed by agent at 2026-11-17T00:27:33+09:00.
 Cache restore wiring re-reviewed against the current implementation at
 2026-11-18T03:44:54+09:00.
+Writer policy decided at 2026-11-18T21:28:00+09:00 (keep read-only; revisit on
+upstream API expansion or measured E2E need).
 
 ## Links
 
