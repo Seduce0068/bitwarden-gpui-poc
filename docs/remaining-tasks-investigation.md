@@ -14,7 +14,8 @@ generated:
 verified:
   by: "dsh-agent (lead)"
   at: "2026-11-17T21:01:35+09:00"
-status: "draft"
+status: "superseded"
+# 2026-11-17 時点の調査スナップショット。現状は README / ADR / todo.md を参照。
 stale_after: "2027-05-17T21:01:35+09:00"
 ---
 
@@ -80,7 +81,8 @@ login-race 2→1、item-kind 2→1、license 2→1。
 
 ## P1: 短期
 
-- オフラインキャッシュの認証フロー接続
+- オフラインキャッシュの認証フロー接続（2026-11-18 時点: read 側は接続済み、
+  write 側のみ未接続）
   - 根拠: `src/cache.rs:70-106,178-182`、`src/auth.rs:293`
   - 根拠: `docs/adr/adr-20261116-openwarden-integration.md:93-97`
 - 実サーバー（Vaultwarden）接続の E2E 検証
@@ -98,9 +100,10 @@ login-race 2→1、item-kind 2→1、license 2→1。
 
 補足:
 
-- キャッシュは `from_body` / `load_detailed` / `save` が実装済みだが、
-  認証フローからの呼び出しがゼロ（read / write 双方とも未接続）。
-  `client.sync()` は生 body を返さず、`Session::access_token` も private。
+- キャッシュは `from_body` / `load_detailed` / `save` が実装済み。調査時点では
+  read / write 双方とも未接続だったが、2026-11-18 時点では `cached_sync_for`
+  が同期失敗時の復元経路へ接続済み。`client.sync()` は生 body を返さず、
+  `Session::access_token` も private のため write 側は未接続のまま。
 - SSRF は `url.host()` が `Host::Domain` のとき常に false を返すため、
   `169.254.169.254.nip.io` 等の DNS 名でバイパスできる。
 - `clear_secrets()` は `lock()` からのみ呼ばれ、`finish_login` の成功パスで
@@ -130,12 +133,13 @@ login-race 2→1、item-kind 2→1、license 2→1。
 
 - 構造化ログを認証フローへ限定導入（見送り理由の再評価）
   - 根拠: `README.md:136`、`docs/review-report.md:49-50,60-64`
-- device identifier をインストールごとに一意化
+- device identifier をインストールごとに一意化（2026-11-18 時点: 完了。
+  UUID v4 を生成・永続化し再ログインでも再利用）
   - 根拠: `README.md:135`、`docs/adr/adr-20261116-openwarden-integration.md:91`
 - MPL-2.0 推移依存と AGPL-3.0 の互換性評価を決着
   - 根拠: `docs/review-report.md:70-73`
   - 根拠: `Cargo.lock:851-866,1462-1471,4671-4674`
-- ADR の Implementation Result を現行実装へ更新
+- ADR の Implementation Result を現行実装へ更新（2026-11-18 時点: 完了）
   - 根拠: `docs/adr/adr-20261116-openwarden-integration.md:82-91`、`README.md:60`
 - gpui-kit 0.10.0 への更新
   - 根拠: `Cargo.toml:18-19`
@@ -175,6 +179,8 @@ login-race 2→1、item-kind 2→1、license 2→1。
   `cache.rs` 外にゼロであること、`client.sync()` が生 body を返さず
   `access_token` も private であることを確認した。
   よって「read / write 双方とも未接続、ADR の結論は維持」へ訂正した。
+  （2026-11-18 追記: その後 read 側は `cached_sync_for` 経由で接続済み。
+  write 側の未接続という結論は変わらない。）
 - gpui-kit 0.10.0: 統合時の「破壊的変更は2件」はリリースノート上3件目
   （`gpui-fast` の `IntoElement`）があり literal には不正確。
   ただし標準の `gpui-pre` には無影響で、本 PoC への影響評価は変わらない。

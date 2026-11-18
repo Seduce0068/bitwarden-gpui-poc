@@ -43,10 +43,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 - [ ] `ensure_device_id` の保存失敗を呼び出し側へ伝える — 根拠 `src/settings.rs:298-306` /
       R2-ER01-F1, R3-DI02-F1 / 重大度 medium
   - `let _ = self.save(path)` で握り潰され、診断も再試行もできない。
-- [ ] README/ADR の「パスワード・TOTP は復号しない」記述を現行実装へ更新 — 根拠 `README.md:50-52,79-81`,
-      `CHANGELOG.md:30`, `docs/adr/adr-20261116-openwarden-integration.md:100-102`
-      / R1-ST05-F1, R5-DC01-F1 / 重大度 medium
-  - 第6弾で実復号済みなのに未復号と記載され、秘密保持範囲の説明が乖離している。
 - [ ] 暗号化キャッシュの writer 未接続を解消する方針を決定する — 根拠 `src/auth.rs:583-589`,
       `docs/adr/adr-20261116-openwarden-integration.md:115-123` / R2-ST01-F2,
       R2-FG01-F1 / 重大度 medium
@@ -114,19 +110,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       R5-VU01-F2 / 重大度 low
 - [ ] クリップボード復元秒数／ログインタイムアウトを GUI 編集可能化 — 根拠 `src/ui/panels.rs:250-255`,
       `src/ui/keys.rs:299-311` / R1-ST03-F6 / 重大度 low
-- [ ] ADR の device identifier「固定値」記述を UUID v4 永続化へ更新 — 根拠
-      `docs/adr/adr-20261116-openwarden-integration.md:103`, `CHANGELOG.md:23` /
-      R1-ST05-F2, R2-FG01-F3 / 重大度 low
-- [ ] ADR の `verified.at` を本文レビュー日時へ更新 — 根拠
-      `docs/adr/adr-20261116-openwarden-integration.md:16,133-135` /
-      R1-ST05-F3 / 重大度 low
-- [ ] CHANGELOG「全残タスク完了」と README「他 kind はモック」の矛盾を解消 — 根拠 `CHANGELOG.md:12`,
-      `README.md:182` / R2-FG01-F2 / 重大度 low
-- [ ] レビュー／調査ドキュメントの draft / 進行中マーカーを確定状態へ — 根拠
-      `docs/cross-review-findings.md:12`,
-      `docs/remaining-tasks-investigation.md:17` / R1-ST05-F4 / 重大度 low
-- [ ] `docs/index.md` に `cross-review-findings.md` への導線を追加 — 根拠
-      `docs/index.md:3-6` / R1-ST05-F5, R5-UX02-F2 / 重大度 low
 - [ ] README ローカルゲートへ `cargo deny` を追加し clippy `-D` 重複を削除 — 根拠
       `README.md:118-129`, `Cargo.toml:48-53` / R2-CF01-F1, R2-CF01-F2 / 重大度 low
 - [ ] Dependabot に `github-actions` エコシステムを追加 — 根拠 `.github/dependabot.yml:6`,
@@ -149,6 +132,17 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] README / ADR / 調査レポートを現行実装へ整合（2026-11-18・第12弾）
+  - 根拠: `README.md:50-52,79-81` / R1-ST05-F1, R5-DC01-F1 ほか6件
+  - パスワード / TOTP の実復号、キャッシュ read 接続・write 未接続、
+    device identifier の UUID v4 永続化、ADR の verified 日時を反映。
+    docs/index に cross-review-findings への導線を追加し、古い
+    draft / 進行中マーカーを確定状態（調査レポートは superseded）へ更新。
+    CHANGELOG の 0.1.0 節と「全残タスク完了」に解消済み注記を追加。
+  - R4 独立レビュー5件をすべて反映（調査レポートの陳腐化4点、
+    README の「未検証」表現の整理）。
+  - 検証: markdownlint（全ドキュメント）成功。コード変更なしのため
+    fmt / check / test / clippy / doc は前イテレーションの結果を維持。
 - [x] `From<AppError>` の catch-all を廃し無関係な失敗の誤分類を防ぐ（2026-11-18・第11弾）
   - 根拠: `src/error.rs:403,443,468` / R1-AR02-F2, R1-ST02-F2, R5-AP01-F1 /
     重大度 medium

@@ -9,7 +9,7 @@ tags:
 generated:
   by: "dsh-agent (lead)"
   at: "2026-11-17T19:25:00+09:00"
-status: "in-progress"
+status: "completed"
 stale_after: "2027-05-17T19:25:00+09:00"
 ---
 
@@ -27,14 +27,14 @@ todo（タスクボード）へ追加する。
 - ラウンド3: 完了（5エージェント、32件、新規クラスタ10）
 - ラウンド4: 完了（5エージェント、22件、新規クラスタ8）
 - ラウンド5: 完了（5エージェント、23件、新規クラスタ7＋妥当性逆検証）
-- ラウンド6（統合）: 進行中
+- ラウンド6（統合）: 完了（重複吸収・妥当性判定・todo 追記まで実施）
 
 ## 検出事項
 
 ### ラウンド1
 
 使用エージェント: r1-arch / r1-tests / r1-corr-crypto（完了）、
-r1-ops-retry / r1-sec-secrets / r1-sec-input / r1-corr-state（実行中）。
+r1-ops-retry / r1-sec-secrets / r1-sec-input / r1-corr-state（完了）。
 r1-security / r1-ops / r1-correctness は途中終了したため、
 観点を分割した代理エージェントで再起動した。
 
@@ -328,7 +328,7 @@ r1-corr-state / r1-ops-build / r1-sec-secrets / r1-ops-runtime。
 
 ### ラウンド2
 
-使用エージェント: r2-uiux（完了）、r2-threat / r2-data / r2-quality / r2-concurrency（実行中）。
+使用エージェント: r2-uiux（完了）、r2-threat / r2-data / r2-quality / r2-concurrency（完了）。
 
 #### r2-uiux（UI/UX / 操作性 / 状態フィードバック、7件）
 
@@ -661,7 +661,7 @@ r1-corr-state / r1-ops-build / r1-sec-secrets / r1-ops-runtime。
 
 ### ラウンド4
 
-使用エージェント: r4-fs（完了）、r4-crypto / r4-invariants / r4-render / r4-release（実行中）。
+使用エージェント: r4-fs（完了）、r4-crypto / r4-invariants / r4-render / r4-release（完了）。
 
 #### r4-fs（ファイルシステム / パス / 永続化、4件）
 
@@ -782,7 +782,7 @@ r1-corr-state / r1-ops-build / r1-sec-secrets / r1-ops-runtime。
 
 ### ラウンド5
 
-使用エージェント: r5-threads（完了）、r5-validity / r5-inputs / r5-api / r5-gaps（実行中）。
+使用エージェント: r5-threads（完了）、r5-validity / r5-inputs / r5-api / r5-gaps（完了）。
 
 #### r5-threads（スレッド安全性 / 並列実行、1件）
 
