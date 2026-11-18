@@ -29,18 +29,14 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] `From<AppError>` の catch-all 分岐を廃し無関係な失敗の誤分類を防ぐ — 根拠
-      `src/error.rs:403,443,468` / R1-AR02-F2, R1-ST02-F2, R5-AP01-F1 / 重大度 medium
-  - `AuthError::Sync` / `UnlockError::MissingProtectedKey` /
-    `SettingsLoadError::ReadFailed`
-    への既定変換が generator の RandomUnavailable 等を誤ラベル化し真因を隠す。
-    全列挙または `Unexpected` バリアント／`TryFrom` を導入する。
 - [ ] キャッシュ読込エラーの一律「破損」表示を分類別へ — 根拠 `src/cache.rs:282-291` / R2-ER02-F3,
       R5-VU02-F3 / 重大度 medium
   - `cache_error_message` が parse/redact/serialize/NotFound
     を全て「キャッシュが破損しています」に落とす。
     `cached_sync_for` も `ok()?` で分類を破棄している（`src/cache.rs:255-261`）。
     定義済み `CacheLoadError` を主経路まで届ける。
+    （第11弾で `Other` のみ汎用文言へ修正済み。残りは parse/redact 等の分類表示と
+    主経路への伝播）
 - [ ] `destroy` 時のクリップボード復元を潜ませない／カード全桁と併せて通知を見直す — 根拠 `src/ui/actions.rs:51` /
       R5-VU01-F1 / 重大度 medium
   - 復元不可時に「コピーしました（N秒後に復元）」と表示する矛盾を解消する。
@@ -153,6 +149,18 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] `From<AppError>` の catch-all を廃し無関係な失敗の誤分類を防ぐ（2026-11-18・第11弾）
+  - 根拠: `src/error.rs:403,443,468` / R1-AR02-F2, R1-ST02-F2, R5-AP01-F1 /
+    重大度 medium
+  - `AppError` と `AuthError` / `UnlockError` / `SettingsLoadError` に `Other`
+    を追加。未知の失敗は「予期しないエラーが発生しました」または元メッセージを
+    保持し、同期／復号キー／設定ファイル読み込みへの誤ラベル化を解消。
+    `cache_error_message` の同種 catch-all も修正。
+  - 検証: fmt / check / test（257 passed、+2）/ clippy / doc / markdownlint 成功。
+  - R4 独立レビュー4件のうち3件を採用（`SettingsLoadError::Other` の文言破棄、
+    空振りテスト、assert_ne による回帰検出不足）。1件は却下: `PartialEq` への
+    discriminant 比較は「Cause 保持バリアントはプレーン版と等価」という
+    既存の明示設計（`src/error.rs:344-346`）と既存テスト5件に反するため。
 - [x] カード番号の末尾抽出を空白区切り非依存にし全桁表示を防ぐ（2026-11-18・第10弾）
   - 根拠: `src/ui/app.rs:342-346` / R1-ST03-F1, R3-AU03-F2 / 重大度 high
   - `ui::logic::card_last_four` を追加し、非 ASCII 数字を除いた末尾最大4桁のみ表示。

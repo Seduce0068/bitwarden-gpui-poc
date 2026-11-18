@@ -70,6 +70,10 @@ impl fmt::Display for BoxedCause {
 
 impl Error for BoxedCause {}
 
+/// Status text for failures that have no counterpart in the small UI-facing
+/// error enums. Never reuse a domain-specific message for an unrelated error.
+pub(crate) const OTHER_ERROR_MESSAGE: &str = "予期しないエラーが発生しました";
+
 /// A failure from any layer of the application.
 #[derive(Debug)]
 pub enum AppError {
@@ -176,6 +180,12 @@ pub enum AppError {
     RandomUnavailableCause(BoxedCause),
     /// The settings would produce an empty character set or result.
     InvalidSettings,
+    /// A failure that does not belong to any of the layer-specific domains.
+    ///
+    /// Used when converting into a smaller UI-facing error type that has no
+    /// variant for the original failure, so the status text stays honest
+    /// instead of claiming an unrelated cause.
+    Other(String),
 }
 
 impl AppError {
@@ -263,6 +273,7 @@ impl AppError {
                 "OS の乱数源を利用できません"
             }
             Self::InvalidSettings => "生成設定が不正です（文字種または長さを確認）",
+            Self::Other(text) => text,
         }
     }
 
@@ -275,6 +286,7 @@ impl AppError {
             Self::ApplySyncFailed(text) | Self::ApplySyncFailedCause(text, _) => Some(text),
             Self::ImportFailed(text) | Self::ImportFailedCause(text, _) => Some(text),
             Self::InvalidLogin(text) | Self::InvalidLoginCause(text, _) => Some(text),
+            Self::Other(text) => Some(text),
             _ => None,
         }
     }
@@ -336,6 +348,7 @@ impl Clone for AppError {
             Self::Invalid => Self::Invalid,
             Self::RandomUnavailable => Self::RandomUnavailable,
             Self::InvalidSettings => Self::InvalidSettings,
+            Self::Other(text) => Self::Other(text.clone()),
         }
     }
 }
@@ -378,6 +391,7 @@ impl From<crate::auth::AuthError> for AppError {
             AuthError::Sync => Self::Sync,
             AuthError::KdfRejected => Self::KdfRejected,
             AuthError::Timeout => Self::Timeout,
+            AuthError::Other(text) => Self::Other(text.to_string()),
         }
     }
 }
@@ -400,7 +414,10 @@ impl From<AppError> for crate::auth::AuthError {
             AppError::Sync | AppError::SyncCause(_) => AuthError::Sync,
             AppError::KdfRejected | AppError::KdfRejectedCause(_) => AuthError::KdfRejected,
             AppError::Timeout => AuthError::Timeout,
-            _ => AuthError::Sync,
+            // This type is `Copy`, so an owned detail cannot survive the
+            // conversion. An honest generic message is better than silently
+            // reporting an unrelated sync failure.
+            _ => AuthError::Other(OTHER_ERROR_MESSAGE),
         }
     }
 }
@@ -422,6 +439,7 @@ impl From<crate::auth::UnlockError> for AppError {
             UnlockError::UnlockFailed(detail) => Self::unlock_failed(detail),
             UnlockError::ApplySyncFailed(detail) => Self::apply_sync_failed(detail),
             UnlockError::ImportFailed(detail) => Self::import_failed(detail),
+            UnlockError::Other(detail) => Self::Other(detail),
         }
     }
 }
@@ -440,7 +458,9 @@ impl From<AppError> for crate::auth::UnlockError {
             AppError::ImportFailed(text) | AppError::ImportFailedCause(text, _) => {
                 UnlockError::ImportFailed(unlock_detail(&text, "vault 変換に失敗しました（"))
             }
-            _ => UnlockError::MissingProtectedKey,
+            // Keep the real message here: unlike `AuthError`, this type can
+            // own a `String`, so no cause text is lost on conversion.
+            unexpected => UnlockError::Other(unexpected.message().to_string()),
         }
     }
 }
@@ -453,6 +473,7 @@ impl From<crate::settings::SettingsLoadError> for AppError {
             SettingsLoadError::ReadFailed => Self::ReadFailed,
             SettingsLoadError::ParseFailed => Self::ParseFailed,
             SettingsLoadError::TooLarge => Self::TooLarge,
+            SettingsLoadError::Other(text) => Self::Other(text.to_string()),
         }
     }
 }
@@ -465,7 +486,7 @@ impl From<AppError> for crate::settings::SettingsLoadError {
             AppError::ReadFailed | AppError::ReadFailedCause(_) => SettingsLoadError::ReadFailed,
             AppError::ParseFailed | AppError::ParseFailedCause(_) => SettingsLoadError::ParseFailed,
             AppError::TooLarge => SettingsLoadError::TooLarge,
-            _ => SettingsLoadError::ReadFailed,
+            _ => SettingsLoadError::Other(OTHER_ERROR_MESSAGE),
         }
     }
 }
@@ -492,5 +513,45 @@ impl Error for AppError {
             | Self::InvalidLoginCause(_, cause) => Some(cause.as_error()),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{AuthError, UnlockError};
+    use crate::settings::SettingsLoadError;
+
+    #[test]
+    fn unrelated_errors_are_not_relabeled_as_domain_failures() {
+        let unexpected = AppError::RandomUnavailable;
+        assert_eq!(
+            AuthError::from(unexpected.clone()).message(),
+            OTHER_ERROR_MESSAGE,
+            "an OS RNG failure must be reported as an unexpected failure"
+        );
+        assert_eq!(
+            UnlockError::from(unexpected.clone()).message(),
+            unexpected.message(),
+            "UnlockError owns its detail, so the original message must survive"
+        );
+        assert_eq!(
+            SettingsLoadError::from(unexpected.clone()).message(),
+            OTHER_ERROR_MESSAGE,
+            "an unrelated failure must not claim a settings-specific cause"
+        );
+    }
+
+    #[test]
+    fn other_variants_round_trip_without_losing_the_status_text() {
+        let auth = AuthError::from(AppError::Other("固有の認証失敗".to_string()));
+        assert_eq!(auth.message(), OTHER_ERROR_MESSAGE);
+        assert_eq!(AppError::from(auth).message(), OTHER_ERROR_MESSAGE);
+
+        let unlock = UnlockError::Other("固有の失敗".to_string());
+        assert_eq!(AppError::from(unlock).message(), "固有の失敗");
+
+        let settings = SettingsLoadError::Other("設定固有の失敗");
+        assert_eq!(AppError::from(settings).message(), "設定固有の失敗");
     }
 }

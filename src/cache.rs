@@ -284,6 +284,8 @@ pub fn cache_error_message(error: SyncCacheError) -> &'static str {
         SyncCacheError::InvalidCache => "キャッシュが破損しています",
         SyncCacheError::UserMismatch => "キャッシュが別のアカウントのものです",
         SyncCacheError::ServerMismatch => "キャッシュが別のサーバーのものです",
+        // An uncategorized failure is not evidence of cache corruption.
+        SyncCacheError::Other(_) => crate::error::OTHER_ERROR_MESSAGE,
         // The cache/load variants and the new parse/redact/serialize variants
         // all use the same status text; keep the message for every other error
         // stable instead of panicking on a variant from another layer.
