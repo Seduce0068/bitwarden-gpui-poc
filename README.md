@@ -123,12 +123,11 @@ Rust 1.88 以上が必要です（`Cargo.toml` の `rust-version`）。
 cargo fmt --all -- --check
 cargo check --all-targets --locked
 cargo test --all-targets --locked
-cargo clippy --all-targets --locked -- -D warnings \
-  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+cargo clippy --all-targets --locked -- -D warnings
 cargo audit
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-markdownlint README.md CHANGELOG.md docs/index.md \
-  docs/adr/index.md docs/adr/log.md docs/adr/*.md docs/review-report.md
+cargo deny check
+markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
 cargo run
 ```
 
@@ -148,11 +147,13 @@ mise use rust@1.88
 
 `.github/workflows/ci.yml` から共通ワークフロー
 `Seduce0068/workflows/.github/workflows/rust-gates.yml@v1` を呼び出します。
-fmt → check → test → clippy → `cargo audit` → doc のゲートを実行します
-（ローカルではさらに markdownlint を実行します）。
+fmt → check → test → clippy → `cargo audit` → doc → `cargo deny check` →
+markdownlint のゲートを実行します。markdownlint は CI で
+`markdownlint-cli@0.50.0` に固定しています。
 clippy の `unwrap_used` / `expect_used` / `panic` /
 `undocumented_unsafe_blocks` deny は `Cargo.toml` の `[lints.clippy]` で
-一元管理しています（unsafe は crate root の `forbid` でも禁止）。
+一元管理しているため、ローカルコマンドでは `-D clippy::<lint>` の個別指定は
+行いません（unsafe は crate root の `forbid` でも禁止）。
 監査は脆弱性検出時に失敗し、unmaintained の warning は失敗させません。
 
 変更を送る前に、上記のローカルゲートを同じ順序で実行してください。

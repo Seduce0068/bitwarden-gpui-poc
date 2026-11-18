@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 検証ゲートの整備
+
+- markdownlint の対象を `docs/**/*.md` 全域へ拡大し、CI の `extra_gates`
+  で `markdownlint-cli@0.50.0` を実行するようにした
+- README のローカルゲートから `-D clippy::<lint>` の重複指定を削除し、
+  `cargo deny check` を追加。ゲート順を CI と一致させた
+
 ### 修正（エラー変換の誤分類）
 
 - `From<AppError>` の catch-all を廃し、OS 乱数源の失敗などが

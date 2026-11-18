@@ -26,4 +26,7 @@ jobs:
         # cargo-deny は共通ワークフローにまだ組み込まれていないため、ここで導入する。
         cargo install cargo-deny --version 0.21.0 --locked
         cargo deny check
+        # ドキュメント書式ゲート（共通ワークフローにまだ無いためここで導入）。
+        npm install --global markdownlint-cli@0.50.0
+        markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
       # Clippy lints (unwrap/expect/panic/unsafe) are denied via Cargo.toml [lints.clippy].

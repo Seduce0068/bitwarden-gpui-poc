@@ -62,11 +62,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 - [ ] 復号失敗 URI が `NoUri` として誤報告される問題を修正 — 根拠 `src/vault_sync.rs:123-125`,
       `src/health.rs:508-511` / R2-ER02-F1, R5-VU02-F1 / 重大度 medium
   - `vault.uris()` の `Err` が `unwrap_or_default()` で空となり、監査が「URI なし」と誤判定する。
-- [ ] markdownlint の対象を `docs/**/*.md` へ広げ CI ゲートへ追加 — 根拠 `README.md:127-128`,
-      `.github/workflows/ci.yml:24-28` / R1-AR04-F2, R1-ST05-F6, R4-CI01-F2 / 重大度
-      medium
-  - `docs/cross-review-findings.md` と `docs/remaining-tasks-investigation.md` が
-    lint 対象外。
 - [ ] `settings.json` のスキーマ・全フィールド・既定値を README へ文書化 — 根拠
       `README.md:38-39,178-184`, `src/settings.rs:260-281` / R2-CF01-F3 / 重大度
       medium
@@ -110,8 +105,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       R5-VU01-F2 / 重大度 low
 - [ ] クリップボード復元秒数／ログインタイムアウトを GUI 編集可能化 — 根拠 `src/ui/panels.rs:250-255`,
       `src/ui/keys.rs:299-311` / R1-ST03-F6 / 重大度 low
-- [ ] README ローカルゲートへ `cargo deny` を追加し clippy `-D` 重複を削除 — 根拠
-      `README.md:118-129`, `Cargo.toml:48-53` / R2-CF01-F1, R2-CF01-F2 / 重大度 low
 - [ ] Dependabot に `github-actions` エコシステムを追加 — 根拠 `.github/dependabot.yml:6`,
       `.github/workflows/ci.yml:21` / R2-CF01-F4, R4-DP01-F1 / 重大度 low
 - [ ] CI の cargo-deny 導入版を固定し `cargo doc` へ `--locked` を付与 — 根拠
@@ -132,6 +125,19 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] ドキュメント lint を全 docs へ拡大し CI ゲート化（2026-11-18・第13弾）
+  - 根拠: `README.md:127-128`, `.github/workflows/ci.yml:24-28` /
+    R1-AR04-F2, R1-ST05-F6, R4-CI01-F2 / 重大度 medium ほか low 1件
+  - `markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'` に統一し、
+    CI `extra_gates` で `markdownlint-cli@0.50.0` を導入・実行。
+    README のローカルゲートから `-D clippy::<lint>` 重複を削除し
+    `cargo deny check` を追加、順序を CI と一致させた。
+  - 検証: `bash -n`（README コマンドブロック）、指定 markdownlint コマンド、
+    CI YAML のパース、すべて成功。
+  - R4 独立レビュー4件を反映（順序矛盾・版固定の明記・文言限定）。
+    npm の利用可能性は共通ワークフロー既定ランナー `ubuntu-24.04` に
+    よるもので未検証（提供側 README で確認）。共通ワークフロー自体への
+    markdownlint ゲート追加は他リポジトリ変更となるため見送り。
 - [x] README / ADR / 調査レポートを現行実装へ整合（2026-11-18・第12弾）
   - 根拠: `README.md:50-52,79-81` / R1-ST05-F1, R5-DC01-F1 ほか6件
   - パスワード / TOTP の実復号、キャッシュ read 接続・write 未接続、
