@@ -8,11 +8,11 @@ tags:
   - review
   - "bitwarden-gpui-poc"
 generated:
-  by: opencode
-  at: "2026-11-17T20:11:47+09:00"
+    by: opencode
+    at: "2026-11-17T20:11:47+09:00"
 verified:
-  by: "dsh-agent (lead)"
-  at: "2026-11-18T04:23:07+09:00"
+    by: "dsh-agent (lead)"
+    at: "2026-11-18T20:25:50+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
@@ -23,10 +23,147 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 未着手
 
-なし（2026-11-18 時点）。
+### 優先度 高
+
+なし（2026-11-18 時点、第10弾で1件完了）。
+
+### 優先度 中
+
+- [ ] `From<AppError>` の catch-all 分岐を廃し無関係な失敗の誤分類を防ぐ — 根拠
+      `src/error.rs:403,443,468` / R1-AR02-F2, R1-ST02-F2, R5-AP01-F1 / 重大度 medium
+  - `AuthError::Sync` / `UnlockError::MissingProtectedKey` /
+    `SettingsLoadError::ReadFailed`
+    への既定変換が generator の RandomUnavailable 等を誤ラベル化し真因を隠す。
+    全列挙または `Unexpected` バリアント／`TryFrom` を導入する。
+- [ ] キャッシュ読込エラーの一律「破損」表示を分類別へ — 根拠 `src/cache.rs:282-291` / R2-ER02-F3,
+      R5-VU02-F3 / 重大度 medium
+  - `cache_error_message` が parse/redact/serialize/NotFound
+    を全て「キャッシュが破損しています」に落とす。
+    `cached_sync_for` も `ok()?` で分類を破棄している（`src/cache.rs:255-261`）。
+    定義済み `CacheLoadError` を主経路まで届ける。
+- [ ] `destroy` 時のクリップボード復元を潜ませない／カード全桁と併せて通知を見直す — 根拠 `src/ui/actions.rs:51` /
+      R5-VU01-F1 / 重大度 medium
+  - 復元不可時に「コピーしました（N秒後に復元）」と表示する矛盾を解消する。
+- [ ] `ensure_device_id` の保存失敗を呼び出し側へ伝える — 根拠 `src/settings.rs:298-306` /
+      R2-ER01-F1, R3-DI02-F1 / 重大度 medium
+  - `let _ = self.save(path)` で握り潰され、診断も再試行もできない。
+- [ ] README/ADR の「パスワード・TOTP は復号しない」記述を現行実装へ更新 — 根拠 `README.md:50-52,79-81`,
+      `CHANGELOG.md:30`, `docs/adr/adr-20261116-openwarden-integration.md:100-102`
+      / R1-ST05-F1, R5-DC01-F1 / 重大度 medium
+  - 第6弾で実復号済みなのに未復号と記載され、秘密保持範囲の説明が乖離している。
+- [ ] 暗号化キャッシュの writer 未接続を解消する方針を決定する — 根拠 `src/auth.rs:583-589`,
+      `docs/adr/adr-20261116-openwarden-integration.md:115-123` / R2-ST01-F2,
+      R2-FG01-F1 / 重大度 medium
+  - reader は接続済みだが `save_default` を呼ぶ本番経路が無い。openwarden 0.1.0 の API 拡張待ち／
+    独自 HTTP クライアント化の判断が必要（既知制約として README/ADR に明記済み）。
+- [ ] `from_cache` を UI ステータスへ反映し復元データの鮮度を通知する — 根拠 `src/auth.rs:616`,
+      `docs/adr/adr-20261116-openwarden-integration.md:125-126` / R1-ST02-F1,
+      R4-DR01-F1 / 重大度 medium
+  - フィールドは設定されるのみで UI 参照が無く、オフライン復元を利用者が判別できない。
+- [ ] キャッシュの有効期限と取得時刻を追加する — 根拠 `src/cache.rs:29-35`,
+      `docs/adr/adr-20261116-openwarden-integration.md:129` / R4-DR02-F2,
+      R5-VU02-F2 / 重大度 medium
+  - 期限が無く鍵ローテーション後は復号不能。取得時刻も無く鮮度判断ができない。
+- [ ] デバイス ID 未生成時に `r` 再試行が進まない問題を修正 — 根拠 `src/ui/login_flow.rs:78-87` /
+      R2-ER03-F3 / 重大度 medium
+  - `ensure_device_id` 失敗時に status を出すが、再試行でも同じ経路を通り回復手段がない。
+- [ ] 復号失敗 URI が `NoUri` として誤報告される問題を修正 — 根拠 `src/vault_sync.rs:123-125`,
+      `src/health.rs:508-511` / R2-ER02-F1, R5-VU02-F1 / 重大度 medium
+  - `vault.uris()` の `Err` が `unwrap_or_default()` で空となり、監査が「URI なし」と誤判定する。
+- [ ] markdownlint の対象を `docs/**/*.md` へ広げ CI ゲートへ追加 — 根拠 `README.md:127-128`,
+      `.github/workflows/ci.yml:24-28` / R1-AR04-F2, R1-ST05-F6, R4-CI01-F2 / 重大度
+      medium
+  - `docs/cross-review-findings.md` と `docs/remaining-tasks-investigation.md` が
+    lint 対象外。
+- [ ] `settings.json` のスキーマ・全フィールド・既定値を README へ文書化 — 根拠
+      `README.md:38-39,178-184`, `src/settings.rs:260-281` / R2-CF01-F3 / 重大度
+      medium
+
+### 優先度 低
+
+- [ ] `unlock_detail` の日本語 prefix/suffix 文字列依存を構造化 detail へ置換 — 根拠
+      `src/error.rs:408-415,435-441` / R1-ST02-F6 / 重大度 low
+- [ ] `PartialEq for AppError` が表示文のみで比較し boxed cause を無視する点を見直す — 根拠
+      `src/error.rs:343-349,245-248` / R2-ER01-F2, R5-AP01-F2 / 重大度 low
+- [ ] `error.rs` の auth/settings への逆依存（循環）を解消 — 根拠 `src/error.rs:367,448`,
+      `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
+- [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
+      `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
+- [ ] `generator::WORDS` の再エクスポートを削除し公開パスを一本化 — 根拠 `src/generator.rs:10`,
+      `src/lib.rs:24,32` / R1-AR01-F5 / 重大度 low
+- [ ] ジェネレータ設定のキー文字列の往復を型付き enum へ — 根拠 `src/ui/keys.rs:276-285`,
+      `src/ui/actions.rs:118-122` / R1-AR03-F1, R5-AP02-F1 / 重大度 low
+- [ ] `KeyAction` とマウス由来 `SelectRow` の境界を明確化（リネームまたは分離） — 根拠
+      `src/ui/keys.rs:68-70`, `src/ui/render.rs:99-104` / R1-AR03-F2 / 重大度 low
+- [ ] 監査レポート欠如時のフォールバック判定を `effective_panel` に一本化 — 根拠 `src/ui/logic.rs:37-47`,
+      `src/ui/app.rs:243`, `src/ui/render.rs:317-320` / R1-AR03-F3 / 重大度 low
+- [ ] `visible_items` と選択 index 計算を `VaultViewState` へ集約し `next_index` を本番化 —
+      根拠 `src/ui/app.rs:197-201,247-267`, `src/ui/vault_view.rs:50-52,112-124` /
+      R1-AR03-F4, R4-TS02-F1 / 重大度 low
+- [ ] ServerUrl/Email の共有フィールド編集を `Settings` 側へ集約 — 根拠
+      `src/ui/actions.rs:76-94`, `src/ui/login_flow.rs:184-202` / R1-AR03-F5 / 重大度
+      low
+- [ ] 未使用 `has_credentials` と矛盾する doc を削除または実ゲート化 — 根拠 `src/ui/logic.rs:7-15`,
+      `src/ui/login_flow.rs:61-69` / R1-AR03-F6, R1-ST03-F4 / 重大度 low
+- [ ] クリップボード復元手続きを単一サービスへ集約し lock 経路の status を整合 — 根拠
+      `src/ui/clipboard.rs:3-4`, `src/ui/actions.rs:56-62`,
+      `src/ui/app.rs:161-164` / R1-AR03-F7 / 重大度 low
+- [ ] 設定パネルの dead hint「n キーで編集」を修正 — 根拠 `src/ui/panels.rs:242-245`,
+      `src/ui/keys.rs:299-311` / R1-ST03-F2, R2-FG02-F1 / 重大度 low
+- [ ] 生成パネルの「30秒で復元」を設定値依存表示へ — 根拠 `src/ui/panels.rs:172`,
+      `src/ui/actions.rs:41` / R1-ST03-F3, R5-UX01-F3 / 重大度 low
+- [ ] `copy_totp` の「項目が選択されていません」文言を実態へ — 根拠 `src/ui/actions.rs:11-24` /
+      R1-ST03-F5 / 重大度 low
+- [ ] 未生成時の `y`/`Y` コピーを無応答にせず通知 — 根拠 `src/ui/input.rs:125-134` / R2-FG02-F3,
+      R5-VU01-F2 / 重大度 low
+- [ ] クリップボード復元秒数／ログインタイムアウトを GUI 編集可能化 — 根拠 `src/ui/panels.rs:250-255`,
+      `src/ui/keys.rs:299-311` / R1-ST03-F6 / 重大度 low
+- [ ] ADR の device identifier「固定値」記述を UUID v4 永続化へ更新 — 根拠
+      `docs/adr/adr-20261116-openwarden-integration.md:103`, `CHANGELOG.md:23` /
+      R1-ST05-F2, R2-FG01-F3 / 重大度 low
+- [ ] ADR の `verified.at` を本文レビュー日時へ更新 — 根拠
+      `docs/adr/adr-20261116-openwarden-integration.md:16,133-135` /
+      R1-ST05-F3 / 重大度 low
+- [ ] CHANGELOG「全残タスク完了」と README「他 kind はモック」の矛盾を解消 — 根拠 `CHANGELOG.md:12`,
+      `README.md:182` / R2-FG01-F2 / 重大度 low
+- [ ] レビュー／調査ドキュメントの draft / 進行中マーカーを確定状態へ — 根拠
+      `docs/cross-review-findings.md:12`,
+      `docs/remaining-tasks-investigation.md:17` / R1-ST05-F4 / 重大度 low
+- [ ] `docs/index.md` に `cross-review-findings.md` への導線を追加 — 根拠
+      `docs/index.md:3-6` / R1-ST05-F5, R5-UX02-F2 / 重大度 low
+- [ ] README ローカルゲートへ `cargo deny` を追加し clippy `-D` 重複を削除 — 根拠
+      `README.md:118-129`, `Cargo.toml:48-53` / R2-CF01-F1, R2-CF01-F2 / 重大度 low
+- [ ] Dependabot に `github-actions` エコシステムを追加 — 根拠 `.github/dependabot.yml:6`,
+      `.github/workflows/ci.yml:21` / R2-CF01-F4, R4-DP01-F1 / 重大度 low
+- [ ] CI の cargo-deny 導入版を固定し `cargo doc` へ `--locked` を付与 — 根拠
+      `.github/workflows/ci.yml:25,27` / R4-CI01-F1, R4-CI01-F3 / 重大度 low
+- [ ] `revision_date` パース失敗の 0 フォールバックを明示的な未設定値へ — 根拠
+      `src/vault_sync.rs:161,358` / R2-ER02-F2, R3-DI01-F1 / 重大度 low
+- [ ] 名前ソートを検索と同じ NFKD 正規化へ — 根拠 `src/model.rs:859-863`, `src/model.rs:25` /
+      R3-IV03-F3 / 重大度 low
+- [ ] TOTP `Code` の `PartialEq` が code 値を無視する点をテスト意図に合わせる — 根拠
+      `src/totp.rs:22-25` / R3-DI01-F3 / 重大度 low
+- [ ] `login_generation` の「トークン消費」テストを実消費へ — 根拠
+      `src/ui/login_generation.rs:75-82` / R4-TS02-F2 / 重大度 low
+- [ ] テストの空振り分岐／値捨てをアサーションへ — 根拠 `src/model_tests.rs:253-257`,
+      `src/health_tests.rs:336-339`, `src/generator_tests.rs:75-85` /
+      R1-ST04-F1〜F3 / 重大度 low
+- [ ] `InsecureUri` 判定の先頭 Cf 文字バイパスを inspection に追加 — 根拠 `src/health.rs:513`,
+      `src/model.rs:36` / R3-IV03-F1 / 重大度 low
 
 ## 完了
 
+- [x] カード番号の末尾抽出を空白区切り非依存にし全桁表示を防ぐ（2026-11-18・第10弾）
+  - 根拠: `src/ui/app.rs:342-346` / R1-ST03-F1, R3-AU03-F2 / 重大度 high
+  - `ui::logic::card_last_four` を追加し、非 ASCII 数字を除いた末尾最大4桁のみ表示。
+    区切りあり／なし／ハイフン／全角数字混入／4桁未満／空文字のテストを追加。
+  - 検証: `cargo fmt --all -- --check` / `cargo check --all-targets --locked` /
+    `cargo test --all-targets --locked`（255 passed、+1）/ `cargo clippy --all-targets
+    --locked -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+    -D clippy::panic` / `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+    / `markdownlint CHANGELOG.md todo.md` すべて成功。
+  - R4 独立レビューの低指摘3件（4桁未満の扱いの説明、CHANGELOG 文言、
+    過去完了ログの矛盾）は doc/ログを修正して解消。
 - [x] 残り3タスクを依存関係付きチーム並列で完結（2026-11-18）
   - 共通 `AppError` と `source()` チェーン、cache の parse/redact/serialize 分離
   - link-local: メタデータホスト・DNS 解決先 IP・埋め込みリテラルを拒否
@@ -46,7 +183,9 @@ stale_after: "2027-05-17T21:04:43+09:00"
   - 選択解除の全経路を `deselect_and_rewind()` に集約
   - 辞書パスワードの長さ上限を定数化し境界をテスト
   - ルート担当: README の bash コマンド例を `bash -n` で検証
-  - 整理: カード末尾4桁マスキングは既存実装で充足（再実装不要）
+  - 整理: カード末尾4桁マスキングは当時「既存実装で充足」と判断したが、
+    2026-11-18 の全体レビューで非区切り番号の全桁露出が判明し、
+    `ui::logic::card_last_four` へ置換して修正した（第10弾）
   - 却下: 「再コピーで deadline を延長しない」は TH1 修正（毎回再取得）と
     矛盾するため採用せず
 - [x] エージェントチームによる4タスク並列対応・第6弾（2026-11-18）
@@ -152,3 +291,47 @@ stale_after: "2027-05-17T21:04:43+09:00"
   測定を行っていないため、機能バグとは区別して扱う。
 - 外部クレート（openwarden / gpui / smol）の内部動作に関する指摘は
   依存クレートを読んでいないため推測として明示している。
+
+### 2026-11-18 コンボ実行（swarm-project-review + swarm-todo-discovery）
+
+- 起動エージェント: 合計 98 体（1 回目 53 体 = R1 9 + R2 12 + R3 12 +
+  R4 11 + R5 9、2 回目 45 体 = R2〜R5 44 + R1-ST01 リトライ 1）。
+  1 回目は出力が保存上限を超過したため R1 のみ回収し R2〜R5 を
+  コンパクト出力で再実行した。R1-ST01 は 1 回リトライして回収。
+  R4-OB02 / R5-DC02 はモデル出力がスキーマに適合せず「未調査」として
+  記録した（担当範囲は他担当が一部カバー）。プロファイル: 無制限
+  （hy4-flash-free）、深度 1、並列度 9〜12 担当／ラウンド。
+- 検出 162 件（R1 44 件 + R2〜R5 118 件）を重複排除・Runtime Proof で
+  吸収し、上記 44 件を todo 化。重複元は `duplicate_of` として破棄。
+- 却下（意図的な設計／既知制約／事実と不一致）:
+  - `ensure_device_id` の保存失敗握り潰しは「次回呼び出しで再試行」と
+    コメントに明記された意図（`src/settings.rs:290-291`）だが、実際には
+    ID が有効になるため再試行経路が無い。上記「中」で採用。
+  - 環境変数テストのロック漏れ（`src/cache_tests.rs:194,295`）は
+    `ENV_LOCK` が既に存在するため却下。
+  - ジェネレータ長のオーバーフロー／大量確保 DoS は
+    `Settings::sanitized()` が 4..=128 / 2..=20 にクランプし、
+    `src/ui/keys.rs:26-27` も同じ上限のため却下。
+  - `schema_version` 欠落／型不一致を現行版とみなす挙動は
+    legacy 互換として明記（`src/settings.rs:7-10,358-363`）するため却下。
+  - `AuthConfig` の `Debug` が認証情報を露出する指摘は、
+    両秘密が `SecretString`（Debug マスク）であるため却下。
+  - `deny.toml` の `unmaintained = "workspace"` と
+    `multiple-versions = "warn"` はコメント付きの意図的な方針のため却下。
+  - zxcvbn 未使用は `src/health.rs:8-10` に明記済みのため却下。
+  - クリップボード連続コピーで直前の秘密が復元される挙動は
+    `src/ui/clipboard.rs:20-25,105-111` で設計・テスト済みのため却下。
+  - `authenticate()` が設定タイムアウトを無視する指摘は、
+    UI が `authenticate_with_timeout` へ設定値を渡すため
+    （`src/ui/login_flow.rs:89-95`）却下。
+  - ログイン再試行時に前回タスクがキャンセルされない点は
+    `src/ui/login_flow.rs:101-103` に既知制約として明記済みのため却下。
+- speculative / 要判断（TODO 化せず候補として保持）:
+  - 監査パネルの TOTP カバレッジ 0 除算（`src/ui/panels.rs:37-42`）——
+    `totp_coverage()` の実装未確認。
+  - クリップボード復元期限 `Instant` 加算のオーバーフロー
+    （`src/ui/clipboard.rs:31`）—— 設定が 1..=3600 にクランプされるため
+    実害なし。
+  - Unicode Cf リストの固定（Unicode 16.0）—— 将来文字の検出は未検証。
+  - 設定ファイルが FIFO で起動停止する可能性、並列初期化の端末 ID 競合、
+    `rust-toolchain.toml` 未固定、edition 2024 未移行。

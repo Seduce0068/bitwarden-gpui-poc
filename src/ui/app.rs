@@ -342,7 +342,7 @@ impl BitwardenApp {
             ItemData::Card(card) => format!(
                 "{base} | {} | 末尾: {}",
                 card.brand,
-                card.number.rsplit(' ').next().unwrap_or("")
+                crate::ui::logic::card_last_four(&card.number)
             ),
             ItemData::Identity(identity) => format!("{base} | {}", identity.email),
             ItemData::SshKey(key) => format!("{base} | {}", key.fingerprint),
