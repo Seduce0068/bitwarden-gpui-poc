@@ -29,10 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] `from_cache` を UI ステータスへ反映し復元データの鮮度を通知する — 根拠 `src/auth.rs:616`,
-      `docs/adr/adr-20261116-openwarden-integration.md:125-126` / R1-ST02-F1,
-      R4-DR01-F1 / 重大度 medium
-  - フィールドは設定されるのみで UI 参照が無く、オフライン復元を利用者が判別できない。
 - [ ] キャッシュの有効期限と取得時刻を追加する — 根拠 `src/cache.rs:29-35`,
       `docs/adr/adr-20261116-openwarden-integration.md:129` / R4-DR02-F2,
       R5-VU02-F2 / 重大度 medium
@@ -106,6 +102,16 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] `from_cache` を UI ステータスへ反映（2026-11-18・第18弾）
+  - 根拠: `src/auth.rs:616` / R1-ST02-F1, R4-DR01-F1 / 重大度 medium
+  - `LoginResult::Vault` に `from_cache` を持たせ、キャッシュ復元時は
+    「オフラインキャッシュから復元。最新でない可能性があります」を表示。
+    モック経路には警告を出さない。
+  - 検証: fmt / check / test（263 passed）/ clippy / doc / markdownlint 成功。
+  - R4 独立レビュー5件: 4件を反映（旧 doc comment、ADR の見出し整理、
+    ADR ログ追記、todo 更新）。1件は「伝播自体の自動テスト」を要するが、
+    GPUI test-support が未有効で `finish_login` を直接検証できないため
+    採用せず。伝播3行は親がコードを読んで確認（Runtime Proof）。
 - [x] 暗号化キャッシュ writer の方針を決定（2026-11-18・第17弾）
   - 根拠: `src/auth.rs:583-589` / R2-ST01-F2, R2-FG01-F1 / 重大度 medium
   - 決定: PoC では読み取り専用を維持し writer は接続しない。上流
