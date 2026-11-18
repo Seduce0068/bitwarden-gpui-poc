@@ -62,6 +62,19 @@ pub(super) fn card_last_four(number: &str) -> String {
     digits[start..].iter().copied().collect()
 }
 
+/// Status text for a clipboard copy.
+///
+/// Restoration is only promised when the pre-copy contents were readable:
+/// `ClipboardState` skips creating a pending restore for `None`, so announcing
+/// one would mislead the user about what will happen.
+pub(super) fn clipboard_copy_status(seconds: u64, has_original: bool) -> String {
+    if has_original {
+        format!("クリップボードにコピーしました（{seconds}秒後に復元）")
+    } else {
+        "クリップボードにコピーしました（元の内容を読めないため復元しません。コピーした内容はそのまま残ります）".to_string()
+    }
+}
+
 /// Adjust the idle auto-lock timeout in one-minute steps, clamped to 1..=60
 /// minutes.
 pub(super) fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
@@ -154,6 +167,18 @@ mod tests {
         assert_eq!(card_last_four(""), "なし");
         assert_eq!(card_last_four("   "), "なし");
         assert_eq!(card_last_four("abcd"), "なし");
+    }
+
+    #[test]
+    fn clipboard_status_promises_restore_only_when_it_can_happen() {
+        assert_eq!(
+            clipboard_copy_status(30, true),
+            "クリップボードにコピーしました（30秒後に復元）"
+        );
+        assert_eq!(
+            clipboard_copy_status(30, false),
+            "クリップボードにコピーしました（元の内容を読めないため復元しません。コピーした内容はそのまま残ります）"
+        );
     }
 
     #[test]

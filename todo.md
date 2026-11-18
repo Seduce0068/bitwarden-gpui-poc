@@ -29,9 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] `destroy` 時のクリップボード復元を潜ませない／カード全桁と併せて通知を見直す — 根拠 `src/ui/actions.rs:51` /
-      R5-VU01-F1 / 重大度 medium
-  - 復元不可時に「コピーしました（N秒後に復元）」と表示する矛盾を解消する。
 - [ ] `ensure_device_id` の保存失敗を呼び出し側へ伝える — 根拠 `src/settings.rs:298-306` /
       R2-ER01-F1, R3-DI02-F1 / 重大度 medium
   - `let _ = self.save(path)` で握り潰され、診断も再試行もできない。
@@ -117,6 +114,16 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 復元不可時のクリップボード通知を実態へ整合（2026-11-18・第15弾）
+  - 根拠: `src/ui/actions.rs:51` / R5-VU01-F1 / 重大度 medium
+  - `ui::logic::clipboard_copy_status` を追加し、コピー元を読めない場合は
+    復元を約束せず「コピーした内容はそのまま残ります」と明示。
+    README の機能説明・既知の制約も条件付き記述へ更新。
+  - 検証: fmt / check / test（261 passed）/ clippy / doc / markdownlint 成功。
+  - R4 独立レビュー4件をすべて反映（README 欠落、テストの脆弱な否定
+    アサーション、秘密残存の注意喚起、todo 未更新）。
+  - 併記されていた強制終了時復元は README の既知制約として維持（OS の
+    clipboard 永続化が必要で PoC 範囲外）。カード全桁表示は第10弾で修正済み。
 - [x] キャッシュ読込エラーの一律「破損」表示を分類別へ（2026-11-18・第14弾）
   - 根拠: `src/cache.rs:282-291` / R2-ER02-F3, R5-VU02-F3 / 重大度 medium
   - `cached_sync_for_detailed` が分類済みエラーを返し、`cache_error_message`

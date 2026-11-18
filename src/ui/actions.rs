@@ -45,10 +45,11 @@ impl BitwardenApp {
                 _ => None,
             })
         });
+        let restorable = current.is_some();
         self.clipboard
             .begin_copy(current, std::time::Instant::now(), seconds);
         cx.write_to_clipboard(ClipboardItem::new_string(value.to_string()));
-        self.status = format!("クリップボードにコピーしました（{seconds}秒後に復元）");
+        self.status = crate::ui::logic::clipboard_copy_status(seconds, restorable);
         cx.notify();
     }
 
