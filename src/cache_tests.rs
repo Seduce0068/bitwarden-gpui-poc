@@ -144,6 +144,31 @@ fn error_messages_are_present() {
     assert!(!cache_error_message(SyncCacheError::ServerMismatch).is_empty());
 }
 
+#[test]
+fn cache_errors_are_not_all_reported_as_corruption() {
+    use crate::error::BoxedCause;
+
+    let corrupt = cache_error_message(SyncCacheError::CacheParse(BoxedCause::text("bad json")));
+    let unreadable =
+        cache_error_message(SyncCacheError::ReadFailedCause(BoxedCause::text("denied")));
+    let missing = cache_error_message(SyncCacheError::NotFound);
+    let outdated = cache_error_message(SyncCacheError::VersionMismatch);
+    let other = cache_error_message(SyncCacheError::Other("unrelated".into()));
+
+    assert_eq!(corrupt, "キャッシュが破損しています");
+    assert_eq!(unreadable, "キャッシュを読み込めません");
+    assert_eq!(missing, "キャッシュがありません");
+    assert_eq!(outdated, "キャッシュのバージョンが古いです");
+    assert_eq!(other, crate::error::OTHER_ERROR_MESSAGE);
+    assert_ne!(unreadable, corrupt);
+    assert_ne!(missing, corrupt);
+    // An unrelated failure from another layer must never be labelled corruption.
+    assert_eq!(
+        cache_error_message(SyncCacheError::RandomUnavailable),
+        crate::error::OTHER_ERROR_MESSAGE
+    );
+}
+
 // --- Cache-directory migration (default path -> XDG cache, legacy read-only) ---
 
 /// Environment variables are process-global; serialize tests that change them.

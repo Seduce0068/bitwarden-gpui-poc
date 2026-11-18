@@ -11,8 +11,9 @@
 //! `Client::sync()` returns a parsed `SyncData` without the raw body and keeps
 //! `Session::access_token` private, so `from_body`/`save_default` cannot be
 //! fed from the login flow. A cache file therefore exists only if a legacy
-//! release wrote one or it was provisioned out of band; a first-ever offline
-//! failure still reports `AuthError::Sync`.
+//! release wrote one or it was provisioned out of band. A missing cache keeps
+//! the original `AuthError::Sync` status; a present but unusable cache reports
+//! the classified reason (corrupt / unreadable / outdated / mismatched).
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -249,15 +250,30 @@ pub fn save_default(cache: &SyncCache) -> Result<(), std::io::Error> {
 /// the live `Session` supplies the protected key at unlock time. A key change
 /// since the cache was written can therefore leave cached items undecryptable.
 ///
-/// Returns `None` when the cache is missing, unreadable, outdated, belongs to
-/// another server or no longer parses; the caller then reports the original
-/// sync failure instead of masking it.
-pub fn cached_sync_for(server_url: &str) -> Option<openwarden::SyncData> {
-    let cache = load_default().ok()?;
+/// Returns the classified failure so the caller can tell a missing cache from
+/// a corrupt or outdated one instead of collapsing every case into `None`.
+///
+/// # Errors
+///
+/// [`SyncCacheError::NotFound`] when no cache file exists,
+/// [`SyncCacheError::ReadFailedCause`] when it cannot be read,
+/// [`SyncCacheError::ParseFailedCause`] / [`SyncCacheError::CacheParse`] when
+/// the stored body is invalid, [`SyncCacheError::VersionMismatch`] when the
+/// format changed, [`SyncCacheError::ServerMismatch`] when it belongs to
+/// another server, and [`SyncCacheError::CacheRedact`] /
+/// [`SyncCacheError::CacheSerialize`] when sanitizing the body fails.
+pub fn cached_sync_for_detailed(server_url: &str) -> Result<openwarden::SyncData, SyncCacheError> {
+    let cache = load_default()?;
     if cache.server_url != server_url {
-        return None;
+        return Err(SyncCacheError::ServerMismatch);
     }
-    cache.sync().ok()
+    cache.sync()
+}
+
+/// Best-effort wrapper around [`cached_sync_for_detailed`] for callers that
+/// only need to know whether a usable cache was found.
+pub fn cached_sync_for(server_url: &str) -> Option<openwarden::SyncData> {
+    cached_sync_for_detailed(server_url).ok()
 }
 
 /// Validate a cache before it is used for the given account and server.
@@ -278,18 +294,33 @@ pub fn validate(cache: &SyncCache, user_id: &str, server_url: &str) -> Result<()
     Ok(())
 }
 
-/// Map a cache error to the status-bar error type used by the auth layer.
+/// Reason strings shared by the cache layer and the auth status mapper.
+pub(crate) const REASON_CORRUPT: &str = "キャッシュが破損しています";
+pub(crate) const REASON_UNREADABLE: &str = "キャッシュを読み込めません";
+pub(crate) const REASON_MISSING: &str = "キャッシュがありません";
+pub(crate) const REASON_OUTDATED: &str = "キャッシュのバージョンが古いです";
+pub(crate) const REASON_USER_MISMATCH: &str = "キャッシュが別のアカウントのものです";
+pub(crate) const REASON_SERVER_MISMATCH: &str = "キャッシュが別のサーバーのものです";
+pub(crate) const REASON_TOO_LARGE: &str = "キャッシュがサイズ上限を超えています";
+
+/// Map a cache error to a short reason for a status-bar message.
 pub fn cache_error_message(error: SyncCacheError) -> &'static str {
     match error {
-        SyncCacheError::InvalidCache => "キャッシュが破損しています",
-        SyncCacheError::UserMismatch => "キャッシュが別のアカウントのものです",
-        SyncCacheError::ServerMismatch => "キャッシュが別のサーバーのものです",
-        // An uncategorized failure is not evidence of cache corruption.
+        SyncCacheError::InvalidCache
+        | SyncCacheError::CacheParse(_)
+        | SyncCacheError::CacheRedact(_)
+        | SyncCacheError::CacheSerialize(_)
+        | SyncCacheError::ParseFailed
+        | SyncCacheError::ParseFailedCause(_) => REASON_CORRUPT,
+        SyncCacheError::UserMismatch => REASON_USER_MISMATCH,
+        SyncCacheError::ServerMismatch => REASON_SERVER_MISMATCH,
+        SyncCacheError::NotFound => REASON_MISSING,
+        SyncCacheError::ReadFailed | SyncCacheError::ReadFailedCause(_) => REASON_UNREADABLE,
+        SyncCacheError::VersionMismatch => REASON_OUTDATED,
+        SyncCacheError::TooLarge => REASON_TOO_LARGE,
         SyncCacheError::Other(_) => crate::error::OTHER_ERROR_MESSAGE,
-        // The cache/load variants and the new parse/redact/serialize variants
-        // all use the same status text; keep the message for every other error
-        // stable instead of panicking on a variant from another layer.
-        _ => "キャッシュが破損しています",
+        // A future variant must never be reported as proven corruption.
+        _ => crate::error::OTHER_ERROR_MESSAGE,
     }
 }
 
