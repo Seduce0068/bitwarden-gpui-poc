@@ -290,22 +290,32 @@ impl Settings {
     /// valid stored value is always reused unchanged. When the value is empty
     /// or malformed, a version 4 UUID is generated from the OS CSPRNG and,
     /// if `path` is supplied, written back immediately so later launches see
-    /// the same identifier. A failed write is not fatal: the in-memory value
-    /// is still stable for this process and the next call retries persistence.
+    /// the same identifier. A failed write is reported to the caller and leaves
+    /// the in-memory value unchanged, so the next call generates and persists a
+    /// fresh identifier instead of silently using an unsaved one.
     ///
     /// # Errors
     ///
-    /// [`getrandom::Error`] when no random source is available. There is no
-    /// hardcoded fallback because that would defeat per-installation
-    /// uniqueness.
-    pub fn ensure_device_id(
-        &mut self,
-        path: Option<&std::path::Path>,
-    ) -> Result<&str, getrandom::Error> {
+    /// [`AppError::RandomUnavailableCause`] when no random source is available,
+    /// or [`AppError::SettingsSaveCause`] when the settings file cannot be
+    /// written (the original io error stays in `Error::source()`). There is no
+    /// hardcoded fallback for the RNG because that would defeat
+    /// per-installation uniqueness.
+    pub fn ensure_device_id(&mut self, path: Option<&std::path::Path>) -> Result<&str, AppError> {
         if !is_valid_device_id(&self.device_id) {
-            self.device_id = generate_device_id()?;
+            let generated = generate_device_id()
+                .map_err(|error| AppError::RandomUnavailableCause(BoxedCause::new(error)))?;
             if let Some(path) = path {
-                let _ = self.save(path);
+                let previous = std::mem::replace(&mut self.device_id, generated);
+                if let Err(error) = self.save(path) {
+                    // Never use an identifier that was not persisted: the next
+                    // call must generate and try again.
+                    self.device_id = previous;
+                    let detail = format!("デバイス ID を保存できませんでした: {error}");
+                    return Err(AppError::SettingsSaveCause(detail, BoxedCause::new(error)));
+                }
+            } else {
+                self.device_id = generated;
             }
         }
         Ok(&self.device_id)

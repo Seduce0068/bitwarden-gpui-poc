@@ -29,9 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] `ensure_device_id` の保存失敗を呼び出し側へ伝える — 根拠 `src/settings.rs:298-306` /
-      R2-ER01-F1, R3-DI02-F1 / 重大度 medium
-  - `let _ = self.save(path)` で握り潰され、診断も再試行もできない。
 - [ ] 暗号化キャッシュの writer 未接続を解消する方針を決定する — 根拠 `src/auth.rs:583-589`,
       `docs/adr/adr-20261116-openwarden-integration.md:115-123` / R2-ST01-F2,
       R2-FG01-F1 / 重大度 medium
@@ -114,6 +111,13 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] `ensure_device_id` の保存失敗を呼び出し側へ伝える（2026-11-18・第16弾）
+  - 根拠: `src/settings.rs:298-306` / R2-ER01-F1, R3-DI02-F1 / 重大度 medium
+  - 保存失敗時に未保存の ID を破棄して再試行可能化。乱数生成・保存の失敗を
+    それぞれ `RandomUnavailableCause` / `SettingsSaveCause` として返し、
+    cause チェーンを保持。UI は `r で再試行` を案内。
+  - 検証: fmt / check / test（262 passed）/ clippy / doc / markdownlint 成功。
+  - R4 独立レビュー2件を反映（再試行フラグ欠落、io エラーの cause 喪失）。
 - [x] 復元不可時のクリップボード通知を実態へ整合（2026-11-18・第15弾）
   - 根拠: `src/ui/actions.rs:51` / R5-VU01-F1 / 重大度 medium
   - `ui::logic::clipboard_copy_status` を追加し、コピー元を読めない場合は

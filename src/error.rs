@@ -164,6 +164,9 @@ pub enum AppError {
     // -- settings (formerly `SettingsLoadError`) --
     /// The file is larger than `MAX_SETTINGS_BYTES`.
     TooLarge,
+    /// The settings file could not be written; keeps both the rendered detail
+    /// for the status bar and the original error for `Error::source()`.
+    SettingsSaveCause(String, BoxedCause),
 
     // -- TOTP (formerly `TotpError`) --
     /// The item has no `totp` field.
@@ -273,7 +276,7 @@ impl AppError {
                 "OS の乱数源を利用できません"
             }
             Self::InvalidSettings => "生成設定が不正です（文字種または長さを確認）",
-            Self::Other(text) => text,
+            Self::Other(text) | Self::SettingsSaveCause(text, _) => text,
         }
     }
 
@@ -325,6 +328,9 @@ impl Clone for AppError {
             Self::ParseFailedCause(cause) => Self::ParseFailedCause(cause.clone()),
             Self::InvalidCause(cause) => Self::InvalidCause(cause.clone()),
             Self::RandomUnavailableCause(cause) => Self::RandomUnavailableCause(cause.clone()),
+            Self::SettingsSaveCause(detail, cause) => {
+                Self::SettingsSaveCause(detail.clone(), cause.clone())
+            }
             Self::MissingField(field) => Self::MissingField(field),
             Self::InvalidServerUrl => Self::InvalidServerUrl,
             Self::BlockedServerUrl => Self::BlockedServerUrl,
@@ -504,6 +510,7 @@ impl Error for AppError {
             | Self::ParseFailedCause(cause)
             | Self::InvalidCause(cause)
             | Self::RandomUnavailableCause(cause)
+            | Self::SettingsSaveCause(_, cause)
             | Self::CacheParse(cause)
             | Self::CacheRedact(cause)
             | Self::CacheSerialize(cause) => Some(cause.as_error()),

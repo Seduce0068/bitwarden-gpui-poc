@@ -81,7 +81,9 @@ impl BitwardenApp {
         {
             Ok(id) => id.to_string(),
             Err(error) => {
-                self.status = format!("デバイス ID を生成できませんでした（{error}）");
+                self.auth.set_login_failed(true);
+                self.status =
+                    format!("デバイス ID を準備できませんでした（{error}）（r で再試行）");
                 cx.notify();
                 return;
             }
