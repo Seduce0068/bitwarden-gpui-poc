@@ -9,8 +9,11 @@ use openwarden::SecretString;
 
 /// Outcome of the whole login pipeline, ready to apply on the UI thread.
 pub(super) enum LoginResult {
-    /// A decrypted vault ready for display.
-    Vault(crate::model::Vault),
+    /// A decrypted vault ready for display, tagged with its offline-cache origin.
+    Vault {
+        vault: crate::model::Vault,
+        from_cache: bool,
+    },
     /// The network login failed.
     AuthFailed(AuthError),
     /// Unlock/import of the authenticated vault failed.
@@ -98,6 +101,10 @@ impl BitwardenApp {
                             .await
                         {
                             Ok(authenticated) => {
+                                // Keep the cache-origin flag before the vault is
+                                // consumed by the import step, so the UI can warn
+                                // that the data may be stale.
+                                let from_cache = authenticated.from_cache;
                                 // Decryption and import scale with the number of items;
                                 // keep them off the UI thread and the 1s ticker.
                                 // The generation token discards a stale result, but
@@ -108,7 +115,7 @@ impl BitwardenApp {
                                 })
                                 .await
                                 {
-                                    Ok(vault) => LoginResult::Vault(vault),
+                                    Ok(vault) => LoginResult::Vault { vault, from_cache },
                                     Err(error) => LoginResult::UnlockFailed(error),
                                 }
                             }
@@ -138,8 +145,8 @@ impl BitwardenApp {
         }
         // Consume the token so a duplicate callback cannot apply twice.
         self.login_generation.invalidate();
-        let vault = match result {
-            LoginResult::Vault(vault) => vault,
+        let (vault, from_cache) = match result {
+            LoginResult::Vault { vault, from_cache } => (vault, from_cache),
             LoginResult::AuthFailed(error) => {
                 self.auth.set_login_failed(true);
                 self.status = LoginFailure::Auth(error).status();
@@ -153,7 +160,7 @@ impl BitwardenApp {
                 return;
             }
         };
-        let status = format!("ログイン成功: {} 件のログインを読み込みました", vault.len());
+        let status = crate::ui::logic::login_success_status(vault.len(), from_cache);
         self.enter_unlocked(vault, status, cx);
     }
 

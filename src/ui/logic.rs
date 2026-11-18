@@ -62,6 +62,19 @@ pub(super) fn card_last_four(number: &str) -> String {
     digits[start..].iter().copied().collect()
 }
 
+/// Status text after a successful login.
+///
+/// A vault restored from the encrypted offline cache may be stale (the sync
+/// call failed), so the status says so instead of implying fresh data.
+pub(super) fn login_success_status(count: usize, from_cache: bool) -> String {
+    let base = format!("ログイン成功: {count} 件のログインを読み込みました");
+    if from_cache {
+        format!("{base}（オフラインキャッシュから復元。最新でない可能性があります）")
+    } else {
+        base
+    }
+}
+
 /// Status text for a clipboard copy.
 ///
 /// Restoration is only promised when the pre-copy contents were readable:
@@ -167,6 +180,23 @@ mod tests {
         assert_eq!(card_last_four(""), "なし");
         assert_eq!(card_last_four("   "), "なし");
         assert_eq!(card_last_four("abcd"), "なし");
+    }
+
+    #[test]
+    fn login_status_warns_only_for_cache_restores() {
+        let fresh = login_success_status(3, false);
+        assert_eq!(fresh, "ログイン成功: 3 件のログインを読み込みました");
+
+        let restored = login_success_status(3, true);
+        assert!(restored.starts_with(&fresh), "{restored}");
+        assert!(
+            restored.contains("オフラインキャッシュから復元"),
+            "{restored}"
+        );
+        assert!(
+            restored.contains("最新でない可能性があります"),
+            "{restored}"
+        );
     }
 
     #[test]

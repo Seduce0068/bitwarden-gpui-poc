@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 修正（オフライン復元の鮮度通知）
+
+- `AuthenticatedVault::from_cache` をログイン成功ステータスへ反映。
+  キャッシュから復元した場合は「最新でない可能性があります」と案内
+- 判定を純粋関数 `ui::logic::login_success_status` へ切り出しテストを追加
+  （263 passed）
+
 ### 決定（オフラインキャッシュ writer）
 
 - PoC ではキャッシュを読み取り専用の best-effort 復元として維持し、

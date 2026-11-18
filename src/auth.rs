@@ -423,7 +423,8 @@ pub struct AuthenticatedVault {
     pub master_key: MasterKey,
     /// Whether `sync` came from the offline cache instead of a fresh response.
     ///
-    /// The UI does not surface this yet; the ADR records it as an open item.
+    /// The login flow copies this flag before the vault is consumed and
+    /// surfaces it in the success status, warning that the data may be stale.
     pub from_cache: bool,
 }
 
