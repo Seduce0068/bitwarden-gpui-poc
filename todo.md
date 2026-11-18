@@ -29,14 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] キャッシュ読込エラーの一律「破損」表示を分類別へ — 根拠 `src/cache.rs:282-291` / R2-ER02-F3,
-      R5-VU02-F3 / 重大度 medium
-  - `cache_error_message` が parse/redact/serialize/NotFound
-    を全て「キャッシュが破損しています」に落とす。
-    `cached_sync_for` も `ok()?` で分類を破棄している（`src/cache.rs:255-261`）。
-    定義済み `CacheLoadError` を主経路まで届ける。
-    （第11弾で `Other` のみ汎用文言へ修正済み。残りは parse/redact 等の分類表示と
-    主経路への伝播）
 - [ ] `destroy` 時のクリップボード復元を潜ませない／カード全桁と併せて通知を見直す — 根拠 `src/ui/actions.rs:51` /
       R5-VU01-F1 / 重大度 medium
   - 復元不可時に「コピーしました（N秒後に復元）」と表示する矛盾を解消する。
@@ -125,6 +117,16 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] キャッシュ読込エラーの一律「破損」表示を分類別へ（2026-11-18・第14弾）
+  - 根拠: `src/cache.rs:282-291` / R2-ER02-F3, R5-VU02-F3 / 重大度 medium
+  - `cached_sync_for_detailed` が分類済みエラーを返し、`cache_error_message`
+    が NotFound / ReadFailed / ParseFailed / VersionMismatch / Mismatch /
+    TooLarge / Other を区別。`cache_restore_failure` がその理由を同期失敗
+    ステータスへ反映。未知バリアントは「破損」と呼ばない。
+  - 検証: fmt / check / test（260 passed、+3）/ clippy / doc /
+    markdownlint すべて成功。
+  - R4 独立レビュー4件をすべて反映（コメント矛盾、分類ロジックの二重化、
+    未知バリアントのテスト欠落、rustdoc リンク不整合）。
 - [x] ドキュメント lint を全 docs へ拡大し CI ゲート化（2026-11-18・第13弾）
   - 根拠: `README.md:127-128`, `.github/workflows/ci.yml:24-28` /
     R1-AR04-F2, R1-ST05-F6, R4-CI01-F2 / 重大度 medium ほか low 1件

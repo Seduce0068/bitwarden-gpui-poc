@@ -6,7 +6,7 @@
 //!
 //! When `Client::sync()` fails after a successful login, the internal
 //! authentication routine falls back to the encrypted offline cache
-//! ([`crate::cache::cached_sync_for`])
+//! ([`crate::cache::cached_sync_for_detailed`])
 //! and unlocks with the protected key from the live `Session`. The result is
 //! tagged with [`AuthenticatedVault::from_cache`] so callers know the data may
 //! be stale. See the ADR for why the cache has no production writer yet.
@@ -547,6 +547,39 @@ pub async fn authenticate(
     authenticate_with_timeout(config, device_identifier, DEFAULT_LOGIN_TIMEOUT).await
 }
 
+/// Report why an offline restore failed, while keeping the sync failure as the
+/// headline. A missing cache is the normal first-launch case, so it keeps the
+/// original `Sync` status rather than adding noise.
+pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
+    if matches!(error, AppError::NotFound) {
+        return AuthError::Sync;
+    }
+    // The classification itself lives in the cache layer; this function only
+    // wraps the reason in a status message so the two cannot drift apart.
+    use crate::cache::{
+        cache_error_message, REASON_CORRUPT, REASON_MISSING, REASON_OUTDATED,
+        REASON_SERVER_MISMATCH, REASON_TOO_LARGE, REASON_UNREADABLE, REASON_USER_MISMATCH,
+    };
+    match cache_error_message(error) {
+        REASON_CORRUPT => AuthError::Other("同期に失敗しました（キャッシュが破損しています）"),
+        REASON_UNREADABLE => AuthError::Other("同期に失敗しました（キャッシュを読み込めません）"),
+        REASON_OUTDATED => {
+            AuthError::Other("同期に失敗しました（キャッシュのバージョンが古いです）")
+        }
+        REASON_USER_MISMATCH => {
+            AuthError::Other("同期に失敗しました（キャッシュが別のアカウントのものです）")
+        }
+        REASON_SERVER_MISMATCH => {
+            AuthError::Other("同期に失敗しました（キャッシュが別のサーバーのものです）")
+        }
+        REASON_TOO_LARGE => {
+            AuthError::Other("同期に失敗しました（キャッシュがサイズ上限を超えています）")
+        }
+        REASON_MISSING => AuthError::Sync,
+        _ => AuthError::Other("同期に失敗しました（キャッシュを復元できませんでした）"),
+    }
+}
+
 async fn authenticate_inner(
     config: &AuthConfig,
     device_identifier: &str,
@@ -588,21 +621,20 @@ async fn authenticate_inner(
     })?;
     // A successful login gives us the protected key, so an encrypted cache can
     // still be unlocked when /api/sync is unreachable. The cache never supplies
-    // key material (keys are stripped on write), and a missing/mismatched cache
-    // reports the original sync failure with its cause attached. No production
-    // code writes the cache yet: openwarden 0.1.0 exposes neither the raw sync
-    // body nor the bearer token, so this is a best-effort restore of a
-    // pre-existing file.
+    // key material (keys are stripped on write). A missing cache keeps the
+    // original `AuthError::Sync`; a present but unusable one reports the
+    // classified `AuthError::Other` reason. The sync error itself is not
+    // propagated. No production code writes the cache yet: openwarden 0.1.0
+    // exposes neither the raw sync body nor the bearer token, so this is a
+    // best-effort restore of a pre-existing file.
     let (sync, from_cache) = match client.sync(&session).await {
         Ok(sync) => (sync, false),
-        Err(error) => match crate::cache::cached_sync_for(config.server_url.trim()) {
-            Some(sync) => (sync, true),
-            None => {
-                return Err(AuthError::from(AppError::SyncCause(BoxedCause::text(
-                    error.to_string(),
-                ))));
+        Err(_sync_error) => {
+            match crate::cache::cached_sync_for_detailed(config.server_url.trim()) {
+                Ok(sync) => (sync, true),
+                Err(cache_error) => return Err(cache_restore_failure(cache_error)),
             }
-        },
+        }
     };
     // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
     let password = config.master_password.clone();

@@ -438,3 +438,33 @@ fn truncation_never_splits_a_utf8_character() {
     truncate_to_limit(&mut value, 0);
     assert!(value.is_empty());
 }
+
+#[test]
+fn cache_restore_failures_are_reported_by_cause() {
+    use crate::error::{AppError, BoxedCause};
+
+    assert_eq!(cache_restore_failure(AppError::NotFound), AuthError::Sync);
+    assert_eq!(
+        cache_restore_failure(AppError::ReadFailedCause(BoxedCause::text("denied"))).message(),
+        "同期に失敗しました（キャッシュを読み込めません）"
+    );
+    assert_eq!(
+        cache_restore_failure(AppError::CacheParse(BoxedCause::text("bad json"))).message(),
+        "同期に失敗しました（キャッシュが破損しています）"
+    );
+    assert_eq!(
+        cache_restore_failure(AppError::VersionMismatch).message(),
+        "同期に失敗しました（キャッシュのバージョンが古いです）"
+    );
+    assert_eq!(
+        cache_restore_failure(AppError::ServerMismatch).message(),
+        "同期に失敗しました（キャッシュが別のサーバーのものです）"
+    );
+}
+
+#[test]
+fn unrelated_cache_errors_are_not_called_corrupt() {
+    let message = cache_restore_failure(AppError::RandomUnavailable).message();
+    assert!(!message.contains("破損"), "{message}");
+    assert_ne!(message, AuthError::Sync.message());
+}
