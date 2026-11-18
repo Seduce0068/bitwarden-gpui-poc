@@ -53,6 +53,8 @@ pub enum Finding {
     PasswordUninspectable,
     /// The item has no URI at all, so autofill can't find it.
     NoUri,
+    /// The URI field could not be decrypted, so no URI check was possible.
+    UriUninspectable,
     /// A card item has no card number.
     NoCardNumber,
     /// The name is empty.
@@ -74,6 +76,7 @@ impl Finding {
                 "パスワード検査対象外（復号できませんでした）".to_string()
             }
             Self::NoUri => "URI 未設定".to_string(),
+            Self::UriUninspectable => "URI 検査対象外（復号できませんでした）".to_string(),
             Self::NoCardNumber => "カード番号が空".to_string(),
             Self::Unnamed => "名前が空".to_string(),
         }
@@ -84,9 +87,11 @@ impl Finding {
         match self {
             Self::ReusedPassword { .. } | Self::InsecureUri { .. } => Severity::High,
             Self::WeakPassword { .. } | Self::Stale { .. } | Self::NoCardNumber => Severity::Medium,
-            Self::NoTotp | Self::PasswordUninspectable | Self::NoUri | Self::Unnamed => {
-                Severity::Low
-            }
+            Self::NoTotp
+            | Self::PasswordUninspectable
+            | Self::NoUri
+            | Self::UriUninspectable
+            | Self::Unnamed => Severity::Low,
         }
     }
 }
@@ -508,6 +513,11 @@ fn audit_item(
     let uris = item.uris();
     if item.kind() == ItemKind::Login && uris.is_empty() {
         findings.push(Finding::NoUri);
+    } else if uris
+        .iter()
+        .any(|uri| crate::vault_sync::is_undecryptable_uri(&uri.uri))
+    {
+        findings.push(Finding::UriUninspectable);
     }
     for uri in uris {
         if uri.uri.trim().to_lowercase().starts_with("http://") {
