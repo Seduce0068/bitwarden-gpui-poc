@@ -373,6 +373,7 @@ fn every_finding_has_a_nonempty_message() {
         Finding::NoTotp,
         Finding::PasswordUninspectable,
         Finding::NoUri,
+        Finding::UriUninspectable,
         Finding::NoCardNumber,
         Finding::Unnamed,
     ];
@@ -681,4 +682,32 @@ fn reports_are_ordered_worst_first_then_by_name() {
     let report = report_of(vec![low, high]);
     assert_eq!(report.items[0].id, "1");
     assert_eq!(report.items[1].id, "2");
+}
+
+#[test]
+fn undecryptable_uri_is_not_reported_as_missing() {
+    use crate::vault_sync::UNDECRYPTABLE_URI;
+
+    let report = report_of(vec![VaultItem::new(
+        "uri-undecryptable",
+        "Login",
+        ItemData::Login {
+            username: "u".into(),
+            password: Zeroizing::new("vT7#kQm2!zR9wP4$xL8@".into()),
+            totp: Zeroizing::new(String::new()),
+            uris: vec![LoginUri {
+                uri: UNDECRYPTABLE_URI.into(),
+                match_type: None,
+            }],
+        },
+    )]);
+    let findings = &report.items[0].findings;
+    assert!(findings.contains(&Finding::UriUninspectable));
+    assert!(
+        !findings.contains(&Finding::NoUri),
+        "a decryption failure is not the same as an empty URI list"
+    );
+    assert!(Finding::UriUninspectable
+        .message()
+        .contains("復号できませんでした"));
 }

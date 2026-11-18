@@ -33,6 +33,12 @@ pub(crate) use unicode_normalize::comparison_key;
 ///
 /// Falls back to `"(不正な URI)"` when the value cannot be parsed.
 pub fn mask_uri(value: &str) -> String {
+    // Status markers use a leading NUL so they cannot collide with real URIs.
+    // The URL parser drops that control character, which would render a marker
+    // as a plausible-looking scheme; show the status instead.
+    if value.starts_with('\0') {
+        return "（復号できませんでした）".to_string();
+    }
     match url::Url::parse(value) {
         Ok(url) => {
             let scheme = url.scheme();

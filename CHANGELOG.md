@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 修正（復号失敗 URI の誤判定）
+
+- ログイン項目の URI 復号に失敗した際、空リストとして扱い監査が
+  `NoUri` を報告していた問題を修正。専用センチネルと
+  `Finding::UriUninspectable` を追加し、「復号できませんでした」と区別
+- 回帰テストを追加（264 passed）
+
 ### 修正（オフライン復元の鮮度通知）
 
 - `AuthenticatedVault::from_cache` をログイン成功ステータスへ反映。

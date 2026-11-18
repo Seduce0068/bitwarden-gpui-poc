@@ -33,9 +33,9 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `docs/adr/adr-20261116-openwarden-integration.md:129` / R4-DR02-F2,
       R5-VU02-F2 / 重大度 medium
   - 期限が無く鍵ローテーション後は復号不能。取得時刻も無く鮮度判断ができない。
-- [ ] デバイス ID 未生成時に `r` 再試行が進まない問題を修正 — 根拠 `src/ui/login_flow.rs:78-87` /
-      R2-ER03-F3 / 重大度 medium
-  - `ensure_device_id` 失敗時に status を出すが、再試行でも同じ経路を通り回復手段がない。
+  - 保留: writer を接続しない方針（第17弾）により新規キャッシュが書かれず、
+    既存ファイルにも取得時刻が無い。期限の一律適用は復元経路を止めるため、
+    writer 方針の再検討時に同時対応する（ADR の再検討トリガと連動）。
 - [ ] 復号失敗 URI が `NoUri` として誤報告される問題を修正 — 根拠 `src/vault_sync.rs:123-125`,
       `src/health.rs:508-511` / R2-ER02-F1, R5-VU02-F1 / 重大度 medium
   - `vault.uris()` の `Err` が `unwrap_or_default()` で空となり、監査が「URI なし」と誤判定する。
@@ -102,6 +102,18 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] デバイス ID 失敗時に `r` 再試行が進まない問題を修正（2026-11-18・第16弾で解消）
+  - 根拠: `src/ui/login_flow.rs:78-87` / R2-ER03-F3 / 重大度 medium
+  - 第16弾で失敗時に `set_login_failed(true)` と「r で再試行」案内を追加し、
+    未保存 ID を破棄して再試行時に再生成するよう変更済み。重複項目をクローズ。
+- [x] 復号失敗 URI が `NoUri` として誤報告される問題を修正（2026-11-18・第19弾）
+  - 根拠: `src/vault_sync.rs:123-125`, `src/health.rs:508-511` /
+    R2-ER02-F1, R5-VU02-F1 / 重大度 medium
+  - NUL 前置の `UNDECRYPTABLE_URI` センチネルを追加し、監査は
+    `UriUninspectable`（低）を報告。真に URI が無い場合の `NoUri` と区別。
+  - 検証: fmt / check / test（265 passed）/ clippy / doc / markdownlint 成功。
+  - R4 独立レビュー4件をすべて反映（producer 側テスト、Finding 網羅、
+    NUL センチネルが `mask_uri` で実 URI 風に表示される問題、doc/ADR ログ）。
 - [x] `from_cache` を UI ステータスへ反映（2026-11-18・第18弾）
   - 根拠: `src/auth.rs:616` / R1-ST02-F1, R4-DR01-F1 / 重大度 medium
   - `LoginResult::Vault` に `from_cache` を持たせ、キャッシュ復元時は

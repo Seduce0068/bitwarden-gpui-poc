@@ -466,3 +466,32 @@ fn missing_totp_is_empty_instead_of_an_available_marker() {
     assert_eq!(model.items[0].totp_secret(), Some(""));
     assert!(crate::totp::code_at(model.items[0].totp_secret().unwrap(), TOTP_AT).is_err());
 }
+
+#[test]
+fn undecryptable_uri_becomes_a_marker_and_is_audited_as_uninspectable() {
+    let mut bad = cipher("login-bad-uri", "2024-01-02T00:00:00Z");
+    bad["name"] = serde_json::json!("plain name");
+    bad["login"]["username"] = serde_json::json!("plain-user");
+    bad["login"]["password"] = serde_json::json!("NEVER_IN_THE_MODEL");
+    bad["login"]["totp"] = serde_json::json!("NEVER_IN_THE_MODEL_TOTP");
+    bad["login"]["uris"] = serde_json::json!([{ "uri": "NEVER_IN_THE_MODEL_URI" }]);
+    let vault = unlocked_vault(&[bad]);
+    let (model, _audit) = import_logins_with_audit(&vault).expect("one bad field must not abort");
+
+    assert_eq!(model.items.len(), 1);
+    let uris = model.items[0].uris();
+    assert_eq!(uris.len(), 1);
+    assert_eq!(uris[0].uri, UNDECRYPTABLE_URI);
+
+    let report = crate::health::audit(
+        &model,
+        crate::health::Thresholds::default(),
+        i64::try_from(TOTP_AT).unwrap(),
+    );
+    assert!(report.items[0]
+        .findings
+        .contains(&crate::health::Finding::UriUninspectable));
+
+    let rendered = format!("{model:?} {}", serde_json::to_string(&model.items).unwrap());
+    assert!(!rendered.contains("NEVER_IN_THE_MODEL_URI"), "{rendered}");
+}

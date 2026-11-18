@@ -25,6 +25,16 @@ use crate::model::{Folder, ItemData, LoginUri, Vault, VaultItem};
 /// password is still redacted by `ItemData`'s manual `Debug` implementation.
 pub const UNDECRYPTABLE_PASSWORD: &str = "\u{0}openwarden:undecryptable";
 
+/// Marker used in place of a login's URI list when the field could not be
+/// decrypted. Without it the audit would mistake a decryption failure for a
+/// genuinely missing URI and report `NoUri`.
+pub const UNDECRYPTABLE_URI: &str = "\u{0}openwarden:uri-undecryptable";
+
+/// Whether a model URI is the undecryptable status marker.
+pub fn is_undecryptable_uri(value: &str) -> bool {
+    value == UNDECRYPTABLE_URI
+}
+
 /// Whether a model password is the undecryptable status marker.
 pub fn is_undecryptable_password(value: &str) -> bool {
     value == UNDECRYPTABLE_PASSWORD
@@ -105,8 +115,10 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
 /// buffers so the audit and the TOTP copy action work on real values. A field
 /// that fails to decrypt never discards the rest of the vault: the password is
 /// replaced with the [`UNDECRYPTABLE_PASSWORD`] status marker (which the health
-/// audit counts as excluded) and an unusable TOTP field is left empty (which
-/// the audit reports as `NoTotp`).
+/// audit counts as excluded), an unusable TOTP field is left empty (which the
+/// audit reports as `NoTotp`), and a failed URI field becomes
+/// [`UNDECRYPTABLE_URI`] (reported as `Finding::UriUninspectable` rather than
+/// `NoUri`).
 fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
     let id = info.id.as_str().to_string();
     let name = vault
@@ -120,15 +132,21 @@ fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
         .flatten()
         .map(|value| value.expose_secret().to_string())
         .unwrap_or_default();
-    let uris = vault
-        .uris(&info.id)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|uri| LoginUri {
-            uri: uri.uri.expose_secret().to_string(),
-            match_type: uri.match_type.map(|kind| kind.to_wire()),
-        })
-        .collect();
+    let uris = match vault.uris(&info.id) {
+        Ok(list) => list
+            .into_iter()
+            .map(|uri| LoginUri {
+                uri: uri.uri.expose_secret().to_string(),
+                match_type: uri.match_type.map(|kind| kind.to_wire()),
+            })
+            .collect(),
+        // Decryption failed: keep a marker so the audit distinguishes this
+        // from a login that genuinely has no URI.
+        Err(_) => vec![LoginUri {
+            uri: UNDECRYPTABLE_URI.to_string(),
+            match_type: None,
+        }],
+    };
     let password = match vault.password(&info.id) {
         Ok(Some(secret)) => Zeroizing::new(secret.expose_secret().to_string()),
         // No password field at all: genuinely empty, so the audit scores it
@@ -321,7 +339,8 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
 ///
 /// [`SyncError::Locked`] when the source vault has no decryption key.
 /// Individual field decryption failures are recorded as uninspectable (see
-/// [`UNDECRYPTABLE_PASSWORD`]) instead of failing the import.
+/// [`UNDECRYPTABLE_PASSWORD`] and [`UNDECRYPTABLE_URI`]) instead of failing
+/// the import.
 pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
     let (model, _) = import_logins_with_audit(vault)?;
     Ok(model)
@@ -339,7 +358,8 @@ pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
 ///
 /// [`SyncError::Locked`] when the source vault has no decryption key.
 /// Individual field decryption failures are recorded as uninspectable (see
-/// [`UNDECRYPTABLE_PASSWORD`]) instead of failing the import.
+/// [`UNDECRYPTABLE_PASSWORD`] and [`UNDECRYPTABLE_URI`]) instead of failing
+/// the import.
 pub fn import_logins_with_audit(vault: &OpenVault) -> Result<(Vault, Vec<ImportAudit>), SyncError> {
     if vault.is_locked() {
         return Err(SyncError::Locked);
