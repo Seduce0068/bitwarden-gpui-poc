@@ -29,13 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] キャッシュの有効期限と取得時刻を追加する — 根拠 `src/cache.rs:29-35`,
-      `docs/adr/adr-20261116-openwarden-integration.md:129` / R4-DR02-F2,
-      R5-VU02-F2 / 重大度 medium
-  - 期限が無く鍵ローテーション後は復号不能。取得時刻も無く鮮度判断ができない。
-  - 保留: writer を接続しない方針（第17弾）により新規キャッシュが書かれず、
-    既存ファイルにも取得時刻が無い。期限の一律適用は復元経路を止めるため、
-    writer 方針の再検討時に同時対応する（ADR の再検討トリガと連動）。
 - [ ] 復号失敗 URI が `NoUri` として誤報告される問題を修正 — 根拠 `src/vault_sync.rs:123-125`,
       `src/health.rs:508-511` / R2-ER02-F1, R5-VU02-F1 / 重大度 medium
   - `vault.uris()` の `Err` が `unwrap_or_default()` で空となり、監査が「URI なし」と誤判定する。
@@ -102,6 +95,14 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] キャッシュの有効期限と取得時刻を追加（2026-11-19・第20弾）
+  - 根拠: `src/cache.rs:29-35` / R4-DR02-F2, R5-VU02-F2 / 重大度 medium
+  - `SyncCache.created_at`（Unix 秒、`#[serde(default)]`）と 7 日の
+    `MAX_CACHE_AGE_SECS` を追加。期限切れは `CacheExpired` として分類し
+    ステータスへ表示。旧ビルドの無印キャッシュは best-effort で許可。
+  - 検証: fmt / check / test（269 passed）/ clippy / doc / markdownlint 成功。
+  - R4 独立レビュー4件をすべて反映（CHANGELOG 記録、serde 往復・文言の
+    結合テスト、旧 JSON キー欠落テスト、ADR ログの日付見出し）。
 - [x] デバイス ID 失敗時に `r` 再試行が進まない問題を修正（2026-11-18・第16弾で解消）
   - 根拠: `src/ui/login_flow.rs:78-87` / R2-ER03-F3 / 重大度 medium
   - 第16弾で失敗時に `set_login_failed(true)` と「r で再試行」案内を追加し、

@@ -160,6 +160,8 @@ pub enum AppError {
     ParseFailedCause(BoxedCause),
     /// The cache was written by an incompatible version.
     VersionMismatch,
+    /// The cached response is older than the accepted offline window.
+    CacheExpired,
 
     // -- settings (formerly `SettingsLoadError`) --
     /// The file is larger than `MAX_SETTINGS_BYTES`.
@@ -269,6 +271,7 @@ impl AppError {
                 "設定ファイルが破損しています（既定値を使用）"
             }
             Self::VersionMismatch => "キャッシュのバージョンが古いです",
+            Self::CacheExpired => "キャッシュが有効期限を過ぎています",
             Self::TooLarge => "設定ファイルがサイズ上限（1 MiB）を超えています（既定値を使用）",
             Self::Missing => "この項目には TOTP が設定されていません",
             Self::Invalid | Self::InvalidCause(_) => "TOTP シークレットを解釈できません",
@@ -349,6 +352,7 @@ impl Clone for AppError {
             Self::ReadFailed => Self::ReadFailed,
             Self::ParseFailed => Self::ParseFailed,
             Self::VersionMismatch => Self::VersionMismatch,
+            Self::CacheExpired => Self::CacheExpired,
             Self::TooLarge => Self::TooLarge,
             Self::Missing => Self::Missing,
             Self::Invalid => Self::Invalid,
