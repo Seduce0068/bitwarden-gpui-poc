@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 追加（実サーバー接続の opt-in E2E テスト）
+
+- `tests/real_server_e2e.rs` を追加（`E2E_*` 環境変数＋`--ignored` で実行）。
+  ローカル Vaultwarden 1.30.2 で API key 認証と `/api/sync` の HTTP 200 まで到達
+- 同サーバーの sync JSON が PascalCase で、openwarden 0.1.0 が要求する
+  camelCase と不一致のため、復号前のパースで失敗（ADR に記録）
+
 ### 追加（キャッシュの有効期限）
 
 - `SyncCache` に取得時刻（Unix 秒）を追加し、7 日で期限切れとする。
