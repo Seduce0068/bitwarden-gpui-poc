@@ -531,3 +531,32 @@ fn device_id_is_not_a_secret_but_is_serialized() {
         "device id is an identifier, not a credential"
     );
 }
+
+#[test]
+fn device_id_save_failure_is_reported_and_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = Settings::default();
+
+    // A directory path cannot be replaced by the settings file.
+    let error = settings.ensure_device_id(Some(dir.path())).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("デバイス ID を保存できませんでした"),
+        "{error}"
+    );
+    assert!(
+        settings.device_id.is_empty(),
+        "an identifier that was never persisted must not be reused"
+    );
+    assert!(
+        std::error::Error::source(&error).is_some(),
+        "the original io error must stay reachable through the cause chain"
+    );
+
+    // Once the target is writable the next call generates and persists a new id.
+    let path = dir.path().join("settings.json");
+    let id = settings.ensure_device_id(Some(&path)).unwrap().to_string();
+    assert!(is_valid_device_id(&id));
+    assert_eq!(Settings::load(&path).device_id, id);
+}
