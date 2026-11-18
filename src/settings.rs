@@ -98,6 +98,8 @@ pub enum SettingsLoadError {
     ParseFailed,
     /// The file is larger than [`MAX_SETTINGS_BYTES`].
     TooLarge,
+    /// A failure from another layer that this small enum cannot describe.
+    Other(&'static str),
 }
 
 impl SettingsLoadError {
@@ -108,6 +110,7 @@ impl SettingsLoadError {
             Self::ReadFailed => "設定ファイルを読み込めません（既定値を使用）",
             Self::ParseFailed => "設定ファイルが破損しています（既定値を使用）",
             Self::TooLarge => "設定ファイルがサイズ上限（1 MiB）を超えています（既定値を使用）",
+            Self::Other(text) => text,
         }
     }
 }

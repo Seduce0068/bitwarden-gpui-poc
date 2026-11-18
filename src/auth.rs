@@ -63,6 +63,8 @@ pub enum AuthError {
     KdfRejected,
     /// The login sequence did not finish within the allotted time.
     Timeout,
+    /// A failure from another layer that this `Copy` enum cannot describe.
+    Other(&'static str),
 }
 
 impl AuthError {
@@ -79,6 +81,7 @@ impl AuthError {
             Self::Sync => "同期に失敗しました",
             Self::KdfRejected => "KDF 設定がポリシーで拒否されました",
             Self::Timeout => "ログインがタイムアウトしました",
+            Self::Other(text) => text,
         }
     }
 }
@@ -438,6 +441,8 @@ pub enum UnlockError {
     ApplySyncFailed(String),
     /// The decrypted vault could not be converted into the local model.
     ImportFailed(String),
+    /// An unexpected failure, keeping the original message for the status bar.
+    Other(String),
 }
 
 impl UnlockError {
@@ -448,6 +453,7 @@ impl UnlockError {
             Self::UnlockFailed(detail) => format!("復号キーを取得できません（{detail}）"),
             Self::ApplySyncFailed(detail) => format!("同期データを取り込めません（{detail}）"),
             Self::ImportFailed(detail) => format!("vault 変換に失敗しました（{detail}）"),
+            Self::Other(detail) => detail.clone(),
         }
     }
 }
