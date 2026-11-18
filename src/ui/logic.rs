@@ -46,6 +46,22 @@ pub(super) fn effective_panel(requested: Panel, has_audit_report: bool) -> Panel
     }
 }
 
+/// Reduce a card number to its last four ASCII digits for display.
+///
+/// As in the search haystack of [`crate::model::Vault::view`], every non-digit
+/// grouping character is ignored, so a number without spaces is masked just as
+/// strictly as one that uses them. At most the last four digits are shown;
+/// shorter numbers are shown as-is and a number with no digits at all is
+/// reported explicitly instead of rendering an empty "末尾:" label.
+pub(super) fn card_last_four(number: &str) -> String {
+    let digits: Vec<char> = number.chars().filter(|ch| ch.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return "なし".to_string();
+    }
+    let start = digits.len().saturating_sub(4);
+    digits[start..].iter().copied().collect()
+}
+
 /// Adjust the idle auto-lock timeout in one-minute steps, clamped to 1..=60
 /// minutes.
 pub(super) fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
@@ -124,6 +140,20 @@ mod tests {
         assert_eq!(effective_panel(Panel::Audit, true), Panel::Audit);
         assert_eq!(effective_panel(Panel::Settings, false), Panel::Settings);
         assert_eq!(effective_panel(Panel::Generator, false), Panel::Generator);
+    }
+
+    #[test]
+    fn card_last_four_ignores_group_separators_and_never_leaks_the_prefix() {
+        assert_eq!(card_last_four("4111 1111 1111 1234"), "1234");
+        assert_eq!(card_last_four("4111111111111234"), "1234");
+        assert_eq!(card_last_four("4111-1111-1111-1234"), "1234");
+        assert_eq!(card_last_four("１２３４ 4111 1111 1111 1234"), "1234");
+        assert_eq!(card_last_four("1234"), "1234");
+        assert_eq!(card_last_four("12 34"), "1234");
+        assert_eq!(card_last_four("123"), "123");
+        assert_eq!(card_last_four(""), "なし");
+        assert_eq!(card_last_four("   "), "なし");
+        assert_eq!(card_last_four("abcd"), "なし");
     }
 
     #[test]
