@@ -468,3 +468,11 @@ fn unrelated_cache_errors_are_not_called_corrupt() {
     assert!(!message.contains("破損"), "{message}");
     assert_ne!(message, AuthError::Sync.message());
 }
+
+#[test]
+fn expired_cache_message_reaches_the_status_bar() {
+    assert_eq!(
+        cache_restore_failure(AppError::CacheExpired).message(),
+        "同期に失敗しました（キャッシュが有効期限を過ぎています）"
+    );
+}

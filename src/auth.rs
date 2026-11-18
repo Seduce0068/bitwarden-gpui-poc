@@ -558,7 +558,7 @@ pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
     // The classification itself lives in the cache layer; this function only
     // wraps the reason in a status message so the two cannot drift apart.
     use crate::cache::{
-        cache_error_message, REASON_CORRUPT, REASON_MISSING, REASON_OUTDATED,
+        cache_error_message, REASON_CORRUPT, REASON_EXPIRED, REASON_MISSING, REASON_OUTDATED,
         REASON_SERVER_MISMATCH, REASON_TOO_LARGE, REASON_UNREADABLE, REASON_USER_MISMATCH,
     };
     match cache_error_message(error) {
@@ -566,6 +566,9 @@ pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
         REASON_UNREADABLE => AuthError::Other("同期に失敗しました（キャッシュを読み込めません）"),
         REASON_OUTDATED => {
             AuthError::Other("同期に失敗しました（キャッシュのバージョンが古いです）")
+        }
+        REASON_EXPIRED => {
+            AuthError::Other("同期に失敗しました（キャッシュが有効期限を過ぎています）")
         }
         REASON_USER_MISMATCH => {
             AuthError::Other("同期に失敗しました（キャッシュが別のアカウントのものです）")

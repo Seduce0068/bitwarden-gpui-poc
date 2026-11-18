@@ -27,6 +27,12 @@ use crate::vault_sync;
 /// variants, each retaining the underlying error through `Error::source()`.
 pub type SyncCacheError = crate::error::AppError;
 
+/// Maximum age of a cached sync response before it is refused.
+///
+/// Seven days balances offline availability with the risk of acting on stale
+/// vault data (for example after a key rotation on the server).
+pub const MAX_CACHE_AGE_SECS: i64 = 7 * 24 * 60 * 60;
+
 /// A cached sync response, still encrypted.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncCache {
@@ -38,6 +44,12 @@ pub struct SyncCache {
     pub server_url: String,
     /// Raw `/api/sync` JSON body.
     pub body: Vec<u8>,
+    /// When the body was captured, in Unix seconds.
+    ///
+    /// Absent in caches written by earlier builds; those remain usable as a
+    /// best-effort fallback because the writer is not connected in this PoC.
+    #[serde(default)]
+    pub created_at: Option<i64>,
 }
 
 impl core::fmt::Debug for SyncCache {
@@ -76,6 +88,7 @@ impl SyncCache {
             user_id,
             server_url: server_url.to_string(),
             body: sanitized,
+            created_at: Some(i64::try_from(crate::totp::now_unix()).unwrap_or(i64::MAX)),
         })
     }
 
@@ -88,6 +101,14 @@ impl SyncCache {
         vault_sync::parse_sync(&self.body)
             .map_err(|error| SyncCacheError::CacheParse(crate::error::BoxedCause::new(error)))
     }
+}
+
+/// Whether a captured-at timestamp is older than the accepted offline window.
+///
+/// `None` means a cache written before timestamps existed; it stays usable as
+/// a best-effort fallback rather than silently disabling offline restore.
+pub(crate) fn is_cache_expired(created_at: Option<i64>, now: i64) -> bool {
+    created_at.is_some_and(|captured| now.saturating_sub(captured) > MAX_CACHE_AGE_SECS)
 }
 
 /// Remove key material from a raw sync body, keeping the rest of the
@@ -267,6 +288,10 @@ pub fn cached_sync_for_detailed(server_url: &str) -> Result<openwarden::SyncData
     if cache.server_url != server_url {
         return Err(SyncCacheError::ServerMismatch);
     }
+    let now = i64::try_from(crate::totp::now_unix()).unwrap_or(i64::MAX);
+    if is_cache_expired(cache.created_at, now) {
+        return Err(SyncCacheError::CacheExpired);
+    }
     cache.sync()
 }
 
@@ -299,6 +324,7 @@ pub(crate) const REASON_CORRUPT: &str = "キャッシュが破損しています
 pub(crate) const REASON_UNREADABLE: &str = "キャッシュを読み込めません";
 pub(crate) const REASON_MISSING: &str = "キャッシュがありません";
 pub(crate) const REASON_OUTDATED: &str = "キャッシュのバージョンが古いです";
+pub(crate) const REASON_EXPIRED: &str = "キャッシュが有効期限を過ぎています";
 pub(crate) const REASON_USER_MISMATCH: &str = "キャッシュが別のアカウントのものです";
 pub(crate) const REASON_SERVER_MISMATCH: &str = "キャッシュが別のサーバーのものです";
 pub(crate) const REASON_TOO_LARGE: &str = "キャッシュがサイズ上限を超えています";
@@ -317,6 +343,7 @@ pub fn cache_error_message(error: SyncCacheError) -> &'static str {
         SyncCacheError::NotFound => REASON_MISSING,
         SyncCacheError::ReadFailed | SyncCacheError::ReadFailedCause(_) => REASON_UNREADABLE,
         SyncCacheError::VersionMismatch => REASON_OUTDATED,
+        SyncCacheError::CacheExpired => REASON_EXPIRED,
         SyncCacheError::TooLarge => REASON_TOO_LARGE,
         SyncCacheError::Other(_) => crate::error::OTHER_ERROR_MESSAGE,
         // A future variant must never be reported as proven corruption.

@@ -271,6 +271,7 @@ fn legacy_cache_is_read_but_never_rewritten() {
         user_id: "user-2".to_string(),
         server_url: "https://vault.example.com".to_string(),
         body: body(),
+        created_at: None,
     };
     save(&old, &other).unwrap();
     assert_eq!(load_with_fallback(&new, &old), Ok(legacy));
@@ -339,4 +340,54 @@ fn cached_sync_for_restores_only_a_usable_cache_for_this_server() {
     let path = default_path().expect("cache path");
     std::fs::write(&path, b"not json").unwrap();
     assert!(cached_sync_for("https://vault.example.com").is_none());
+}
+
+#[test]
+fn cache_expiry_uses_a_fixed_window_and_keeps_legacy_files() {
+    let now = 1_800_000_000_i64;
+    assert!(!is_cache_expired(None, now), "legacy caches stay usable");
+    assert!(!is_cache_expired(Some(now), now));
+    assert!(!is_cache_expired(Some(now - MAX_CACHE_AGE_SECS), now));
+    assert!(is_cache_expired(Some(now - MAX_CACHE_AGE_SECS - 1), now));
+    // A clock moved backwards must not mark a fresh cache as stale.
+    assert!(!is_cache_expired(Some(now + 100), now));
+    assert_eq!(
+        cache_error_message(SyncCacheError::CacheExpired),
+        REASON_EXPIRED
+    );
+}
+
+#[test]
+fn legacy_json_without_created_at_stays_restorable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.json");
+    let legacy = serde_json::json!({
+        "version": SyncCache::VERSION,
+        "user_id": "user-1",
+        "server_url": "https://vault.example.com",
+        "body": body(),
+    });
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+    let loaded = load_detailed(&path).unwrap();
+    assert_eq!(loaded.created_at, None);
+    assert!(!is_cache_expired(loaded.created_at, 1_800_000_000));
+}
+
+#[test]
+fn expired_cache_survives_serde_roundtrip_as_expired() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.json");
+    let now = i64::try_from(crate::totp::now_unix()).unwrap();
+    let stale = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: body(),
+        created_at: Some(now - MAX_CACHE_AGE_SECS - 1),
+    };
+    save(&path, &stale).unwrap();
+
+    let loaded = load_detailed(&path).unwrap();
+    assert!(is_cache_expired(loaded.created_at, now));
 }
