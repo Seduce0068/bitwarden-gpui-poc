@@ -43,9 +43,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     `from_json` を呼び正規化を通らないため。上流対応または自前 HTTP
     クライアント化が必要で、未解決として残す。
 
-- [ ] `settings.json` のスキーマ・全フィールド・既定値を README へ文書化 — 根拠
-      `README.md:38-39,178-184`, `src/settings.rs:260-281` / R2-CF01-F3 / 重大度
-      medium
 
 ### 優先度 低
 
@@ -106,6 +103,13 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] `settings.json` のスキーマを README へ文書化（2026-11-20・第27弾）
+  - 根拠: `README.md:38-39,178-184`, `src/settings.rs:260-281` /
+    R2-CF01-F3 / 重大度 medium
+  - 全フィールドの型・既定値・クランプ範囲を表形式で追加。
+  - 検証: markdownlint / `bash -n` 成功（ドキュメントのみ）。
+  - R4 指摘 2 件を反映（数値のクランプと型失敗フォールバックの区別、
+    文字列上限が認証時に適用される点）。
 - [x] 低優先度のレビュー指摘を整理（2026-11-20・第25弾）
   - 根拠: `docs/index.md:6`, `src/ui/app.rs:64-68`, `.github/workflows/ci.yml:21`,
     `.gitignore:1`, `src/model.rs:693` / 重大度 low 5件

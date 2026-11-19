@@ -43,6 +43,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - 生成結果はクリップボードにコピーでき、コピー元を読み取れた場合は
   設定ファイルで指定した秒数（既定30秒）後に以前の内容へ自動復元される
   （ロック時も即復元。読み取れなかった場合は復元しない）
+- 設定は `settings.json` のスキーマ v1 に従う（下記「設定ファイル」を参照）
 - ロック画面で Personal API key（Client ID / Client Secret）とマスターパスワードを
   入力し、`openwarden` による実ログイン・同期・復号を試せる。`Enter` は常に実認証
   であり、モック vault は `m` で明示的に開く
@@ -123,6 +124,39 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 
 設定パネルでは `1` / `2` でサーバーURL とメールを編集し、`Enter` で確定します。
 `+` / `-` で監査閾値、`i` / `u` で自動ロック時間（1〜60分）を調整し、`w` で保存します。
+
+### 設定ファイル
+
+`settings.json` は XDG 設定ディレクトリ（既定は `~/.config/bitwarden-gpui-poc/`）
+に保存されます。パスワードや API key は保存されません。スキーマ v1 の
+フィールドと既定値は次のとおりです（手編集時は型と範囲に注意）。
+
+| JSON キー | 型 | 既定値 | 範囲・説明 |
+| --- | --- | --- | --- |
+| `schema_version` | number | `1` | 将来版（>1）は破棄して既定値へ。欠落は v1 として扱う |
+| `server_url` | string | `https://vault.bitwarden.com` | 最大 2048 文字 |
+| `email` | string | `""` | 最大 254 文字 |
+| `device_id` | string | `""` | UUID v4。初回ログイン時に生成・永続化 |
+| `password_generator.length` | number | `20` | 4〜128 |
+| `password_generator.lowercase` | bool | `true` | `a-z` を含める |
+| `password_generator.uppercase` | bool | `true` | `A-Z` を含める |
+| `password_generator.digits` | bool | `true` | `0-9` を含める |
+| `password_generator.symbols` | bool | `true` | `!@#$%^&*` を含める |
+| `password_generator.avoid_ambiguous` | bool | `false` | 紛らわしい文字を除外 |
+| `passphrase_generator.words` | number | `4` | 2〜20 |
+| `passphrase_generator.separator` | string | `"-"` | 単語区切り |
+| `passphrase_generator.capitalize` | bool | `true` | 単語を大文字開始に |
+| `passphrase_generator.include_number` | bool | `false` | 数字を 1 桁追加 |
+| `thresholds.weak_bits` | number | `50` | 1〜200（推定エントロピー） |
+| `thresholds.stale_days` | number | `365` | 1〜3650（更新からの日数） |
+| `idle_lock_seconds` | number | `300` | 60〜3600（1〜60 分） |
+| `login_timeout_seconds` | number | `30` | 1〜3600 |
+| `clipboard_restore_seconds` | number | `30` | 1〜3600 |
+
+数値は型として表現できる範囲外の値がクランプされ、負数・小数など型として
+表現できない値は既定値へ置き換えられます。`server_url` / `email` の上限は
+認証時に切り詰められます（設定ファイルの読み込み時にはクランプされません）。
+ファイル全体の上限は 1 MiB です。
 
 ## ビルドと検証
 
