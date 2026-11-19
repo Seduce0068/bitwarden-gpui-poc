@@ -55,8 +55,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/ui/actions.rs:118-122` / R1-AR03-F1, R5-AP02-F1 / 重大度 low
 - [ ] `KeyAction` とマウス由来 `SelectRow` の境界を明確化（リネームまたは分離） — 根拠
       `src/ui/keys.rs:68-70`, `src/ui/render.rs:99-104` / R1-AR03-F2 / 重大度 low
-- [ ] 監査レポート欠如時のフォールバック判定を `effective_panel` に一本化 — 根拠 `src/ui/logic.rs:37-47`,
-      `src/ui/app.rs:243`, `src/ui/render.rs:317-320` / R1-AR03-F3 / 重大度 low
 - [ ] `visible_items` と選択 index 計算を `VaultViewState` へ集約し `next_index` を本番化 —
       根拠 `src/ui/app.rs:197-201,247-267`, `src/ui/vault_view.rs:50-52,112-124` /
       R1-AR03-F4, R4-TS02-F1 / 重大度 low
@@ -75,6 +73,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] パネル状態の正規化を単一化（2026-11-20・第31弾）
+  - 根拠: `src/ui/logic.rs:37-47`, `src/ui/render.rs:317-320` / 重大度 low
+  - 描画の本体・ヘッダタブ・`KeyContext` すべてで `effective_panel` を通す。
+  - 検証: fmt / check / test（281 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 3 件を反映。描画分岐の直接テストは
+    GPUI ウィンドウが必要なため残リスクとして記録。
 - [x] `InsecureUri` 判定の Cf 文字バイパスを防止（2026-11-20・第30弾）
   - 根拠: `src/health.rs:513`, `src/model.rs:36` / R3-IV03-F1 / 重大度 low
   - 判定用文字列から不可視文字（空白・制御・書式）を全除去し、マスク済み
