@@ -125,11 +125,17 @@ impl BitwardenApp {
             KeyAction::CopyPassword => {
                 if let Some(value) = self.generator.last_password.clone() {
                     self.copy_to_clipboard(&value, cx);
+                } else {
+                    self.status = crate::ui::logic::no_generated_status("パスワード");
+                    cx.notify();
                 }
             }
             KeyAction::CopyPassphrase => {
                 if let Some(value) = self.generator.last_passphrase.clone() {
                     self.copy_to_clipboard(&value, cx);
+                } else {
+                    self.status = crate::ui::logic::no_generated_status("パスフレーズ");
+                    cx.notify();
                 }
             }
             KeyAction::CopyTotp => self.copy_totp(cx),

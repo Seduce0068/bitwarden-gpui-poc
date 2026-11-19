@@ -72,20 +72,8 @@ stale_after: "2027-05-17T21:04:43+09:00"
 - [ ] クリップボード復元手続きを単一サービスへ集約し lock 経路の status を整合 — 根拠
       `src/ui/clipboard.rs:3-4`, `src/ui/actions.rs:56-62`,
       `src/ui/app.rs:161-164` / R1-AR03-F7 / 重大度 low
-- [ ] 設定パネルの dead hint「n キーで編集」を修正 — 根拠 `src/ui/panels.rs:242-245`,
-      `src/ui/keys.rs:299-311` / R1-ST03-F2, R2-FG02-F1 / 重大度 low
-- [ ] 生成パネルの「30秒で復元」を設定値依存表示へ — 根拠 `src/ui/panels.rs:172`,
-      `src/ui/actions.rs:41` / R1-ST03-F3, R5-UX01-F3 / 重大度 low
-- [ ] `copy_totp` の「項目が選択されていません」文言を実態へ — 根拠 `src/ui/actions.rs:11-24` /
-      R1-ST03-F5 / 重大度 low
-- [ ] 未生成時の `y`/`Y` コピーを無応答にせず通知 — 根拠 `src/ui/input.rs:125-134` / R2-FG02-F3,
-      R5-VU01-F2 / 重大度 low
 - [ ] クリップボード復元秒数／ログインタイムアウトを GUI 編集可能化 — 根拠 `src/ui/panels.rs:250-255`,
       `src/ui/keys.rs:299-311` / R1-ST03-F6 / 重大度 low
-- [ ] Dependabot に `github-actions` エコシステムを追加 — 根拠 `.github/dependabot.yml:6`,
-      `.github/workflows/ci.yml:21` / R2-CF01-F4, R4-DP01-F1 / 重大度 low
-- [ ] CI の cargo-deny 導入版を固定し `cargo doc` へ `--locked` を付与 — 根拠
-      `.github/workflows/ci.yml:25,27` / R4-CI01-F1, R4-CI01-F3 / 重大度 low
 - [ ] `revision_date` パース失敗の 0 フォールバックを明示的な未設定値へ — 根拠
       `src/vault_sync.rs:161,358` / R2-ER02-F2, R3-DI01-F1 / 重大度 low
 - [ ] 名前ソートを検索と同じ NFKD 正規化へ — 根拠 `src/model.rs:859-863`, `src/model.rs:25` /
@@ -102,6 +90,15 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] UX 文言と CI 設定の小規模修正（2026-11-20・第28弾）
+  - 根拠: `src/ui/panels.rs:172`, `src/ui/actions.rs:11-24`,
+    `.github/dependabot.yml:6`, `.github/workflows/ci.yml:25` / 重大度 low 6件
+  - 設定パネルの dead hint 修正、復元秒数の設定値表示、TOTP 空一覧の文言、
+    未生成時の通知、Dependabot の Actions 追跡、cargo-deny の exact 固定と
+    `cargo doc --locked`。
+  - 検証: fmt / check / test（279 passed）/ clippy / doc / gitleaks /
+    YAML / markdownlint 成功。
+  - R4 指摘 2 件を反映（生成値への「復号」文言誤用、空一覧と未選択の区別）。
 - [x] `settings.json` のスキーマを README へ文書化（2026-11-20・第27弾）
   - 根拠: `README.md:38-39,178-184`, `src/settings.rs:260-281` /
     R2-CF01-F3 / 重大度 medium

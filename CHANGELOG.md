@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 修正（UX 文言と CI 設定）
+
+- 設定パネルの無効な「n キー」案内を修正し、生成パネルの復元秒数を
+  設定値に連動表示
+- TOTP 空一覧・未生成時のコピーに実態に合った文言を表示
+- Dependabot に github-actions を追加し、cargo-deny を exact 固定、
+  `cargo doc --locked` を適用（279 passed）
+
 ### ドキュメント（設定スキーマの文書化）
 
 - README に `settings.json` スキーマ v1 の全フィールド・型・既定値・
