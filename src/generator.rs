@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::words::WORDS;
+use crate::words::WORDS;
 
 /// Characters that Bitwarden's generator offers, grouped by class.
 pub const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";

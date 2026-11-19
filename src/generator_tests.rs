@@ -75,29 +75,34 @@ fn generated_passwords_include_every_enabled_class() {
     // Every non-empty combination of the four classes, with and without the
     // ambiguous-character filter, must contribute at least one character.
     for mask in 1u8..=0b1111 {
-        let settings = PasswordSettings {
-            length: 12,
-            lowercase: mask & 0b0001 != 0,
-            uppercase: mask & 0b0010 != 0,
-            digits: mask & 0b0100 != 0,
-            symbols: mask & 0b1000 != 0,
-            avoid_ambiguous: mask % 2 == 0,
-        };
-        let classes = [
-            (settings.lowercase, LOWERCASE),
-            (settings.uppercase, UPPERCASE),
-            (settings.digits, DIGITS),
-            (settings.symbols, SYMBOLS),
-        ];
-        for _ in 0..64 {
-            let password = settings.generate().unwrap();
-            let chars: Vec<char> = password.chars().collect();
-            assert_eq!(chars.len(), 12);
-            for (enabled, class) in classes {
-                let present = chars.iter().any(|c| class.contains(*c));
-                assert_eq!(present, enabled, "{password} / mask {mask:04b}");
+        for avoid_ambiguous in [false, true] {
+            let settings = PasswordSettings {
+                length: 12,
+                lowercase: mask & 0b0001 != 0,
+                uppercase: mask & 0b0010 != 0,
+                digits: mask & 0b0100 != 0,
+                symbols: mask & 0b1000 != 0,
+                avoid_ambiguous,
+            };
+            let classes = [
+                (settings.lowercase, LOWERCASE),
+                (settings.uppercase, UPPERCASE),
+                (settings.digits, DIGITS),
+                (settings.symbols, SYMBOLS),
+            ];
+            for _ in 0..64 {
+                let password = settings.generate().unwrap();
+                let chars: Vec<char> = password.chars().collect();
+                assert_eq!(chars.len(), 12);
+                for (enabled, class) in classes {
+                    let present = chars.iter().any(|c| class.contains(*c));
+                    assert_eq!(
+                        present, enabled,
+                        "{password} / mask {mask:04b} / avoid_ambiguous {avoid_ambiguous}"
+                    );
+                }
+                assert!(chars.iter().all(|c| settings.alphabet().contains(*c)));
             }
-            assert!(chars.iter().all(|c| settings.alphabet().contains(*c)));
         }
     }
 }

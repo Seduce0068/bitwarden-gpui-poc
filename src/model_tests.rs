@@ -251,10 +251,14 @@ fn password_and_totp_secrets_are_not_searchable() {
         "https://example.com",
     );
     let mut secret_item = item;
-    if let ItemData::Login { totp, .. } = &mut secret_item.data {
+    let replaced = if let ItemData::Login { totp, .. } = &mut secret_item.data {
         // Reassignment drops (and zeroizes) the previous secret buffer.
         *totp = Zeroizing::new("JBSWY3DPEHPK3PXP".into());
-    }
+        true
+    } else {
+        false
+    };
+    assert!(replaced, "the test item must be a login with a TOTP field");
     // matches_query expects a lowercased needle; Vault::view() normalizes it.
     assert!(secret_item.matches_query("alice"));
     assert!(
@@ -629,4 +633,35 @@ fn login_secret_serde_round_trip_keeps_debug_redacted() {
     let debug = format!("{restored:?}");
     assert!(!debug.contains("super-secret-pw"), "{debug}");
     assert!(!debug.contains("JBSWY3DPEHPK3PXP"), "{debug}");
+}
+
+#[test]
+fn name_sort_uses_the_same_nfkd_key_as_search() {
+    let mut vault = Vault::new();
+    // Full-width "A" and a decomposed "A" must sort like plain "A".
+    vault.items.push(VaultItem::new(
+        "a-full",
+        "Ａ",
+        ItemData::SecureNote {
+            text: String::new(),
+        },
+    ));
+    vault.items.push(VaultItem::new(
+        "a-decomposed",
+        "A\u{0301}",
+        ItemData::SecureNote {
+            text: String::new(),
+        },
+    ));
+    vault.items.push(VaultItem::new(
+        "b-plain",
+        "B",
+        ItemData::SecureNote {
+            text: String::new(),
+        },
+    ));
+
+    let sorted = vault.view(&Filter::All, "", SortKey::NameAsc);
+    let ids: Vec<&str> = sorted.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(ids, vec!["a-full", "a-decomposed", "b-plain"]);
 }
