@@ -119,6 +119,10 @@ pub(super) enum KeyAction {
     CopyPassword,
     CopyPassphrase,
     CopyTotp,
+    /// Copy the selected login's password.
+    CopySelectedPassword,
+    /// Copy the selected login's username.
+    CopySelectedUsername,
     /// Cycle the item filter.
     CycleFilter,
     /// Cycle the sort key.
@@ -319,6 +323,8 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
             "s" => KeyAction::CycleSort,
             "f" => KeyAction::ToggleFavorite,
             "y" => KeyAction::CopyTotp,
+            "p" => KeyAction::CopySelectedPassword,
+            "u" => KeyAction::CopySelectedUsername,
             "g" if ctx.has_audit_report => KeyAction::OpenAudit,
             "n" => KeyAction::SetPanel(Panel::Generator),
             "c" => KeyAction::SetPanel(Panel::Settings),

@@ -62,6 +62,37 @@ pub(super) fn card_last_four(number: &str) -> String {
     digits[start..].iter().copied().collect()
 }
 
+/// Value to copy from a login item, or `None` when nothing may be copied.
+///
+/// Empty values and the undecryptable marker are refused so no placeholder or
+/// empty string is written into the user's clipboard.
+pub(super) fn select_copy_value(data: &crate::model::ItemData, password: bool) -> Option<String> {
+    match data {
+        crate::model::ItemData::Login {
+            username,
+            password: secret,
+            ..
+        } => {
+            let raw = if password {
+                secret.as_str()
+            } else {
+                username.as_str()
+            };
+            if raw.is_empty() || (password && crate::vault_sync::is_undecryptable_password(raw)) {
+                None
+            } else {
+                Some(raw.to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Status text when the selected item has no copyable value for `field`.
+pub(super) fn no_field_status(field: &str) -> String {
+    format!("この項目に {field} はありません（復号できない場合も同様です）")
+}
+
 /// Status text after a successful login.
 ///
 /// A vault restored from the encrypted offline cache may be stale (the sync
@@ -180,6 +211,57 @@ mod tests {
         assert_eq!(card_last_four(""), "なし");
         assert_eq!(card_last_four("   "), "なし");
         assert_eq!(card_last_four("abcd"), "なし");
+    }
+
+    #[test]
+    fn select_copy_value_refuses_empty_and_undecryptable_secrets() {
+        use crate::model::ItemData;
+        use crate::vault_sync::UNDECRYPTABLE_PASSWORD;
+        use zeroize::Zeroizing;
+
+        let data = ItemData::Login {
+            username: "alice@example.com".to_string(),
+            password: Zeroizing::new("s3cret".to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(select_copy_value(&data, true).as_deref(), Some("s3cret"));
+        assert_eq!(
+            select_copy_value(&data, false).as_deref(),
+            Some("alice@example.com")
+        );
+
+        let broken = ItemData::Login {
+            username: "alice@example.com".to_string(),
+            password: Zeroizing::new(UNDECRYPTABLE_PASSWORD.to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(select_copy_value(&broken, true), None);
+        assert!(select_copy_value(&broken, false).is_some());
+
+        let empty = ItemData::Login {
+            username: String::new(),
+            password: Zeroizing::new(String::new()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(select_copy_value(&empty, true), None);
+        assert_eq!(select_copy_value(&empty, false), None);
+
+        let note = ItemData::SecureNote {
+            text: "body".to_string(),
+        };
+        assert_eq!(select_copy_value(&note, true), None);
+    }
+
+    #[test]
+    fn missing_field_status_names_the_field() {
+        assert_eq!(
+            no_field_status("パスワード"),
+            "この項目に パスワード はありません（復号できない場合も同様です）"
+        );
+        assert!(no_field_status("ユーザー名").contains("ユーザー名"));
     }
 
     #[test]

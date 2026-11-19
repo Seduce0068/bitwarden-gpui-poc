@@ -29,10 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] 選択項目のパスワード／ユーザー名をコピーできるようにする — 根拠
-      `src/ui/keys.rs:321`, `src/ui/app.rs:333` / R1-FG-ui, R4-VU-ui /
-      重大度 medium
-  - 現在 `y` は TOTP のみで、パスワードは文字数表示のまま取得手段が無い。
 
 - [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
       問題を解消 — 根拠 `tests/real_server_e2e.rs`,
@@ -117,6 +113,15 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 選択項目のパスワード／ユーザー名をコピー可能化（2026-11-20・第24弾）
+  - 根拠: `src/ui/keys.rs:321`, `src/ui/app.rs:333` / R1-FG-ui, R4-VU-ui /
+    重大度 medium
+  - Vault パネルの `p` / `u` でコピー。復号不能・空値・非ログイン項目は
+    拒否し理由を表示。判定を純粋関数化してテスト。
+  - 検証: fmt / check / test（274 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。
+  - R4 指摘 2 件を反映（README の安全性記述、キー割当と分岐のテスト）。
+    併せて flaky だった環境変数テストに ENV_LOCK を追加。
 - [x] CI にシークレットスキャンを追加（2026-11-20・第23弾）
   - 根拠: `.github/workflows/ci.yml:24` / R3-AU-ops, R3-DE-ops /
     重大度 medium
