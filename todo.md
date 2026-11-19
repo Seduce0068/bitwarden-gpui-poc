@@ -29,10 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] キャッシュ読込にサイズ上限を追加 — 根拠 `src/cache.rs:207-215` /
-      R3-IV-core, R3-DE-core / 重大度 medium
-  - `std::fs::read` が無制限。設定の 1 MiB と同様の上限を設け、超過を
-    分類エラーとして拒否する。
 - [ ] 選択項目のパスワード／ユーザー名をコピーできるようにする — 根拠
       `src/ui/keys.rs:321`, `src/ui/app.rs:333` / R1-FG-ui, R4-VU-ui /
       重大度 medium
@@ -125,6 +121,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] キャッシュ読込にサイズ上限を追加（2026-11-20・第22弾）
+  - 根拠: `src/cache.rs:207-215` / R3-IV-core, R3-DE-core / 重大度 medium
+  - 生ボディ 8 MiB・ファイル 64 MiB の上限を保存／読込双方で適用。
+    専用 `CacheTooLarge` により設定ファイルの上限と誤表示しない。
+  - 検証: fmt / check / test（272 passed）/ clippy / doc / markdownlint 成功。
+  - R4 指摘 4 件を反映（JSON 膨張、エラー文言、境界テスト、UI 文言テスト）。
 - [x] opt-in E2E が認証情報未設定時に成功扱いになる問題を修正（2026-11-20・第21弾）
   - 根拠: `tests/real_server_e2e.rs:44-47` / R1-AR-tests, R3-AU-tests /
     重大度 medium
