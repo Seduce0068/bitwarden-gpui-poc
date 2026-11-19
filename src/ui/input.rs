@@ -165,17 +165,7 @@ impl BitwardenApp {
                     crate::ui::logic::adjust_idle_lock(self.settings.idle_lock_seconds, delta);
                 cx.notify();
             }
-            KeyAction::ToggleLowercase => self.toggle_generator("1", cx),
-            KeyAction::ToggleUppercase => self.toggle_generator("2", cx),
-            KeyAction::ToggleDigits => self.toggle_generator("3", cx),
-            KeyAction::ToggleSymbols => self.toggle_generator("4", cx),
-            KeyAction::ToggleAmbiguous => self.toggle_generator("5", cx),
-            KeyAction::ToggleCapitalize => self.toggle_generator("6", cx),
-            KeyAction::ToggleNumber => self.toggle_generator("7", cx),
-            KeyAction::AdjustLength(delta) => {
-                self.toggle_generator(if delta > 0 { "+" } else { "-" }, cx)
-            }
-            KeyAction::CycleSeparator => self.toggle_generator(",", cx),
+            KeyAction::Generator(option) => self.toggle_generator(option, cx),
             KeyAction::SelectRow(index) => {
                 if self.view.select_index(index) {
                     self.view

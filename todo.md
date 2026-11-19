@@ -49,8 +49,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
 - [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
       `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
-- [ ] ジェネレータ設定のキー文字列の往復を型付き enum へ — 根拠 `src/ui/keys.rs:276-285`,
-      `src/ui/actions.rs:118-122` / R1-AR03-F1, R5-AP02-F1 / 重大度 low
 - [ ] `KeyAction` とマウス由来 `SelectRow` の境界を明確化（リネームまたは分離） — 根拠
       `src/ui/keys.rs:68-70`, `src/ui/render.rs:99-104` / R1-AR03-F2 / 重大度 low
 - [ ] 未使用 `has_credentials` と矛盾する doc を削除または実ゲート化 — 根拠 `src/ui/logic.rs:7-15`,
@@ -65,6 +63,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] ジェネレータキー割当を型付き化（2026-11-20・第35弾）
+  - 根拠: `src/ui/keys.rs:276-285`, `src/ui/actions.rs:118-122` / 重大度 low
+  - `GeneratorOption` を導入し、キー文字列の往復を廃止。`KeyAction` の
+    9 バリアントを `Generator(GeneratorOption)` に統合。
+  - 検証: fmt / check / test（286 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 3 件を反映（stale doc、shift 注記、全網羅テスト）。
 - [x] 復号失敗 detail を構造化（2026-11-20・第34弾）
   - 根拠: `src/error.rs:408-415,435-441` / 重大度 low
   - 整形済み文言と生 detail を両方保持する variant を追加し、文字列 strip

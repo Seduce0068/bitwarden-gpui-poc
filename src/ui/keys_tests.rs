@@ -93,56 +93,43 @@ fn lock_screen_keys_and_retry_gate() {
 
 #[test]
 fn generator_keys_toggle_options_and_clamp_lengths() {
+    use crate::ui::keys::GeneratorOption;
+
     let mut state = Settings::default();
-    assert!(apply_generator_key(&mut state, "1"));
+    apply_generator_key(&mut state, GeneratorOption::Lowercase);
     assert!(!state.password_generator.lowercase);
-    assert!(apply_generator_key(&mut state, "6"));
+    apply_generator_key(&mut state, GeneratorOption::Capitalize);
     assert!(!state.passphrase_generator.capitalize);
 
-    assert!(apply_generator_key(&mut state, "+"));
+    apply_generator_key(&mut state, GeneratorOption::LengthUp);
     assert_eq!(state.password_generator.length, 21);
     assert_eq!(state.passphrase_generator.words, 5);
-    assert!(apply_generator_key(&mut state, "-"));
+    apply_generator_key(&mut state, GeneratorOption::LengthDown);
     assert_eq!(state.password_generator.length, 20);
     assert_eq!(state.passphrase_generator.words, 4);
 
-    // The upper bounds are 128 characters and 20 words: a step from just
-    // below them reaches the bound, further steps must not exceed it.
     state.password_generator.length = 127;
     state.passphrase_generator.words = 19;
-    assert!(apply_generator_key(&mut state, "+"));
+    apply_generator_key(&mut state, GeneratorOption::LengthUp);
     assert_eq!(state.password_generator.length, 128);
     assert_eq!(state.passphrase_generator.words, 20);
-    assert!(
-        apply_generator_key(&mut state, "="),
-        "'=' is an alias for '+'"
-    );
+    apply_generator_key(&mut state, GeneratorOption::LengthUp);
     assert_eq!(state.password_generator.length, 128);
     assert_eq!(state.passphrase_generator.words, 20);
 
-    // The lower bounds are 4 characters and 2 words.
     state.password_generator.length = 5;
     state.passphrase_generator.words = 3;
-    assert!(apply_generator_key(&mut state, "-"));
+    apply_generator_key(&mut state, GeneratorOption::LengthDown);
     assert_eq!(state.password_generator.length, 4);
     assert_eq!(state.passphrase_generator.words, 2);
-    assert!(
-        apply_generator_key(&mut state, "_"),
-        "'_' is an alias for '-'"
-    );
+    apply_generator_key(&mut state, GeneratorOption::LengthDown);
     assert_eq!(state.password_generator.length, 4);
     assert_eq!(state.passphrase_generator.words, 2);
 
-    assert!(apply_generator_key(&mut state, ","));
-    assert_eq!(state.passphrase_generator.separator, ".");
-    assert!(apply_generator_key(&mut state, ","));
-    assert_eq!(state.passphrase_generator.separator, "_");
-    assert!(apply_generator_key(&mut state, ","));
-    assert_eq!(state.passphrase_generator.separator, "");
-    assert!(apply_generator_key(&mut state, ","));
-    assert_eq!(state.passphrase_generator.separator, "-");
-
-    assert!(!apply_generator_key(&mut state, "q"));
+    for expected in [".", "_", "", "-"] {
+        apply_generator_key(&mut state, GeneratorOption::Separator);
+        assert_eq!(state.passphrase_generator.separator, expected);
+    }
 }
 
 #[test]
@@ -180,7 +167,10 @@ fn settings_and_generator_keys() {
     value.key = "Y";
     assert_eq!(classify_key(&value), KeyAction::CopyPassphrase);
     value.key = "-";
-    assert_eq!(classify_key(&value), KeyAction::AdjustLength(-1));
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::Generator(GeneratorOption::LengthDown)
+    );
 }
 
 #[test]
@@ -275,7 +265,10 @@ fn shift_characters_are_matched_through_key_char() {
 
     value.key = "=";
     value.key_char = Some("+");
-    assert_eq!(classify_key(&value), KeyAction::AdjustLength(1));
+    assert_eq!(
+        classify_key(&value),
+        KeyAction::Generator(GeneratorOption::LengthUp)
+    );
 }
 
 #[test]
@@ -352,4 +345,55 @@ fn field_routing_distinguishes_shared_and_credential_fields() {
     assert_eq!(AuthField::ClientId.shared(), None);
     assert_eq!(AuthField::ClientSecret.shared(), None);
     assert_eq!(AuthField::MasterPassword.shared(), None);
+}
+
+#[test]
+fn every_generator_option_toggles_from_its_default() {
+    use crate::ui::keys::GeneratorOption;
+
+    for option in [
+        GeneratorOption::Lowercase,
+        GeneratorOption::Uppercase,
+        GeneratorOption::Digits,
+        GeneratorOption::Symbols,
+        GeneratorOption::AvoidAmbiguous,
+        GeneratorOption::Capitalize,
+        GeneratorOption::IncludeNumber,
+    ] {
+        let mut state = Settings::default();
+        let before = state.clone();
+        apply_generator_key(&mut state, option);
+        assert_ne!(state, before, "{option:?} must change the settings");
+        apply_generator_key(&mut state, option);
+        assert_eq!(state, before, "{option:?} must toggle back");
+    }
+}
+
+#[test]
+fn generator_keys_map_to_typed_options() {
+    use crate::ui::keys::GeneratorOption;
+
+    let mut value = ctx("enter");
+    value.panel = Panel::Generator;
+    for (key, option) in [
+        ("1", GeneratorOption::Lowercase),
+        ("2", GeneratorOption::Uppercase),
+        ("3", GeneratorOption::Digits),
+        ("4", GeneratorOption::Symbols),
+        ("5", GeneratorOption::AvoidAmbiguous),
+        ("6", GeneratorOption::Capitalize),
+        ("7", GeneratorOption::IncludeNumber),
+        ("+", GeneratorOption::LengthUp),
+        ("=", GeneratorOption::LengthUp),
+        ("-", GeneratorOption::LengthDown),
+        ("_", GeneratorOption::LengthDown),
+        (",", GeneratorOption::Separator),
+    ] {
+        value.key = key;
+        assert_eq!(
+            classify_key(&value),
+            KeyAction::Generator(option),
+            "key {key:?}"
+        );
+    }
 }

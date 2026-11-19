@@ -139,9 +139,12 @@ impl BitwardenApp {
         cx.notify();
     }
 
-    pub(super) fn toggle_generator(&mut self, key: &str, cx: &mut Context<Self>) {
-        if crate::ui::keys::apply_generator_key(&mut self.settings, key) {
-            cx.notify();
-        }
+    pub(super) fn toggle_generator(
+        &mut self,
+        option: crate::ui::keys::GeneratorOption,
+        cx: &mut Context<Self>,
+    ) {
+        crate::ui::keys::apply_generator_key(&mut self.settings, option);
+        cx.notify();
     }
 }
