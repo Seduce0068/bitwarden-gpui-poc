@@ -29,6 +29,23 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
+- [ ] opt-in E2E が認証情報未設定時に成功扱いになる — 根拠 `tests/real_server_e2e.rs:44-47` /
+      R1-AR-tests, R3-AU-tests / 重大度 medium
+  - `E2E_*` が未設定だと `eprintln!` だけ出して `return` し、CI が緑になる。
+    `--ignored` で明示実行された場合は欠落時に panic させる。
+- [ ] キャッシュ読込にサイズ上限を追加 — 根拠 `src/cache.rs:207-215` /
+      R3-IV-core, R3-DE-core / 重大度 medium
+  - `std::fs::read` が無制限。設定の 1 MiB と同様の上限を設け、超過を
+    分類エラーとして拒否する。
+- [ ] 選択項目のパスワード／ユーザー名をコピーできるようにする — 根拠
+      `src/ui/keys.rs:321`, `src/ui/app.rs:333` / R1-FG-ui, R4-VU-ui /
+      重大度 medium
+  - 現在 `y` は TOTP のみで、パスワードは文字数表示のまま取得手段が無い。
+- [ ] CI にシークレットスキャンを追加 — 根拠 `.github/workflows/ci.yml:24` /
+      R3-AU-ops, R3-DE-ops / 重大度 medium
+  - AGENTS.md §4 に従い pre-commit の gitleaks を主軸とし、CI を最終ゲート
+    として併設する。共通ワークフローで対応できる場合は委譲を検討。
+
 - [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
       問題を解消 — 根拠 `tests/real_server_e2e.rs`,
       `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium
@@ -43,6 +60,17 @@ stale_after: "2027-05-17T21:04:43+09:00"
       medium
 
 ### 優先度 低
+
+- [ ] `docs/index.md` が superseded レポートを無印で案内 — 根拠 `docs/index.md:6` /
+      R1-AR-docs, R5-UX-docs / 重大度 low
+- [ ] 設定パス未取得時に `ReadFailed` と誤報告する — 根拠 `src/ui/app.rs:64-68` /
+      R2-ER-ui / 重大度 low
+- [ ] 宣言 MSRV 1.88 を CI で検証 — 根拠 `.github/workflows/ci.yml:21` /
+      R2-BV-ops, R5-ST-ops / 重大度 low
+- [ ] `.gitignore` がローカル秘密ファイルを除外していない — 根拠 `.gitignore:1` /
+      R1-CF-ops, R3-IV-ops / 重大度 low
+- [ ] 未使用の `Vault.unlocked` を整理 — 根拠 `src/model.rs:693` / R3-AU-core /
+      重大度 low
 
 - [ ] `unlock_detail` の日本語 prefix/suffix 文字列依存を構造化 detail へ置換 — 根拠
       `src/error.rs:408-415,435-441` / R1-ST02-F6 / 重大度 low
