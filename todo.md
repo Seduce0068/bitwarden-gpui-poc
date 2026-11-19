@@ -74,15 +74,8 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/ui/keys.rs:299-311` / R1-ST03-F6 / 重大度 low
 - [ ] `revision_date` パース失敗の 0 フォールバックを明示的な未設定値へ — 根拠
       `src/vault_sync.rs:161,358` / R2-ER02-F2, R3-DI01-F1 / 重大度 low
-- [ ] 名前ソートを検索と同じ NFKD 正規化へ — 根拠 `src/model.rs:859-863`, `src/model.rs:25` /
-      R3-IV03-F3 / 重大度 low
 - [ ] TOTP `Code` の `PartialEq` が code 値を無視する点をテスト意図に合わせる — 根拠
       `src/totp.rs:22-25` / R3-DI01-F3 / 重大度 low
-- [ ] `login_generation` の「トークン消費」テストを実消費へ — 根拠
-      `src/ui/login_generation.rs:75-82` / R4-TS02-F2 / 重大度 low
-- [ ] テストの空振り分岐／値捨てをアサーションへ — 根拠 `src/model_tests.rs:253-257`,
-      `src/health_tests.rs:336-339`, `src/generator_tests.rs:75-85` /
-      R1-ST04-F1〜F3 / 重大度 low
 - [ ] `InsecureUri` 判定の先頭 Cf 文字バイパスを inspection に追加 — 根拠 `src/health.rs:513`,
       `src/model.rs:36` / R3-IV03-F1 / 重大度 low
 
