@@ -168,9 +168,14 @@ pub(super) fn generator_panel<'a>(
             state.last_passphrase.as_ref().map(|value| value.as_str()),
         ))
         .child(
-            div().mt_4().text_xs().text_color(rgb(0x6c7086)).child(
-                "p/h: 生成 / y/Y: コピー（30秒で復元） / n: 一覧に戻る / l: ロック / Esc: 終了",
-            ),
+            div()
+                .mt_4()
+                .text_xs()
+                .text_color(rgb(0x6c7086))
+                .child(format!(
+                    "p/h: 生成 / y/Y: コピー（{}秒で復元） / n: 一覧に戻る / l: ロック / Esc: 終了",
+                    settings.clipboard_restore_seconds
+                )),
         )
 }
 
@@ -240,7 +245,7 @@ pub(super) fn settings_panel<'a>(
             editing == Some(SettingsField::Email),
         ))
         .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "生成設定: パスワード {} 文字 / パスフレーズ {} 語（n キーで編集）",
+            "生成設定: パスワード {} 文字 / パスフレーズ {} 語（一覧で n キー）",
             settings.password_generator.length, settings.passphrase_generator.words
         )))
         .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(

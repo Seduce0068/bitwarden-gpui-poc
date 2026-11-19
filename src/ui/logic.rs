@@ -88,9 +88,14 @@ pub(super) fn select_copy_value(data: &crate::model::ItemData, password: bool) -
     }
 }
 
+/// Status text when no generated value exists yet (never a decryption issue).
+pub(super) fn no_generated_status(kind: &str) -> String {
+    format!("生成済み{kind}がありません（生成パネルで生成してください）")
+}
+
 /// Status text when the selected item has no copyable value for `field`.
 pub(super) fn no_field_status(field: &str) -> String {
-    format!("この項目に {field} はありません（復号できない場合も同様です）")
+    format!("コピーできる {field} がありません（復号できない場合も同様です）")
 }
 
 /// Status text after a successful login.
@@ -256,10 +261,20 @@ mod tests {
     }
 
     #[test]
+    fn generated_value_status_does_not_mention_decryption() {
+        let status = no_generated_status("パスワード");
+        assert_eq!(
+            status,
+            "生成済みパスワードがありません（生成パネルで生成してください）"
+        );
+        assert!(!status.contains("復号"));
+    }
+
+    #[test]
     fn missing_field_status_names_the_field() {
         assert_eq!(
             no_field_status("パスワード"),
-            "この項目に パスワード はありません（復号できない場合も同様です）"
+            "コピーできる パスワード がありません（復号できない場合も同様です）"
         );
         assert!(no_field_status("ユーザー名").contains("ユーザー名"));
     }

@@ -18,7 +18,9 @@ impl BitwardenApp {
                 .and_then(|id| visible.iter().find(|item| item.id == id))
                 .or_else(|| visible.first())
             else {
-                self.status = "項目が選択されていません".to_string();
+                // The fallback to `visible.first()` means this branch is
+                // reached only when the visible list itself is empty.
+                self.status = "一覧に項目がありません（フィルタ／検索を確認）".to_string();
                 cx.notify();
                 return;
             };

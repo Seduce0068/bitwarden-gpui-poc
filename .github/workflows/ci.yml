@@ -24,9 +24,9 @@ jobs:
       rust_toolchain: "1.95"
       audit: true
       extra_gates: |
-        RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+        RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
         # cargo-deny は共通ワークフローにまだ組み込まれていないため、ここで導入する。
-        cargo install cargo-deny --version 0.21.0 --locked
+        cargo install cargo-deny --version 0.21.0 --exact --locked
         cargo deny check
         # ドキュメント書式ゲート（共通ワークフローにまだ無いためここで導入）。
         npm install --global markdownlint-cli@0.50.0
