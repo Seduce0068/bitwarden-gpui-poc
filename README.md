@@ -135,6 +135,20 @@ markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
 cargo run
 ```
 
+シークレットスキャンは [gitleaks](https://github.com/gitleaks/gitleaks) を
+pre-commit フックとして使います。初回のみ次を実行してください:
+
+```bash
+# gitleaks フックは Go ツールチェーンを必要とする（初回のみ）
+sudo apt install -y golang-go
+pip install pre-commit
+pre-commit install
+```
+
+CI でも最終ゲートとして作業ツリーと Git 履歴を走査します（バージョンは
+8.28.0 に固定）。`pre-commit autoupdate` でフックを更新する場合は
+`.github/workflows/ci.yml` の `GITLEAKS_VERSION` も同時に更新してください。
+
 Linux では Wayland/X11 と GPU ドライバが必要です（`gpui-kit` / wgpu 経由）。
 
 Kubuntu 2026.04 での導入例（未検証のため環境に応じて調整してください）:

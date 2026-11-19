@@ -29,4 +29,19 @@ jobs:
         # ドキュメント書式ゲート（共通ワークフローにまだ無いためここで導入）。
         npm install --global markdownlint-cli@0.50.0
         markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
+        # シークレットスキャンは pre-commit を主軸とし、CI を最終ゲートとする。
+        GITLEAKS_VERSION=8.28.0
+        GITLEAKS_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        curl -sSfL \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GITLEAKS_ARCHIVE}" \
+          -o "/tmp/${GITLEAKS_ARCHIVE}"
+        curl -sSfL \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" \
+          -o /tmp/gitleaks-checksums.txt
+        (cd /tmp && sha256sum -c gitleaks-checksums.txt --ignore-missing)
+        tar -xzf "/tmp/${GITLEAKS_ARCHIVE}" -C /tmp gitleaks
+        /tmp/gitleaks dir --redact --config .gitleaks.toml
+        # pre-commit を回避して投入された秘密を履歴からも検出する。
+        git fetch --unshallow >/dev/null 2>&1 || true
+        /tmp/gitleaks git --redact --config .gitleaks.toml
       # Clippy lints (unwrap/expect/panic/unsafe) are denied via Cargo.toml [lints.clippy].
