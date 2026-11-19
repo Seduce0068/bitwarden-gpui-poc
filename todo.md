@@ -29,10 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] opt-in E2E が認証情報未設定時に成功扱いになる — 根拠 `tests/real_server_e2e.rs:44-47` /
-      R1-AR-tests, R3-AU-tests / 重大度 medium
-  - `E2E_*` が未設定だと `eprintln!` だけ出して `return` し、CI が緑になる。
-    `--ignored` で明示実行された場合は欠落時に panic させる。
 - [ ] キャッシュ読込にサイズ上限を追加 — 根拠 `src/cache.rs:207-215` /
       R3-IV-core, R3-DE-core / 重大度 medium
   - `std::fs::read` が無制限。設定の 1 MiB と同様の上限を設け、超過を
@@ -129,6 +125,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] opt-in E2E が認証情報未設定時に成功扱いになる問題を修正（2026-11-20・第21弾）
+  - 根拠: `tests/real_server_e2e.rs:44-47` / R1-AR-tests, R3-AU-tests /
+    重大度 medium
+  - 明示実行時に `E2E_*` の欠落／空値を検出して失敗し、不足変数名を表示。
+  - 検証: fmt / check / test（269 passed）/ clippy / markdownlint 成功。
+  - R4 指摘 2 件を反映（不足変数名の列挙、文言とドキュメントの整合）。
 - [x] キャッシュの有効期限と取得時刻を追加（2026-11-19・第20弾）
   - 根拠: `src/cache.rs:29-35` / R4-DR02-F2, R5-VU02-F2 / 重大度 medium
   - `SyncCache.created_at`（Unix 秒、`#[serde(default)]`）と 7 日の
