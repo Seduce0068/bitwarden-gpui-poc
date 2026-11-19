@@ -67,7 +67,7 @@ impl BitwardenApp {
     }
 
     fn render_unlocked(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.visible_items().len();
+        let count = self.view.visible_items().len();
         let detail = self.selected_detail();
 
         let list = uniform_list(
@@ -75,7 +75,7 @@ impl BitwardenApp {
             count,
             cx.processor(
                 move |this: &mut Self, range: std::ops::Range<usize>, _window, cx| {
-                    let visible = this.visible_items();
+                    let visible = this.view.visible_items();
                     let mut rows = Vec::with_capacity(range.len());
                     for index in range {
                         let Some(item) = visible.get(index) else {

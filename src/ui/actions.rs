@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 impl BitwardenApp {
     pub(super) fn copy_totp(&mut self, cx: &mut Context<Self>) {
         let secret = {
-            let visible = self.visible_items();
+            let visible = self.view.visible_items();
             let Some(item) = self
                 .view
                 .selected_id
@@ -41,7 +41,7 @@ impl BitwardenApp {
     /// Copy the selected login's password (`true`) or username (`false`).
     pub(super) fn copy_selected_field(&mut self, password: bool, cx: &mut Context<Self>) {
         let value = {
-            let visible = self.visible_items();
+            let visible = self.view.visible_items();
             let Some(item) = self
                 .view
                 .selected_id

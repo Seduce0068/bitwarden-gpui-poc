@@ -111,7 +111,12 @@ impl VaultViewState {
     /// the selection itself.
     #[cfg(test)]
     pub(super) fn next_index(&self, delta: isize) -> Option<usize> {
-        let visible = self.visible_items();
+        self.next_index_in(&self.visible_items(), delta)
+    }
+
+    /// Same computation with an already-computed visible list, so callers that
+    /// also need the item at that index do not filter/sort twice.
+    pub(super) fn next_index_in(&self, visible: &[&VaultItem], delta: isize) -> Option<usize> {
         if visible.is_empty() {
             return None;
         }
