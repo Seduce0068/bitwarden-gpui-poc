@@ -366,7 +366,6 @@ pub fn import_logins_with_audit(vault: &OpenVault) -> Result<(Vault, Vec<ImportA
     }
     let mut model = Vault {
         folders: folders_from(vault)?,
-        unlocked: true,
         ..Vault::default()
     };
     let mut seen: HashSet<String> = HashSet::new();

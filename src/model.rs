@@ -690,9 +690,6 @@ pub struct Vault {
     pub items: Vec<VaultItem>,
     /// All folders.
     pub folders: Vec<Folder>,
-    /// Whether the vault is unlocked. The PoC never holds a real key; this
-    /// only gates the UI.
-    pub unlocked: bool,
 }
 
 impl Vault {

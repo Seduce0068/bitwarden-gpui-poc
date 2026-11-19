@@ -44,17 +44,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 低
 
-- [ ] `docs/index.md` が superseded レポートを無印で案内 — 根拠 `docs/index.md:6` /
-      R1-AR-docs, R5-UX-docs / 重大度 low
-- [ ] 設定パス未取得時に `ReadFailed` と誤報告する — 根拠 `src/ui/app.rs:64-68` /
-      R2-ER-ui / 重大度 low
-- [ ] 宣言 MSRV 1.88 を CI で検証 — 根拠 `.github/workflows/ci.yml:21` /
-      R2-BV-ops, R5-ST-ops / 重大度 low
-- [ ] `.gitignore` がローカル秘密ファイルを除外していない — 根拠 `.gitignore:1` /
-      R1-CF-ops, R3-IV-ops / 重大度 low
-- [ ] 未使用の `Vault.unlocked` を整理 — 根拠 `src/model.rs:693` / R3-AU-core /
-      重大度 low
-
 - [ ] `unlock_detail` の日本語 prefix/suffix 文字列依存を構造化 detail へ置換 — 根拠
       `src/error.rs:408-415,435-441` / R1-ST02-F6 / 重大度 low
 - [ ] `PartialEq for AppError` が表示文のみで比較し boxed cause を無視する点を見直す — 根拠
@@ -112,6 +101,16 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 低優先度のレビュー指摘を整理（2026-11-20・第25弾）
+  - 根拠: `docs/index.md:6`, `src/ui/app.rs:64-68`, `.github/workflows/ci.yml:21`,
+    `.gitignore:1`, `src/model.rs:693` / 重大度 low 5件
+  - 索引の superseded 明記、設定パス未取得の誤案内解消、MSRV 1.88 の CI
+    検証、秘密ファイルの ignore、未使用 `Vault.unlocked` の削除。
+  - 検証: fmt / check / test（274 passed）/ clippy / doc / gitleaks /
+    YAML / markdownlint 成功。
+  - R4 指摘 4 件を反映。MSRV は 1.88 では依存がビルド不能なため、
+    Runtime Proof（1.88/1.92/1.93/1.94 失敗・1.95 成功）に基づき
+    Cargo.toml・CI・README を 1.95 へ統一。OKF status は `deprecated` に修正。
 - [x] 選択項目のパスワード／ユーザー名をコピー可能化（2026-11-20・第24弾）
   - 根拠: `src/ui/keys.rs:321`, `src/ui/app.rs:333` / R1-FG-ui, R4-VU-ui /
     重大度 medium

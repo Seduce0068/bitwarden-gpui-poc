@@ -20,6 +20,8 @@ jobs:
   gates:
     uses: Seduce0068/workflows/.github/workflows/rust-gates.yml@v1
     with:
+      # Cargo.toml の rust-version を CI でも検証する。
+      rust_toolchain: "1.95"
       audit: true
       extra_gates: |
         RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
