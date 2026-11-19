@@ -29,7 +29,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-
 - [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
       問題を解消 — 根拠 `tests/real_server_e2e.rs`,
       `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium
