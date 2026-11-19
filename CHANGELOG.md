@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### ドキュメント（設定スキーマの文書化）
+
+- README に `settings.json` スキーマ v1 の全フィールド・型・既定値・
+  クランプ範囲を表形式で追加
+
 ### 修正（sync JSON のキー正規化）
 
 - `parse_sync` が PascalCase の JSON キーを camelCase へ再帰的に正規化。
