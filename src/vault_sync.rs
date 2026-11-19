@@ -77,10 +77,65 @@ pub type SyncError = crate::error::AppError;
 ///
 /// [`SyncError::InvalidLogin`] when `openwarden` rejects the body.
 pub fn parse_sync(body: &[u8]) -> Result<openwarden::SyncData, SyncError> {
-    openwarden::SyncData::from_json(body).map_err(|error| {
+    let mut value: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
+        let detail = error.to_string();
+        SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
+    })?;
+    normalize_sync_keys(&mut value).map_err(|detail| {
+        SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
+    })?;
+    let normalized = serde_json::to_vec(&value).map_err(|error| {
+        let detail = format!("sync: {error}");
+        SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
+    })?;
+    openwarden::SyncData::from_json(&normalized).map_err(|error| {
         let detail = error.to_string();
         SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
     })
+}
+
+/// Lowercase the first ASCII character of a JSON key (`RevisionDate` →
+/// `revisionDate`). Already-camelCase keys are returned unchanged.
+fn camel_case_key(key: &str) -> String {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_uppercase() => {
+            first.to_ascii_lowercase().to_string() + chars.as_str()
+        }
+        Some(first) => first.to_string() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Recursively normalize PascalCase JSON keys returned by some Vaultwarden
+/// versions into the camelCase that openwarden 0.1.0 expects.
+///
+/// Only keys change: encrypted values, ids and user data are passed through
+/// verbatim, so normalization cannot alter secrets.
+fn normalize_sync_keys(value: &mut serde_json::Value) -> Result<(), String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut normalized = serde_json::Map::with_capacity(map.len());
+            for (key, mut child) in std::mem::take(map) {
+                normalize_sync_keys(&mut child)?;
+                let target = camel_case_key(&key);
+                if normalized.contains_key(&target) {
+                    return Err(format!(
+                        "sync: conflicting keys `{key}` and `{target}` in the same object"
+                    ));
+                }
+                normalized.insert(target, child);
+            }
+            *map = normalized;
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                normalize_sync_keys(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Folder id and decrypted name from an unlocked `openwarden` vault.

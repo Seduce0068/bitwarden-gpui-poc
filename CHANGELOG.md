@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 修正（sync JSON のキー正規化）
+
+- `parse_sync` が PascalCase の JSON キーを camelCase へ再帰的に正規化。
+  キャッシュ経由の sync ボディを openwarden で解析可能にした
+- 混在キーの衝突を検出して拒否。エラー文脈に `sync` を付与
+- E2E は上流 `Client::sync()` が内部でパースするため未解決のまま
+  （ADR / README に明記、278 passed）
+
 ### 修正（レビュー指摘の小規模整理）
 
 - 調査レポートを superseded スナップショットとして索引に明記

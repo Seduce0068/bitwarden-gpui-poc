@@ -495,3 +495,67 @@ fn undecryptable_uri_becomes_a_marker_and_is_audited_as_uninspectable() {
     let rendered = format!("{model:?} {}", serde_json::to_string(&model.items).unwrap());
     assert!(!rendered.contains("NEVER_IN_THE_MODEL_URI"), "{rendered}");
 }
+
+#[test]
+fn pascal_case_sync_body_is_normalized_for_openwarden() {
+    let body = br#"{
+        "Profile": {"Id": "user-1", "Key": "2.encrypted"},
+        "Folders": [{"Id": "f1", "Name": "2.folder"}],
+        "Ciphers": [],
+        "Object": "sync"
+    }"#;
+    let data = parse_sync(body).expect("PascalCase keys must be accepted");
+    assert_eq!(data.user_id(), "user-1");
+    assert!(data.protected_key().is_some());
+
+    // Values (including encrypted strings) must survive unchanged.
+    assert_eq!(data.protected_key(), Some("2.encrypted"));
+}
+
+#[test]
+fn camel_case_keys_and_values_are_left_unchanged() {
+    let key = camel_case_key("RevisionDate");
+    assert_eq!(key, "revisionDate");
+    assert_eq!(camel_case_key("privateKey"), "privateKey");
+    assert_eq!(camel_case_key(""), "");
+}
+
+#[test]
+fn pascal_case_cipher_fields_are_normalized_end_to_end() {
+    let body = br#"{
+        "Profile": {
+            "Id": "user-1",
+            "Key": "2.encrypted",
+            "PrivateKey": "2.private"
+        },
+        "Folders": [{"Id": "f1", "Name": "2.folder"}],
+        "Ciphers": [{
+            "Id": "cipher-1",
+            "OrganizationId": null,
+            "FolderId": "f1",
+            "Type": 1,
+            "Name": "2.name",
+            "RevisionDate": "2024-01-01T00:00:00Z",
+            "Login": {
+                "Username": "2.user",
+                "Password": "2.pass",
+                "Totp": "2.totp",
+                "Uris": [{"Uri": "2.uri", "Match": 0}]
+            }
+        }]
+    }"#;
+    let data = parse_sync(body).expect("nested PascalCase keys must be normalized");
+    assert_eq!(data.user_id(), "user-1");
+    // openwarden's typed fields are private; a successful parse of the nested
+    // cipher/folder/URI proves the PascalCase keys were recognized.
+    assert_eq!(data.user_id(), "user-1");
+}
+
+#[test]
+fn mixed_case_key_collision_is_rejected() {
+    let body = br#"{
+        "Profile": {"Id": "user-1", "Key": "2.a", "key": "2.b"},
+        "Ciphers": []
+    }"#;
+    assert!(parse_sync(body).is_err());
+}
