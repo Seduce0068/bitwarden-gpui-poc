@@ -4,11 +4,11 @@ use crate::health::{audit, Report, Thresholds};
 use crate::model::Vault;
 use crate::ui::state::Panel;
 
-/// Whether the lock screen has enough credential input to attempt a login.
+/// Whether any credential field is non-empty (test helper only).
 ///
-/// The server URL and email may be pre-filled from settings, so they are not
-/// considered here. An empty client id, secret or master password means the
-/// demo vault is opened instead.
+/// `Enter` always attempts a real login and the demo vault requires the
+/// explicit `m` key, so this predicate is not a login gate; it only describes
+/// the state of the credential fields in tests.
 #[cfg(test)]
 pub(super) fn has_credentials(client_id: &str, client_secret: &str, master_password: &str) -> bool {
     !client_id.is_empty() || !client_secret.is_empty() || !master_password.is_empty()
