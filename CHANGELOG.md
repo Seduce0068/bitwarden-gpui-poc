@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修正（ジェネレータキーの型付き化）
+
+- キー文字列の往復をやめ `GeneratorOption` を導入。`KeyAction` の
+  9 バリアントを `Generator(GeneratorOption)` に統合（286 passed）
+
 ### 修正（復号失敗 detail の構造化）
 
 - `unlock_failed` の往復変換を文字列 strip から構造化 variant へ変更。

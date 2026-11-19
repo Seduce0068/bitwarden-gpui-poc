@@ -3,36 +3,51 @@
 use crate::settings::Settings;
 use crate::ui::state::{AuthField, Panel, Screen, SettingsField};
 
-/// Apply a generator-panel key to its settings.
-///
-/// Returns whether the key was recognised, so the caller can decide whether
-/// to redraw.
-pub(super) fn apply_generator_key(settings: &mut Settings, key: &str) -> bool {
-    match key {
-        "1" => settings.password_generator.lowercase = !settings.password_generator.lowercase,
-        "2" => settings.password_generator.uppercase = !settings.password_generator.uppercase,
-        "3" => settings.password_generator.digits = !settings.password_generator.digits,
-        "4" => settings.password_generator.symbols = !settings.password_generator.symbols,
-        "5" => {
+/// A typed generator setting change, independent of the key that triggered it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GeneratorOption {
+    Lowercase,
+    Uppercase,
+    Digits,
+    Symbols,
+    AvoidAmbiguous,
+    Capitalize,
+    IncludeNumber,
+    LengthUp,
+    LengthDown,
+    Separator,
+}
+
+/// Apply a generator option to its settings.
+pub(super) fn apply_generator_key(settings: &mut Settings, option: GeneratorOption) {
+    use GeneratorOption::*;
+    match option {
+        Lowercase => settings.password_generator.lowercase = !settings.password_generator.lowercase,
+        Uppercase => settings.password_generator.uppercase = !settings.password_generator.uppercase,
+        Digits => settings.password_generator.digits = !settings.password_generator.digits,
+        Symbols => settings.password_generator.symbols = !settings.password_generator.symbols,
+        AvoidAmbiguous => {
             settings.password_generator.avoid_ambiguous =
                 !settings.password_generator.avoid_ambiguous
         }
-        "6" => settings.passphrase_generator.capitalize = !settings.passphrase_generator.capitalize,
-        "7" => {
+        Capitalize => {
+            settings.passphrase_generator.capitalize = !settings.passphrase_generator.capitalize
+        }
+        IncludeNumber => {
             settings.passphrase_generator.include_number =
                 !settings.passphrase_generator.include_number
         }
-        "+" | "=" => {
+        LengthUp => {
             settings.password_generator.length = (settings.password_generator.length + 1).min(128);
             settings.passphrase_generator.words = (settings.passphrase_generator.words + 1).min(20);
         }
-        "-" | "_" => {
+        LengthDown => {
             settings.password_generator.length =
                 settings.password_generator.length.saturating_sub(1).max(4);
             settings.passphrase_generator.words =
                 settings.passphrase_generator.words.saturating_sub(1).max(2);
         }
-        "," => {
+        Separator => {
             settings.passphrase_generator.separator =
                 match settings.passphrase_generator.separator.as_str() {
                     "-" => ".".into(),
@@ -41,15 +56,14 @@ pub(super) fn apply_generator_key(settings: &mut Settings, key: &str) -> bool {
                     _ => "-".into(),
                 };
         }
-        _ => return false,
     }
-    true
 }
 
-/// Modifier keys that must not trigger single-key commands.
+/// Command-like modifiers relevant to key classification.
 ///
-/// `shift` is deliberately absent: it is required for uppercase letters and
-/// symbols such as `+` and `_`.
+/// Shift is deliberately absent: it is required for uppercase letters and
+/// symbols such as `+` and `_`, so treating it as a command modifier would
+/// break the generator key bindings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct KeyModifiers {
     pub(super) control: bool,
@@ -59,93 +73,52 @@ pub(super) struct KeyModifiers {
 }
 
 impl KeyModifiers {
-    /// Whether a command-like modifier was held.
+    /// Whether a platform-level command shortcut must be left to the OS.
     pub(super) fn has_command(self) -> bool {
         self.control || self.platform || self.function
     }
 }
 
-/// A UI intent derived from a keystroke, independent of GPUI types.
+/// A UI intent derived from a keystroke or a mouse action.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum KeyAction {
-    /// Leave the application.
     Quit,
-    /// Attempt a real login with the entered credentials.
     Authenticate,
-    /// Open the mock vault explicitly (demo only).
     OpenDemoVault,
-    /// Retry a failed login.
     RetryLogin,
-    /// Select the credential field to edit.
     EditAuthField(AuthField),
-    /// Select the settings field to edit.
     EditSettingsField(SettingsField),
-    /// Finish editing a lock-screen credential field.
     FinishAuthEdit,
-    /// Finish searching.
     FinishSearch,
-    /// Finish editing a settings field.
     FinishSettingsEdit,
-    /// Insert a character into the active credential field.
     InsertAuthText(String),
-    /// Insert a character into the search query.
     InsertSearchText(String),
-    /// Insert a character into the active settings field.
     InsertSettingsText(String),
-    /// Remove the last character from the active credential field.
     BackspaceAuth,
-    /// Remove the last character from the search query.
     BackspaceSearch,
-    /// Remove the last character from the active settings field.
     BackspaceSettings,
-    /// Remove the last character from the current filter query.
     BackspaceQuery,
-    /// Switch to a panel.
     SetPanel(Panel),
-    /// Lock the vault.
     Lock,
-    /// Move the selected row.
     MoveSelection(isize),
-    /// Select a row by index (mouse click); not produced by key classification.
     SelectRow(usize),
-    /// Toggle the selected item's favorite flag.
     ToggleFavorite,
-    /// Open the audit panel when a report exists.
     OpenAudit,
-    /// Generate a password or passphrase.
     GeneratePassword,
     GeneratePassphrase,
-    /// Copy a secret to the clipboard.
     CopyPassword,
     CopyPassphrase,
     CopyTotp,
-    /// Copy the selected login's password.
     CopySelectedPassword,
-    /// Copy the selected login's username.
     CopySelectedUsername,
-    /// Cycle the item filter.
     CycleFilter,
-    /// Cycle the sort key.
     CycleSort,
-    /// Begin searching.
     StartSearch,
-    /// Persist settings.
     SaveSettings,
-    /// Adjust audit thresholds by the given delta.
     AdjustThreshold(i32),
-    /// Adjust the idle auto-lock timeout by the given delta (minutes).
     AdjustIdleLock(i32),
-    /// Toggle one generator option.
-    ToggleLowercase,
-    ToggleUppercase,
-    ToggleDigits,
-    ToggleSymbols,
-    ToggleAmbiguous,
-    ToggleCapitalize,
-    ToggleNumber,
-    AdjustLength(isize),
-    CycleSeparator,
-    /// No action for this keystroke.
+    /// Change one typed generator option.
+    Generator(GeneratorOption),
     None,
 }
 
@@ -277,16 +250,16 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
                 "h" => KeyAction::GeneratePassphrase,
                 "y" => KeyAction::CopyPassword,
                 "Y" => KeyAction::CopyPassphrase,
-                "1" => KeyAction::ToggleLowercase,
-                "2" => KeyAction::ToggleUppercase,
-                "3" => KeyAction::ToggleDigits,
-                "4" => KeyAction::ToggleSymbols,
-                "5" => KeyAction::ToggleAmbiguous,
-                "6" => KeyAction::ToggleCapitalize,
-                "7" => KeyAction::ToggleNumber,
-                "+" | "=" => KeyAction::AdjustLength(1),
-                "-" | "_" => KeyAction::AdjustLength(-1),
-                "," => KeyAction::CycleSeparator,
+                "1" => KeyAction::Generator(GeneratorOption::Lowercase),
+                "2" => KeyAction::Generator(GeneratorOption::Uppercase),
+                "3" => KeyAction::Generator(GeneratorOption::Digits),
+                "4" => KeyAction::Generator(GeneratorOption::Symbols),
+                "5" => KeyAction::Generator(GeneratorOption::AvoidAmbiguous),
+                "6" => KeyAction::Generator(GeneratorOption::Capitalize),
+                "7" => KeyAction::Generator(GeneratorOption::IncludeNumber),
+                "+" | "=" => KeyAction::Generator(GeneratorOption::LengthUp),
+                "-" | "_" => KeyAction::Generator(GeneratorOption::LengthDown),
+                "," => KeyAction::Generator(GeneratorOption::Separator),
                 _ => KeyAction::None,
             }
         }
