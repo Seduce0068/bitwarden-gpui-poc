@@ -1,0 +1,12 @@
+title = "gitleaks config for bitwarden-gpui-poc"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated build output and two historical commits with synthetic test-key fixtures"
+paths = ['''^target/''']
+commits = [
+  "41ce6a0d7e57442aafca7d1fa5f97b84303d4b65",
+  "0d2c2131e85e0a19f251d0e5c3f10e037fb5aa73",
+]

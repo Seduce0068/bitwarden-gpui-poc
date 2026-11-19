@@ -33,10 +33,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/ui/keys.rs:321`, `src/ui/app.rs:333` / R1-FG-ui, R4-VU-ui /
       重大度 medium
   - 現在 `y` は TOTP のみで、パスワードは文字数表示のまま取得手段が無い。
-- [ ] CI にシークレットスキャンを追加 — 根拠 `.github/workflows/ci.yml:24` /
-      R3-AU-ops, R3-DE-ops / 重大度 medium
-  - AGENTS.md §4 に従い pre-commit の gitleaks を主軸とし、CI を最終ゲート
-    として併設する。共通ワークフローで対応できる場合は委譲を検討。
 
 - [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
       問題を解消 — 根拠 `tests/real_server_e2e.rs`,
@@ -121,6 +117,14 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] CI にシークレットスキャンを追加（2026-11-20・第23弾）
+  - 根拠: `.github/workflows/ci.yml:24` / R3-AU-ops, R3-DE-ops /
+    重大度 medium
+  - gitleaks 8.28.0 を pre-commit 主軸・CI 最終ゲートで導入。テスト
+    フィクスチャの誤検知を解消し、ローカルで 0 件を確認。
+  - 検証: YAML パース / `bash -n` / gitleaks dir+git 0 件 / markdownlint 成功。
+  - R4 指摘 6 件を反映（空振りアサーション、履歴スキャン、Go 要件、
+    非推奨サブコマンド、checksum 検証、target/ 除外）。
 - [x] キャッシュ読込にサイズ上限を追加（2026-11-20・第22弾）
   - 根拠: `src/cache.rs:207-215` / R3-IV-core, R3-DE-core / 重大度 medium
   - 生ボディ 8 MiB・ファイル 64 MiB の上限を保存／読込双方で適用。

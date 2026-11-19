@@ -114,16 +114,17 @@ fn profile_keys_are_stripped_before_storage() {
     let body = br#"{
         "profile": {
             "id": "user-1",
-            "key": "2.aWxvdGhlcg==",
-            "privateKey": "2.encrypted"
+            "key": "TEST_KEY_PLACEHOLDER",
+            "privateKey": "TEST_PRIVATE_KEY_PLACEHOLDER"
         },
         "ciphers": []
     }"#;
     let cache = SyncCache::from_body(body.to_vec(), "https://vault.example.com").unwrap();
     let stored = String::from_utf8(cache.body.clone()).unwrap();
-    assert!(!stored.contains("aWxvdGhlcg"), "{stored}");
-    assert!(!stored.contains("encrypted"), "{stored}");
+    assert!(!stored.contains("TEST_KEY_PLACEHOLDER"), "{stored}");
+    assert!(!stored.contains("TEST_PRIVATE_KEY_PLACEHOLDER"), "{stored}");
     assert!(!stored.contains("privateKey"), "{stored}");
+    assert!(!stored.contains("\"key\""), "{stored}");
     assert!(stored.contains("user-1"), "{stored}");
     // A key-less sync body must still be parseable for offline display.
     assert!(cache.sync().is_ok());
