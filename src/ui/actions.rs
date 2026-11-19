@@ -36,6 +36,36 @@ impl BitwardenApp {
         }
     }
 
+    /// Copy the selected login's password (`true`) or username (`false`).
+    pub(super) fn copy_selected_field(&mut self, password: bool, cx: &mut Context<Self>) {
+        let value = {
+            let visible = self.visible_items();
+            let Some(item) = self
+                .view
+                .selected_id
+                .as_deref()
+                .and_then(|id| visible.iter().find(|item| item.id == id))
+                .or_else(|| visible.first())
+            else {
+                self.status = "項目が選択されていません".to_string();
+                cx.notify();
+                return;
+            };
+            crate::ui::logic::select_copy_value(&item.data, password)
+        };
+        let Some(value) = value else {
+            let field = if password {
+                "パスワード"
+            } else {
+                "ユーザー名"
+            };
+            self.status = crate::ui::logic::no_field_status(field);
+            cx.notify();
+            return;
+        };
+        self.copy_to_clipboard(&value, cx);
+    }
+
     /// Copy `value` to the clipboard with automatic restoration.
     pub(super) fn copy_to_clipboard(&mut self, value: &str, cx: &mut Context<Self>) {
         let seconds = self.settings.clipboard_restore_seconds;

@@ -203,6 +203,8 @@ impl Drop for EnvGuard {
 
 #[test]
 fn default_path_uses_cache_dir_and_legacy_path_uses_config_dir() {
+    #[cfg(target_os = "linux")]
+    let _lock = ENV_LOCK.lock().unwrap();
     let cache_name = std::path::Path::new("bitwarden-gpui-poc").join("sync-cache.json");
     assert_eq!(
         default_path(),

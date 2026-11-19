@@ -151,6 +151,8 @@ fn vault_keys_map_to_actions() {
     assert_eq!(classify_key(&ctx("down")), KeyAction::MoveSelection(1));
     assert_eq!(classify_key(&ctx("f")), KeyAction::ToggleFavorite);
     assert_eq!(classify_key(&ctx("y")), KeyAction::CopyTotp);
+    assert_eq!(classify_key(&ctx("p")), KeyAction::CopySelectedPassword);
+    assert_eq!(classify_key(&ctx("u")), KeyAction::CopySelectedUsername);
     assert_eq!(classify_key(&ctx("g")), KeyAction::OpenAudit);
     assert_eq!(classify_key(&ctx("/")), KeyAction::StartSearch);
     assert_eq!(

@@ -133,6 +133,8 @@ impl BitwardenApp {
                 }
             }
             KeyAction::CopyTotp => self.copy_totp(cx),
+            KeyAction::CopySelectedPassword => self.copy_selected_field(true, cx),
+            KeyAction::CopySelectedUsername => self.copy_selected_field(false, cx),
             KeyAction::CycleFilter => self.cycle_filter(cx),
             KeyAction::CycleSort => {
                 self.view.sort = self.view.sort.next();
