@@ -1,1 +1,9 @@
 /target
+
+# ローカル秘密情報・生成物（gitleaks の最終ゲートと併用）
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx

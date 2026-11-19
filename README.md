@@ -124,7 +124,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 
 ## ビルドと検証
 
-Rust 1.88 以上が必要です（`Cargo.toml` の `rust-version`）。
+Rust 1.95 以上が必要です（`Cargo.toml` の `rust-version`）。
 
 ```bash
 # このリポジトリのルートで実行
@@ -161,8 +161,8 @@ Kubuntu 2026.04 での導入例（未検証のため環境に応じて調整し�
 sudo apt update
 sudo apt install -y build-essential pkg-config libssl-dev \
   libwayland-dev libxkbcommon-dev
-# mise を利用する場合（rust-version 1.88 以上）
-mise use rust@1.88
+# mise を利用する場合（rust-version 1.95 以上）
+mise use rust@1.95
 ```
 
 ## CI

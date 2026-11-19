@@ -14,7 +14,7 @@ generated:
 verified:
   by: "dsh-agent (lead)"
   at: "2026-11-17T21:01:35+09:00"
-status: "superseded"
+status: "deprecated"
 # 2026-11-17 時点の調査スナップショット。現状は README / ADR / todo.md を参照。
 stale_after: "2027-05-17T21:01:35+09:00"
 ---

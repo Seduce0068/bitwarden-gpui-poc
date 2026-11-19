@@ -62,10 +62,12 @@ fn apply_state_reset(
 impl BitwardenApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let path = Settings::default_path();
-        let loaded = path
-            .as_ref()
-            .map(Settings::load_detailed)
-            .unwrap_or(Err(crate::settings::SettingsLoadError::ReadFailed));
+        // No platform config directory is a supported first-run case, not a
+        // failed read; fall back to defaults without a misleading notice.
+        let loaded = match path.as_ref() {
+            Some(path) => Settings::load_detailed(path),
+            None => Ok(Settings::default()),
+        };
         let load_notice = match &loaded {
             Err(crate::settings::SettingsLoadError::NotFound) => None,
             Err(error) => Some(error.message()),
