@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修正（共有フィールドの所有権）
+
+- ServerUrl/Email の編集を `Settings` のメソッドへ集約し、設定パネルと
+  ロック画面で同じ経路を通すようにした（282 passed）
+
 ### 修正（選択ロジックの集約）
 
 - app 側の重複 `visible_items` を削除し `VaultViewState` に統一

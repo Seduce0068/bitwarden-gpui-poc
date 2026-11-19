@@ -191,23 +191,18 @@ impl BitwardenApp {
     }
 
     pub(super) fn edit_auth_field(&mut self, text: &str) {
-        match self.auth.field() {
-            Some(AuthField::ServerUrl) => self.settings.server_url.push_str(text),
-            Some(AuthField::Email) => self.settings.email.push_str(text),
-            _ => self.auth.push_text(text),
+        match self.auth.field().and_then(AuthField::shared) {
+            Some(field) => self.settings.push_shared_text(field, text),
+            None => self.auth.push_text(text),
         }
     }
 
     pub(super) fn backspace_auth_field(&mut self) {
-        match self.auth.field() {
-            Some(AuthField::ServerUrl) => {
-                self.settings.server_url.pop();
-            }
-            Some(AuthField::Email) => {
-                self.settings.email.pop();
-            }
-            _ => self.auth.pop_char(),
+        if let Some(field) = self.auth.field().and_then(AuthField::shared) {
+            self.settings.pop_shared_char(field);
+            return;
         }
+        self.auth.pop_char();
     }
 
     pub(super) fn unlock_mock(&mut self, cx: &mut Context<Self>) {

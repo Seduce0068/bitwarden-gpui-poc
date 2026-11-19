@@ -33,6 +33,15 @@ pub(super) enum SettingsField {
     Email,
 }
 
+impl From<SettingsField> for crate::settings::SharedSettingsField {
+    fn from(field: SettingsField) -> Self {
+        match field {
+            SettingsField::ServerUrl => Self::ServerUrl,
+            SettingsField::Email => Self::Email,
+        }
+    }
+}
+
 /// A credential field being edited on the lock screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AuthField {
@@ -46,6 +55,17 @@ pub(super) enum AuthField {
     ClientSecret,
     /// Master password.
     MasterPassword,
+}
+
+impl AuthField {
+    /// The `Settings`-owned counterpart, if this field is shared.
+    pub(super) fn shared(self) -> Option<crate::settings::SharedSettingsField> {
+        match self {
+            Self::ServerUrl => Some(crate::settings::SharedSettingsField::ServerUrl),
+            Self::Email => Some(crate::settings::SharedSettingsField::Email),
+            Self::ClientId | Self::ClientSecret | Self::MasterPassword => None,
+        }
+    }
 }
 
 /// Last values drawn from the generator; configuration lives in `Settings`.

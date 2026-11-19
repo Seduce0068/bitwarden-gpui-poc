@@ -55,9 +55,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/ui/actions.rs:118-122` / R1-AR03-F1, R5-AP02-F1 / 重大度 low
 - [ ] `KeyAction` とマウス由来 `SelectRow` の境界を明確化（リネームまたは分離） — 根拠
       `src/ui/keys.rs:68-70`, `src/ui/render.rs:99-104` / R1-AR03-F2 / 重大度 low
-- [ ] ServerUrl/Email の共有フィールド編集を `Settings` 側へ集約 — 根拠
-      `src/ui/actions.rs:76-94`, `src/ui/login_flow.rs:184-202` / R1-AR03-F5 / 重大度
-      low
 - [ ] 未使用 `has_credentials` と矛盾する doc を削除または実ゲート化 — 根拠 `src/ui/logic.rs:7-15`,
       `src/ui/login_flow.rs:61-69` / R1-AR03-F6, R1-ST03-F4 / 重大度 low
 - [ ] クリップボード復元手続きを単一サービスへ集約し lock 経路の status を整合 — 根拠
@@ -70,6 +67,14 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 共有フィールド編集を `Settings` へ集約（2026-11-20・第33弾）
+  - 根拠: `src/ui/actions.rs:76-94`, `src/ui/login_flow.rs:184-202` /
+    重大度 low
+  - `Settings::push_shared_text` / `pop_shared_char` を追加し、設定パネルと
+    ロック画面の両経路を統一。`AuthField::shared()` で認証フィールドは
+    `AuthState` 側へフォールバック。
+  - 検証: fmt / check / test（283 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 2 件を反映（ルーティングテスト、網羅性）。
 - [x] 選択ロジックを `VaultViewState` へ集約（2026-11-20・第32弾）
   - 根拠: `src/ui/app.rs:197-201,247-267`, `src/ui/vault_view.rs:50-52,112-124` /
     重大度 low
