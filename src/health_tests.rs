@@ -711,3 +711,38 @@ fn undecryptable_uri_is_not_reported_as_missing() {
         .message()
         .contains("復号できませんでした"));
 }
+
+#[test]
+fn invisible_characters_do_not_hide_an_insecure_uri() {
+    for raw in [
+        "\u{200b}http://example.com",
+        "\u{200b} http://example.com",
+        "http\u{200b}://example.com",
+        "\u{202e}http://example.com",
+    ] {
+        let item = VaultItem::new(
+            "insecure-cf",
+            "Login",
+            ItemData::Login {
+                username: "u".into(),
+                password: Zeroizing::new("s3cret".into()),
+                totp: Zeroizing::new(String::new()),
+                uris: vec![LoginUri {
+                    uri: raw.into(),
+                    match_type: None,
+                }],
+            },
+        );
+        let report = report_of(vec![item]);
+        let finding = report.items[0]
+            .findings
+            .iter()
+            .find(|finding| matches!(finding, Finding::InsecureUri { .. }))
+            .unwrap_or_else(|| panic!("insecure URI hidden in {raw:?}"));
+        let Finding::InsecureUri { uri } = finding else {
+            unreachable!()
+        };
+        assert_eq!(uri, "http://example.com", "raw: {raw:?}");
+        assert!(finding.message().contains("http://example.com"));
+    }
+}

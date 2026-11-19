@@ -166,7 +166,7 @@ pub fn clamp_auth_config(config: &mut AuthConfig) {
 /// lookalike addresses or change how an address is rendered, so they are
 /// rejected explicitly instead of being silently tolerated by the structural
 /// check below. The list is the `Cf` category of Unicode 16.0.
-fn has_format_character(value: &str) -> bool {
+pub(crate) fn has_format_character(value: &str) -> bool {
     value.chars().any(|ch| {
         matches!(
             ch,

@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修正（監査の URI 検査バイパス）
+
+- 先頭の不可視な書式文字（ZWSP 等）で `http://` を隠すバイパスを防止。
+  監査の URI 検査で control/format 文字を除去してから判定（281 passed）
+
 ### 修正（リファクタとテスト品質）
 
 - `generator::WORDS` の再エクスポートを削除し公開パスを `words` に統一
