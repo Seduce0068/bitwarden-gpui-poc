@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 修正（復号失敗 detail の構造化）
+
+- `unlock_failed` の往復変換を文字列 strip から構造化 variant へ変更。
+  detail に日本語 prefix と同じ文字列が含まれても正しく復元。
+  構造化 variant は生 detail を `detail()` に返すため、レガシー
+  `UnlockFailed` の整形済み detail とは `PartialEq` で非等価（284 passed）
+
 ### 修正（共有フィールドの所有権）
 
 - ServerUrl/Email の編集を `Settings` のメソッドへ集約し、設定パネルと

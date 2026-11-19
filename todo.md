@@ -45,8 +45,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 低
 
-- [ ] `unlock_detail` の日本語 prefix/suffix 文字列依存を構造化 detail へ置換 — 根拠
-      `src/error.rs:408-415,435-441` / R1-ST02-F6 / 重大度 low
 - [ ] `error.rs` の auth/settings への逆依存（循環）を解消 — 根拠 `src/error.rs:367,448`,
       `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
 - [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
@@ -67,6 +65,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 復号失敗 detail を構造化（2026-11-20・第34弾）
+  - 根拠: `src/error.rs:408-415,435-441` / 重大度 low
+  - 整形済み文言と生 detail を両方保持する variant を追加し、文字列 strip
+    による往復変換を廃止。cause 保持版のテストも追加。
+  - 検証: fmt / check / test（284 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 3 件を反映。
 - [x] 共有フィールド編集を `Settings` へ集約（2026-11-20・第33弾）
   - 根拠: `src/ui/actions.rs:76-94`, `src/ui/login_flow.rs:184-202` /
     重大度 low
