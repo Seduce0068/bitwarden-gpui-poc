@@ -35,7 +35,7 @@ impl BitwardenApp {
         self.last_activity = std::time::Instant::now();
         let ctx = KeyContext {
             screen: self.screen,
-            panel: self.panel,
+            panel: crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some()),
             key: &event.keystroke.key,
             key_char: event.keystroke.key_char.as_deref(),
             modifiers: KeyModifiers {

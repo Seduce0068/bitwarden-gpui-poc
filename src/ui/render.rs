@@ -230,6 +230,9 @@ impl BitwardenApp {
 
 impl Render for BitwardenApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // One normalized panel value for the header tabs, the key context and
+        // the body, so a stale Audit request cannot disagree with the drawing.
+        let panel = crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some());
         let header = div()
             .flex()
             .items_center()
@@ -252,7 +255,7 @@ impl Render for BitwardenApp {
                     .child(panel_button(
                         "[一覧]",
                         Panel::Vault,
-                        self.panel,
+                        panel,
                         |this, cx| {
                             this.apply_action(
                                 crate::ui::keys::KeyAction::SetPanel(Panel::Vault),
@@ -264,7 +267,7 @@ impl Render for BitwardenApp {
                     .child(panel_button(
                         "[監査]",
                         Panel::Audit,
-                        self.panel,
+                        panel,
                         |this, cx| {
                             this.apply_action(
                                 crate::ui::keys::KeyAction::SetPanel(Panel::Audit),
@@ -276,7 +279,7 @@ impl Render for BitwardenApp {
                     .child(panel_button(
                         "[生成]",
                         Panel::Generator,
-                        self.panel,
+                        panel,
                         |this, cx| {
                             this.apply_action(
                                 crate::ui::keys::KeyAction::SetPanel(Panel::Generator),
@@ -288,7 +291,7 @@ impl Render for BitwardenApp {
                     .child(panel_button(
                         "[設定]",
                         Panel::Settings,
-                        self.panel,
+                        panel,
                         |this, cx| {
                             this.apply_action(
                                 crate::ui::keys::KeyAction::SetPanel(Panel::Settings),
@@ -306,25 +309,25 @@ impl Render for BitwardenApp {
                     .into_any_element()
             });
 
-        let body = match self.screen {
-            Screen::Locked => div()
+        let body = match (self.screen, panel) {
+            (Screen::Locked, _) => div()
                 .flex_1()
                 .flex()
                 .items_center()
                 .justify_center()
                 .child(self.render_locked(cx))
                 .into_any_element(),
-            Screen::Unlocked if self.panel == Panel::Audit => match &self.view.audit_report {
+            (Screen::Unlocked, Panel::Audit) => match &self.view.audit_report {
                 Some(report) => audit_panel(report).into_any_element(),
                 None => self.render_unlocked(cx).into_any_element(),
             },
-            Screen::Unlocked if self.panel == Panel::Generator => {
+            (Screen::Unlocked, Panel::Generator) => {
                 generator_panel(&self.settings, &self.generator).into_any_element()
             }
-            Screen::Unlocked if self.panel == Panel::Settings => {
+            (Screen::Unlocked, Panel::Settings) => {
                 settings_panel(&self.settings, self.editing).into_any_element()
             }
-            Screen::Unlocked => self.render_unlocked(cx).into_any_element(),
+            (Screen::Unlocked, _) => self.render_unlocked(cx).into_any_element(),
         };
 
         let status = div()
