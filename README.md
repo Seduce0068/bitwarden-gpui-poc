@@ -56,7 +56,9 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   （`tests/real_server_e2e.rs`）でローカル Vaultwarden 1.30.2 への API key
   認証と `/api/sync` の HTTP 200 までは確認したが、同サーバーの sync JSON が
   PascalCase で openwarden 0.1.0 の camelCase パーサーと不一致のため、
-  復号前のパースに失敗する（ADR に詳細を記録）
+  復号前のパースに失敗する。キャッシュ経由のボディはキー正規化で
+  解析可能だが、生の認証経路は上流の `Client::sync()` が内部で
+  パースするため未解決（ADR に詳細を記録）
 - `src/cache.rs` に、暗号化済みアイテムを含む平文 JSON キャッシュを実装済み
   （キーは保存しない、ファイルは 0600 で作成）。取得時刻から 7 日で期限切れ。
   読み出しは同期失敗時の復元経路へ接続済みだが、openwarden 0.1.0 の

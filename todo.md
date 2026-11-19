@@ -37,6 +37,11 @@ stale_after: "2027-05-17T21:04:43+09:00"
     openwarden 0.1.0 の `SyncWire`（camelCase 要求）がパースに失敗。
     対応方針: camelCase を返すサーバーバージョンへ固定するか、取り込み前に
     camelCase へ正規化する層を追加する。
+  - 進捗（第26弾）: `parse_sync` に再帰的なキー正規化を追加しキャッシュ経路は
+    解析可能に（278 passed、R4 指摘 3 件反映）。ただし実サーバーで E2E を
+    再実行しても認証経路は失敗。openwarden の `Client::sync()` が内部で
+    `from_json` を呼び正規化を通らないため。上流対応または自前 HTTP
+    クライアント化が必要で、未解決として残す。
 
 - [ ] `settings.json` のスキーマ・全フィールド・既定値を README へ文書化 — 根拠
       `README.md:38-39,178-184`, `src/settings.rs:260-281` / R2-CF01-F3 / 重大度
