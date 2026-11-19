@@ -560,3 +560,20 @@ fn device_id_save_failure_is_reported_and_retried() {
     assert!(is_valid_device_id(&id));
     assert_eq!(Settings::load(&path).device_id, id);
 }
+
+#[test]
+fn shared_field_edits_are_owned_by_settings() {
+    use crate::settings::SharedSettingsField;
+    let mut settings = Settings::default();
+    settings.server_url.clear();
+    settings.email.clear();
+    settings.push_shared_text(SharedSettingsField::ServerUrl, "https://example.com");
+    settings.push_shared_text(SharedSettingsField::Email, "a@b.example");
+    assert_eq!(settings.server_url, "https://example.com");
+    assert_eq!(settings.email, "a@b.example");
+
+    settings.pop_shared_char(SharedSettingsField::ServerUrl);
+    settings.pop_shared_char(SharedSettingsField::Email);
+    assert_eq!(settings.server_url, "https://example.co");
+    assert_eq!(settings.email, "a@b.exampl");
+}

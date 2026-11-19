@@ -83,6 +83,37 @@ impl Default for Settings {
     }
 }
 
+/// A settings field that is also editable from the lock screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SharedSettingsField {
+    /// Server URL.
+    ServerUrl,
+    /// Account email.
+    Email,
+}
+
+impl Settings {
+    /// Append text to a field owned by `Settings`, from either UI path.
+    pub fn push_shared_text(&mut self, field: SharedSettingsField, text: &str) {
+        match field {
+            SharedSettingsField::ServerUrl => self.server_url.push_str(text),
+            SharedSettingsField::Email => self.email.push_str(text),
+        }
+    }
+
+    /// Remove the last character from a field owned by `Settings`.
+    pub fn pop_shared_char(&mut self, field: SharedSettingsField) {
+        match field {
+            SharedSettingsField::ServerUrl => {
+                self.server_url.pop();
+            }
+            SharedSettingsField::Email => {
+                self.email.pop();
+            }
+        }
+    }
+}
+
 /// Why settings could not be loaded.
 ///
 /// Kept as its own type so the UI's `&'static str` status messages stay valid.

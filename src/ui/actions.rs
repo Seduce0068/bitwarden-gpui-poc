@@ -3,7 +3,6 @@
 use crate::settings::Settings;
 use crate::totp;
 use crate::ui::app::BitwardenApp;
-use crate::ui::state::SettingsField;
 use gpui_kit::*;
 use zeroize::Zeroizing;
 
@@ -107,22 +106,14 @@ impl BitwardenApp {
     }
 
     pub(super) fn push_editing(&mut self, text: &str) {
-        match self.editing {
-            Some(SettingsField::ServerUrl) => self.settings.server_url.push_str(text),
-            Some(SettingsField::Email) => self.settings.email.push_str(text),
-            None => {}
+        if let Some(field) = self.editing {
+            self.settings.push_shared_text(field.into(), text);
         }
     }
 
     pub(super) fn pop_editing(&mut self) {
-        match self.editing {
-            Some(SettingsField::ServerUrl) => {
-                self.settings.server_url.pop();
-            }
-            Some(SettingsField::Email) => {
-                self.settings.email.pop();
-            }
-            None => {}
+        if let Some(field) = self.editing {
+            self.settings.pop_shared_char(field.into());
         }
     }
 

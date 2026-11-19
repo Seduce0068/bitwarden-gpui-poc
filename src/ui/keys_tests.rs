@@ -330,3 +330,26 @@ fn backspace_query_requires_a_nonempty_query() {
     value.searching = true;
     assert_eq!(classify_key(&value), KeyAction::BackspaceSearch);
 }
+
+#[test]
+fn field_routing_distinguishes_shared_and_credential_fields() {
+    use crate::settings::SharedSettingsField;
+    use crate::ui::state::{AuthField, SettingsField};
+
+    assert_eq!(
+        SharedSettingsField::from(SettingsField::ServerUrl),
+        SharedSettingsField::ServerUrl
+    );
+    assert_eq!(
+        SharedSettingsField::from(SettingsField::Email),
+        SharedSettingsField::Email
+    );
+    assert_eq!(
+        AuthField::ServerUrl.shared(),
+        Some(SharedSettingsField::ServerUrl)
+    );
+    assert_eq!(AuthField::Email.shared(), Some(SharedSettingsField::Email));
+    assert_eq!(AuthField::ClientId.shared(), None);
+    assert_eq!(AuthField::ClientSecret.shared(), None);
+    assert_eq!(AuthField::MasterPassword.shared(), None);
+}
