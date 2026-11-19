@@ -520,12 +520,22 @@ fn audit_item(
         findings.push(Finding::UriUninspectable);
     }
     for uri in uris {
-        if uri.uri.trim().to_lowercase().starts_with("http://") {
-            // Store the same masked form that `message()` shows, so the raw
-            // URI (with credentials, path, query or fragment) never reaches
-            // `Debug` output or a serialized report.
+        // Invisible whitespace, control and format characters (e.g. zero-width
+        // space) can hide an insecure scheme anywhere in the string, so strip
+        // them from the value used both for detection and for the masked
+        // finding. The raw URI is never stored.
+        let visible: String = uri
+            .uri
+            .chars()
+            .filter(|ch| {
+                !ch.is_whitespace()
+                    && !ch.is_control()
+                    && !crate::auth::has_format_character(&ch.to_string())
+            })
+            .collect();
+        if visible.to_lowercase().starts_with("http://") {
             findings.push(Finding::InsecureUri {
-                uri: crate::model::mask_uri(&uri.uri),
+                uri: crate::model::mask_uri(&visible),
             });
         }
     }

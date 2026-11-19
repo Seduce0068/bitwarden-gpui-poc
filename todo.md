@@ -76,11 +76,15 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/vault_sync.rs:161,358` / R2-ER02-F2, R3-DI01-F1 / 重大度 low
 - [ ] TOTP `Code` の `PartialEq` が code 値を無視する点をテスト意図に合わせる — 根拠
       `src/totp.rs:22-25` / R3-DI01-F3 / 重大度 low
-- [ ] `InsecureUri` 判定の先頭 Cf 文字バイパスを inspection に追加 — 根拠 `src/health.rs:513`,
-      `src/model.rs:36` / R3-IV03-F1 / 重大度 low
 
 ## 完了
 
+- [x] `InsecureUri` 判定の Cf 文字バイパスを防止（2026-11-20・第30弾）
+  - 根拠: `src/health.rs:513`, `src/model.rs:36` / R3-IV03-F1 / 重大度 low
+  - 判定用文字列から不可視文字（空白・制御・書式）を全除去し、マスク済み
+     finding にも同じ値を使用。4 パターンの回帰テストを追加。
+  - 検証: fmt / check / test（281 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 4 件を反映。
 - [x] リファクタとテスト品質の改善（2026-11-20・第29弾）
   - 根拠: `src/generator.rs:10`, `src/model.rs:859-863`,
     `src/model_tests.rs:253-257` / 重大度 low 4件
