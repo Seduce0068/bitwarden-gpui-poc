@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修正（UI アクション名の整理）
+
+- マウス由来 `SelectRow` を含む実態に合わせ `KeyAction` を `UiAction` へ改名
+- `has_credentials` の doc をテストヘルパーとしての役割に修正（286 passed）
+
 ### 修正（ジェネレータキーの型付き化）
 
 - キー文字列の往復をやめ `GeneratorOption` を導入。`KeyAction` の

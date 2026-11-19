@@ -81,7 +81,7 @@ impl KeyModifiers {
 
 /// A UI intent derived from a keystroke or a mouse action.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum KeyAction {
+pub(super) enum UiAction {
     Quit,
     Authenticate,
     OpenDemoVault,
@@ -175,7 +175,7 @@ fn command_key<'a>(ctx: &KeyContext<'a>) -> &'a str {
         .unwrap_or(ctx.key)
 }
 
-fn text_action(text: &str, action: fn(String) -> KeyAction) -> KeyAction {
+fn text_action(text: &str, action: fn(String) -> UiAction) -> UiAction {
     action(text.to_string())
 }
 
@@ -184,126 +184,126 @@ fn text_action(text: &str, action: fn(String) -> KeyAction) -> KeyAction {
 /// Editing modes take priority so that typing `l` into a password field does
 /// not lock the vault. Keybindings with command-like modifiers are ignored so
 /// they can be handled by the platform (e.g. Ctrl+C).
-pub(super) fn classify_key(ctx: &KeyContext<'_>) -> KeyAction {
+pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
     if ctx.modifiers.has_command() {
-        return KeyAction::None;
+        return UiAction::None;
     }
     // Alt alone may still produce a printable layout character (e.g. Option+S
     // -> "ß"). Allow it only while editing text and only when it produced one;
     // in command panels Alt+key must stay inert.
     let editing_text = ctx.editing_auth || ctx.searching || ctx.editing_settings;
     if ctx.modifiers.alt && !(editing_text && typed_text(ctx).is_some()) {
-        return KeyAction::None;
+        return UiAction::None;
     }
     let key = command_key(ctx);
 
     if ctx.screen == Screen::Locked {
         if ctx.editing_auth {
             return match key {
-                "escape" | "enter" => KeyAction::FinishAuthEdit,
-                "backspace" => KeyAction::BackspaceAuth,
-                _ => typed_text(ctx).map_or(KeyAction::None, |text| {
-                    text_action(text, KeyAction::InsertAuthText)
+                "escape" | "enter" => UiAction::FinishAuthEdit,
+                "backspace" => UiAction::BackspaceAuth,
+                _ => typed_text(ctx).map_or(UiAction::None, |text| {
+                    text_action(text, UiAction::InsertAuthText)
                 }),
             };
         }
         return match key {
-            "escape" => KeyAction::Quit,
-            "enter" => KeyAction::Authenticate,
-            "m" => KeyAction::OpenDemoVault,
-            "r" if ctx.login_failed => KeyAction::RetryLogin,
-            "1" => KeyAction::EditAuthField(AuthField::ServerUrl),
-            "2" => KeyAction::EditAuthField(AuthField::Email),
-            "3" => KeyAction::EditAuthField(AuthField::ClientId),
-            "4" => KeyAction::EditAuthField(AuthField::ClientSecret),
-            "5" => KeyAction::EditAuthField(AuthField::MasterPassword),
-            _ => KeyAction::None,
+            "escape" => UiAction::Quit,
+            "enter" => UiAction::Authenticate,
+            "m" => UiAction::OpenDemoVault,
+            "r" if ctx.login_failed => UiAction::RetryLogin,
+            "1" => UiAction::EditAuthField(AuthField::ServerUrl),
+            "2" => UiAction::EditAuthField(AuthField::Email),
+            "3" => UiAction::EditAuthField(AuthField::ClientId),
+            "4" => UiAction::EditAuthField(AuthField::ClientSecret),
+            "5" => UiAction::EditAuthField(AuthField::MasterPassword),
+            _ => UiAction::None,
         };
     }
 
     if ctx.searching {
         return match key {
-            "escape" | "enter" => KeyAction::FinishSearch,
-            "backspace" => KeyAction::BackspaceSearch,
-            _ => typed_text(ctx).map_or(KeyAction::None, |text| {
-                text_action(text, KeyAction::InsertSearchText)
+            "escape" | "enter" => UiAction::FinishSearch,
+            "backspace" => UiAction::BackspaceSearch,
+            _ => typed_text(ctx).map_or(UiAction::None, |text| {
+                text_action(text, UiAction::InsertSearchText)
             }),
         };
     }
 
     match ctx.panel {
         Panel::Audit => match key {
-            "escape" => KeyAction::Quit,
-            "g" => KeyAction::SetPanel(Panel::Vault),
-            "l" => KeyAction::Lock,
-            _ => KeyAction::None,
+            "escape" => UiAction::Quit,
+            "g" => UiAction::SetPanel(Panel::Vault),
+            "l" => UiAction::Lock,
+            _ => UiAction::None,
         },
         Panel::Generator => {
             if ctx.editing_settings {
-                return KeyAction::None;
+                return UiAction::None;
             }
             match key {
-                "escape" => KeyAction::Quit,
-                "n" => KeyAction::SetPanel(Panel::Vault),
-                "l" => KeyAction::Lock,
-                "p" => KeyAction::GeneratePassword,
-                "h" => KeyAction::GeneratePassphrase,
-                "y" => KeyAction::CopyPassword,
-                "Y" => KeyAction::CopyPassphrase,
-                "1" => KeyAction::Generator(GeneratorOption::Lowercase),
-                "2" => KeyAction::Generator(GeneratorOption::Uppercase),
-                "3" => KeyAction::Generator(GeneratorOption::Digits),
-                "4" => KeyAction::Generator(GeneratorOption::Symbols),
-                "5" => KeyAction::Generator(GeneratorOption::AvoidAmbiguous),
-                "6" => KeyAction::Generator(GeneratorOption::Capitalize),
-                "7" => KeyAction::Generator(GeneratorOption::IncludeNumber),
-                "+" | "=" => KeyAction::Generator(GeneratorOption::LengthUp),
-                "-" | "_" => KeyAction::Generator(GeneratorOption::LengthDown),
-                "," => KeyAction::Generator(GeneratorOption::Separator),
-                _ => KeyAction::None,
+                "escape" => UiAction::Quit,
+                "n" => UiAction::SetPanel(Panel::Vault),
+                "l" => UiAction::Lock,
+                "p" => UiAction::GeneratePassword,
+                "h" => UiAction::GeneratePassphrase,
+                "y" => UiAction::CopyPassword,
+                "Y" => UiAction::CopyPassphrase,
+                "1" => UiAction::Generator(GeneratorOption::Lowercase),
+                "2" => UiAction::Generator(GeneratorOption::Uppercase),
+                "3" => UiAction::Generator(GeneratorOption::Digits),
+                "4" => UiAction::Generator(GeneratorOption::Symbols),
+                "5" => UiAction::Generator(GeneratorOption::AvoidAmbiguous),
+                "6" => UiAction::Generator(GeneratorOption::Capitalize),
+                "7" => UiAction::Generator(GeneratorOption::IncludeNumber),
+                "+" | "=" => UiAction::Generator(GeneratorOption::LengthUp),
+                "-" | "_" => UiAction::Generator(GeneratorOption::LengthDown),
+                "," => UiAction::Generator(GeneratorOption::Separator),
+                _ => UiAction::None,
             }
         }
         Panel::Settings => {
             if ctx.editing_settings {
                 return match key {
-                    "escape" | "enter" => KeyAction::FinishSettingsEdit,
-                    "backspace" => KeyAction::BackspaceSettings,
-                    _ => typed_text(ctx).map_or(KeyAction::None, |text| {
-                        text_action(text, KeyAction::InsertSettingsText)
+                    "escape" | "enter" => UiAction::FinishSettingsEdit,
+                    "backspace" => UiAction::BackspaceSettings,
+                    _ => typed_text(ctx).map_or(UiAction::None, |text| {
+                        text_action(text, UiAction::InsertSettingsText)
                     }),
                 };
             }
             match key {
-                "escape" => KeyAction::Quit,
-                "c" => KeyAction::SetPanel(Panel::Vault),
-                "l" => KeyAction::Lock,
-                "1" => KeyAction::EditSettingsField(SettingsField::ServerUrl),
-                "2" => KeyAction::EditSettingsField(SettingsField::Email),
-                "+" | "=" => KeyAction::AdjustThreshold(1),
-                "-" | "_" => KeyAction::AdjustThreshold(-1),
-                "i" => KeyAction::AdjustIdleLock(1),
-                "u" => KeyAction::AdjustIdleLock(-1),
-                "w" => KeyAction::SaveSettings,
-                _ => KeyAction::None,
+                "escape" => UiAction::Quit,
+                "c" => UiAction::SetPanel(Panel::Vault),
+                "l" => UiAction::Lock,
+                "1" => UiAction::EditSettingsField(SettingsField::ServerUrl),
+                "2" => UiAction::EditSettingsField(SettingsField::Email),
+                "+" | "=" => UiAction::AdjustThreshold(1),
+                "-" | "_" => UiAction::AdjustThreshold(-1),
+                "i" => UiAction::AdjustIdleLock(1),
+                "u" => UiAction::AdjustIdleLock(-1),
+                "w" => UiAction::SaveSettings,
+                _ => UiAction::None,
             }
         }
         Panel::Vault => match key {
-            "escape" => KeyAction::Quit,
-            "up" => KeyAction::MoveSelection(-1),
-            "down" => KeyAction::MoveSelection(1),
-            "l" => KeyAction::Lock,
-            "t" => KeyAction::CycleFilter,
-            "s" => KeyAction::CycleSort,
-            "f" => KeyAction::ToggleFavorite,
-            "y" => KeyAction::CopyTotp,
-            "p" => KeyAction::CopySelectedPassword,
-            "u" => KeyAction::CopySelectedUsername,
-            "g" if ctx.has_audit_report => KeyAction::OpenAudit,
-            "n" => KeyAction::SetPanel(Panel::Generator),
-            "c" => KeyAction::SetPanel(Panel::Settings),
-            "/" => KeyAction::StartSearch,
-            "backspace" if ctx.query_nonempty => KeyAction::BackspaceQuery,
-            _ => KeyAction::None,
+            "escape" => UiAction::Quit,
+            "up" => UiAction::MoveSelection(-1),
+            "down" => UiAction::MoveSelection(1),
+            "l" => UiAction::Lock,
+            "t" => UiAction::CycleFilter,
+            "s" => UiAction::CycleSort,
+            "f" => UiAction::ToggleFavorite,
+            "y" => UiAction::CopyTotp,
+            "p" => UiAction::CopySelectedPassword,
+            "u" => UiAction::CopySelectedUsername,
+            "g" if ctx.has_audit_report => UiAction::OpenAudit,
+            "n" => UiAction::SetPanel(Panel::Generator),
+            "c" => UiAction::SetPanel(Panel::Settings),
+            "/" => UiAction::StartSearch,
+            "backspace" if ctx.query_nonempty => UiAction::BackspaceQuery,
+            _ => UiAction::None,
         },
     }
 }

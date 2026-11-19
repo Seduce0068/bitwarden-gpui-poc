@@ -49,10 +49,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
 - [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
       `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
-- [ ] `KeyAction` とマウス由来 `SelectRow` の境界を明確化（リネームまたは分離） — 根拠
-      `src/ui/keys.rs:68-70`, `src/ui/render.rs:99-104` / R1-AR03-F2 / 重大度 low
-- [ ] 未使用 `has_credentials` と矛盾する doc を削除または実ゲート化 — 根拠 `src/ui/logic.rs:7-15`,
-      `src/ui/login_flow.rs:61-69` / R1-AR03-F6, R1-ST03-F4 / 重大度 low
 - [ ] クリップボード復元手続きを単一サービスへ集約し lock 経路の status を整合 — 根拠
       `src/ui/clipboard.rs:3-4`, `src/ui/actions.rs:56-62`,
       `src/ui/app.rs:161-164` / R1-AR03-F7 / 重大度 low
@@ -63,6 +59,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] UI アクション名と doc を整理（2026-11-20・第36弾）
+  - 根拠: `src/ui/keys.rs`, `src/ui/logic.rs:7-15` / 重大度 low 2件
+  - マウス由来 `SelectRow` を含む実態に合わせ `KeyAction` を `UiAction` へ
+    改名。`has_credentials` はテストヘルパーとして doc を修正。
+  - 検証: fmt / check / test（286 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 2 件（改名漏れ、todo 未更新）を反映。
 - [x] ジェネレータキー割当を型付き化（2026-11-20・第35弾）
   - 根拠: `src/ui/keys.rs:276-285`, `src/ui/actions.rs:118-122` / 重大度 low
   - `GeneratorOption` を導入し、キー文字列の往復を廃止。`KeyAction` の

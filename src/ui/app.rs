@@ -103,7 +103,7 @@ impl BitwardenApp {
     /// when focus moves to another element the normal key path no longer sees
     /// key presses. A keystroke observer fires regardless of which element is
     /// focused. It watches only `FOCUS_RECOVERY_KEY`, which `classify_key`
-    /// maps to `KeyAction::None` in every screen and editing mode, so key
+    /// maps to `UiAction::None` in every screen and editing mode, so key
     /// classification and editing behaviour are left completely untouched.
     pub(super) fn install_focus_recovery(&mut self, cx: &mut Context<Self>) {
         cx.observe_keystrokes(|view: &mut Self, event, window, cx| {

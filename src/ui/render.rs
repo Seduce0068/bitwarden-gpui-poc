@@ -98,7 +98,7 @@ impl BitwardenApp {
                                 .id(index)
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     this.apply_action(
-                                        crate::ui::keys::KeyAction::SelectRow(index),
+                                        crate::ui::keys::UiAction::SelectRow(index),
                                         cx,
                                     );
                                 }))
@@ -258,7 +258,7 @@ impl Render for BitwardenApp {
                         panel,
                         |this, cx| {
                             this.apply_action(
-                                crate::ui::keys::KeyAction::SetPanel(Panel::Vault),
+                                crate::ui::keys::UiAction::SetPanel(Panel::Vault),
                                 cx,
                             );
                         },
@@ -270,7 +270,7 @@ impl Render for BitwardenApp {
                         panel,
                         |this, cx| {
                             this.apply_action(
-                                crate::ui::keys::KeyAction::SetPanel(Panel::Audit),
+                                crate::ui::keys::UiAction::SetPanel(Panel::Audit),
                                 cx,
                             );
                         },
@@ -282,7 +282,7 @@ impl Render for BitwardenApp {
                         panel,
                         |this, cx| {
                             this.apply_action(
-                                crate::ui::keys::KeyAction::SetPanel(Panel::Generator),
+                                crate::ui::keys::UiAction::SetPanel(Panel::Generator),
                                 cx,
                             );
                         },
@@ -294,7 +294,7 @@ impl Render for BitwardenApp {
                         panel,
                         |this, cx| {
                             this.apply_action(
-                                crate::ui::keys::KeyAction::SetPanel(Panel::Settings),
+                                crate::ui::keys::UiAction::SetPanel(Panel::Settings),
                                 cx,
                             );
                         },

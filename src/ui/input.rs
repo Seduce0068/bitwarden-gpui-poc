@@ -4,7 +4,7 @@
 //! only applies the resulting action to the app state.
 
 use crate::ui::app::BitwardenApp;
-use crate::ui::keys::{classify_key, KeyAction, KeyContext, KeyModifiers};
+use crate::ui::keys::{classify_key, KeyContext, KeyModifiers, UiAction};
 use crate::ui::state::Panel;
 use gpui_kit::*;
 
@@ -12,7 +12,7 @@ use gpui_kit::*;
 /// moved elsewhere (for example via Tab).
 ///
 /// `F1` is chosen deliberately: [`crate::ui::keys::classify_key`] maps it to
-/// [`KeyAction::None`] on every screen and in every editing mode, and the
+/// [`UiAction::None`] on every screen and in every editing mode, and the
 /// default keymaps do not bind it. The global observer that watches this key
 /// therefore cannot change normal key classification or editing behaviour.
 pub(super) const FOCUS_RECOVERY_KEY: &str = "f1";
@@ -56,73 +56,73 @@ impl BitwardenApp {
 
     /// Apply a UI action to the app state. Both keyboard and mouse input go
     /// through this single path so state transitions stay consistent.
-    pub(super) fn apply_action(&mut self, action: KeyAction, cx: &mut Context<Self>) {
+    pub(super) fn apply_action(&mut self, action: UiAction, cx: &mut Context<Self>) {
         self.last_activity = std::time::Instant::now();
         match action {
-            KeyAction::Quit => cx.quit(),
-            KeyAction::Authenticate | KeyAction::RetryLogin => self.unlock_with_auth(cx),
-            KeyAction::OpenDemoVault => self.unlock_mock(cx),
-            KeyAction::EditAuthField(field) => {
+            UiAction::Quit => cx.quit(),
+            UiAction::Authenticate | UiAction::RetryLogin => self.unlock_with_auth(cx),
+            UiAction::OpenDemoVault => self.unlock_mock(cx),
+            UiAction::EditAuthField(field) => {
                 // Changing credentials invalidates any in-flight attempt.
                 self.login_generation.invalidate();
                 self.auth.set_field(Some(field));
                 cx.notify();
             }
-            KeyAction::EditSettingsField(field) => {
+            UiAction::EditSettingsField(field) => {
                 self.editing = Some(field);
                 cx.notify();
             }
-            KeyAction::FinishAuthEdit => {
+            UiAction::FinishAuthEdit => {
                 self.login_generation.invalidate();
                 self.auth.take_field();
                 cx.notify();
             }
-            KeyAction::FinishSearch => {
+            UiAction::FinishSearch => {
                 self.view.finish_search();
                 cx.notify();
             }
-            KeyAction::FinishSettingsEdit => {
+            UiAction::FinishSettingsEdit => {
                 self.editing = None;
                 cx.notify();
             }
-            KeyAction::InsertAuthText(text) => {
+            UiAction::InsertAuthText(text) => {
                 self.login_generation.invalidate();
                 self.edit_auth_field(&text);
                 cx.notify();
             }
-            KeyAction::InsertSearchText(text) => {
+            UiAction::InsertSearchText(text) => {
                 self.view.push_query(&text);
                 cx.notify();
             }
-            KeyAction::InsertSettingsText(text) => {
+            UiAction::InsertSettingsText(text) => {
                 self.push_editing(&text);
                 cx.notify();
             }
-            KeyAction::BackspaceAuth => {
+            UiAction::BackspaceAuth => {
                 self.login_generation.invalidate();
                 self.backspace_auth_field();
                 cx.notify();
             }
-            KeyAction::BackspaceSearch => {
+            UiAction::BackspaceSearch => {
                 self.view.pop_query();
                 cx.notify();
             }
-            KeyAction::BackspaceSettings => {
+            UiAction::BackspaceSettings => {
                 self.pop_editing();
                 cx.notify();
             }
-            KeyAction::BackspaceQuery => {
+            UiAction::BackspaceQuery => {
                 self.view.pop_query();
                 cx.notify();
             }
-            KeyAction::SetPanel(panel) => self.set_panel(panel, cx),
-            KeyAction::Lock => self.lock(cx),
-            KeyAction::MoveSelection(delta) => self.move_selection(delta, cx),
-            KeyAction::ToggleFavorite => self.toggle_favorite(cx),
-            KeyAction::OpenAudit => self.set_panel(Panel::Audit, cx),
-            KeyAction::GeneratePassword => self.generate_password(cx),
-            KeyAction::GeneratePassphrase => self.generate_passphrase(cx),
-            KeyAction::CopyPassword => {
+            UiAction::SetPanel(panel) => self.set_panel(panel, cx),
+            UiAction::Lock => self.lock(cx),
+            UiAction::MoveSelection(delta) => self.move_selection(delta, cx),
+            UiAction::ToggleFavorite => self.toggle_favorite(cx),
+            UiAction::OpenAudit => self.set_panel(Panel::Audit, cx),
+            UiAction::GeneratePassword => self.generate_password(cx),
+            UiAction::GeneratePassphrase => self.generate_passphrase(cx),
+            UiAction::CopyPassword => {
                 if let Some(value) = self.generator.last_password.clone() {
                     self.copy_to_clipboard(&value, cx);
                 } else {
@@ -130,7 +130,7 @@ impl BitwardenApp {
                     cx.notify();
                 }
             }
-            KeyAction::CopyPassphrase => {
+            UiAction::CopyPassphrase => {
                 if let Some(value) = self.generator.last_passphrase.clone() {
                     self.copy_to_clipboard(&value, cx);
                 } else {
@@ -138,35 +138,35 @@ impl BitwardenApp {
                     cx.notify();
                 }
             }
-            KeyAction::CopyTotp => self.copy_totp(cx),
-            KeyAction::CopySelectedPassword => self.copy_selected_field(true, cx),
-            KeyAction::CopySelectedUsername => self.copy_selected_field(false, cx),
-            KeyAction::CycleFilter => self.cycle_filter(cx),
-            KeyAction::CycleSort => {
+            UiAction::CopyTotp => self.copy_totp(cx),
+            UiAction::CopySelectedPassword => self.copy_selected_field(true, cx),
+            UiAction::CopySelectedUsername => self.copy_selected_field(false, cx),
+            UiAction::CycleFilter => self.cycle_filter(cx),
+            UiAction::CycleSort => {
                 self.view.sort = self.view.sort.next();
                 self.view.selected_id = None;
                 cx.notify();
             }
-            KeyAction::StartSearch => {
+            UiAction::StartSearch => {
                 self.view.searching = true;
                 self.view.query.clear();
                 self.view.selected_id = None;
                 cx.notify();
             }
-            KeyAction::SaveSettings => self.save_settings(cx),
-            KeyAction::AdjustThreshold(delta) => {
+            UiAction::SaveSettings => self.save_settings(cx),
+            UiAction::AdjustThreshold(delta) => {
                 self.settings.thresholds =
                     crate::ui::logic::adjust_thresholds(self.settings.thresholds, delta);
                 self.refresh_audit();
                 cx.notify();
             }
-            KeyAction::AdjustIdleLock(delta) => {
+            UiAction::AdjustIdleLock(delta) => {
                 self.settings.idle_lock_seconds =
                     crate::ui::logic::adjust_idle_lock(self.settings.idle_lock_seconds, delta);
                 cx.notify();
             }
-            KeyAction::Generator(option) => self.toggle_generator(option, cx),
-            KeyAction::SelectRow(index) => {
+            UiAction::Generator(option) => self.toggle_generator(option, cx),
+            UiAction::SelectRow(index) => {
                 if self.view.select_index(index) {
                     self.view
                         .scroll_handle
@@ -174,7 +174,7 @@ impl BitwardenApp {
                 }
                 cx.notify();
             }
-            KeyAction::None => {}
+            UiAction::None => {}
         }
     }
 }
@@ -239,7 +239,7 @@ mod tests {
         for ctx in &contexts {
             assert_eq!(
                 classify_key(ctx),
-                KeyAction::None,
+                UiAction::None,
                 "the recovery key must stay inert in {ctx:?}"
             );
         }
@@ -247,14 +247,14 @@ mod tests {
         // A stray `key_char` must not turn F1 into inserted text either.
         let mut with_char = context(Screen::Unlocked, Panel::Vault, FOCUS_RECOVERY_KEY);
         with_char.key_char = Some("\u{f1}");
-        assert_eq!(classify_key(&with_char), KeyAction::None);
+        assert_eq!(classify_key(&with_char), UiAction::None);
 
         // Sanity check: the helper only fires for the dedicated key, and a
         // normal command key stays classified as before.
         assert!(!is_focus_recovery_key("l"));
         assert_eq!(
             classify_key(&context(Screen::Unlocked, Panel::Vault, "l")),
-            KeyAction::Lock
+            UiAction::Lock
         );
     }
 }
