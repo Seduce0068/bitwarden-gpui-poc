@@ -476,3 +476,11 @@ fn expired_cache_message_reaches_the_status_bar() {
         "同期に失敗しました（キャッシュが有効期限を過ぎています）"
     );
 }
+
+#[test]
+fn cache_too_large_message_reaches_the_status_bar() {
+    assert_eq!(
+        cache_restore_failure(AppError::CacheTooLarge).message(),
+        "同期に失敗しました（キャッシュがサイズ上限を超えています）"
+    );
+}

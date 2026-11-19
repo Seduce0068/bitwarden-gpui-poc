@@ -16,6 +16,7 @@
 //! the classified reason (corrupt / unreadable / outdated / mismatched).
 
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::PathBuf;
 
 use crate::vault_sync;
@@ -32,6 +33,18 @@ pub type SyncCacheError = crate::error::AppError;
 /// Seven days balances offline availability with the risk of acting on stale
 /// vault data (for example after a key rotation on the server).
 pub const MAX_CACHE_AGE_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// Maximum raw `/api/sync` body accepted from a cache.
+///
+/// openwarden caps a live sync response at 32 MiB; a PoC vault needs far less.
+pub const MAX_CACHE_BODY_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum on-disk cache file size accepted before parsing.
+///
+/// `body: Vec<u8>` is serialized as a JSON number per byte, expanding roughly
+/// fourfold, so the file cap leaves headroom over the raw-body cap. A corrupt
+/// or hostile file must not exhaust memory before the parser runs.
+pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A cached sync response, still encrypted.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +92,9 @@ impl SyncCache {
     /// [`SyncCacheError::InvalidCache`] when the body is not a valid sync
     /// response.
     pub fn from_body(body: Vec<u8>, server_url: &str) -> Result<Self, SyncCacheError> {
+        if body.len() > MAX_CACHE_BODY_BYTES {
+            return Err(SyncCacheError::CacheTooLarge);
+        }
         let sync = vault_sync::parse_sync(&body)
             .map_err(|error| SyncCacheError::CacheParse(crate::error::BoxedCause::new(error)))?;
         let user_id = sync.user_id().to_string();
@@ -205,15 +221,33 @@ pub type CacheLoadError = crate::error::AppError;
 ///
 /// [`CacheLoadError`] when the file cannot be used as a cache.
 pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<SyncCache, CacheLoadError> {
-    let contents = std::fs::read(path).map_err(|error| {
+    let file = std::fs::File::open(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             CacheLoadError::NotFound
         } else {
             CacheLoadError::ReadFailedCause(crate::error::BoxedCause::new(error))
         }
     })?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| CacheLoadError::ReadFailedCause(crate::error::BoxedCause::new(error)))?;
+    if metadata.len() > MAX_CACHE_BYTES {
+        return Err(CacheLoadError::CacheTooLarge);
+    }
+    // Read one byte past the limit so a file that grew after `metadata` is
+    // still rejected without loading an unbounded body.
+    let mut contents = Vec::new();
+    file.take(MAX_CACHE_BYTES.saturating_add(1))
+        .read_to_end(&mut contents)
+        .map_err(|error| CacheLoadError::ReadFailedCause(crate::error::BoxedCause::new(error)))?;
+    if contents.len() as u64 > MAX_CACHE_BYTES {
+        return Err(CacheLoadError::CacheTooLarge);
+    }
     let cache: SyncCache = serde_json::from_slice(&contents)
         .map_err(|error| CacheLoadError::ParseFailedCause(crate::error::BoxedCause::new(error)))?;
+    if cache.body.len() > MAX_CACHE_BODY_BYTES {
+        return Err(CacheLoadError::CacheTooLarge);
+    }
     if cache.version != SyncCache::VERSION {
         return Err(CacheLoadError::VersionMismatch);
     }
@@ -344,7 +378,7 @@ pub fn cache_error_message(error: SyncCacheError) -> &'static str {
         SyncCacheError::ReadFailed | SyncCacheError::ReadFailedCause(_) => REASON_UNREADABLE,
         SyncCacheError::VersionMismatch => REASON_OUTDATED,
         SyncCacheError::CacheExpired => REASON_EXPIRED,
-        SyncCacheError::TooLarge => REASON_TOO_LARGE,
+        SyncCacheError::CacheTooLarge => REASON_TOO_LARGE,
         SyncCacheError::Other(_) => crate::error::OTHER_ERROR_MESSAGE,
         // A future variant must never be reported as proven corruption.
         _ => crate::error::OTHER_ERROR_MESSAGE,

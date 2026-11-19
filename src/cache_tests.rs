@@ -391,3 +391,30 @@ fn expired_cache_survives_serde_roundtrip_as_expired() {
     let loaded = load_detailed(&path).unwrap();
     assert!(is_cache_expired(loaded.created_at, now));
 }
+
+#[test]
+fn oversized_cache_is_rejected_before_parsing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.json");
+    std::fs::write(&path, vec![b'x'; (MAX_CACHE_BYTES + 1) as usize]).unwrap();
+    assert_eq!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge));
+    assert_eq!(
+        cache_error_message(CacheLoadError::CacheTooLarge),
+        REASON_TOO_LARGE
+    );
+}
+
+#[test]
+fn oversized_cache_body_is_rejected_after_parsing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.json");
+    let cache = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: vec![b'x'; MAX_CACHE_BODY_BYTES + 1],
+        created_at: None,
+    };
+    save(&path, &cache).unwrap();
+    assert_eq!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge));
+}
