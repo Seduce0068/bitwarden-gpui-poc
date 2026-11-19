@@ -2,7 +2,7 @@
 
 use crate::generator::{entropy_bits, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::health::*;
-use crate::model::{CardData, Folder, ItemData, LoginUri, VaultItem};
+use crate::model::{CardData, ItemData, LoginUri, VaultItem};
 use crate::vault_sync::{is_undecryptable_password, UNDECRYPTABLE_PASSWORD};
 use zeroize::Zeroizing;
 
@@ -333,10 +333,10 @@ fn cards_without_a_number_are_flagged_and_notes_are_not() {
     assert_eq!(report.items[0].id, "1");
     assert!(report.items[0].findings.contains(&Finding::NoCardNumber));
     assert!(!report.items[0].findings.contains(&Finding::NoUri));
-    let _ = Folder {
-        id: "f".into(),
-        name: "F".into(),
-    };
+    assert!(
+        !report.items.iter().any(|item| item.id == "2"),
+        "a note inside a folder must not be flagged"
+    );
 }
 
 #[test]

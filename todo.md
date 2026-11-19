@@ -53,8 +53,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
 - [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
       `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
-- [ ] `generator::WORDS` の再エクスポートを削除し公開パスを一本化 — 根拠 `src/generator.rs:10`,
-      `src/lib.rs:24,32` / R1-AR01-F5 / 重大度 low
 - [ ] ジェネレータ設定のキー文字列の往復を型付き enum へ — 根拠 `src/ui/keys.rs:276-285`,
       `src/ui/actions.rs:118-122` / R1-AR03-F1, R5-AP02-F1 / 重大度 low
 - [ ] `KeyAction` とマウス由来 `SelectRow` の境界を明確化（リネームまたは分離） — 根拠
@@ -90,6 +88,15 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] リファクタとテスト品質の改善（2026-11-20・第29弾）
+  - 根拠: `src/generator.rs:10`, `src/model.rs:859-863`,
+    `src/model_tests.rs:253-257` / 重大度 low 4件
+  - WORDS の再エクスポート削除、名前ソートの NFKD 統一、空振りテストの
+    アサーション化、parity テストの 30 通り化。
+  - 却下: `Code` の PartialEq が code を無視する点は「等価比較に秘密を
+    露出しない」という明示設計のため（src/totp.rs:15）。
+  - 検証: fmt / check / test（280 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 3 件を反映。
 - [x] UX 文言と CI 設定の小規模修正（2026-11-20・第28弾）
   - 根拠: `src/ui/panels.rs:172`, `src/ui/actions.rs:11-24`,
     `.github/dependabot.yml:6`, `.github/workflows/ci.yml:25` / 重大度 low 6件

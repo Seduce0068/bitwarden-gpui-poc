@@ -73,7 +73,7 @@ mod tests {
     }
 
     #[test]
-    fn consuming_a_token_prevents_duplicate_application() {
+    fn invalidate_makes_the_begin_token_stale() {
         let mut generation = LoginGeneration::default();
         let token = generation.begin();
         assert!(generation.is_current(token));

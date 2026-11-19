@@ -860,10 +860,8 @@ impl Vault {
 }
 
 fn compare(a: &VaultItem, b: &VaultItem, sort: SortKey) -> std::cmp::Ordering {
-    let by_name = a
-        .name
-        .to_lowercase()
-        .cmp(&b.name.to_lowercase())
+    let by_name = comparison_key(&a.name)
+        .cmp(&comparison_key(&b.name))
         .then_with(|| a.id.cmp(&b.id));
     match sort {
         SortKey::NameAsc => by_name,
