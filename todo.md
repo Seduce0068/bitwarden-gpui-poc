@@ -47,8 +47,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 - [ ] `unlock_detail` の日本語 prefix/suffix 文字列依存を構造化 detail へ置換 — 根拠
       `src/error.rs:408-415,435-441` / R1-ST02-F6 / 重大度 low
-- [ ] `PartialEq for AppError` が表示文のみで比較し boxed cause を無視する点を見直す — 根拠
-      `src/error.rs:343-349,245-248` / R2-ER01-F2, R5-AP01-F2 / 重大度 low
 - [ ] `error.rs` の auth/settings への逆依存（循環）を解消 — 根拠 `src/error.rs:367,448`,
       `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
 - [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
@@ -74,8 +72,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/ui/keys.rs:299-311` / R1-ST03-F6 / 重大度 low
 - [ ] `revision_date` パース失敗の 0 フォールバックを明示的な未設定値へ — 根拠
       `src/vault_sync.rs:161,358` / R2-ER02-F2, R3-DI01-F1 / 重大度 low
-- [ ] TOTP `Code` の `PartialEq` が code 値を無視する点をテスト意図に合わせる — 根拠
-      `src/totp.rs:22-25` / R3-DI01-F3 / 重大度 low
 
 ## 完了
 
@@ -378,6 +374,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 - [x] 誤検知／過大評価／既に対処済み 5件（V1〜V5）を却下。
 
 ## メモ
+
+- 却下: `AppError` の `PartialEq` に discriminant 比較を入れる案は、
+  「Cause 保持バリアントはプレーン版と等価」という明示設計と既存テスト
+  5 件に反するため採用しない（`src/error.rs:343-349`）。
+- 却下: `totp::Code` の `PartialEq` が code を無視する点は、
+  「等価比較に秘密を露出しない」という明示設計（`src/totp.rs:15`）。
 
 - グローバルTODO: `~/.config/opencode/todo.md`（複数プロジェクト横断のタスク用）。
 - 詳細な生指摘は [docs/cross-review-findings.md](docs/cross-review-findings.md) を参照。
