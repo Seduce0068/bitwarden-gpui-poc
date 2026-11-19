@@ -55,9 +55,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/ui/actions.rs:118-122` / R1-AR03-F1, R5-AP02-F1 / 重大度 low
 - [ ] `KeyAction` とマウス由来 `SelectRow` の境界を明確化（リネームまたは分離） — 根拠
       `src/ui/keys.rs:68-70`, `src/ui/render.rs:99-104` / R1-AR03-F2 / 重大度 low
-- [ ] `visible_items` と選択 index 計算を `VaultViewState` へ集約し `next_index` を本番化 —
-      根拠 `src/ui/app.rs:197-201,247-267`, `src/ui/vault_view.rs:50-52,112-124` /
-      R1-AR03-F4, R4-TS02-F1 / 重大度 low
 - [ ] ServerUrl/Email の共有フィールド編集を `Settings` 側へ集約 — 根拠
       `src/ui/actions.rs:76-94`, `src/ui/login_flow.rs:184-202` / R1-AR03-F5 / 重大度
       low
@@ -73,6 +70,13 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 選択ロジックを `VaultViewState` へ集約（2026-11-20・第32弾）
+  - 根拠: `src/ui/app.rs:197-201,247-267`, `src/ui/vault_view.rs:50-52,112-124` /
+    重大度 low
+  - app 側の重複 `visible_items` を削除。`next_index_in` を追加して
+    一覧の filter+sort をキー操作ごとに1回だけ実行。
+  - 検証: fmt / check / test（281 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 1 件（二重計算）を反映。
 - [x] パネル状態の正規化を単一化（2026-11-20・第31弾）
   - 根拠: `src/ui/logic.rs:37-47`, `src/ui/render.rs:317-320` / 重大度 low
   - 描画の本体・ヘッダタブ・`KeyContext` すべてで `effective_panel` を通す。

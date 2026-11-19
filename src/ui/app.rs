@@ -1,6 +1,6 @@
 //! The main application state and GPUI wiring.
 
-use crate::model::{Filter, ItemData, SortKey, Vault, VaultItem};
+use crate::model::{Filter, ItemData, SortKey, Vault};
 use crate::settings::Settings;
 use crate::totp;
 use crate::ui::auth_state::AuthState;
@@ -195,13 +195,6 @@ impl BitwardenApp {
         .detach();
     }
 
-    /// The current view, computed by the library exactly as the tests see it.
-    pub(super) fn visible_items(&self) -> Vec<&VaultItem> {
-        self.view
-            .vault
-            .view(&self.view.filter, &self.view.query, self.view.sort)
-    }
-
     /// Apply the input-mode reset shared by all lock/unlock transitions.
     ///
     /// Also stamps `last_activity`; the caller keeps ownership of the vault,
@@ -247,17 +240,10 @@ impl BitwardenApp {
     }
 
     pub(super) fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let visible = self.visible_items();
-        if visible.is_empty() {
+        let visible = self.view.visible_items();
+        let Some(next) = self.view.next_index_in(&visible, delta) else {
             return;
-        }
-        let current = self
-            .view
-            .selected_id
-            .as_deref()
-            .and_then(|id| visible.iter().position(|item| item.id == id))
-            .unwrap_or(0);
-        let next = (current as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
+        };
         let id = visible[next].id.clone();
         if self.view.selected_id.as_deref() != Some(id.as_str()) {
             self.view.selected_id = Some(id);
@@ -274,12 +260,12 @@ impl BitwardenApp {
     }
 
     pub(super) fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self
-            .view
-            .selected_id
-            .clone()
-            .or_else(|| self.visible_items().first().map(|item| item.id.clone()))
-        else {
+        let Some(id) = self.view.selected_id.clone().or_else(|| {
+            self.view
+                .visible_items()
+                .first()
+                .map(|item| item.id.clone())
+        }) else {
             return;
         };
         if let Some(favorite) = self.view.vault.toggle_favorite(&id) {
@@ -300,7 +286,7 @@ impl BitwardenApp {
 
     pub(super) fn selected_detail(&mut self) -> String {
         let Some((base, data)) = (|| {
-            let visible = self.visible_items();
+            let visible = self.view.visible_items();
             let item = self
                 .view
                 .selected_id

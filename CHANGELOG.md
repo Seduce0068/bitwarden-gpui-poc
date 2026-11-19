@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修正（選択ロジックの集約）
+
+- app 側の重複 `visible_items` を削除し `VaultViewState` に統一
+- `next_index` を本番化し `move_selection` から利用（281 passed）
+
 ### 修正（パネル状態の統一）
 
 - 描画時のパネル選択も `effective_panel` を通し、キー入力と描画の
