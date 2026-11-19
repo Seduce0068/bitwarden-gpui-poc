@@ -118,6 +118,10 @@ pub enum AppError {
     UnlockFailed(String),
     /// The master key could not decrypt the protected key; retains the cause.
     UnlockFailedCause(String, BoxedCause),
+    /// An unlock failure: the formatted status text and the raw detail.
+    UnlockFailedStructured(String, String),
+    /// The same, retaining the original cause as well.
+    UnlockFailedStructuredCause(String, String, BoxedCause),
     /// The sync payload could not be applied to the decrypted vault.
     ApplySyncFailed(String),
     /// The sync payload could not be applied; retains the cause.
@@ -198,13 +202,16 @@ pub enum AppError {
 impl AppError {
     /// Construct the status-bar message for an unlock failure.
     pub fn unlock_failed(detail: impl Into<String>) -> Self {
-        Self::UnlockFailed(format!("復号キーを取得できません（{}）", detail.into()))
+        let detail = detail.into();
+        Self::UnlockFailedStructured(format!("復号キーを取得できません（{detail}）"), detail)
     }
 
     /// Construct an unlock failure that also retains its cause.
     pub fn unlock_failed_cause(detail: impl Into<String>, cause: BoxedCause) -> Self {
-        Self::UnlockFailedCause(
-            format!("復号キーを取得できません（{}）", detail.into()),
+        let detail = detail.into();
+        Self::UnlockFailedStructuredCause(
+            format!("復号キーを取得できません（{detail}）"),
+            detail,
             cause,
         )
     }
@@ -240,6 +247,8 @@ impl AppError {
     pub fn message(&self) -> &str {
         match self {
             Self::UnlockFailed(text) | Self::UnlockFailedCause(text, _) => text,
+            Self::UnlockFailedStructured(text, _)
+            | Self::UnlockFailedStructuredCause(text, _, _) => text,
             Self::ApplySyncFailed(text) | Self::ApplySyncFailedCause(text, _) => text,
             Self::ImportFailed(text) | Self::ImportFailedCause(text, _) => text,
             Self::MissingField(_) => "認証情報が未入力です",
@@ -292,6 +301,8 @@ impl AppError {
         match self {
             Self::MissingField(field) => Some(field),
             Self::UnlockFailed(text) | Self::UnlockFailedCause(text, _) => Some(text),
+            Self::UnlockFailedStructured(_, detail)
+            | Self::UnlockFailedStructuredCause(_, detail, _) => Some(detail),
             Self::ApplySyncFailed(text) | Self::ApplySyncFailedCause(text, _) => Some(text),
             Self::ImportFailed(text) | Self::ImportFailedCause(text, _) => Some(text),
             Self::InvalidLogin(text) | Self::InvalidLoginCause(text, _) => Some(text),
@@ -313,6 +324,12 @@ impl Clone for AppError {
             Self::UnlockFailed(detail) => Self::UnlockFailed(detail.clone()),
             Self::UnlockFailedCause(detail, cause) => {
                 Self::UnlockFailedCause(detail.clone(), cause.clone())
+            }
+            Self::UnlockFailedStructured(text, detail) => {
+                Self::UnlockFailedStructured(text.clone(), detail.clone())
+            }
+            Self::UnlockFailedStructuredCause(text, detail, cause) => {
+                Self::UnlockFailedStructuredCause(text.clone(), detail.clone(), cause.clone())
             }
             Self::ApplySyncFailed(detail) => Self::ApplySyncFailed(detail.clone()),
             Self::ApplySyncFailedCause(detail, cause) => {
@@ -436,8 +453,12 @@ impl From<AppError> for crate::auth::AuthError {
     }
 }
 
-/// Strip the prefix that [`AppError::unlock_failed`] adds, so the UI's own
-/// formatter does not print it twice.
+/// Strip the status prefix/suffix from legacy formatted errors.
+///
+/// Current `unlock_failed` values use structured variants that carry the raw
+/// detail directly; this helper is only needed for older `UnlockFailed` /
+/// `UnlockFailedCause` values (and the apply-sync/import families) that still
+/// store a fully formatted message.
 fn unlock_detail(text: &str, prefix: &str) -> String {
     text.strip_prefix(prefix)
         .and_then(|rest| rest.strip_suffix('）'))
@@ -463,6 +484,12 @@ impl From<AppError> for crate::auth::UnlockError {
         use crate::auth::UnlockError;
         match error {
             AppError::MissingProtectedKey => UnlockError::MissingProtectedKey,
+            AppError::UnlockFailedStructured(_, detail)
+            | AppError::UnlockFailedStructuredCause(_, detail, _) => {
+                UnlockError::UnlockFailed(detail.clone())
+            }
+            // Legacy variants still carry a formatted message; keep the strip
+            // fallback for values constructed before the structured variants.
             AppError::UnlockFailed(text) | AppError::UnlockFailedCause(text, _) => {
                 UnlockError::UnlockFailed(unlock_detail(&text, "復号キーを取得できません（"))
             }
@@ -522,7 +549,8 @@ impl Error for AppError {
             | Self::CacheParse(cause)
             | Self::CacheRedact(cause)
             | Self::CacheSerialize(cause) => Some(cause.as_error()),
-            Self::UnlockFailedCause(_, cause)
+            Self::UnlockFailedStructuredCause(_, _, cause)
+            | Self::UnlockFailedCause(_, cause)
             | Self::ApplySyncFailedCause(_, cause)
             | Self::ImportFailedCause(_, cause)
             | Self::InvalidLoginCause(_, cause) => Some(cause.as_error()),
@@ -568,5 +596,33 @@ mod tests {
 
         let settings = SettingsLoadError::Other("設定固有の失敗");
         assert_eq!(AppError::from(settings).message(), "設定固有の失敗");
+    }
+
+    #[test]
+    fn unlock_detail_survives_a_structural_round_trip() {
+        use crate::auth::UnlockError;
+
+        // A detail that itself resembles the formatted message used to be mangled
+        // by the prefix/suffix stripping conversion.
+        let detail = "復号キーを取得できません（混入）";
+        let app = AppError::unlock_failed(detail);
+        assert_eq!(
+            app.message(),
+            format!("復号キーを取得できません（{detail}）")
+        );
+        let converted = crate::auth::UnlockError::from(app);
+        assert!(
+            matches!(converted, UnlockError::UnlockFailed(ref restored) if restored == detail),
+            "raw detail must survive verbatim: {converted:?}"
+        );
+
+        let with_cause =
+            AppError::unlock_failed_cause("cause-detail", BoxedCause::text("original io failure"));
+        assert!(std::error::Error::source(&with_cause).is_some());
+        let converted = crate::auth::UnlockError::from(with_cause);
+        assert!(
+            matches!(converted, UnlockError::UnlockFailed(ref restored) if restored == "cause-detail"),
+            "cause-carrying detail must survive: {converted:?}"
+        );
     }
 }
