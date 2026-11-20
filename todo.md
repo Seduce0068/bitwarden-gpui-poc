@@ -19,7 +19,17 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 進行中
 
-なし。クロスレビューは修正を行わない（read-only）方針で実施した。
+制限プロファイル（swarm-coding / 並列 5〜8・深度 1・合計 40 起動・
+連続 3 イテレーション）の上限に到達したため、以下は次回の明示的な
+再開指示まで保留する。
+
+- [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
+      問題を解消 — 根拠 `tests/real_server_e2e.rs`,
+      `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium
+- [ ] `error.rs` の auth/settings への逆依存（循環）を解消 — 根拠 `src/error.rs:367,448`,
+      `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
+- [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
+      `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
 
 ## 未着手
 
@@ -29,9 +39,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ### 優先度 中
 
-- [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
-      問題を解消 — 根拠 `tests/real_server_e2e.rs`,
-      `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium
   - ローカル Vaultwarden 1.30.2 では API key 認証と `/api/sync` の HTTP 200 まで
     到達したが、レスポンスが `Profile` / `Ciphers` 等の PascalCase で、
     openwarden 0.1.0 の `SyncWire`（camelCase 要求）がパースに失敗。
@@ -44,11 +51,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
     クライアント化が必要で、未解決として残す。
 
 ### 優先度 低
-
-- [ ] `error.rs` の auth/settings への逆依存（循環）を解消 — 根拠 `src/error.rs:367,448`,
-      `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
-- [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
-      `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
 
 ## 完了
 
