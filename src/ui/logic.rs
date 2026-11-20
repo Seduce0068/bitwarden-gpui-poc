@@ -132,6 +132,12 @@ pub(super) fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 
     (next * 60) as u64
 }
 
+/// Adjust a seconds-based setting by one UI step, clamped to 1..=3600.
+pub(super) fn adjust_seconds(current: u64, delta_seconds: i32) -> u64 {
+    let next = i64::try_from(current).unwrap_or(i64::MAX) + i64::from(delta_seconds);
+    next.clamp(1, 3600) as u64
+}
+
 /// Adjust audit thresholds by one UI step, clamping to safe bounds:
 /// 1..=200 bits and 1..=3650 days.
 ///
@@ -345,5 +351,20 @@ mod tests {
         let clamped = adjust_thresholds(at_min, -1);
         assert_eq!(clamped.weak_bits, 1);
         assert_eq!(clamped.stale_days, 1);
+    }
+}
+
+#[cfg(test)]
+mod seconds_tests {
+    use super::*;
+
+    #[test]
+    fn seconds_adjustments_clamp_to_one_and_3600() {
+        assert_eq!(adjust_seconds(30, 1), 31);
+        assert_eq!(adjust_seconds(30, -1), 29);
+        assert_eq!(adjust_seconds(1, -1), 1);
+        assert_eq!(adjust_seconds(3600, 1), 3600);
+        assert_eq!(adjust_seconds(0, 0), 1);
+        assert_eq!(adjust_seconds(u64::MAX, -1), 3600);
     }
 }

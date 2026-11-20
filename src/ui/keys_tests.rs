@@ -379,3 +379,16 @@ fn generator_keys_map_to_typed_options() {
         );
     }
 }
+
+#[test]
+fn settings_keys_adjust_seconds_fields() {
+    let mut value = ctx("3");
+    value.panel = Panel::Settings;
+    assert_eq!(classify_key(&value), UiAction::AdjustLoginTimeout(1));
+    value.key = "4";
+    assert_eq!(classify_key(&value), UiAction::AdjustLoginTimeout(-1));
+    value.key = "5";
+    assert_eq!(classify_key(&value), UiAction::AdjustClipboardRestore(1));
+    value.key = "6";
+    assert_eq!(classify_key(&value), UiAction::AdjustClipboardRestore(-1));
+}

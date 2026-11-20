@@ -165,6 +165,18 @@ impl BitwardenApp {
                     crate::ui::logic::adjust_idle_lock(self.settings.idle_lock_seconds, delta);
                 cx.notify();
             }
+            UiAction::AdjustLoginTimeout(delta) => {
+                self.settings.login_timeout_seconds =
+                    crate::ui::logic::adjust_seconds(self.settings.login_timeout_seconds, delta);
+                cx.notify();
+            }
+            UiAction::AdjustClipboardRestore(delta) => {
+                self.settings.clipboard_restore_seconds = crate::ui::logic::adjust_seconds(
+                    self.settings.clipboard_restore_seconds,
+                    delta,
+                );
+                cx.notify();
+            }
             UiAction::Generator(option) => self.toggle_generator(option, cx),
             UiAction::SelectRow(index) => {
                 if self.view.select_index(index) {

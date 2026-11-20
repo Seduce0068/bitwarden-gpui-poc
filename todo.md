@@ -49,13 +49,18 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
 - [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
       `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
-- [ ] クリップボード復元秒数／ログインタイムアウトを GUI 編集可能化 — 根拠 `src/ui/panels.rs:250-255`,
-      `src/ui/keys.rs:299-311` / R1-ST03-F6 / 重大度 low
 - [ ] `revision_date` パース失敗の 0 フォールバックを明示的な未設定値へ — 根拠
       `src/vault_sync.rs:161,358` / R2-ER02-F2, R3-DI01-F1 / 重大度 low
 
 ## 完了
 
+- [x] 復元秒数／ログインタイムアウトを GUI 編集化（2026-11-20・第38弾）
+  - 根拠: `src/ui/panels.rs:250-255` / 重大度 low
+  - `UiAction::AdjustLoginTimeout` / `AdjustClipboardRestore` を追加し、
+    純粋な `adjust_seconds`（1..=3600）でクランプ。3/4 と 5/6 を割当。
+  - 検証: fmt / check / test（288 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 レビュアーの応答が取得できなかったため
+    親が差分を直接確認（キー衝突なし、クランプ境界テストあり）。
 - [x] クリップボード復元手続きを単一サービスへ集約（2026-11-20・第37弾）
   - 根拠: `src/ui/clipboard.rs`, `src/ui/actions.rs`, `src/ui/app.rs` / 重大度 low
   - ticker と lock の I/O を `restore_clipboard` に統一。戻り値で notify を
