@@ -85,12 +85,16 @@ impl BitwardenApp {
     }
 
     /// Put the clipboard back the way it was before the last copy.
-    pub(super) fn restore_clipboard(&mut self, cx: &mut Context<Self>) {
-        if let Some(previous) = self.clipboard.take_restore() {
-            cx.write_to_clipboard(ClipboardItem::new_string(previous));
-            self.status = "クリップボードを復元しました".to_string();
-            cx.notify();
-        }
+    /// Apply a pending restore. Returns whether anything was written;
+    /// notification is left to the caller so a single UI transition can
+    /// notify once after its final status is set.
+    pub(super) fn restore_clipboard(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(previous) = self.clipboard.take_restore() else {
+            return false;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(previous));
+        self.status = "クリップボードを復元しました".to_string();
+        true
     }
 
     pub(super) fn save_settings(&mut self, cx: &mut Context<Self>) {

@@ -49,9 +49,6 @@ stale_after: "2027-05-17T21:04:43+09:00"
       `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
 - [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
       `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
-- [ ] クリップボード復元手続きを単一サービスへ集約し lock 経路の status を整合 — 根拠
-      `src/ui/clipboard.rs:3-4`, `src/ui/actions.rs:56-62`,
-      `src/ui/app.rs:161-164` / R1-AR03-F7 / 重大度 low
 - [ ] クリップボード復元秒数／ログインタイムアウトを GUI 編集可能化 — 根拠 `src/ui/panels.rs:250-255`,
       `src/ui/keys.rs:299-311` / R1-ST03-F6 / 重大度 low
 - [ ] `revision_date` パース失敗の 0 フォールバックを明示的な未設定値へ — 根拠
@@ -59,6 +56,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] クリップボード復元手続きを単一サービスへ集約（2026-11-20・第37弾）
+  - 根拠: `src/ui/clipboard.rs`, `src/ui/actions.rs`, `src/ui/app.rs` / 重大度 low
+  - ticker と lock の I/O を `restore_clipboard` に統一。戻り値で notify を
+    呼び出し側へ委譲し、lock の二重 notify を解消。
+  - 検証: fmt / check / test（286 passed）/ clippy / doc / gitleaks /
+    markdownlint 成功。R4 指摘 1 件を反映。
 - [x] UI アクション名と doc を整理（2026-11-20・第36弾）
   - 根拠: `src/ui/keys.rs`, `src/ui/logic.rs:7-15` / 重大度 low 2件
   - マウス由来 `SelectRow` を含む実態に合わせ `KeyAction` を `UiAction` へ
