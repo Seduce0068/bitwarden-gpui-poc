@@ -23,31 +23,16 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 未着手
 
-### 優先度 中
-
-- [ ] 他 item kind の実データ取り込みを検討 — 根拠 `README.md:245`,
-      `src/vault_sync.rs:332` / 重大度 medium
-  - 実ログイン時はログイン項目のみを model へ変換し、他 kind はモックのまま。
-    openwarden 0.1.1 がどの kind の復号を公開するか調査し、対応可否を決定する。
-- [ ] リダイレクト先検査と DNS rebinding 防止を検討 — 根拠 `README.md:251` /
-      重大度 medium
-  - openwarden 0.1.x はリダイレクトを追従しないため未対応。0.1.1 の
-    `sync_body` 公開で自前 HTTP が不要になった今、再度 API 制約を確認する。
-- [ ] OS keyring 連携の可否を調査 — 根拠 `README.md:239-240` / 重大度 medium
-  - PoC 目的との重要性と保守コストを比較し、採否を ADR に記録する。
-
-### 優先度 低
-
-- [ ] 構造化ログ・メトリクスの最小導入を検討 — 根拠 `README.md:252` /
-      重大度 low
-  - 認証・同期失敗の診断が UI ステータスのみ。依存追加なしの範囲で
-    何が可能かを評価する。
-- [ ] openwarden 0.2 の changelog 監視を自動化 — 根拠
-      `docs/remaining-tasks-investigation.md:162` / 重大度 low
-  - 2FA / 組織 vault 対応の上流動向を追跡する手段を整備する。
+なし（全タスク完了）。
 
 ## 完了
 
+- [x] 残る既知制約 5 件を再評価（2026-11-21・第43弾）
+  - 根拠: `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium〜low
+  - 他 kind / リダイレクト / OS keyring / 構造化ログ / 上流監視の 5 件を
+    調査エージェント 3 体で評価。すべて現状維持と判断し ADR に記録。
+  - 検証: markdownlint 成功（コード変更なし）。R4 相当の親レビューで
+    Runtime Proof（openwarden API、Dependabot、依存一覧）を確認。
 - [x] 実サーバー E2E を完了（2026-11-21・第42弾）
   - 根拠: `tests/real_server_e2e.rs`, `docs/adr/adr-20261116-openwarden-integration.md`
   - openwarden 0.1.1 の `sync_body()` で生 body を取得し、既存の PascalCase
