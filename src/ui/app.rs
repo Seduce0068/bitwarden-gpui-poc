@@ -161,8 +161,9 @@ impl BitwardenApp {
                                 for effect in effects {
                                     match effect {
                                         crate::ui::timing::TickEffect::RestoreClipboard => {
-                                            view.restore_clipboard(cx);
-                                            cx.notify();
+                                            if view.restore_clipboard(cx) {
+                                                cx.notify();
+                                            }
                                         }
                                         crate::ui::timing::TickEffect::InvalidateTotp => {
                                             view.totp.invalidate();
@@ -215,9 +216,9 @@ impl BitwardenApp {
     pub(super) fn lock(&mut self, cx: &mut Context<Self>) {
         // A login finishing after this point must not unlock the vault again.
         self.login_generation.invalidate();
-        if let Some(previous) = self.clipboard.take_restore() {
-            cx.write_to_clipboard(ClipboardItem::new_string(previous));
-        }
+        // One service handles the clipboard I/O; the lock status below
+        // intentionally takes precedence over the restore notice.
+        self.restore_clipboard(cx);
         self.reset_input_state();
         self.view.vault = Vault::new();
         self.view.audit_report = None;
