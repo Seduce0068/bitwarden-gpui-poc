@@ -19,17 +19,7 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 進行中
 
-制限プロファイル（swarm-coding / 並列 5〜8・深度 1・合計 40 起動・
-連続 3 イテレーション）の上限に到達したため、以下は次回の明示的な
-再開指示まで保留する。
-
-- [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
-    問題を解消 — 根拠 `tests/real_server_e2e.rs`,
-    `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium
-- [ ] `error.rs` の auth/settings への逆依存（循環）を解消 — 根拠 `src/error.rs:367,448`,
-    `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
-- [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
-    `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
+残タスクはすべて完了。
 
 ## 未着手
 
@@ -37,6 +27,17 @@ stale_after: "2027-05-17T21:04:43+09:00"
 
 ## 完了
 
+- [x] 実サーバー E2E を完了（2026-11-21・第42弾）
+  - 根拠: `tests/real_server_e2e.rs`, `docs/adr/adr-20261116-openwarden-integration.md`
+  - openwarden 0.1.1 の `sync_body()` で生 body を取得し、既存の PascalCase
+    正規化を本番経路へ接続。ローカル Vaultwarden 1.30.2 で E2E 成功。
+  - R4 指摘 5 件を反映（fallback、エラー分類、ADR 更新、冗長 import、
+    テスト配置）。
+- [x] error.rs の逆依存を解消（2026-11-21・第40弾）
+  - 6 つの From impl と unlock_detail を auth.rs / settings.rs へ移管。
+    cfg(test) の参照も移し、error.rs は上位モジュールを参照しない。
+- [x] エラー型の別名維持を決定（2026-11-21・第41弾）
+  - ADR に「層のラベルとして alias を維持、独立 enum 化は別途検討」と記録。
 - [x] `revision_date` の 0 フォールバックに名前を付与（2026-11-20・第39弾）
   - 根拠: `src/vault_sync.rs:234,432` / 重大度 low
   - `UNKNOWN_REVISION` 定数を導入し、model/health/vault_sync の 0 リテラルを

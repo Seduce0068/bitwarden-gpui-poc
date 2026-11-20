@@ -4,7 +4,8 @@
 //! checked without a server lives in [`validate_config`], so the important
 //! input rules are covered by deterministic tests.
 //!
-//! When `Client::sync()` fails after a successful login, the internal
+//! When `Client::sync_body()` fails or the body cannot be parsed after a
+//! successful login, the internal
 //! authentication routine falls back to the encrypted offline cache
 //! ([`crate::cache::cached_sync_for_detailed`])
 //! and unlocks with the protected key from the live `Session`. The result is
@@ -93,6 +94,105 @@ impl core::fmt::Display for AuthError {
 }
 
 impl std::error::Error for AuthError {}
+
+impl From<AuthError> for AppError {
+    fn from(error: AuthError) -> Self {
+        match error {
+            AuthError::MissingField(field) => Self::MissingField(field),
+            AuthError::InvalidServerUrl => Self::InvalidServerUrl,
+            AuthError::BlockedServerUrl => Self::BlockedServerUrl,
+            AuthError::InvalidEmail => Self::InvalidEmail,
+            AuthError::ClientSetup => Self::ClientSetup,
+            AuthError::Prelogin => Self::Prelogin,
+            AuthError::Login => Self::Login,
+            AuthError::Sync => Self::Sync,
+            AuthError::KdfRejected => Self::KdfRejected,
+            AuthError::Timeout => Self::Timeout,
+            AuthError::Other(text) => Self::Other(text.to_string()),
+        }
+    }
+}
+
+impl From<AppError> for AuthError {
+    fn from(error: AppError) -> Self {
+        // A cause-carrying variant keeps the status text of its plain sibling;
+        // dropping the cause here is the price of the UI's `Copy` error type.
+        match error {
+            AppError::MissingField(field) => AuthError::MissingField(field),
+            AppError::InvalidServerUrl | AppError::InvalidServerUrlCause(_) => {
+                AuthError::InvalidServerUrl
+            }
+            AppError::BlockedServerUrl => AuthError::BlockedServerUrl,
+            AppError::InvalidEmail => AuthError::InvalidEmail,
+            AppError::ClientSetup | AppError::ClientSetupCause(_) => AuthError::ClientSetup,
+            AppError::Prelogin | AppError::PreloginCause(_) => AuthError::Prelogin,
+            AppError::Login | AppError::LoginCause(_) => AuthError::Login,
+            // A malformed sync body (e.g. unexpected key casing) is a sync
+            // failure, not an unexpected error, and must be retryable with `r`.
+            AppError::Sync
+            | AppError::SyncCause(_)
+            | AppError::InvalidLogin(_)
+            | AppError::InvalidLoginCause(_, _) => AuthError::Sync,
+            AppError::KdfRejected | AppError::KdfRejectedCause(_) => AuthError::KdfRejected,
+            AppError::Timeout => AuthError::Timeout,
+            // This type is `Copy`, so an owned detail cannot survive the
+            // conversion. An honest generic message is better than silently
+            // reporting an unrelated sync failure.
+            _ => AuthError::Other(crate::error::OTHER_ERROR_MESSAGE),
+        }
+    }
+}
+
+/// Strip the status prefix/suffix from legacy formatted errors.
+///
+/// Current `unlock_failed` values use structured variants that carry the raw
+/// detail directly; this helper is only needed for older `UnlockFailed` /
+/// `UnlockFailedCause` values (and the apply-sync/import families) that still
+/// store a fully formatted message.
+fn unlock_detail(text: &str, prefix: &str) -> String {
+    text.strip_prefix(prefix)
+        .and_then(|rest| rest.strip_suffix('）'))
+        .unwrap_or(text)
+        .to_string()
+}
+
+impl From<UnlockError> for AppError {
+    fn from(error: UnlockError) -> Self {
+        match error {
+            UnlockError::MissingProtectedKey => Self::MissingProtectedKey,
+            UnlockError::UnlockFailed(detail) => Self::unlock_failed(detail),
+            UnlockError::ApplySyncFailed(detail) => Self::apply_sync_failed(detail),
+            UnlockError::ImportFailed(detail) => Self::import_failed(detail),
+            UnlockError::Other(detail) => Self::Other(detail),
+        }
+    }
+}
+
+impl From<AppError> for UnlockError {
+    fn from(error: AppError) -> Self {
+        match error {
+            AppError::MissingProtectedKey => UnlockError::MissingProtectedKey,
+            AppError::UnlockFailedStructured(_, detail)
+            | AppError::UnlockFailedStructuredCause(_, detail, _) => {
+                UnlockError::UnlockFailed(detail.clone())
+            }
+            // Legacy variants still carry a formatted message; keep the strip
+            // fallback for values constructed before the structured variants.
+            AppError::UnlockFailed(text) | AppError::UnlockFailedCause(text, _) => {
+                UnlockError::UnlockFailed(unlock_detail(&text, "復号キーを取得できません（"))
+            }
+            AppError::ApplySyncFailed(text) | AppError::ApplySyncFailedCause(text, _) => {
+                UnlockError::ApplySyncFailed(unlock_detail(&text, "同期データを取り込めません（"))
+            }
+            AppError::ImportFailed(text) | AppError::ImportFailedCause(text, _) => {
+                UnlockError::ImportFailed(unlock_detail(&text, "vault 変換に失敗しました（"))
+            }
+            // Keep the real message here: unlike `AuthError`, this type can
+            // own a `String`, so no cause text is lost on conversion.
+            unexpected => UnlockError::Other(unexpected.message().to_string()),
+        }
+    }
+}
 
 pub use crate::cache::SyncCacheError;
 
@@ -623,22 +723,23 @@ async fn authenticate_inner(
     let session = client.login_api_key(&api_key).await.map_err(|error| {
         AuthError::from(AppError::LoginCause(BoxedCause::text(error.to_string())))
     })?;
-    // A successful login gives us the protected key, so an encrypted cache can
-    // still be unlocked when /api/sync is unreachable. The cache never supplies
-    // key material (keys are stripped on write). A missing cache keeps the
-    // original `AuthError::Sync`; a present but unusable one reports the
-    // classified `AuthError::Other` reason. The sync error itself is not
-    // propagated. No production code writes the cache yet: openwarden 0.1.0
-    // exposes neither the raw sync body nor the bearer token, so this is a
-    // best-effort restore of a pre-existing file.
-    let (sync, from_cache) = match client.sync(&session).await {
-        Ok(sync) => (sync, false),
-        Err(_sync_error) => {
-            match crate::cache::cached_sync_for_detailed(config.server_url.trim()) {
-                Ok(sync) => (sync, true),
-                Err(cache_error) => return Err(cache_restore_failure(cache_error)),
-            }
-        }
+    // Fetch the raw body so our normalizer can accept Vaultwarden's
+    // PascalCase keys (openwarden 0.1.0's `Client::sync` rejected them).
+    // openwarden 0.1.1 exposes `sync_body` without requiring our own HTTP
+    // client or token handling. On failure fall back to the encrypted cache.
+    let raw_sync = client.sync_body(&session).await.ok();
+    let parsed = raw_sync
+        .as_ref()
+        .and_then(|body| crate::vault_sync::parse_sync(body).ok());
+    let (sync, from_cache) = match parsed {
+        Some(sync) => (sync, false),
+        // A transport failure or an unparsable (e.g. PascalCase) body both
+        // leave us without a fresh vault; try the encrypted cache in either
+        // case, as the pre-0.1.1 path did.
+        None => match crate::cache::cached_sync_for_detailed(config.server_url.trim()) {
+            Ok(sync) => (sync, true),
+            Err(cache_error) => return Err(cache_restore_failure(cache_error)),
+        },
     };
     // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
     let password = config.master_password.clone();

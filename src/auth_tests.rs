@@ -4,6 +4,7 @@ use std::net::IpAddr;
 
 use super::{is_blocked_server_url_with, is_blocked_server_url_without_dns, is_link_local_ip};
 use crate::auth::*;
+use crate::error::OTHER_ERROR_MESSAGE;
 
 /// A unique, non-production canary so a leak of the client secret can be
 /// detected unambiguously in debug output.
@@ -482,5 +483,48 @@ fn cache_too_large_message_reaches_the_status_bar() {
     assert_eq!(
         cache_restore_failure(AppError::CacheTooLarge).message(),
         "同期に失敗しました（キャッシュがサイズ上限を超えています）"
+    );
+}
+
+use crate::auth::{AuthError, UnlockError};
+
+#[test]
+fn unlock_detail_survives_a_structural_round_trip() {
+    // A detail that itself resembles the formatted message used to be mangled
+    // by the prefix/suffix stripping conversion.
+    let detail = "復号キーを取得できません（混入）";
+    let app = AppError::unlock_failed(detail);
+    assert_eq!(
+        app.message(),
+        format!("復号キーを取得できません（{detail}）")
+    );
+    let converted = crate::auth::UnlockError::from(app);
+    assert!(
+        matches!(converted, UnlockError::UnlockFailed(ref restored) if restored == detail),
+        "raw detail must survive verbatim: {converted:?}"
+    );
+
+    let with_cause =
+        AppError::unlock_failed_cause("cause-detail", BoxedCause::text("original io failure"));
+    assert!(std::error::Error::source(&with_cause).is_some());
+    let converted = crate::auth::UnlockError::from(with_cause);
+    assert!(
+        matches!(converted, UnlockError::UnlockFailed(ref restored) if restored == "cause-detail"),
+        "cause-carrying detail must survive: {converted:?}"
+    );
+}
+
+#[test]
+fn unrelated_errors_are_not_relabeled_as_domain_failures() {
+    let unexpected = AppError::RandomUnavailable;
+    assert_eq!(
+        AuthError::from(unexpected.clone()).message(),
+        OTHER_ERROR_MESSAGE,
+        "an OS RNG failure must be reported as an unexpected failure"
+    );
+    assert_eq!(
+        UnlockError::from(unexpected.clone()).message(),
+        unexpected.message(),
+        "UnlockError owns its detail, so the original message must survive"
     );
 }
