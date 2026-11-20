@@ -253,7 +253,7 @@ pub(super) fn settings_panel<'a>(
             settings.thresholds.weak_bits, settings.thresholds.stale_days
         )))
         .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "自動ロック: {} 分（i/u で調整） / ログイン制限: {} 秒 / クリップボード復元: {} 秒（設定ファイル）",
+            "自動ロック: {} 分（i/u） / ログイン制限: {} 秒（3/4） / 復元: {} 秒（5/6）",
             settings.idle_lock_seconds / 60,
             settings.login_timeout_seconds,
             settings.clipboard_restore_seconds
@@ -265,7 +265,7 @@ pub(super) fn settings_panel<'a>(
                 .child(format!("保存先: {path}")),
         )
         .child(div().mt_4().text_xs().text_color(rgb(0x6c7086)).child(
-            "1,2: 編集 / enter: 確定 / +/-: 閾値 / i/u: 自動ロック / w: 保存 / c: 戻る / l: ロック / Esc: 確定/終了",
+            "1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログイン制限 / 5,6: 復元 / w: 保存 / c: 戻る / l: ロック / Esc: 確定/終了",
         ))
 }
 

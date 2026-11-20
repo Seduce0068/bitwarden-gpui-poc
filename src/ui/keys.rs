@@ -117,6 +117,8 @@ pub(super) enum UiAction {
     SaveSettings,
     AdjustThreshold(i32),
     AdjustIdleLock(i32),
+    AdjustLoginTimeout(i32),
+    AdjustClipboardRestore(i32),
     /// Change one typed generator option.
     Generator(GeneratorOption),
     None,
@@ -283,6 +285,10 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 "-" | "_" => UiAction::AdjustThreshold(-1),
                 "i" => UiAction::AdjustIdleLock(1),
                 "u" => UiAction::AdjustIdleLock(-1),
+                "3" => UiAction::AdjustLoginTimeout(1),
+                "4" => UiAction::AdjustLoginTimeout(-1),
+                "5" => UiAction::AdjustClipboardRestore(1),
+                "6" => UiAction::AdjustClipboardRestore(-1),
                 "w" => UiAction::SaveSettings,
                 _ => UiAction::None,
             }
