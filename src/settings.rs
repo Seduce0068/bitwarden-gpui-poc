@@ -154,6 +154,30 @@ impl core::fmt::Display for SettingsLoadError {
 
 impl std::error::Error for SettingsLoadError {}
 
+impl From<SettingsLoadError> for AppError {
+    fn from(error: SettingsLoadError) -> Self {
+        match error {
+            SettingsLoadError::NotFound => Self::NotFound,
+            SettingsLoadError::ReadFailed => Self::ReadFailed,
+            SettingsLoadError::ParseFailed => Self::ParseFailed,
+            SettingsLoadError::TooLarge => Self::TooLarge,
+            SettingsLoadError::Other(text) => Self::Other(text.to_string()),
+        }
+    }
+}
+
+impl From<AppError> for SettingsLoadError {
+    fn from(error: AppError) -> Self {
+        match error {
+            AppError::NotFound => SettingsLoadError::NotFound,
+            AppError::ReadFailed | AppError::ReadFailedCause(_) => SettingsLoadError::ReadFailed,
+            AppError::ParseFailed | AppError::ParseFailedCause(_) => SettingsLoadError::ParseFailed,
+            AppError::TooLarge => SettingsLoadError::TooLarge,
+            _ => SettingsLoadError::Other(crate::error::OTHER_ERROR_MESSAGE),
+        }
+    }
+}
+
 impl core::fmt::Debug for Settings {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Settings")

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 修正（実サーバー接続の完了）
+
+- openwarden を 0.1.1 へ更新し `Client::sync_body()` で生 body を取得。
+  既存の PascalCase 正規化を本番認証経路へ接続し、実サーバー E2E が成功
+- パース失敗時も暗号化キャッシュへ fallback。同期ボディ解析失敗は
+  `AuthError::Sync`（`r` で再試行可能）へ分類
+- `From` 変換 impl とテストを型定義側へ移し、error.rs の逆依存を解消
+- 階層別エラー型の別名維持を ADR に記録（288 passed / E2E 1 passed）
+
 ### 修正（revision センチネルの名前付け）
 
 - `revision_date` の 0 リテラルを `UNKNOWN_REVISION` 定数へ集約（挙動不変）

@@ -4643,9 +4643,9 @@ checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
 name = "openwarden"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6827a2dfc8af2348488b7cf8c82e03beb0e254f02a7eecf164e7c58e8ec56a8f"
+checksum = "59b38a2acc3d28fd8a0fb2671f37b3f3e968cbbcc30db1cc27f0f08488fb8341"
 dependencies = [
  "aes 0.9.4",
  "argon2",
@@ -4656,7 +4656,7 @@ dependencies = [
  "hmac 0.13.0",
  "pbkdf2 0.13.0",
  "psl",
- "regex",
+ "regex-automata",
  "reqwest",
  "secrecy",
  "serde",

@@ -577,3 +577,15 @@ fn shared_field_edits_are_owned_by_settings() {
     assert_eq!(settings.server_url, "https://example.co");
     assert_eq!(settings.email, "a@b.exampl");
 }
+
+#[test]
+fn settings_error_round_trip_keeps_status_text() {
+    use crate::error::OTHER_ERROR_MESSAGE;
+    let settings = SettingsLoadError::Other("設定固有の失敗");
+    assert_eq!(AppError::from(settings).message(), "設定固有の失敗");
+    let unexpected = AppError::RandomUnavailable;
+    assert_eq!(
+        SettingsLoadError::from(unexpected).message(),
+        OTHER_ERROR_MESSAGE
+    );
+}

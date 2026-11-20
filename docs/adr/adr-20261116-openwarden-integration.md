@@ -185,3 +185,14 @@ upstream API expansion or measured E2E need).
 
 - [openwarden (crates.io)](https://crates.io/crates/openwarden)
 - [GPUI](https://gpui.rs)
+
+## Decision Update (2026-11-21): 階層別エラー型の別名を維持する
+
+`SyncError` / `SyncCacheError` / `CacheLoadError` / `GeneratorError` /
+`TotpError` はすべて `AppError` の `pub type` 別名である。これらは
+「層ごとの意味的なラベル」として残し、独立 enum へ戻さない。
+
+根拠: 実体は単一の `AppError` で、`Display` / `PartialEq` / `Error::source()`
+は共通化済み。独立 enum に戻すには各境界で `From` 変換とメッセージの
+二重管理が発生し、PoC の目的に見合わない。型システムで層を区別する
+必要が生じた場合は、newtype 化を ADR 改訂として別途検討する。
