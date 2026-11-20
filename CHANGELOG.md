@@ -9,7 +9,6 @@
 - ticker と lock の両方から単一の `restore_clipboard` サービスを呼ぶようにした
 - 復元が occurred かを戻り値で返し、lock 経路の二重 notify を解消
 
-
 ### 修正（UI アクション名の整理）
 
 - マウス由来 `SelectRow` を含む実態に合わせ `KeyAction` を `UiAction` へ改名
