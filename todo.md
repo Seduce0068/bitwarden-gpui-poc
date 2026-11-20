@@ -55,7 +55,7 @@ stale_after: "2027-05-17T21:04:43+09:00"
 - [x] `revision_date` の 0 フォールバックに名前を付与（2026-11-20・第39弾）
   - 根拠: `src/vault_sync.rs:234,432` / 重大度 low
   - `UNKNOWN_REVISION` 定数を導入し、model/health/vault_sync の 0 リテラルを
-    置換（挙動不変）。Option<i64> 化は serde と API を伴うため別チケット。
+    置換（挙動不変）。`Option<i64>` 化は serde と API を伴うため別チケット。
   - 検証: fmt / check / test（288 passed）/ clippy / doc / gitleaks /
     markdownlint 成功。R4 指摘 2 件を反映。
 - [x] 復元秒数／ログインタイムアウトを GUI 編集化（2026-11-20・第38弾）
