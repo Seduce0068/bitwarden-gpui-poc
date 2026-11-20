@@ -196,3 +196,29 @@ upstream API expansion or measured E2E need).
 は共通化済み。独立 enum に戻すには各境界で `From` 変換とメッセージの
 二重管理が発生し、PoC の目的に見合わない。型システムで層を区別する
 必要が生じた場合は、newtype 化を ADR 改訂として別途検討する。
+
+## Decision Update (2026-11-21): 残る既知制約の再評価
+
+3 体の調査エージェントと親の Runtime Proof で、残る 5 件を再評価した。
+いずれも現状維持とし、コード変更は行わない。
+
+- 他 item kind の実データ取り込み: openwarden 0.1.1 は非 login の
+  decryptor も暗号文アクセサも公開しない（`SyncData.ciphers` は
+  `pub(crate)`、`item_key()` は非公開）。PoC 側のモデルと UI は
+  5 kind 分すべて用意済みだが、上流 API 追加が前提。モック維持とする。
+- リダイレクト先検査: openwarden の `Client::new` は
+  `redirect(Policy::none())` を設定しており追従自体が無効。検査対象が
+  存在しないため追加しない。DNS rebinding の TOCTOU は README に
+  開示済みで、IP ピン留めはトランスポート差し替えが必要なため範囲外。
+- OS keyring: `keyring` crate 4.2.0 は成熟しているが、Linux では
+  Secret Service / D-Bus 依存が増え、「認証情報を永続化しない」という
+  現行の脅威モデルを変更する。PoC では zeroize と既知制約の開示を継続。
+- 構造化ログ: `log` / `tracing` は推移依存のみで subscriber が無く、
+  追加依存なしではイベントが破棄される。構造化エラーと UI ステータスで
+  代替できているため導入しない。
+- 上流 changelog 監視: 0.2 は未公開で [Unreleased] も空。Dependabot の
+  cargo 週次が exact pin の更新 PR を作成し release notes を付けるため、
+  専用自動化は不要。
+
+再評価トリガー: openwarden が非 login の decryptor を公開した時点で、
+他 kind の取り込みを再検討する。
