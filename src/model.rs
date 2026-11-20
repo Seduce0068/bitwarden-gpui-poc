@@ -28,6 +28,15 @@ mod unicode_normalize {
 }
 pub(crate) use unicode_normalize::comparison_key;
 
+/// Sentinel for a missing or unparsable revision date.
+///
+/// Kept as a named constant so callers outside this module do not depend on
+/// the literal `0`; the value's definition is gathered here, while callers
+/// that compare or store it still assume `i64` (a future Option-based
+/// representation would need those sites updated too). Revision 0 itself
+/// (1970-01-01T00:00:00Z) is indistinguishable from this sentinel in v1.
+pub const UNKNOWN_REVISION: i64 = 0;
+
 /// Reduce a URI to scheme and host so embedded credentials or tokens in the
 /// path/query are never shown in the UI or copied into reports.
 ///
@@ -493,7 +502,7 @@ impl VaultItem {
             folder_id: None,
             favorite: false,
             notes: String::new(),
-            revision_date: 0,
+            revision_date: UNKNOWN_REVISION,
             data,
         }
     }
@@ -814,7 +823,7 @@ impl Vault {
             .find(|existing| existing.id == item.id)
         {
             Some(existing) => {
-                let revision = if item.revision_date == 0 {
+                let revision = if item.revision_date == UNKNOWN_REVISION {
                     existing.revision_date
                 } else {
                     item.revision_date

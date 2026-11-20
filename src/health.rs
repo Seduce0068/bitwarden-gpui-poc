@@ -540,7 +540,7 @@ fn audit_item(
         }
     }
 
-    if item.revision_date > 0 && now > item.revision_date {
+    if item.revision_date > crate::model::UNKNOWN_REVISION && now > item.revision_date {
         let days = (now - item.revision_date) / 86_400;
         if days >= thresholds.stale_days {
             findings.push(Finding::Stale { days });

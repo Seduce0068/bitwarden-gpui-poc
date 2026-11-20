@@ -231,7 +231,8 @@ fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
         .folder_id
         .as_ref()
         .map(|folder| folder.as_str().to_string());
-    item.revision_date = parse_revision(info.revision_date.as_deref()).unwrap_or(0);
+    item.revision_date =
+        parse_revision(info.revision_date.as_deref()).unwrap_or(crate::model::UNKNOWN_REVISION);
     item
 }
 
@@ -429,10 +430,14 @@ pub fn import_logins_with_audit(vault: &OpenVault) -> Result<(Vault, Vec<ImportA
 
     for info in vault.logins() {
         let id = info.id.as_str().to_string();
-        let revision = parse_revision(info.revision_date.as_deref()).unwrap_or(0);
+        let revision =
+            parse_revision(info.revision_date.as_deref()).unwrap_or(crate::model::UNKNOWN_REVISION);
 
         if !seen.insert(id.clone()) {
-            let old_revision = revisions.get(&id).copied().unwrap_or(0);
+            let old_revision = revisions
+                .get(&id)
+                .copied()
+                .unwrap_or(crate::model::UNKNOWN_REVISION);
             if revision < old_revision {
                 audit.push(ImportAudit::Clipped {
                     id,
