@@ -24,12 +24,12 @@ stale_after: "2027-05-17T21:04:43+09:00"
 再開指示まで保留する。
 
 - [ ] Vaultwarden の sync JSON が PascalCase の場合に openwarden が解析できない
-      問題を解消 — 根拠 `tests/real_server_e2e.rs`,
-      `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium
+    問題を解消 — 根拠 `tests/real_server_e2e.rs`,
+    `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium
 - [ ] `error.rs` の auth/settings への逆依存（循環）を解消 — 根拠 `src/error.rs:367,448`,
-      `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
+    `src/auth.rs:21` / R1-AR02-F1 / 重大度 low
 - [ ] 階層別エラー型の別名を実型または AppError 一本へ統一 — 根拠 `src/vault_sync.rs:62`,
-      `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
+    `src/generator.rs:28`, `src/totp.rs:89` / R1-AR01-F4 / 重大度 low
 
 ## 未着手
 
