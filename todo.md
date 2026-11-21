@@ -12,21 +12,63 @@ generated:
     at: "2026-11-17T20:11:47+09:00"
 verified:
     by: "dsh-agent (lead)"
-    at: "2026-11-18T20:25:50+09:00"
+    at: "2026-11-21T06:07:00+09:00"
 status: current
 stale_after: "2027-05-17T21:04:43+09:00"
 ---
 
 ## 進行中
 
-残タスクはすべて完了。
+swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding）の
+イテレーション 1 が完了。第46弾の実装と検証結果を下記に反映済み。
 
 ## 未着手
 
-なし（全タスク完了）。
+なし（第48弾で補充分 9 件をすべて完了。イテレーション上限 3 に到達）。
 
 ## 完了
 
+- [x] バックログ補充分 9 件を完結（2026-11-21・第48弾 / イテレーション 3）
+  - `load_advisories` にサイズ上限とトップレベル限定を明示。設定破棄時にも
+    未来バージョン警告を再表示。キャッシュ理由文言を cache 層へ一元化。
+  - デバイス ID のみを永続化し、未保存の共有設定欄を書き出さないようにした。
+    E2E に TOTP コード生成検証とアカウント前提を追加。キャッシュ境界の
+    off-by-one をテストで固定。生成パネル離脱時も未保存警告。
+  - README の `w` / `d`、ADR ログ、CHANGELOG の履歴注記を整合。
+  - 検証: fmt / check / test（339 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+- [x] 残り 6 件を完結（2026-11-21・第47弾 / swarm-coding イテレーション 2）
+  - 設定の未来バージョン／未知キーを起動時通知へ集約（`load_advisories`）。
+    キャッシュ version 文言を「互換性がありません」へ統一。
+  - スクロール検証テストの gpui-pre 内部フィールド依存を、テスト専用の
+    `rewind_calls` カウンタへ置換（`src/ui/vault_view.rs` / `src/ui/app.rs`）。
+  - E2E に復号済み TOTP のアサーションを追加。
+  - 全パネル横断のキー衝突テスト、CHANGELOG の時系列、
+    ADR の Status 集約、ツール版の管理手順と CI 整合チェックを追加。
+  - 「破損ファイルのタイムスタンプ付き退避」は、既存の起動時エラー通知と
+    0600 の一時ファイル運用で代替し、PoC では新規実装しないと裁定
+    （メモへ記録）。
+  - 検証: fmt / check / test（339 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+- [x] 全レビュー・発掘タスクの実装と検証（2026-11-21・第46弾 / swarm-coding）
+  - 第44弾 25 件 + 第45弾 16 件のうち 38 件を完了。残り 2 件は上記「未着手」へ
+    集約し、R4 レビューの低優先度 4 件を新規追加した。
+  - 変更: CI 履歴スキャン、E2E アサーション、cache / vault_sync の redact と
+    重複 ID、認証エラーと cause、Settings 保存 / スキーマ、UI 選択・TOTP・
+    未保存・キー割当、監査 Finding、ドキュメント整合。
+  - 起動サブエージェント: 7 体（実装 4 + 独立レビュー 3）。深度 1、
+    無制限プロファイル（hy4-flash-free）。書き込み担当パスを分離し、
+    共有ファイル（todo.md / CI / E2E）は親が担当した。
+  - 親が R4 指摘を Runtime Proof で確認して修正: 複数 profile の redact 漏れ、
+    status の二重接頭辞、共有設定欄の未保存フラグ、star クリックの伝播、
+    設定破棄時の読込失敗、ヒントとテストの d 表記、ADR 根拠と未来時刻、
+    review-report の集計数。
+  - 検証: fmt / check / test（338 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+  - 未検証: opt-in E2E は実サーバーが無いため ignored のまま。E2E は
+    復号済みパスワードまでを検証し、TOTP は低優先度の残項目とした。
+  - 却下: deny.toml の unmaintained = "workspace" と `=` ピン解除は
+    明示的な既存判断のため維持（第45弾メモを参照）。
 - [x] 残る既知制約 5 件を再評価（2026-11-21・第43弾）
   - 根拠: `docs/adr/adr-20261116-openwarden-integration.md` / 重大度 medium〜low
   - 他 kind / リダイレクト / OS keyring / 構造化ログ / 上流監視の 5 件を
@@ -463,3 +505,84 @@ stale_after: "2027-05-17T21:04:43+09:00"
   - Unicode Cf リストの固定（Unicode 16.0）—— 将来文字の検出は未検証。
   - 設定ファイルが FIFO で起動停止する可能性、並列初期化の端末 ID 競合、
     `rust-toolchain.toml` 未固定、edition 2024 未移行。
+
+### 2026-11-21 swarm-todo-discovery（第44弾）
+
+- 起動エージェント: 合計 31 体（R1 7 + R2 6 + R3 7 + R4 5 + R5 6）、
+  ネスト深度 1、ハードリミット 60。プロファイルは無制限
+  （hy4-flash-free）。子エージェントは読み取り系ツールのみを使うよう
+  指示したが、ハーネス側のツール allowlist での拒否は未設定のため、
+  **権限分離は未担保**（指示による制御のみ）。実際のコード変更はなし。
+- 検出 174 件のうち、ツール出力上限により上位 75 件（高 13・中 62、
+  すべて confirmed）のみ回収。残り 99 件は低優先度 / likely / speculative
+  の尾部と推定され、**未取得**。未取得範囲を「調査済み」とは扱わない。
+- R6 で 75 件を重複排除・妥当性判定し、上記 25 項目（高 10・中 15）へ
+  統合。主な吸収: `p/u/y` コピーと `f` 反転と詳細表示の先頭フォールバック、
+  README / ADR の E2E 未成功記述、openwarden 0.1.0 表記と writer
+  再検討トリガー、認証エラー通知、ドキュメントのスナップショット表記、
+  テストギャップ 13 件。
+- 妥当性判定: 根拠 `path:line` 250 件を機械検証し、欠落 3 件は外部
+  クレート source のパス誤抽出と判明。高優先度 13 件は親が該当行を直接
+  読み、Runtime Proof で確認。重複 ID 指摘は子の「id 先頭一致」という
+  説明を訂正し、`openwarden-0.1.1/src/vault.rs:609-614` の
+  `c.id == *id`（最初の完全一致）を根拠に採用した。
+- 却下 / メモ留め: 比較ソートの `sort_by_cached_key` 化は測定根拠が無く
+  AGENTS.md の方針に従い機能バグと区別してメモに留める。既知制約の
+  OS keyring / 2FA / 構造化ログ / 上流監視は 2026-11-21 の再評価で
+  現状維持と決定済みのため再掲しない。
+
+### 2026-11-21 全体レビュー + 残タスク発掘（第45弾・swarm コンボ）
+
+- `swarm-project-review` と `swarm-todo-discovery` の R1〜R5 を 1 回の
+  workflow で並列実行。起動 24 体（R1 6 / R2 5 / R3 4 / R4 4 / R5 5）、
+  深度 1、ハードリミット 120、無制限プロファイル（hy4-flash-free）。
+  生指摘 134 件を親が重複・妥当性で吸収し、上記 16 項目（高 1・中 13・低 2）を
+  未着手へ追記。既知 25 項目と同一内容は子の段階で除外した。
+- 親の Runtime Proof: high 2 件と主要 medium を直接読んで確認。`AppError`
+  の `derive Debug` は実在するが、秘密ペイロードの具体的露出は未証明のため
+  `high` → `medium` に格下げ。`Settings::save()` が `sanitized()` を通さない
+  点、`matches_query` の未正規化 require、`valid_email` の Cc 許容、
+  Enter の編集確定のみ、review-report の `security #11` 重複を確認。
+- 却下:
+  - `tokio` 未使用依存の指摘は `tests/real_server_e2e.rs:37` の
+    `#[tokio::test]` で事実と不一致のため却下。
+  - `deny.toml` の `unmaintained = "workspace"` は意図的な方針として
+    既に却下済み（上記メモ）のため再掲しない。
+  - 既存親ディレクトリの権限是正は「行わない」と明記済みの制約
+    （`todo.md` 完了ログ・2026-11-17）のため却下。
+  - `=` ピン解除は gpui-kit の API 固定という明示判断（Cargo.toml:18）に
+    反するため却下。手順整備のみ低優先度で採用。
+  - UI 公開面を `pub(crate)` にする案は設計判断が必要なため `## メモ` の
+    要判断候補として残し、TODO 化しない。
+
+### 2026-11-21 残タスクの裁定（第47弾）
+
+- 「破損ファイルのタイムスタンプ付き退避」は実装しないと裁定した。根拠:
+  設定読み込み失敗は起動時の `load_notice` で通知され、書き込みは
+  `private_file::write_private` が 0600 の一時ファイル＋atomic persist を使う。
+  退避ファイルの追加は PoC の目的に対して保全価値が小さく、秘密データの
+  コピーを増やすため採用しない。将来バージョン検出時は
+  `load_advisories` が上書きリスクを通知する。
+
+### 2026-11-21 バックログ補充（第48弾）
+
+- 未着手が 0 件になったため、swarm-project-review + swarm-todo-discovery の
+  R1〜R5 を 8 担当で並列実行（深度 1、無制限プロファイル）。生指摘 44 件から
+  重複を吸収し、上記 9 件を採用。
+- 却下: 「オフラインキャッシュ読込前に再 redact する」案は、redact が
+  protected key を除去する処理であり、読込時に再適用すると復号不能になる。
+  書き込み時に除去済みであるという既存契約を維持し、追加しない。
+- 却下: E2E の全ログイン必須化はテストアカウントに依存するため採用せず、
+  前提を明記する方向（上記 TODO）で吸収する。
+
+### 2026-11-21 swarm コンボの停止（イテレーション 3）
+
+- 実行したイテレーション: 3（上限 3）。各イテレーションで
+  review + discovery → coding → 検証 → R6 追記を行った。
+- 起動サブエージェント合計: 55 体（第44弾 31 + 第45弾 24 は前回セッション、
+  本ループでは実装 4 + R4 レビュー 3 + 補充探索 8 = 15 体）。
+  深度 1、無制限プロファイル（hy4-flash-free）、ハードリミット 120。
+- 停止理由: 親が設定したイテレーション上限 3 に到達し、未着手も 0 件。
+  追加のバックログ補充は行わない。
+- 未検証: opt-in E2E は実サーバーが無く ignored のまま。UI の実起動確認は
+  GPUI ウィンドウが必要なため実施していない（純粋ロジックのテストは全通過）。

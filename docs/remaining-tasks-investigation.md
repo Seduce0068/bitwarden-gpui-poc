@@ -159,7 +159,8 @@ login-race 2→1、item-kind 2→1、license 2→1。
 - defer: 復号・vault 変換の UI スレッド同期実行
   - 停止時間が未計測。E2E で実 vault 規模の所要時間を計測してから判断。
 - defer: 2FA / 組織 vault のアップストリーム追従
-  - 上流未実装で 0.1.0 が最新。0.2 の changelog 監視へ組み込む。
+  - 2026-11-17 時点では上流未実装で 0.1.0 が最新だった。現行は 0.1.1。
+    0.2 の changelog 監視へ組み込む。
 - defer: openwarden の書き込み API 未利用
   - high effort。read 側の完全接続と実接続検証を先に片付ける。
 - defer: repository / homepage メタデータ

@@ -1,7 +1,7 @@
 ---
 type: Report
 title: "全体敵対的レビュー結果"
-description: "bitwarden-gpui-poc v0.1.0 に対するセキュリティ・アーキテクチャ・運用の3観点レビューと修正結果"
+description: "v0.1.0 / 137 passed 時点の3観点レビューと修正結果（現状は README / ADR）"
 tags:
   - review
   - security
@@ -12,7 +12,7 @@ generated:
   at: "2026-11-17T01:48:58+09:00"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-17T14:00:44+09:00"
+  at: "2026-11-21T04:49:12+09:00"
 status: "approved"
 stale_after: "2027-05-17T01:48:58+09:00"
 ---
@@ -21,19 +21,26 @@ stale_after: "2027-05-17T01:48:58+09:00"
 
 3観点のサブエージェント（security / arch / ops）を並列起動し、
 `src/` 全体と設定・CI・ドキュメントをレビューした。
-結果は Critical 0 / High 1 / Medium 16 / Low 18。
+結果は Critical 0 / High 1 / Medium 8 / Low 3（修正対象の列挙12件）。
+見送り・未実装は4件を別節に列挙する（合計16件）。
 High の1件と、即対応可能な Medium/Low を修正した。
+「対応済み（追記）」は集計後の追加確認で対応済みの項目を再掲したもので、
+上記の件数には含めない。
+
+注: 本レポートは v0.1.0 / 137 passed 時点のスナップショットである。
+現行の実装・テスト件数は README / ADR / CHANGELOG を参照。
 
 ## 検出と対応
 
 ### High（修正済み）
 
 - **設定画面の入力が確定時に失われる**（arch #1）
-  - `BitwardenApp` が `server_url` / `email` と `settings.server_url` /
-    `settings.email` の二重状態を持ち、設定パネルは後者を編集する一方、
-    確定時の `sync_settings_from_ui()` が古い前者で上書きしていた。
-  - 真実源を `self.server_url` / `self.email` に統一し、
-    `settings_panel` がそれらを表示・編集するよう修正した。
+  - 当時 `BitwardenApp` が `server_url` / `email` と `settings.server_url` /
+    `settings.email` の二重状態を持ち、確定時の `sync_settings_from_ui()`
+    が古い前者で上書きしていた。
+  - 真実源を `Settings` の `server_url` / `email` へ統一し、設定パネルと
+    ロック画面が同じ経路を通すよう修正した（当時は `BitwardenApp` の
+    フィールドへ統一していたが、その後 `Settings` へ一本化）。
 
 ### Medium（修正済み）
 
@@ -41,11 +48,13 @@ High の1件と、即対応可能な Medium/Low を修正した。
 - 設定・キャッシュが umask 依存の権限で保存される（security #3 / ops #6）:
   `private_file::write_private` を新設し、Unix で 0700 / 0600 を明示
 - タグ push 時に CI が起動しない（ops #7）: `on.push.tags: ['v*']` を追加
-- `openwarden = "0.1"` が 0.1.x 全体に解決される（ops #8）: `=0.1.0` にピン
+- `openwarden = "0.1"` が 0.1.x 全体に解決される（ops #8）: 当時 `=0.1.0` に
+  ピン。現行は `=0.1.1`（`=` ピン自体は維持）
 - キャッシュが「暗号化済み」と誤記述（ops #5 / ops #9）:
   「暗号化済みアイテムを含む平文 JSON」に修正し、0600 を明記
 - `auth ↔ cache` の循環依存（arch #2）: `SyncCacheError` を `cache.rs` へ移動
-- ドメインコードの陳腐化コメント（arch #6 / security #11）: 実装に合わせて修正
+- ドメインコードの陳腐化コメント: 実装に合わせて修正（ID 重複を解消し、
+  セキュリティ方針項目側へ統一）
 - `finish_login` の一部エラーパスで再試行案内が出ない（親レビュー）:
   全エラーパスで `login_failed = true` を設定
 
@@ -72,8 +81,9 @@ High の1件と、即対応可能な Medium/Low を修正した。
   いずれも GPUI / wgpu 系の推移依存で、AGPL-3.0-or-later との具体的な
   互換性判断は専門家の確認が必要なためここでは断定しない。
 
-### 対応済み（追記）
+### 対応済み（追記・上記集計外）
 
+集計後に追加で確認・対応した項目を再掲する（件数には含めない）。
 設定のエラー通知（ops #1）、キャッシュのエラー区別（ops #3）、atomic 書き込み
 （ops #4）、モック解除の分離（security #4）、入力検証（security #5 / #6）、
 クリップボード復元（security #7）、URI マスク（security #10）、アイドルロック
@@ -88,12 +98,12 @@ zeroize 側の制約で保証外）、TOTP シークレットの検索除外、�
 
 ## 検証
 
-修正後に以下を実行し、すべて成功した:
+当時の修正後に以下を実行し、すべて成功した（スナップショット）:
 
 - `cargo fmt --all -- --check`
 - `cargo check --all-targets --locked`
-- `cargo test --all-targets --locked`（137 passed、並列 / `--test-threads=1` の
-  両方で同一結果、flaky なし）
+- `cargo test --all-targets --locked`（当時 137 passed、現行は 288 passed /
+  E2E 1 passed。当時は並列 / `--test-threads=1` の両方で同一結果、flaky なし）
 - `cargo clippy --all-targets --locked -- -D warnings -D clippy::unwrap_used
   -D clippy::expect_used -D clippy::panic`
 - `cargo audit`
@@ -105,5 +115,6 @@ zeroize 側の制約で保証外）、TOTP シークレットの検索除外、�
 
 ## 判定
 
-High はすべて解消し、マージブロックは存在しない。
+High はすべて解消し、マージブロックは存在しない（当時時点）。
 見送り項目は PoC の既知の制約として文書化済み。
+構造化ログの見送り根拠は本レポートが唯一の出典とし、ADR 側から参照する。

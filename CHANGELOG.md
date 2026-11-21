@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### ドキュメント（現行状態への整合）
+
+- README / ADR の実サーバー E2E 記述を 0.1.1 の `sync_body()` 接続と
+  E2E 成功へ更新。UI の `p` / `u` / `y` は実サーバー未確認と明記
+- ADR に writer 再検討トリガー#1の発動と「現状維持」の再裁定を記録
+- レビューレポート / 索引 / ADR ログのスナップショット表記とメタデータを
+  現行状態へ整合（2026-11-20 のログ見出しを追加）
+- README にタイムアウト範囲・TOTP 形式・設定のネスト JSON・同期キャッシュ・
+  依存セキュリティ更新手順を追記
+
 ### 調査（既知制約の再評価）
 
 - 残る 5 件（他 kind / リダイレクト / keyring / ログ / 上流監視）を
@@ -17,6 +27,8 @@
   `AuthError::Sync`（`r` で再試行可能）へ分類
 - `From` 変換 impl とテストを型定義側へ移し、error.rs の逆依存を解消
 - 階層別エラー型の別名維持を ADR に記録（288 passed / E2E 1 passed）
+- 実サーバー E2E はログイン・sync・復号・取り込みまでを検証。UI の
+  `p` / `u` / `y` の実サーバー確認は未実施
 
 ### 修正（revision センチネルの名前付け）
 
@@ -39,8 +51,9 @@
 
 ### 修正（ジェネレータキーの型付き化）
 
-- キー文字列の往復をやめ `GeneratorOption` を導入。`KeyAction` の
-  9 バリアントを `Generator(GeneratorOption)` に統合（286 passed）
+- キー文字列の往復をやめ `GeneratorOption` を導入。当時の `KeyAction`
+  （現在の `UiAction`）の9バリアントを `Generator(GeneratorOption)` へ
+  統合（286 passed）
 
 ### 修正（復号失敗 detail の構造化）
 
@@ -94,8 +107,8 @@
 - `parse_sync` が PascalCase の JSON キーを camelCase へ再帰的に正規化。
   キャッシュ経由の sync ボディを openwarden で解析可能にした
 - 混在キーの衝突を検出して拒否。エラー文脈に `sync` を付与
-- E2E は上流 `Client::sync()` が内部でパースするため未解決のまま
-  （ADR / README に明記、278 passed）
+- 当時は E2E が未成功（上流 `Client::sync()` が内部でパースするため）。
+  現行は 0.1.1 の `sync_body()` 接続で成功済み（この節は履歴）
 
 ### 修正（レビュー指摘の小規模整理）
 
@@ -335,6 +348,9 @@
   無効化／全件 Stale になる問題を防止
 
 ## [0.1.101] - 2026-11-17
+
+> 注: 以下のリリース済みエントリは当時の名称（`KeyAction` など）を維持して
+> います。現行名は `[Unreleased]` の `UiAction` を参照してください。
 
 ### メタデータの更新
 
