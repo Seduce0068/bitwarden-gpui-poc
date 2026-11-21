@@ -651,7 +651,7 @@ name = "bitwarden-gpui-poc"
 version = "0.1.101"
 dependencies = [
  "dirs 6.0.0",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "gpui-kit",
  "openwarden",
  "serde",
