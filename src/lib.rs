@@ -23,6 +23,7 @@ pub mod cache;
 pub mod error;
 pub mod generator;
 pub mod health;
+pub(crate) mod limits;
 pub mod model;
 pub(crate) mod private_file;
 pub mod settings;

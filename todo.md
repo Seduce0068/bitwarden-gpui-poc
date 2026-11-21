@@ -24,10 +24,27 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第50弾で 9 件すべてを完了）。
+なし（第51弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第51弾のレビュー指摘 7 件を完結（2026-11-22）
+  - `KdfRejectedDetail` を追加し KDF 拒否理由を status へ反映。
+    監査行スクロールのヘッダ 3 行分のオフセットを修正。
+    `save_device_id_only` の失敗文言を「上書きを中止」へ変更。
+  - 第49弾で漏れていた auth/settings の逆依存を解消（`src/limits.rs` を
+    新設し上限・既定 timeout を中立化）。`authenticate` の公開範囲は
+    既存 API 互換のため維持。
+  - AuthError doc の Detail 5 種表記、AppError cause テストの
+    `RandomUnavailableCause` 追加、浮動小数 `schema_version` の拒否、
+    TOTP / 設定パスの回帰テストを追加。
+  - 起動エージェント: 6 体（バックログ補充）。
+  - 検証: fmt / check / test（364 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+  - 却下（メモ）: 設定パスの OnceLock 固定は「既定パスはプロセス全体で
+    一定」という意図的な設計とし、明示パスを渡す API が既にあるため
+    変更しない。エラー詳細合成の文字列再解析は既存テストで固定されて
+    おり、構造化への変更は利益が小さいため見送る。
 - [x] 第50弾のレビュー指摘 9 件を完結（2026-11-22）
   - `AuthError::Prelogin` の等価性と `PreloginDetail` を追加し、API 秘密の
     複製をログイン後に破棄。未使用の `SyncCacheError` 再エクスポートを削除。

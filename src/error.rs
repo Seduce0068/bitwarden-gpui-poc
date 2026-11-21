@@ -486,6 +486,10 @@ mod tests {
                 AppError::SettingsSaveCause("detail".into(), cause()),
             ),
             ("totp_invalid", AppError::InvalidCause(cause())),
+            (
+                "random_unavailable",
+                AppError::RandomUnavailableCause(cause()),
+            ),
         ];
         for (name, error) in cases {
             assert!(!error.message().is_empty(), "{name}: empty message");

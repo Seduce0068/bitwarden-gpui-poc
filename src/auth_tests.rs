@@ -847,3 +847,17 @@ fn prelogin_is_reflexive_and_keeps_its_detail() {
     assert!(matches!(app, crate::error::AppError::PreloginCause(_)));
     assert!(std::error::Error::source(&app).is_some());
 }
+
+#[test]
+fn kdf_rejection_is_reflexive_and_keeps_its_detail() {
+    assert_eq!(AuthError::KdfRejected, AuthError::KdfRejected);
+    assert_eq!(
+        AuthError::KdfRejectedDetail("policy".into()),
+        AuthError::KdfRejected
+    );
+    assert!(AuthError::KdfRejectedDetail("policy".into())
+        .status_message()
+        .contains("policy"));
+    let app: crate::error::AppError = AuthError::KdfRejectedDetail("policy".into()).into();
+    assert!(matches!(app, crate::error::AppError::KdfRejectedCause(_)));
+}

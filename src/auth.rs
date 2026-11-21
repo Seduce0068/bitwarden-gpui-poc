@@ -39,7 +39,7 @@ pub struct AuthConfig {
 /// Errors the authentication layer can report.
 ///
 /// Most variants stay cheap to copy so the UI can match and format them
-/// directly. Four variants (the `Detail` ones) own a `String`: a cause-carrying
+/// directly. Five variants (the `Detail` ones) own a `String`: a cause-carrying
 /// `AppError` cannot stay `Copy` while its rendered detail is surfaced in the
 /// status bar, so those variants retain the text that would otherwise be
 /// dropped by [`From<AppError> for AuthError`]. The typed cause itself stays in
@@ -77,6 +77,8 @@ pub enum AuthError {
     SyncDetail(String),
     /// The KDF policy rejected the account's settings.
     KdfRejected,
+    /// The KDF policy rejected the settings; keeps its detail for the status bar.
+    KdfRejectedDetail(String),
     /// The login sequence did not finish within the allotted time.
     Timeout,
     /// A failure from another layer that this small enum cannot describe.
@@ -97,12 +99,12 @@ impl PartialEq for AuthError {
             | (ClientSetup | ClientSetupDetail(_), ClientSetup | ClientSetupDetail(_))
             | (Prelogin | PreloginDetail(_), Prelogin | PreloginDetail(_))
             | (Login | LoginDetail(_), Login | LoginDetail(_))
-            | (Sync | SyncDetail(_), Sync | SyncDetail(_)) => true,
+            | (Sync | SyncDetail(_), Sync | SyncDetail(_))
+            | (KdfRejected | KdfRejectedDetail(_), KdfRejected | KdfRejectedDetail(_)) => true,
             (MissingField(left), MissingField(right)) => left == right,
             (Other(left), Other(right)) => left == right,
             (BlockedServerUrl, BlockedServerUrl)
             | (InvalidEmail, InvalidEmail)
-            | (KdfRejected, KdfRejected)
             | (Timeout, Timeout) => true,
             _ => false,
         }
@@ -127,7 +129,7 @@ impl AuthError {
             Self::Prelogin | Self::PreloginDetail(_) => "サーバー情報の取得に失敗しました",
             Self::Login | Self::LoginDetail(_) => "ログインに失敗しました",
             Self::Sync | Self::SyncDetail(_) => "同期に失敗しました",
-            Self::KdfRejected => "KDF 設定がポリシーで拒否されました",
+            Self::KdfRejected | Self::KdfRejectedDetail(_) => "KDF 設定がポリシーで拒否されました",
             Self::Timeout => "ログインがタイムアウトしました",
             Self::Other(text) => text,
         }
@@ -144,6 +146,7 @@ impl AuthError {
         match self {
             Self::MissingField(field) => format!("{}（{field}）", self.message()),
             Self::PreloginDetail(detail)
+            | Self::KdfRejectedDetail(detail)
             | Self::LoginDetail(detail)
             | Self::SyncDetail(detail)
             | Self::InvalidServerUrlDetail(detail)
@@ -188,6 +191,9 @@ impl From<AuthError> for AppError {
             AuthError::Sync => Self::Sync,
             AuthError::SyncDetail(detail) => Self::SyncCause(BoxedCause::text(detail.clone())),
             AuthError::KdfRejected => Self::KdfRejected,
+            AuthError::KdfRejectedDetail(detail) => {
+                Self::KdfRejectedCause(BoxedCause::text(detail.clone()))
+            }
             AuthError::Timeout => Self::Timeout,
             AuthError::Other(text) => Self::Other(text.to_string()),
         }
@@ -225,7 +231,8 @@ impl From<AppError> for AuthError {
             AppError::InvalidLogin(text) | AppError::InvalidLoginCause(text, _) => {
                 AuthError::SyncDetail(text.clone())
             }
-            AppError::KdfRejected | AppError::KdfRejectedCause(_) => AuthError::KdfRejected,
+            AppError::KdfRejected => AuthError::KdfRejected,
+            AppError::KdfRejectedCause(cause) => AuthError::KdfRejectedDetail(cause.to_string()),
             AppError::Timeout => AuthError::Timeout,
             // An honest generic message is better than silently reporting an
             // unrelated domain failure for an error this enum cannot describe.
@@ -320,13 +327,10 @@ impl From<AppError> for UnlockError {
 // backstop for configs assembled by callers that bypass the input layer.
 // ---------------------------------------------------------------------------
 
-/// Maximum length of an email address, in characters. RFC 5321 caps the local
-/// part at 64 octets and the domain at 255; 254 is the practical ceiling mail
-/// servers enforce, so longer addresses cannot be real deliverable addresses.
-pub const MAX_EMAIL_LEN: usize = 254;
-/// Maximum length of a server URL, in characters. Well above a normal
-/// self-hosted URL, but below the ~2 KiB limit many HTTP stacks apply.
-pub const MAX_SERVER_URL_LEN: usize = 2048;
+pub(crate) use crate::limits::{
+    truncate_to_limit, DEFAULT_LOGIN_TIMEOUT, MAX_EMAIL_LEN, MAX_SERVER_URL_LEN,
+};
+
 /// Maximum length of a Client ID, in characters. Bitwarden keys are short
 /// (`user.<uuid>`); this leaves room for custom installations.
 pub const MAX_CLIENT_ID_LEN: usize = 256;
@@ -339,14 +343,6 @@ pub const MAX_MASTER_PASSWORD_LEN: usize = 1024;
 /// Byte offset just past `limit` characters, or `None` when `value` fits.
 fn char_boundary_at(value: &str, limit: usize) -> Option<usize> {
     value.char_indices().nth(limit).map(|(index, _)| index)
-}
-
-/// Shorten `value` to at most `limit` characters without splitting a UTF-8
-/// code point. Following the policy above, this can never fail.
-pub fn truncate_to_limit(value: &mut String, limit: usize) {
-    if let Some(index) = char_boundary_at(value, limit) {
-        value.truncate(index);
-    }
 }
 
 /// Secret counterpart of [`truncate_to_limit`]. Replacing the value drops and
@@ -407,7 +403,7 @@ pub(crate) fn has_format_character(value: &str) -> bool {
     })
 }
 
-/// A minimal structural check: at most [`MAX_EMAIL_LEN`] characters, exactly
+/// A minimal structural check: at most `MAX_EMAIL_LEN` characters, exactly
 /// one `@`, no whitespace/control/format characters, and a dotted domain.
 /// Regex-level RFC 5322 validation is out of scope for the PoC.
 pub fn valid_email(value: &str) -> bool {
@@ -767,9 +763,6 @@ pub fn unlock_and_import(
     })
 }
 
-/// Default time budget for the whole login sequence.
-pub const DEFAULT_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// Log in and fetch the vault data with a timeout.
 ///
 /// The KDF derivation is CPU- and memory-heavy; callers should run this
@@ -802,7 +795,7 @@ pub async fn authenticate_with_timeout(
     smol::future::race(login, timer).await
 }
 
-/// Log in using [`DEFAULT_LOGIN_TIMEOUT`].
+/// Log in using the default login timeout.
 pub async fn authenticate(
     config: &AuthConfig,
     device_identifier: &str,

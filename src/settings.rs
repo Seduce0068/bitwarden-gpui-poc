@@ -20,10 +20,10 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::auth::{truncate_to_limit, MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
 use crate::error::{AppError, BoxedCause};
 use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::health::Thresholds;
+use crate::limits::{truncate_to_limit, MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
 
 /// Maximum accepted size of `settings.json` (1 MiB). Anything larger is
 /// rejected before parsing so a truncated/garbled file cannot consume memory
@@ -91,7 +91,7 @@ impl Default for Settings {
             passphrase_generator: PassphraseSettings::default(),
             thresholds: Thresholds::default(),
             idle_lock_seconds: 300,
-            login_timeout_seconds: crate::auth::DEFAULT_LOGIN_TIMEOUT.as_secs(),
+            login_timeout_seconds: crate::limits::DEFAULT_LOGIN_TIMEOUT.as_secs(),
             clipboard_restore_seconds: 30,
         }
     }
@@ -291,7 +291,14 @@ pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
 /// JSON number. Non-numeric values return `None` and are treated as legacy.
 fn schema_version_of(value: Option<&Value>) -> Option<u64> {
     match value? {
-        Value::Number(number) => number.as_u64(),
+        Value::Number(number) => number.as_u64().or_else(|| {
+            // JSON `2.0` is a number too; treat an integral float as a version
+            // marker so a future writer cannot slip past the guard.
+            number
+                .as_f64()
+                .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
+                .map(|value| value as u64)
+        }),
         Value::String(text) => text.trim().parse::<u64>().ok(),
         _ => None,
     }
@@ -491,7 +498,14 @@ impl Settings {
         let mut current = match Self::load_detailed(path) {
             Ok(settings) => settings,
             Err(SettingsLoadError::NotFound) => Self::default(),
-            Err(error) => return Err(std::io::Error::other(error)),
+            Err(error) => {
+                // Do not reuse SettingsLoadError's message here: it promises
+                // default values, while this path deliberately aborts without
+                // touching the existing file.
+                return Err(std::io::Error::other(format!(
+                    "保存済みの設定を読み込めないため上書きを中止しました（{error:?}）"
+                )));
+            }
         };
         current.device_id = id.to_string();
         current.schema_version = CURRENT_SCHEMA_VERSION;

@@ -737,9 +737,10 @@ fn save_device_id_only_aborts_on_a_malformed_file() {
     let error = Settings::save_device_id_only(&path, &id).unwrap_err();
 
     assert!(
-        error.to_string().contains("破損"),
-        "the parse failure reason must reach the caller: {error}"
+        error.to_string().contains("中止") && error.to_string().contains("ParseFailed"),
+        "the abort reason must reach the caller: {error}"
     );
+    assert!(!error.to_string().contains("既定値"), "{error}");
     assert_eq!(
         std::fs::read(&path).unwrap(),
         original,
@@ -781,4 +782,20 @@ fn ensure_device_id_keeps_its_save_error_classification_on_a_broken_file() {
     assert!(std::error::Error::source(&error).is_some());
     assert!(settings.device_id.is_empty());
     assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn integral_float_schema_version_is_rejected_as_future() {
+    let dir = std::env::temp_dir().join("bitwarden-gpui-poc-float-schema");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.json");
+    std::fs::write(
+        &path,
+        br#"{"schema_version":2.0,"email":"future@example.com"}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_ne!(loaded.email, "future@example.com");
 }
