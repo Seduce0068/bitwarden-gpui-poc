@@ -8,9 +8,12 @@ on:
       - 'v*'
   pull_request:
   workflow_dispatch:
+  # 固定版の依存に対する新規脆弱性情報を定期的に検出する。
+  schedule:
+    - cron: '0 3 * * 1'
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

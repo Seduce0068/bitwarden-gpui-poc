@@ -1,9 +1,20 @@
-//! One error type for the whole application, with a retained cause chain.
+//! One shared error type for the whole application, with a retained cause chain.
 //!
-//! Every module used to define its own error enum. They now alias [`AppError`],
-//! so callers keep writing `AuthError::Sync` or `TotpError::Missing` while all
-//! failures share one `Display`, one status-bar message and one
+//! Five module-level names are aliases of [`AppError`]:
+//! [`crate::generator::GeneratorError`], [`crate::vault_sync::SyncError`],
+//! [`crate::totp::TotpError`], [`crate::cache::SyncCacheError`] and
+//! [`crate::cache::CacheLoadError`]. Those modules keep writing
+//! `SyncError::Locked` or `TotpError::Missing`, but the value really is an
+//! `AppError` and shares its `Display`, status message and
 //! [`std::error::Error::source()`] implementation.
+//!
+//! The small UI-facing enums are different: [`crate::auth::AuthError`],
+//! [`crate::auth::UnlockError`] and [`crate::settings::SettingsLoadError`] are
+//! independent enums, not aliases. Each has `From` conversions to and from
+//! `AppError`, so a cause-carrying domain failure can cross the UI boundary.
+//! `AuthError` and `SettingsLoadError` expose a short `&'static str` family
+//! message, while `UnlockError::message()` includes the failure detail and
+//! returns an owned `String`.
 //!
 //! There is no `thiserror` dependency: `Display` and `Error` are implemented by
 //! hand. Variants ending in `Cause` (and the cache's `Cache*` variants) keep a

@@ -39,24 +39,29 @@ pub struct AuthConfig {
 /// Errors the authentication layer can report.
 ///
 /// Most variants stay cheap to copy so the UI can match and format them
-/// directly. Two variants (the `Detail` ones) own a `String`: a cause-carrying
+/// directly. Four variants (the `Detail` ones) own a `String`: a cause-carrying
 /// `AppError` cannot stay `Copy` while its rendered detail is surfaced in the
 /// status bar, so those variants retain the text that would otherwise be
-/// dropped by [`From<AppError> for AuthError`]. The full typed cause chain still
-/// lives in [`AppError`] and remains reachable through `Error::source()` for
-/// callers that convert before the UI boundary.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// dropped by [`From<AppError> for AuthError`]. The typed cause itself stays in
+/// [`AppError`] and is reachable through `Error::source()` for callers that
+/// convert before the UI boundary; after conversion only the rendered detail
+/// survives in the small enum.
+#[derive(Clone, Debug)]
 pub enum AuthError {
     /// A required field was empty.
     MissingField(&'static str),
     /// The server URL is not a valid HTTPS base URL.
     InvalidServerUrl,
+    /// The URL was rejected with a cause; keeps its detail for the status bar.
+    InvalidServerUrlDetail(String),
     /// The server URL points at a link-local address (e.g. cloud metadata).
     BlockedServerUrl,
     /// The email address is malformed.
     InvalidEmail,
     /// The client could not be built.
     ClientSetup,
+    /// The client setup failed with a cause; keeps its detail for the status bar.
+    ClientSetupDetail(String),
     /// The prelogin call failed.
     Prelogin,
     /// The API-key login failed.
@@ -76,15 +81,46 @@ pub enum AuthError {
     Other(&'static str),
 }
 
+impl PartialEq for AuthError {
+    /// A `Detail` variant is the same failure as its plain sibling: the cause
+    /// is diagnostic context, not identity. This mirrors [`AppError`]'s rule,
+    /// so adding a cause does not change how callers match or compare errors.
+    fn eq(&self, other: &Self) -> bool {
+        use self::AuthError::*;
+        match (self, other) {
+            (
+                InvalidServerUrl | InvalidServerUrlDetail(_),
+                InvalidServerUrl | InvalidServerUrlDetail(_),
+            )
+            | (ClientSetup | ClientSetupDetail(_), ClientSetup | ClientSetupDetail(_))
+            | (Login | LoginDetail(_), Login | LoginDetail(_))
+            | (Sync | SyncDetail(_), Sync | SyncDetail(_)) => true,
+            (MissingField(left), MissingField(right)) => left == right,
+            (Other(left), Other(right)) => left == right,
+            (BlockedServerUrl, BlockedServerUrl)
+            | (InvalidEmail, InvalidEmail)
+            | (KdfRejected, KdfRejected)
+            | (Timeout, Timeout) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for AuthError {}
+
 impl AuthError {
     /// A short message for the status bar.
     pub const fn message(&self) -> &'static str {
         match self {
             Self::MissingField(_) => "認証情報が未入力です",
-            Self::InvalidServerUrl => "サーバー URL が不正です（HTTPS または loopback の HTTP）",
+            Self::InvalidServerUrl | Self::InvalidServerUrlDetail(_) => {
+                "サーバー URL が不正です（HTTPS または loopback の HTTP）"
+            }
             Self::BlockedServerUrl => "サーバー URL が link-local アドレスを指しています",
             Self::InvalidEmail => "メールアドレスの形式が不正です",
-            Self::ClientSetup => "クライアントを初期化できませんでした",
+            Self::ClientSetup | Self::ClientSetupDetail(_) => {
+                "クライアントを初期化できませんでした"
+            }
             Self::Prelogin => "サーバー情報の取得に失敗しました",
             Self::Login | Self::LoginDetail(_) => "ログインに失敗しました",
             Self::Sync | Self::SyncDetail(_) => "同期に失敗しました",
@@ -99,11 +135,17 @@ impl AuthError {
     /// `message()` stays a cheap `&'static str` for callers that only need the
     /// family; this method appends the field name for [`Self::MissingField`]
     /// and the retained cause text for the `Detail` variants, so a user can see
-    /// *which* credential is missing or why the API-key login failed.
+    /// *which* credential is missing, why the API-key login failed, or which
+    /// URL/client setup error the server reported.
     pub fn status_message(&self) -> String {
         match self {
             Self::MissingField(field) => format!("{}（{field}）", self.message()),
-            Self::LoginDetail(detail) | Self::SyncDetail(detail) if !detail.is_empty() => {
+            Self::LoginDetail(detail)
+            | Self::SyncDetail(detail)
+            | Self::InvalidServerUrlDetail(detail)
+            | Self::ClientSetupDetail(detail)
+                if !detail.is_empty() =>
+            {
                 format!("{}（{detail}）", self.message())
             }
             _ => self.message().to_string(),
@@ -124,9 +166,15 @@ impl From<AuthError> for AppError {
         match error {
             AuthError::MissingField(field) => Self::MissingField(field),
             AuthError::InvalidServerUrl => Self::InvalidServerUrl,
+            AuthError::InvalidServerUrlDetail(detail) => {
+                Self::InvalidServerUrlCause(BoxedCause::text(detail.clone()))
+            }
             AuthError::BlockedServerUrl => Self::BlockedServerUrl,
             AuthError::InvalidEmail => Self::InvalidEmail,
             AuthError::ClientSetup => Self::ClientSetup,
+            AuthError::ClientSetupDetail(detail) => {
+                Self::ClientSetupCause(BoxedCause::text(detail.clone()))
+            }
             AuthError::Prelogin => Self::Prelogin,
             AuthError::Login => Self::Login,
             AuthError::LoginDetail(detail) => Self::LoginCause(BoxedCause::text(detail.clone())),
@@ -146,12 +194,16 @@ impl From<AppError> for AuthError {
         // `AppError::PartialEq` rule that a cause is diagnostic context only.
         match error {
             AppError::MissingField(field) => AuthError::MissingField(field),
-            AppError::InvalidServerUrl | AppError::InvalidServerUrlCause(_) => {
-                AuthError::InvalidServerUrl
+            AppError::InvalidServerUrl => AuthError::InvalidServerUrl,
+            // The URL parser's message used to vanish here: keep it in a detail
+            // variant so `status_message()` can show why the URL was rejected.
+            AppError::InvalidServerUrlCause(cause) => {
+                AuthError::InvalidServerUrlDetail(cause.to_string())
             }
             AppError::BlockedServerUrl => AuthError::BlockedServerUrl,
             AppError::InvalidEmail => AuthError::InvalidEmail,
-            AppError::ClientSetup | AppError::ClientSetupCause(_) => AuthError::ClientSetup,
+            AppError::ClientSetup => AuthError::ClientSetup,
+            AppError::ClientSetupCause(cause) => AuthError::ClientSetupDetail(cause.to_string()),
             AppError::Prelogin | AppError::PreloginCause(_) => AuthError::Prelogin,
             AppError::Login => AuthError::Login,
             // Keep the rendered detail of a cause-carrying login failure: the
@@ -532,7 +584,8 @@ fn is_blocked_server_url_without_dns(value: &str) -> bool {
 /// [`AuthError::MissingField`] for an empty field,
 /// [`AuthError::InvalidEmail`] for a malformed or over-long address,
 /// [`AuthError::BlockedServerUrl`] for link-local hosts, or
-/// [`AuthError::InvalidServerUrl`] for a URL `openwarden` rejects.
+/// [`AuthError::InvalidServerUrl`] for a URL `openwarden` rejects (carrying the
+/// parser's message in [`AuthError::InvalidServerUrlDetail`]).
 pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
     if config.server_url.trim().is_empty() {
         return Err(AuthError::MissingField("server_url"));
@@ -819,9 +872,10 @@ async fn authenticate_inner(
     if smol::unblock(move || is_blocked_server_url(&server_url)).await {
         return Err(AuthError::BlockedServerUrl);
     }
-    // `openwarden::Error` implements `std::error::Error + Send + Sync`, so box
-    // the concrete value with `new()` and keep its typed source chain instead
-    // of flattening it into text with `text()`.
+    // Box the concrete errors with `new()` so the `AppError` created here keeps
+    // their typed source chain. `AuthError::from` then renders that cause into
+    // an `InvalidServerUrlDetail` / `ClientSetupDetail` for the status bar: the
+    // detail reaches the UI, but the typed chain stops at the `AuthError` boundary.
     let urls = ServerUrls::self_hosted(config.server_url.trim()).map_err(|error| {
         AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::new(error)))
     })?;

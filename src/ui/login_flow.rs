@@ -85,12 +85,13 @@ impl BitwardenApp {
         if let Err(error) = validate_config(&config) {
             // `status_message` names the offending field, so "which credential
             // is missing" is visible instead of a generic message.
-            self.status = error.status_message();
+            self.status =
+                crate::ui::app::status_with_unsaved(&error.status_message(), self.settings_dirty);
             cx.notify();
             return;
         }
         let generation = self.login_generation.begin();
-        self.status = "ログイン中…".to_string();
+        self.status = crate::ui::app::status_with_unsaved("ログイン中…", self.settings_dirty);
         cx.notify();
         // The initial login and the resync/retry path (the `r` key maps to
         // this same method) both resolve the identifier here, so every
@@ -103,8 +104,10 @@ impl BitwardenApp {
             Ok(id) => id.to_string(),
             Err(error) => {
                 self.auth.set_login_failed(true);
-                self.status =
-                    format!("デバイス ID を準備できませんでした（{error}）（r で再試行）");
+                self.status = crate::ui::app::status_with_unsaved(
+                    &format!("デバイス ID を準備できませんでした（{error}）（r で再試行）"),
+                    self.settings_dirty,
+                );
                 cx.notify();
                 return;
             }
@@ -173,18 +176,27 @@ impl BitwardenApp {
             LoginResult::Vault { vault, from_cache } => (vault, from_cache),
             LoginResult::AuthFailed(error) => {
                 self.auth.set_login_failed(true);
-                self.status = LoginFailure::Auth(error).status();
+                self.status = crate::ui::app::status_with_unsaved(
+                    &LoginFailure::Auth(error).status(),
+                    self.settings_dirty,
+                );
                 cx.notify();
                 return;
             }
             LoginResult::UnlockFailed(error) => {
                 self.auth.set_login_failed(true);
-                self.status = LoginFailure::Unlock(error).status();
+                self.status = crate::ui::app::status_with_unsaved(
+                    &LoginFailure::Unlock(error).status(),
+                    self.settings_dirty,
+                );
                 cx.notify();
                 return;
             }
         };
-        let status = crate::ui::logic::login_success_status(vault.len(), from_cache);
+        let status = crate::ui::app::status_with_unsaved(
+            &crate::ui::logic::login_success_status(vault.len(), from_cache),
+            self.settings_dirty,
+        );
         self.enter_unlocked(vault, status, cx);
     }
 
@@ -237,9 +249,12 @@ impl BitwardenApp {
         // A pending real login must not overwrite the demo vault.
         self.login_generation.invalidate();
         let vault = mock_vault();
-        let status = format!(
-            "{} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / y TOTPコピー / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",
-            vault.len()
+        let status = crate::ui::app::status_with_unsaved(
+            &format!(
+                "{} 件。↑↓選択 / f お気に入り / t フィルタ / s 並び順 / / 検索 / y TOTPコピー / g 監査 / n 生成 / c 設定 / l ロック / Esc 終了",
+                vault.len()
+            ),
+            self.settings_dirty,
         );
         self.enter_unlocked(vault, status, cx);
     }
@@ -320,5 +335,15 @@ mod tests {
         let auth = LoginFailure::Auth(AuthError::Login).status();
         let unlock = LoginFailure::Unlock(UnlockError::MissingProtectedKey).status();
         assert_ne!(auth, unlock);
+    }
+
+    #[::core::prelude::v1::test]
+    fn login_status_keeps_the_unsaved_marker_after_a_relock_cycle() {
+        let base = crate::ui::logic::login_success_status(3, false);
+        let clean = crate::ui::app::status_with_unsaved(&base, false);
+        let dirty = crate::ui::app::status_with_unsaved(&base, true);
+        assert_eq!(clean, base);
+        assert!(dirty.starts_with(&base));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
     }
 }

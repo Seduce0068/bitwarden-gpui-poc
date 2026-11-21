@@ -700,3 +700,131 @@ fn boxed_cause_new_keeps_the_source_chain() {
     let flat_cause = std::error::Error::source(&flat).expect("text cause");
     assert!(std::error::Error::source(flat_cause).is_none());
 }
+
+#[test]
+fn invalid_server_url_cause_detail_survives_conversion_to_auth_error() {
+    use crate::error::BoxedCause;
+
+    let app = AppError::InvalidServerUrlCause(BoxedCause::text("URL scheme must be https"));
+    let small = AuthError::from(app);
+    assert_eq!(small.message(), AuthError::InvalidServerUrl.message());
+    assert!(
+        small.status_message().contains("URL scheme must be https"),
+        "{}",
+        small.status_message()
+    );
+    assert!(
+        matches!(
+            &small,
+            AuthError::InvalidServerUrlDetail(detail)
+                if detail.as_str() == "URL scheme must be https"
+        ),
+        "the parser detail must survive: {small:?}"
+    );
+
+    // The detail variant is the same failure as the plain one and converts
+    // back to a cause-carrying AppError instead of dropping the context.
+    assert_eq!(small, AuthError::InvalidServerUrl);
+    let restored = AppError::from(small);
+    assert!(matches!(&restored, AppError::InvalidServerUrlCause(_)));
+    assert!(std::error::Error::source(&restored).is_some());
+    assert_eq!(restored, AppError::InvalidServerUrl);
+}
+
+#[test]
+fn client_setup_cause_detail_survives_conversion_to_auth_error() {
+    use crate::error::BoxedCause;
+
+    let app = AppError::ClientSetupCause(BoxedCause::text("client id rejected"));
+    let small = AuthError::from(app);
+    assert_eq!(small.message(), AuthError::ClientSetup.message());
+    assert!(
+        small.status_message().contains("client id rejected"),
+        "{}",
+        small.status_message()
+    );
+    assert_eq!(small, AuthError::ClientSetup);
+
+    let restored = AppError::from(small);
+    assert!(matches!(&restored, AppError::ClientSetupCause(_)));
+    assert!(std::error::Error::source(&restored).is_some());
+    assert_eq!(restored, AppError::ClientSetup);
+}
+
+#[test]
+fn validate_config_keeps_the_url_parser_detail_variant() {
+    let mut value = config();
+    value.server_url = "http://vault.example.com".into();
+    let error = validate_config(&value).unwrap_err();
+
+    // The family comparison still holds, but the returned value now carries
+    // the parser's reason instead of collapsing to the bare plain variant.
+    assert_eq!(error, AuthError::InvalidServerUrl);
+    assert!(
+        matches!(&error, AuthError::InvalidServerUrlDetail(_)),
+        "the URL parser detail must survive: {error:?}"
+    );
+    assert!(error
+        .status_message()
+        .starts_with(AuthError::InvalidServerUrl.message()));
+}
+
+#[test]
+fn invalid_server_url_typed_cause_is_rendered_at_the_ui_boundary() {
+    use crate::error::BoxedCause;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Inner(&'static str);
+    impl fmt::Display for Inner {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Inner {}
+
+    let app = AppError::InvalidServerUrlCause(BoxedCause::new(Inner("dns failure")));
+    let cause = std::error::Error::source(&app).expect("typed cause kept by AppError");
+    assert_eq!(cause.to_string(), "dns failure");
+
+    let small = AuthError::from(app);
+    assert!(
+        small.status_message().contains("dns failure"),
+        "{}",
+        small.status_message()
+    );
+    // The typed chain stops at the small enum: only its rendered detail is
+    // surfaced, which is exactly what the corrected authenticate_inner comment
+    // documents.
+    assert!(std::error::Error::source(&small).is_none());
+}
+
+#[test]
+fn auth_detail_variants_compare_equal_to_plain_siblings() {
+    // Cause/detail context is diagnostic, never part of failure identity.
+    for (detailed, plain) in [
+        (
+            AuthError::InvalidServerUrlDetail("a".into()),
+            AuthError::InvalidServerUrl,
+        ),
+        (
+            AuthError::ClientSetupDetail("b".into()),
+            AuthError::ClientSetup,
+        ),
+        (AuthError::LoginDetail("c".into()), AuthError::Login),
+        (AuthError::SyncDetail("d".into()), AuthError::Sync),
+    ] {
+        assert_eq!(detailed, plain);
+        assert_eq!(plain, detailed);
+        assert_eq!(detailed.message(), plain.message());
+    }
+    assert_eq!(
+        AuthError::InvalidServerUrlDetail("a".into()),
+        AuthError::InvalidServerUrlDetail("b".into())
+    );
+    assert_ne!(AuthError::ClientSetup, AuthError::InvalidServerUrl);
+    assert_ne!(
+        AuthError::MissingField("email"),
+        AuthError::MissingField("url")
+    );
+}

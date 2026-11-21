@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.95"
 description = "Bitwarden/Vaultwarden client PoC built with GPUI (gpui-kit)"
 license = "AGPL-3.0-or-later"
+repository = "https://github.com/Seduce0068/bitwarden-gpui-poc"
 
 [lib]
 name = "bitwarden_gpui_poc"

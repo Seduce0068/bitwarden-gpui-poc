@@ -23,6 +23,11 @@ pub struct BitwardenApp {
     /// Leaving the settings panel, locking or quitting never saves silently;
     /// the flag keeps that visible until `w` saves or `d` discards.
     pub(super) settings_dirty: bool,
+    /// Highlighted audit row, as an index into `Report::items`.
+    ///
+    /// Kept on the app rather than the (out-of-scope) panel renderer so the
+    /// keyboard path can remember the row between keystrokes.
+    pub(super) audit_row_selection: Option<usize>,
     pub(super) editing: Option<SettingsField>,
     pub(super) auth: crate::ui::auth_state::AuthState,
     pub(super) login_generation: crate::ui::login_generation::LoginGeneration,
@@ -64,6 +69,66 @@ fn apply_state_reset(
     *last_activity = now;
 }
 
+/// Status shown when leaving a settings-owning panel with unsaved edits.
+///
+/// The destination panel (vault list or audit) has no `w`/`d` binding, so the
+/// guidance explicitly points back to the panels where those keys work.
+pub(super) fn unsaved_panel_exit_status() -> &'static str {
+    "未保存の設定変更があります（設定/生成パネルに戻り w: 保存 / d: 破棄）"
+}
+
+/// Marker appended to transient statuses and to the list detail line.
+///
+/// Keeping it in one place makes the unsaved state visible outside the
+/// settings panels without depending on GPUI's rendering internals.
+pub(super) fn unsaved_status_suffix(dirty: bool) -> &'static str {
+    if dirty {
+        " | [未保存の設定変更があります]"
+    } else {
+        ""
+    }
+}
+
+/// Compose a status message with the persistent unsaved marker.
+pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
+    format!("{base}{}", unsaved_status_suffix(dirty))
+}
+
+/// Warning shown when Esc is pressed while settings are still unsaved.
+pub(super) fn unsaved_quit_warning_status() -> &'static str {
+    "警告: 未保存の設定変更があります（設定/生成パネルに戻り w: 保存 / d: 破棄）"
+}
+
+/// Pure gate for the Esc warning: `Some` keeps the user in the app, `None`
+/// allows the existing Quit action to run.
+pub(super) fn quit_gate_warning(dirty: bool) -> Option<&'static str> {
+    dirty.then_some(unsaved_quit_warning_status())
+}
+
+/// Clamp a relative audit-row move into a report of `len` rows.
+///
+/// With no selection, Down starts at the first row and Up at the last one;
+/// an empty report has no valid row. Out-of-range moves clamp instead of
+/// wrapping so a long key repeat cannot jump unexpectedly.
+pub(super) fn next_audit_row(current: Option<usize>, delta: isize, len: usize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let last = len - 1;
+    let Some(index) = current else {
+        return Some(if delta < 0 { last } else { 0 });
+    };
+    let next = (index.min(last) as isize).saturating_add(delta);
+    if next < 0 {
+        Some(0)
+    } else if next > last as isize {
+        Some(last)
+    } else {
+        // `next` is now within 0..=last, which is at most `usize::MAX`.
+        Some(next as usize)
+    }
+}
+
 impl BitwardenApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let path = Settings::default_path();
@@ -99,6 +164,7 @@ impl BitwardenApp {
             generator: GeneratorState::default(),
             settings,
             settings_dirty: false,
+            audit_row_selection: None,
             editing: None,
             auth: crate::ui::auth_state::AuthState::new(),
             login_generation: crate::ui::login_generation::LoginGeneration::default(),
@@ -226,6 +292,8 @@ impl BitwardenApp {
             &mut self.last_activity,
             std::time::Instant::now(),
         );
+        // A highlight into the old report has no meaning after a lock/unlock.
+        self.audit_row_selection = None;
     }
 
     /// Lock the vault: discard the data and clear every transient input mode.
@@ -258,7 +326,7 @@ impl BitwardenApp {
         if owns_settings && panel != self.panel && self.settings_dirty {
             // Leaving the panel does not persist anything. Say so before the
             // destination panel overwrites the status message.
-            self.status = "未保存の設定変更があります（w: 保存 / d: 破棄）".to_string();
+            self.status = unsaved_panel_exit_status().to_string();
         }
         self.editing = None;
         self.auth.take_field();
@@ -288,13 +356,46 @@ impl BitwardenApp {
         }
     }
 
-    /// Follow an audit finding: show the vault list and select its item.
+    /// Follow an audit finding, or resolve a reserved command sentinel.
+    ///
+    /// Mouse clicks pass a real item id; `Enter` in the audit panel passes the
+    /// "selected row" sentinel, and `Esc` passes the "quit or warn" sentinel.
+    /// Both are resolved here because this is where the dirty flag and the
+    /// current report live.
     pub(super) fn focus_audit_item(&mut self, id: &str, cx: &mut Context<Self>) {
+        if id == crate::ui::keys::QUIT_OR_WARN_SENTINEL {
+            if let Some(warning) = quit_gate_warning(self.settings_dirty) {
+                // A confirmation dialog needs window APIs outside this change;
+                // keep the user in the app and explain what to do instead.
+                self.status = warning.to_string();
+                cx.notify();
+            } else {
+                self.apply_action(crate::ui::keys::UiAction::Quit, cx);
+            }
+            return;
+        }
+        let resolved = if id == crate::ui::keys::AUDIT_SELECTED_ROW_SENTINEL {
+            self.view
+                .audit_report
+                .as_ref()
+                .and_then(|report| {
+                    self.audit_row_selection
+                        .and_then(|index| report.items.get(index))
+                })
+                .map(|item| item.id.clone())
+        } else {
+            Some(id.to_string())
+        };
+        let Some(id) = resolved else {
+            self.status = "監査行が選択されていません（↑↓で行を選択してください）".to_string();
+            cx.notify();
+            return;
+        };
         self.set_panel(Panel::Vault, cx);
         self.view.filter = Filter::All;
         self.view.query.clear();
         self.view.finish_search();
-        if let Some(index) = self.view.select_id(id) {
+        if let Some(index) = self.view.select_id(&id) {
             self.view
                 .scroll_handle
                 .scroll_to_item(index, ScrollStrategy::Nearest);
@@ -307,7 +408,17 @@ impl BitwardenApp {
         cx.notify();
     }
 
+    /// Move the vault selection, or the audit highlight while that panel is up.
+    ///
+    /// Both key paths dispatch `MoveSelection`; routing by the effective panel
+    /// keeps the keyboard intent aligned with what is actually drawn.
     pub(super) fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some())
+            == Panel::Audit
+        {
+            self.move_audit_selection(delta, cx);
+            return;
+        }
         let visible = self.view.visible_items();
         let Some(next) = self.view.next_index_in(&visible, delta) else {
             return;
@@ -321,6 +432,40 @@ impl BitwardenApp {
             self.sync_totp_to_selection();
             cx.notify();
         }
+    }
+
+    /// Highlight the next audit row and describe it in the status bar.
+    fn move_audit_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let len = self
+            .view
+            .audit_report
+            .as_ref()
+            .map_or(0, |report| report.items.len());
+        let next = next_audit_row(self.audit_row_selection, delta, len);
+        self.audit_row_selection = next;
+        let Some(index) = next else {
+            self.status = status_with_unsaved(
+                "監査する問題がありません（↑↓で行を選択できません）",
+                self.settings_dirty,
+            );
+            cx.notify();
+            return;
+        };
+        if let Some(item) = self
+            .view
+            .audit_report
+            .as_ref()
+            .and_then(|report| report.items.get(index))
+        {
+            let base = format!(
+                "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了）",
+                index + 1,
+                len,
+                item.name
+            );
+            self.status = status_with_unsaved(&base, self.settings_dirty);
+        }
+        cx.notify();
     }
 
     pub(super) fn cycle_filter(&mut self, cx: &mut Context<Self>) {
@@ -379,9 +524,12 @@ impl BitwardenApp {
             )
         };
         let Some((base, data)) = selected else {
-            return crate::ui::logic::no_selection_status().to_string();
+            return status_with_unsaved(
+                crate::ui::logic::no_selection_status(),
+                self.settings_dirty,
+            );
         };
-        match data {
+        let detail = match data {
             ItemData::Login {
                 username,
                 password,
@@ -410,7 +558,8 @@ impl BitwardenApp {
             ),
             ItemData::Identity(identity) => format!("{base} | {}", identity.email),
             ItemData::SshKey(key) => format!("{base} | {}", key.fingerprint),
-        }
+        };
+        status_with_unsaved(&detail, self.settings_dirty)
     }
 
     /// Recompute the health report with the current thresholds.
@@ -420,6 +569,18 @@ impl BitwardenApp {
             self.settings.thresholds,
             i64::try_from(totp::now_unix()).unwrap_or(i64::MAX),
         ));
+        // Findings can disappear when a threshold changes; do not leave the
+        // keyboard highlight pointing past the end of the new report.
+        let len = self
+            .view
+            .audit_report
+            .as_ref()
+            .map_or(0, |report| report.items.len());
+        let last = len.saturating_sub(1);
+        self.audit_row_selection = self.audit_row_selection.map(|index| index.min(last));
+        if len == 0 {
+            self.audit_row_selection = None;
+        }
     }
 }
 
@@ -433,6 +594,20 @@ mod tests {
     use super::*;
     use crate::health::Report;
     use crate::ui::clipboard::ClipboardState;
+
+    #[::core::prelude::v1::test]
+    fn quit_gate_warns_only_when_settings_are_dirty() {
+        assert_eq!(quit_gate_warning(true), Some(unsaved_quit_warning_status()));
+        assert_eq!(quit_gate_warning(false), None);
+        assert!(quit_gate_warning(true).is_some_and(|text| text.contains("w: 保存 / d: 破棄")));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_status_carries_the_unsaved_marker() {
+        let base = "監査行 1/2: example";
+        assert!(!status_with_unsaved(base, false).contains("[未保存"));
+        assert!(status_with_unsaved(base, true).contains("[未保存"));
+    }
     use crate::ui::state::AuthField;
     use std::time::{Duration, Instant};
     use zeroize::Zeroizing;
@@ -584,5 +759,46 @@ mod tests {
         assert!(state.generator.last_password.is_none());
         assert!(!state.totp.has_secret());
         assert_eq!(state.last_activity, now);
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_exit_warning_points_back_to_the_panels_with_w_and_d() {
+        let status = unsaved_panel_exit_status();
+        assert!(status.contains("未保存"));
+        assert!(status.contains("設定/生成パネルに戻り"));
+        assert!(status.contains("w: 保存 / d: 破棄"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn unsaved_marker_is_only_added_while_dirty() {
+        assert_eq!(unsaved_status_suffix(false), "");
+        assert_eq!(status_with_unsaved("ログイン成功", false), "ログイン成功");
+        let dirty = status_with_unsaved("ログイン成功", true);
+        assert!(dirty.starts_with("ログイン成功"));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
+        assert_eq!(
+            dirty,
+            format!("ログイン成功{}", unsaved_status_suffix(true))
+        );
+        assert!(unsaved_quit_warning_status().contains("未保存の設定変更があります"));
+        assert!(unsaved_quit_warning_status().contains("w: 保存 / d: 破棄"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_row_navigation_clamps_and_handles_empty_reports() {
+        assert_eq!(next_audit_row(None, 1, 0), None);
+        assert_eq!(next_audit_row(None, -1, 0), None);
+        assert_eq!(next_audit_row(Some(0), 1, 0), None);
+
+        assert_eq!(next_audit_row(None, 1, 3), Some(0));
+        assert_eq!(next_audit_row(None, -1, 3), Some(2));
+        assert_eq!(next_audit_row(Some(0), -1, 3), Some(0));
+        assert_eq!(next_audit_row(Some(2), 1, 3), Some(2));
+        assert_eq!(next_audit_row(Some(1), 1, 3), Some(2));
+        assert_eq!(next_audit_row(Some(1), -1, 3), Some(0));
+        assert_eq!(next_audit_row(Some(1), 100, 3), Some(2));
+        assert_eq!(next_audit_row(Some(1), -100, 3), Some(0));
+        // A stale index is clamped before the delta is applied.
+        assert_eq!(next_audit_row(Some(99), 1, 3), Some(2));
     }
 }

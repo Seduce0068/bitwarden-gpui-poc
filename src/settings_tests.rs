@@ -689,3 +689,96 @@ fn future_schema_keeps_a_valid_device_id() {
     .unwrap();
     assert!(Settings::load_detailed(&path).unwrap().device_id.is_empty());
 }
+
+#[test]
+fn save_device_id_only_preserves_other_on_disk_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // A legacy file (no schema marker) exercises both preservation of its
+    // fields and the current-version stamping done by the id-only path.
+    std::fs::write(
+        &path,
+        br#"{"email":"keep@example.com","server_url":"https://vault.example.com"}"#,
+    )
+    .unwrap();
+
+    let id = generate_device_id().unwrap();
+    Settings::save_device_id_only(&path, &id).unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.device_id, id);
+    assert_eq!(loaded.email, "keep@example.com");
+    assert_eq!(loaded.server_url, "https://vault.example.com");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn save_device_id_only_creates_a_file_when_none_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let id = generate_device_id().unwrap();
+
+    Settings::save_device_id_only(&path, &id).unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.device_id, id);
+    assert_eq!(loaded.email, "");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn save_device_id_only_aborts_on_a_malformed_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let original = b"not json".to_vec();
+    std::fs::write(&path, &original).unwrap();
+
+    let id = generate_device_id().unwrap();
+    let error = Settings::save_device_id_only(&path, &id).unwrap_err();
+
+    assert!(
+        error.to_string().contains("破損"),
+        "the parse failure reason must reach the caller: {error}"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "a broken file must never be overwritten with defaults"
+    );
+}
+
+#[test]
+fn save_device_id_only_aborts_on_an_oversized_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let original = vec![b' '; MAX_SETTINGS_BYTES as usize + 1];
+    std::fs::write(&path, &original).unwrap();
+
+    let id = generate_device_id().unwrap();
+    assert!(Settings::save_device_id_only(&path, &id).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn ensure_device_id_keeps_its_save_error_classification_on_a_broken_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let original = b"not json".to_vec();
+    std::fs::write(&path, &original).unwrap();
+
+    let mut settings = Settings::default();
+    let error = settings.ensure_device_id(Some(&path)).unwrap_err();
+
+    // A failed pre-read is still reported through the same save variant, with
+    // the io error in the cause chain, and the id is never accepted in memory.
+    assert!(matches!(
+        &error,
+        crate::error::AppError::SettingsSaveCause(_, _)
+    ));
+    assert!(error
+        .to_string()
+        .contains("デバイス ID を保存できませんでした"));
+    assert!(std::error::Error::source(&error).is_some());
+    assert!(settings.device_id.is_empty());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}

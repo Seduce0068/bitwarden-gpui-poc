@@ -71,9 +71,11 @@ High の1件と、即対応可能な Medium/Low を修正した。
   `tracing-subscriber`（追加の推移依存を伴う）が必要。現在のログ出力は
   起動時エラー1箇所のみで、共通指示の「依存追加は最小限の方針」に従い
   見送った。代わりに起動時エラーへ `Debug` 詳細を追加した。
-- repository / homepage フィールド（ops #10）: リモート URL が未確認のため
-  断定せず追加していない。現時点で `git remote` は空、`master` の upstream も
-  未設定（Runtime Proof 済み）。push 先確定後に設定する。
+- repository / homepage フィールド（ops #10）: 当時はリモート URL が未確認
+  だったため見送ったが、2026-11-21 に public リポジトリ
+  `Seduce0068/bitwarden-gpui-poc` を作成・push 済み。現在は `Cargo.toml` に
+  `repository` を設定している（`homepage` は repository と重複するため
+  cargo の警告に従い未設定）。
 - テスト・型の整理残り（arch #3 / #5 / #8 / #11 の一部）: 設計変更を伴い、
   PoC の目的（GPUI + openwarden の構成検証）に直接寄与しないため見送り。
 - 全推移依存のライセンス互換性の法的評価: `cargo metadata` で棚卸しした結果、
