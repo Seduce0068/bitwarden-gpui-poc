@@ -115,6 +115,9 @@ pub(super) enum UiAction {
     CycleSort,
     StartSearch,
     SaveSettings,
+    DiscardSettings,
+    /// Move to the vault list and select the item named by an audit finding.
+    FocusAuditItem(String),
     AdjustThreshold(i32),
     AdjustIdleLock(i32),
     AdjustLoginTimeout(i32),
@@ -262,11 +265,18 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 "+" | "=" => UiAction::Generator(GeneratorOption::LengthUp),
                 "-" | "_" => UiAction::Generator(GeneratorOption::LengthDown),
                 "," => UiAction::Generator(GeneratorOption::Separator),
+                // Options are in-memory edits too: `w` persists them through
+                // the same `save_settings` path the settings panel uses.
+                "w" => UiAction::SaveSettings,
+                "d" => UiAction::DiscardSettings,
                 _ => UiAction::None,
             }
         }
         Panel::Settings => {
             if ctx.editing_settings {
+                // Input-only mode: even `w`, `c` and `l` are literal text so a
+                // URL or email can contain them. Saving is an explicit action
+                // available only after Enter/Escape confirms the field.
                 return match key {
                     "escape" | "enter" => UiAction::FinishSettingsEdit,
                     "backspace" => UiAction::BackspaceSettings,
@@ -279,6 +289,7 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 "escape" => UiAction::Quit,
                 "c" => UiAction::SetPanel(Panel::Vault),
                 "l" => UiAction::Lock,
+                "d" => UiAction::DiscardSettings,
                 "1" => UiAction::EditSettingsField(SettingsField::ServerUrl),
                 "2" => UiAction::EditSettingsField(SettingsField::Email),
                 "+" | "=" => UiAction::AdjustThreshold(1),

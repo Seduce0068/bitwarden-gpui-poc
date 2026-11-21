@@ -281,7 +281,7 @@ impl AppError {
             Self::ParseFailed | Self::ParseFailedCause(_) => {
                 "設定ファイルが破損しています（既定値を使用）"
             }
-            Self::VersionMismatch => "キャッシュのバージョンが古いです",
+            Self::VersionMismatch => "キャッシュのバージョンに互換性がありません",
             Self::CacheExpired => "キャッシュが有効期限を過ぎています",
             Self::CacheTooLarge => "キャッシュがサイズ上限を超えています",
             Self::TooLarge => "設定ファイルがサイズ上限（1 MiB）を超えています（既定値を使用）",

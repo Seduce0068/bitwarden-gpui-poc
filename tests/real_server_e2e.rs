@@ -17,11 +17,19 @@
 //! but any variable is missing or empty, the test fails and names the
 //! offending variable instead of reporting a false success.
 //!
+//! The test account must contain at least one login with a decryptable
+//! password and a decryptable TOTP secret; these are asserted after import.
+//!
+//! The test account must contain at least one login with a decryptable
+//! password and a decryptable TOTP secret; these are asserted after import.
+//!
 //! No credentials are stored in this file or in the repository.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
 use bitwarden_gpui_poc::auth::{authenticate_with_timeout, unlock_and_import, AuthConfig};
+use bitwarden_gpui_poc::totp::{code_at, now_unix};
+use bitwarden_gpui_poc::vault_sync::{is_undecryptable_totp, UNDECRYPTABLE_PASSWORD};
 use openwarden::SecretString;
 use std::time::Duration;
 
@@ -86,8 +94,32 @@ async fn real_server_login_sync_and_unlock() {
         .await
         .expect("decryption and import must succeed with the test vault");
 
+    // A successful HTTP 200 is not enough: an empty or wholly undecryptable
+    // vault must fail so that regressions in sync/import cannot pass as green.
+    assert!(
+        !vault.items.is_empty(),
+        "real sync returned an empty vault; check the E2E test account"
+    );
+    let logins: Vec<_> = vault.items.iter().filter_map(|item| item.login()).collect();
+    assert!(
+        !logins.is_empty(),
+        "real sync returned no login items; check the E2E test account"
+    );
+    assert!(
+        logins
+            .iter()
+            .any(|(_, password, _, _)| !password.is_empty() && *password != UNDECRYPTABLE_PASSWORD),
+        "no login password decrypted; E2E must verify real decrypted fields"
+    );
+    assert!(
+        logins.iter().any(|(_, _, totp, _)| {
+            !totp.is_empty() && !is_undecryptable_totp(totp) && code_at(totp, now_unix()).is_ok()
+        }),
+        "no usable TOTP secret decrypted; E2E must verify real TOTP fields"
+    );
     eprintln!(
-        "E2E OK: loaded {} items from the real server",
-        vault.items.len()
+        "E2E OK: loaded {} items ({} logins) from the real server",
+        vault.items.len(),
+        logins.len()
     );
 }

@@ -1,18 +1,69 @@
 //! Panel renderers and small row helpers used by the GPUI window.
 
 use gpui_kit::prelude::*;
+use gpui_kit::StatefulInteractiveElement;
 use gpui_kit::*;
 
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
-use crate::health::{Report, Severity};
+use crate::health::{has_totp_field, has_usable_totp, Report, Severity};
 use crate::settings::Settings;
+use crate::ui::logic::{settings_hint, unsaved_marker};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
+use crate::vault_sync::is_undecryptable_totp;
+
+/// Colour for a finding's severity, shared by the item header and its rows.
+fn severity_color(severity: Severity) -> u32 {
+    match severity {
+        Severity::High => 0xf38ba8,
+        Severity::Medium => 0xf9e2af,
+        Severity::Low => 0xa6adc8,
+    }
+}
+
+/// The status of a TOTP badge in the vault list.
+///
+/// Uses the public health predicates added for this purpose so the list, the
+/// audit counter and the `NoTotp` finding share one definition of "usable".
+/// A field that exists but is malformed or undecryptable is shown as `不正`
+/// / `不可`, never as a healthy `TOTP` badge.
+pub(super) struct TotpBadge {
+    pub(super) label: &'static str,
+    pub(super) color: u32,
+}
+
+pub(super) fn totp_badge(item: &crate::model::VaultItem) -> TotpBadge {
+    if has_usable_totp(item) {
+        TotpBadge {
+            label: "TOTP",
+            color: 0xa6e3a1,
+        }
+    } else if has_totp_field(item) {
+        TotpBadge {
+            label: if item.totp_secret().is_some_and(is_undecryptable_totp) {
+                "不可"
+            } else {
+                "不正"
+            },
+            color: 0xf38ba8,
+        }
+    } else {
+        TotpBadge {
+            label: "",
+            color: 0xa6adc8,
+        }
+    }
+}
 
 // Scrollable panel roots share the same pattern: a stable id keeps the scroll
 // offset in element state across frames, min_h_0 lets the flex item shrink
 // below its content height, and overflow_y_scroll keeps every row reachable
 // when the window is short.
-pub(super) fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
+pub(super) fn audit_panel<'a, V: 'static>(
+    report: &'a Report,
+    on_focus: impl Fn(&mut V, &str, &mut Context<V>) + 'static,
+    cx: &mut Context<V>,
+) -> impl IntoElement + 'a {
+    let focus = std::rc::Rc::new(on_focus);
     let mut panel = div()
         .id("audit-panel-scroll")
         .flex()
@@ -34,21 +85,23 @@ pub(super) fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
                 .text_color(rgb(0xa6adc8))
                 .child(report.summary()),
         )
-        .child(div().text_xs().text_color(rgb(0x6c7086)).child(format!(
-            "TOTP 設定済み: {}/{} ({:.0}%)",
+        .child(div().text_xs().text_color(rgb(0xa6adc8)).child(format!(
+            "TOTP 設定済み: {}/{} ({:.0}%) / 行をクリックで対象を選択",
             report.with_totp,
             report.logins,
             report.totp_coverage() * 100.0
         )));
     for item in &report.items {
-        let color = match item.worst() {
-            Some(Severity::High) => rgb(0xf38ba8),
-            Some(Severity::Medium) => rgb(0xf9e2af),
-            _ => rgb(0xa6adc8),
-        };
+        let color = rgb(item.worst().map_or(0xa6adc8, severity_color));
+        let id = item.id.clone();
+        let focus = focus.clone();
         panel = panel.child(
             div()
+                .id(SharedString::from(format!("audit-row-{id}")))
                 .mt_2()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    focus(this, &id, cx);
+                }))
                 .child(
                     div()
                         .text_sm()
@@ -62,11 +115,12 @@ pub(super) fn audit_panel<'a>(report: &'a Report) -> impl IntoElement + 'a {
                         )),
                 )
                 .children(item.findings.iter().map(|finding| {
+                    let severity = finding.severity();
                     div()
                         .text_xs()
                         .pl_4()
-                        .text_color(rgb(0xcdd6f4))
-                        .child(format!("- {}", finding.message()))
+                        .text_color(rgb(severity_color(severity)))
+                        .child(format!("- [{}] {}", severity.label(), finding.message()))
                 })),
         );
     }
@@ -84,7 +138,7 @@ pub(super) fn setting_row<'a>(label: &'a str, enabled: bool) -> impl IntoElement
                 .text_color(if enabled {
                     rgb(0xa6e3a1)
                 } else {
-                    rgb(0x6c7086)
+                    rgb(0xa6adc8)
                 })
                 .child(if enabled { "ON" } else { "OFF" }),
         )
@@ -112,6 +166,7 @@ pub(super) fn result_row<'a>(label: &'a str, value: Option<&'a str>) -> impl Int
 pub(super) fn generator_panel<'a>(
     settings: &'a Settings,
     state: &'a GeneratorState,
+    dirty: bool,
 ) -> impl IntoElement + 'a {
     let password = &settings.password_generator;
     let passphrase = &settings.passphrase_generator;
@@ -169,11 +224,29 @@ pub(super) fn generator_panel<'a>(
         ))
         .child(
             div()
+                .text_sm()
+                .text_color(if dirty {
+                    rgb(0xf9e2af)
+                } else {
+                    rgb(0xa6adc8)
+                })
+                .child(format!(
+                    "{} {}",
+                    unsaved_marker(dirty),
+                    if dirty {
+                        "生成設定は未保存です（w: 保存 / d: 破棄）"
+                    } else {
+                        "未保存の設定変更はありません"
+                    }
+                )),
+        )
+        .child(
+            div()
                 .mt_4()
                 .text_xs()
-                .text_color(rgb(0x6c7086))
+                .text_color(rgb(0xa6adc8))
                 .child(format!(
-                    "p/h: 生成 / y/Y: コピー（{}秒で復元） / n: 一覧に戻る / l: ロック / Esc: 終了",
+                    "p/h: 生成 / y/Y: コピー（{}秒で復元） / w: 設定を保存 / d: 破棄 / n: 一覧に戻る / l: ロック / Esc: 終了",
                     settings.clipboard_restore_seconds
                 )),
         )
@@ -194,7 +267,7 @@ pub(super) fn field_row<'a>(
                 .text_color(if editing {
                     rgb(0x89b4fa)
                 } else {
-                    rgb(0x6c7086)
+                    rgb(0xa6adc8)
                 })
                 .child(label.to_string()),
         )
@@ -218,6 +291,7 @@ pub(super) fn field_row<'a>(
 pub(super) fn settings_panel<'a>(
     settings: &'a Settings,
     editing: Option<SettingsField>,
+    dirty: bool,
 ) -> impl IntoElement + 'a {
     let server_url = settings.server_url.as_str();
     let email = settings.email.as_str();
@@ -234,6 +308,20 @@ pub(super) fn settings_panel<'a>(
         .min_h_0()
         .overflow_y_scroll()
         .child(div().text_lg().font_weight(FontWeight::BOLD).child("設定"))
+        .child(
+            div()
+                .text_sm()
+                .text_color(if dirty { rgb(0xf9e2af) } else { rgb(0xa6adc8) })
+                .child(format!(
+                    "{} {}",
+                    unsaved_marker(dirty),
+                    if dirty {
+                        "未保存の変更があります（w: 保存 / d: 破棄）"
+                    } else {
+                        "未保存の変更はありません"
+                    }
+                )),
+        )
         .child(field_row(
             "1  サーバー URL",
             server_url,
@@ -261,12 +349,16 @@ pub(super) fn settings_panel<'a>(
         .child(
             div()
                 .text_xs()
-                .text_color(rgb(0x6c7086))
+                .text_color(rgb(0xa6adc8))
                 .child(format!("保存先: {path}")),
         )
-        .child(div().mt_4().text_xs().text_color(rgb(0x6c7086)).child(
-            "1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログイン制限 / 5,6: 復元 / w: 保存 / c: 戻る / l: ロック / Esc: 確定/終了",
-        ))
+        .child(
+            div()
+                .mt_4()
+                .text_xs()
+                .text_color(rgb(0xa6adc8))
+                .child(settings_hint(editing.is_some())),
+        )
 }
 
 pub(super) fn panel_button<V: 'static>(
@@ -318,7 +410,7 @@ pub(super) fn auth_row<'a>(
                 .text_color(if editing {
                     rgb(0x89b4fa)
                 } else {
-                    rgb(0x6c7086)
+                    rgb(0xa6adc8)
                 })
                 .child(label.to_string()),
         )
@@ -332,4 +424,64 @@ pub(super) fn auth_row<'a>(
                 })
                 .child(shown),
         )
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn severity_colours_are_distinct() {
+        assert_eq!(severity_color(Severity::High), 0xf38ba8);
+        assert_eq!(severity_color(Severity::Medium), 0xf9e2af);
+        assert_eq!(severity_color(Severity::Low), 0xa6adc8);
+        assert_ne!(
+            severity_color(Severity::High),
+            severity_color(Severity::Medium)
+        );
+    }
+
+    fn login_with_totp(secret: &str) -> crate::model::VaultItem {
+        use crate::model::ItemData;
+        use zeroize::Zeroizing;
+
+        crate::model::VaultItem::new(
+            "id",
+            "name",
+            ItemData::Login {
+                username: String::new(),
+                password: Zeroizing::new(String::new()),
+                totp: Zeroizing::new(secret.to_string()),
+                uris: Vec::new(),
+            },
+        )
+    }
+
+    #[::core::prelude::v1::test]
+    fn totp_badge_distinguishes_valid_invalid_undecryptable_and_absent_secrets() {
+        use crate::model::ItemData;
+
+        let valid = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        assert_eq!(totp_badge(&login_with_totp(valid)).label, "TOTP");
+        assert_eq!(totp_badge(&login_with_totp("not base32!")).label, "不正");
+        assert_eq!(
+            totp_badge(&login_with_totp(crate::vault_sync::UNDECRYPTABLE_TOTP)).label,
+            "不可"
+        );
+        assert_ne!(
+            totp_badge(&login_with_totp(valid)).color,
+            totp_badge(&login_with_totp("not base32!")).color
+        );
+
+        let note = crate::model::VaultItem::new(
+            "note",
+            "note",
+            ItemData::SecureNote {
+                text: String::new(),
+            },
+        );
+        assert_eq!(totp_badge(&note).label, "");
+        assert_eq!(totp_badge(&login_with_totp("")).label, "");
+    }
 }

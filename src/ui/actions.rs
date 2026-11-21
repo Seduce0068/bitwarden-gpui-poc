@@ -10,28 +10,40 @@ impl BitwardenApp {
     pub(super) fn copy_totp(&mut self, cx: &mut Context<Self>) {
         let secret = {
             let visible = self.view.visible_items();
-            let Some(item) = self
-                .view
-                .selected_id
-                .as_deref()
-                .and_then(|id| visible.iter().find(|item| item.id == id))
-                .or_else(|| visible.first())
+            let Some(index) =
+                crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible)
             else {
-                // The fallback to `visible.first()` means this branch is
-                // reached only when the visible list itself is empty.
-                self.status = "一覧に項目がありません（フィルタ／検索を確認）".to_string();
+                self.status = crate::ui::logic::no_selection_status().to_string();
                 cx.notify();
                 return;
             };
-            item.totp_secret().unwrap_or("").to_string()
+            visible[index].totp_secret().unwrap_or("").to_string()
         };
-        // Do not classify an empty secret here: code_at already maps it to
-        // TotpError::Missing. Letting the actual error decide keeps the status
-        // derived from TotpError::message() in every failure path.
-        match totp::code_at(&secret, totp::now_unix()) {
-            Ok(code) => self.copy_to_clipboard(code.code(), cx),
-            Err(error) => {
-                self.status = error.message().to_string();
+        // Copy the code that is actually on screen. Generating a fresh one here
+        // could disagree with the cached display across a period boundary, so
+        // only refresh when the cache is empty (for example right after a
+        // selection change or a ticker invalidation).
+        self.sync_totp_to_selection();
+        let mut displayed = self.totp.current_code().map(str::to_string);
+        if displayed.is_none() && !secret.trim().is_empty() {
+            let _ = self.totp_text(&secret);
+            displayed = self.totp.current_code().map(str::to_string);
+        }
+        match displayed {
+            Some(code) => self.copy_to_clipboard(&code, cx),
+            None => {
+                // No cached code: prefer the cached generation error, then a
+                // fresh parse, so a missing/malformed secret reports its real
+                // reason instead of a generic failure.
+                let status = self.totp.error_message().unwrap_or_else(|| {
+                    match totp::code_at(&secret, totp::now_unix()) {
+                        Ok(_) => {
+                            "表示中の TOTP コードがありません（一覧を表示してください）".to_string()
+                        }
+                        Err(error) => error.message().to_string(),
+                    }
+                });
+                self.status = status;
                 cx.notify();
             }
         }
@@ -41,18 +53,14 @@ impl BitwardenApp {
     pub(super) fn copy_selected_field(&mut self, password: bool, cx: &mut Context<Self>) {
         let value = {
             let visible = self.view.visible_items();
-            let Some(item) = self
-                .view
-                .selected_id
-                .as_deref()
-                .and_then(|id| visible.iter().find(|item| item.id == id))
-                .or_else(|| visible.first())
+            let Some(index) =
+                crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible)
             else {
-                self.status = "項目が選択されていません".to_string();
+                self.status = crate::ui::logic::no_selection_status().to_string();
                 cx.notify();
                 return;
             };
-            crate::ui::logic::select_copy_value(&item.data, password)
+            crate::ui::logic::select_copy_value(&visible[index].data, password)
         };
         let Some(value) = value else {
             let field = if password {
@@ -92,8 +100,21 @@ impl BitwardenApp {
         let Some(previous) = self.clipboard.take_restore() else {
             return false;
         };
+        // `write_to_clipboard` returns no result, so verify the write by
+        // reading the same text back and surface a mismatch in the status bar.
+        let expected = previous.clone();
         cx.write_to_clipboard(ClipboardItem::new_string(previous));
-        self.status = "クリップボードを復元しました".to_string();
+        let observed = cx.read_from_clipboard().and_then(|item| {
+            item.entries.into_iter().find_map(|entry| match entry {
+                ClipboardEntry::String(text) => Some(text.text),
+                _ => None,
+            })
+        });
+        if observed.as_deref() == Some(expected.as_str()) {
+            self.status = "クリップボードを復元しました".to_string();
+        } else {
+            self.status = crate::ui::logic::clipboard_restore_failure_status().to_string();
+        }
         true
     }
 
@@ -101,23 +122,70 @@ impl BitwardenApp {
         self.settings = self.settings.sanitized();
         match Settings::default_path() {
             Some(path) => match self.settings.save(&path) {
-                Ok(()) => self.status = format!("設定を保存しました: {}", path.display()),
-                Err(error) => self.status = format!("設定の保存に失敗: {error}"),
+                Ok(()) => {
+                    self.settings_dirty = false;
+                    self.status = format!("設定を保存しました: {}", path.display());
+                }
+                Err(error) => {
+                    self.settings_dirty = true;
+                    self.status = format!("設定の保存に失敗（未保存のまま）: {error}");
+                }
             },
-            None => self.status = "設定ディレクトリを特定できません".to_string(),
+            None => {
+                self.settings_dirty = true;
+                self.status = "設定ディレクトリを特定できません（未保存のまま）".to_string();
+            }
         }
+        cx.notify();
+    }
+
+    /// Reload the persisted settings, dropping unsaved in-memory edits.
+    ///
+    /// Uses the same startup fallback as `BitwardenApp::new`, so first-run
+    /// installs simply return to defaults without inventing a fake save.
+    pub(super) fn discard_settings(&mut self, cx: &mut Context<Self>) {
+        let (settings, notice) = match Settings::default_path() {
+            Some(path) => match Settings::load_detailed(&path) {
+                Ok(settings) => (settings, None),
+                Err(error) => (
+                    Settings::default(),
+                    Some(format!(
+                        "保存済みの設定を読み込めませんでした（{error}）。既定値へ戻しました"
+                    )),
+                ),
+            },
+            None => (Settings::default(), None),
+        };
+        self.settings = settings;
+        self.settings_dirty = false;
+        // Thresholds affect the report, so recompute it rather than leaving a
+        // report produced with the discarded values on screen.
+        if self.view.audit_report.is_some() {
+            self.refresh_audit();
+        }
+        let mut notices = notice.into_iter().collect::<Vec<_>>();
+        if let Some(path) = Settings::default_path() {
+            notices.extend(crate::settings::load_advisories(&path));
+        }
+        self.status = if notices.is_empty() {
+            "未保存の設定変更を破棄しました（保存済みの設定に戻しました）".to_string()
+        } else {
+            notices.join(" / ")
+        };
         cx.notify();
     }
 
     pub(super) fn push_editing(&mut self, text: &str) {
         if let Some(field) = self.editing {
             self.settings.push_shared_text(field.into(), text);
+            self.mark_settings_dirty();
         }
     }
 
     pub(super) fn pop_editing(&mut self) {
         if let Some(field) = self.editing {
             self.settings.pop_shared_char(field.into());
+            self.mark_settings_dirty();
         }
     }
 
@@ -149,6 +217,8 @@ impl BitwardenApp {
         cx: &mut Context<Self>,
     ) {
         crate::ui::keys::apply_generator_key(&mut self.settings, option);
+        self.mark_settings_dirty();
+        self.status = "生成設定を変更しました（未保存 / w: 保存 / d: 破棄）".to_string();
         cx.notify();
     }
 }

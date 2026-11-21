@@ -5,9 +5,13 @@
 //! secrets are persisted here: master passwords and keys live only in memory.
 //!
 //! The file carries a [`CURRENT_SCHEMA_VERSION`] marker. Files that predate
-//! the marker (missing field) are treated as compatible with the current
-//! schema, while a *newer* version is never trusted: the whole file is
-//! discarded in favour of defaults because its field meanings may differ.
+//! the marker (missing field) are kept as [`LEGACY_SCHEMA_VERSION`] and never
+//! silently promoted to the current version: they remain compatible field by
+//! field, but the loaded struct reports the legacy marker until it is written
+//! back. A *newer* version is never trusted: the whole file is discarded in
+//! favour of defaults because its field meanings may differ. The only field
+//! rescued from such a file is a valid `device_id`, which is an opaque local
+//! identifier whose meaning cannot change with the schema.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -15,6 +19,7 @@ use serde_json::Value;
 use std::io::Read;
 use std::path::PathBuf;
 
+use crate::auth::{truncate_to_limit, MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
 use crate::error::{AppError, BoxedCause};
 use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::health::Thresholds;
@@ -28,8 +33,14 @@ pub const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 ///
 /// Bump this when the meaning or shape of a field changes incompatibly.
 /// Values `0..=CURRENT_SCHEMA_VERSION` are accepted (0 covers legacy files
-/// that used 0 explicitly); anything larger is rejected as unknown.
+/// that used 0 explicitly); anything larger is rejected as unknown, regardless
+/// of the JSON type used to encode it.
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// Marker for files written before `schema_version` existed, and for files
+/// whose marker has the wrong type. Their known fields stay usable, but the
+/// value is not promoted to [`CURRENT_SCHEMA_VERSION`] until the next save.
+pub const LEGACY_SCHEMA_VERSION: u32 = 0;
 
 /// Top-level settings object.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,8 +48,10 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 pub struct Settings {
     /// Schema version of the file this struct came from.
     ///
-    /// Missing in legacy files, in which case serde's container-level
-    /// `#[serde(default)]` fills it with [`CURRENT_SCHEMA_VERSION`].
+    /// Missing or wrongly typed in legacy files: serde's container-level
+    /// `#[serde(default)]` first fills it with [`CURRENT_SCHEMA_VERSION`], and
+    /// `parse_settings` then explicitly rewrites it to
+    /// [`LEGACY_SCHEMA_VERSION`] so a legacy file is not reported as current.
     pub schema_version: u32,
     /// Server URL (Bitwarden or Vaultwarden).
     pub server_url: String,
@@ -94,10 +107,21 @@ pub enum SharedSettingsField {
 
 impl Settings {
     /// Append text to a field owned by `Settings`, from either UI path.
+    ///
+    /// The same caps used for the network config and for `sanitized()` apply
+    /// here, so a large paste cannot grow a stored field past its limit. Like
+    /// `AuthState::push_text`, excess input is dropped rather than reported as
+    /// an error, and truncation happens on a UTF-8 character boundary.
     pub fn push_shared_text(&mut self, field: SharedSettingsField, text: &str) {
         match field {
-            SharedSettingsField::ServerUrl => self.server_url.push_str(text),
-            SharedSettingsField::Email => self.email.push_str(text),
+            SharedSettingsField::ServerUrl => {
+                self.server_url.push_str(text);
+                truncate_to_limit(&mut self.server_url, MAX_SERVER_URL_LEN);
+            }
+            SharedSettingsField::Email => {
+                self.email.push_str(text);
+                truncate_to_limit(&mut self.email, MAX_EMAIL_LEN);
+            }
         }
     }
 
@@ -199,6 +223,74 @@ impl core::fmt::Debug for Settings {
             .field("login_timeout_seconds", &self.login_timeout_seconds)
             .field("clipboard_restore_seconds", &self.clipboard_restore_seconds)
             .finish()
+    }
+}
+
+/// Warnings for a file that parsed, but whose metadata cannot be fully
+/// trusted: a future schema marker or unknown keys. These are advisory only;
+/// `load_detailed` still applies the documented fallback.
+/// Only top-level keys are inspected; nested fields are validated by
+/// `load_detailed`'s per-field tolerance. Files above `MAX_SETTINGS_BYTES` are
+/// skipped because `load_detailed` already reports them as too large.
+pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
+    if !std::fs::metadata(path).is_ok_and(|meta| meta.len() <= MAX_SETTINGS_BYTES) {
+        return Vec::new();
+    }
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&contents) else {
+        return Vec::new();
+    };
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    let mut notices = Vec::new();
+    if let Some(version) = schema_version_of(object.get("schema_version")) {
+        if version > u64::from(CURRENT_SCHEMA_VERSION) {
+            notices.push(format!(
+                "設定ファイルのバージョン {version} は未対応です。既定値で起動します"
+            ));
+        }
+    }
+    const KNOWN: &[&str] = &[
+        "schema_version",
+        "server_url",
+        "email",
+        "device_id",
+        "password_generator",
+        "passphrase_generator",
+        "thresholds",
+        "idle_lock_seconds",
+        "login_timeout_seconds",
+        "clipboard_restore_seconds",
+    ];
+    let unknown: Vec<String> = object
+        .keys()
+        .filter(|key| !KNOWN.contains(&key.as_str()))
+        .cloned()
+        .collect();
+    if !unknown.is_empty() {
+        notices.push(format!(
+            "未知の設定キーは無視されます: {}",
+            unknown.join(", ")
+        ));
+    }
+    notices
+}
+
+/// Read a schema marker as a number regardless of its JSON type.
+///
+/// A future writer might have serialized the version as a string (e.g.
+/// `"9999"`). Treating that as "wrong type, therefore current" would silently
+/// downgrade an unknown schema to one we claim to understand, so numeric
+/// strings are parsed here and rejected by the same future-version guard as a
+/// JSON number. Non-numeric values return `None` and are treated as legacy.
+fn schema_version_of(value: Option<&Value>) -> Option<u64> {
+    match value? {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.trim().parse::<u64>().ok(),
+        _ => None,
     }
 }
 
@@ -320,7 +412,9 @@ impl Settings {
     /// them. Bounds match the UI adjusters: 1..=60 minutes for idle lock,
     /// 1..=3600 seconds for login/clipboard delays, 4..=128 characters and
     /// 2..=20 words for the generators, 1..=200 bits / 1..=3650 days for the
-    /// audit thresholds.
+    /// audit thresholds. The same auth caps apply to `server_url` and `email`,
+    /// reusing the constants from `crate::auth` so the stored value and the
+    /// effective (clamped) login config cannot diverge.
     pub fn sanitized(&self) -> Self {
         let mut result = self.clone();
         // A hand-edited, malformed identifier must not be sent to the server;
@@ -328,6 +422,8 @@ impl Settings {
         if !is_valid_device_id(&result.device_id) {
             result.device_id.clear();
         }
+        truncate_to_limit(&mut result.server_url, MAX_SERVER_URL_LEN);
+        truncate_to_limit(&mut result.email, MAX_EMAIL_LEN);
         result.idle_lock_seconds = result.idle_lock_seconds.clamp(60, 3600);
         result.login_timeout_seconds = result.login_timeout_seconds.clamp(1, 3600);
         result.clipboard_restore_seconds = result.clipboard_restore_seconds.clamp(1, 3600);
@@ -361,19 +457,29 @@ impl Settings {
             let generated = generate_device_id()
                 .map_err(|error| AppError::RandomUnavailableCause(BoxedCause::new(error)))?;
             if let Some(path) = path {
-                let previous = std::mem::replace(&mut self.device_id, generated);
-                if let Err(error) = self.save(path) {
+                if let Err(error) = Self::save_device_id_only(path, &generated) {
                     // Never use an identifier that was not persisted: the next
                     // call must generate and try again.
-                    self.device_id = previous;
                     let detail = format!("デバイス ID を保存できませんでした: {error}");
                     return Err(AppError::SettingsSaveCause(detail, BoxedCause::new(error)));
                 }
-            } else {
-                self.device_id = generated;
             }
+            self.device_id = generated;
         }
         Ok(&self.device_id)
+    }
+
+    /// Persist only the device identifier, preserving other on-disk fields.
+    ///
+    /// The login screen may hold unsaved shared-field edits; writing `self`
+    /// would silently persist them. Re-read the file, replace just the id and
+    /// stamp the current schema before writing.
+    pub fn save_device_id_only(path: &std::path::Path, id: &str) -> std::io::Result<()> {
+        let mut current = Self::load_detailed(path).unwrap_or_default();
+        current.device_id = id.to_string();
+        current.schema_version = CURRENT_SCHEMA_VERSION;
+        let contents = serde_json::to_string_pretty(&current).map_err(std::io::Error::other)?;
+        crate::private_file::write_private(path, contents.as_bytes())
     }
 
     /// The default config file path.
@@ -423,12 +529,17 @@ impl Settings {
 
     /// Parse JSON with per-field tolerance, including the nested structs.
     ///
-    /// A numeric `schema_version` newer than [`CURRENT_SCHEMA_VERSION`] is
-    /// rejected before any other field is read: a future writer may have
-    /// changed the meaning of otherwise familiar keys, so no field from such
-    /// a file is safe to keep. The whole struct falls back to defaults.
-    /// A missing or wrong-typed marker stays compatible and is filled in by
-    /// the tolerance pass below.
+    /// A `schema_version` newer than [`CURRENT_SCHEMA_VERSION`] is rejected
+    /// before any other field is read, regardless of its JSON type (a numeric
+    /// string such as `"9999"` counts as a future version too): a future writer
+    /// may have changed what otherwise familiar keys mean. Only a valid
+    /// `device_id` survives, because it is an opaque local identifier whose
+    /// meaning cannot change with the schema. Everything else falls back to
+    /// defaults.
+    ///
+    /// A missing or wrong-typed marker stays compatible and is explicitly
+    /// reported as [`LEGACY_SCHEMA_VERSION`], never silently promoted to the
+    /// current version. Only a correctly typed numeric marker is trusted.
     ///
     /// The nested objects are repaired first so that a single bad leaf does
     /// not discard its correctly typed siblings; the top level is then parsed
@@ -441,12 +552,20 @@ impl Settings {
         let Some(obj) = value.as_object_mut() else {
             return Err(SettingsLoadError::ParseFailed);
         };
-        if obj
-            .get("schema_version")
-            .and_then(Value::as_u64)
-            .is_some_and(|version| version > u64::from(CURRENT_SCHEMA_VERSION))
-        {
-            return Ok(Self::default());
+        let raw_version = obj.get("schema_version");
+        let numeric_version = schema_version_of(raw_version);
+        let well_typed = matches!(raw_version, Some(Value::Number(_)));
+        if numeric_version.is_some_and(|version| version > u64::from(CURRENT_SCHEMA_VERSION)) {
+            let mut result = Self::default();
+            // The device id is an opaque UUID, not a schema-governed field: a
+            // valid one is safe to reuse even when the rest of the file comes
+            // from an unknown writer. A malformed value is dropped as usual.
+            if let Some(id) = obj.get("device_id").and_then(Value::as_str) {
+                if is_valid_device_id(id) {
+                    result.device_id = id.to_string();
+                }
+            }
+            return Ok(result);
         }
         if let Some(nested) = obj.get_mut("password_generator") {
             *nested = serde_json::to_value(tolerant_struct::<PasswordSettings>(nested.clone()))
@@ -465,7 +584,13 @@ impl Settings {
                 |error| SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::new(error))),
             )?;
         }
-        Ok(tolerant_struct::<Settings>(value))
+        let mut parsed = tolerant_struct::<Settings>(value);
+        if !well_typed || numeric_version.is_none() {
+            // serde's container default would otherwise present a legacy file
+            // as if it had explicitly declared the current schema.
+            parsed.schema_version = LEGACY_SCHEMA_VERSION;
+        }
+        Ok(parsed)
     }
 
     /// Load settings from `path`, or fall back to defaults on any error.
@@ -476,15 +601,16 @@ impl Settings {
     /// Save settings to `path`, creating parent directories if needed.
     ///
     /// The file always records [`CURRENT_SCHEMA_VERSION`], so loading a
-    /// compatible legacy struct upgrades it on the next write. `self` is not
-    /// mutated.
+    /// compatible legacy struct upgrades it on the next write. The write uses
+    /// [`Self::sanitized`] on a clone so the persisted value matches the
+    /// effective (clamped) one; `self` is never mutated.
     ///
     /// # Errors
     ///
     /// Returns `std::io::Error` on filesystem or serialization failure.
     pub fn save(&self, path: impl AsRef<std::path::Path>) -> Result<(), std::io::Error> {
         let path = path.as_ref();
-        let mut stamped = self.clone();
+        let mut stamped = self.sanitized();
         stamped.schema_version = CURRENT_SCHEMA_VERSION;
         let contents = serde_json::to_string_pretty(&stamped)?;
         crate::private_file::write_private(path, contents.as_bytes())

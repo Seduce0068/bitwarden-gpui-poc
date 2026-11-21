@@ -13,10 +13,11 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::generator::{entropy_bits, Strength, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
-use crate::model::{ItemKind, Vault, VaultItem};
+use crate::generator::{entropy_bits, Strength, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE, WEAK_BITS};
+use crate::model::{FingerprintVerify, ItemKind, Vault, VaultItem};
 use crate::totp::is_valid_secret;
-use crate::vault_sync::is_undecryptable_password;
+use crate::vault_sync::{is_undecryptable_password, is_undecryptable_totp};
+use crate::words::WORDS;
 
 /// A single finding.
 ///
@@ -48,6 +49,9 @@ pub enum Finding {
     },
     /// A login carries no usable TOTP secret.
     NoTotp,
+    /// A TOTP field exists but its ciphertext could not be decrypted, so the
+    /// login is known to be 2FA-enabled but no code can be generated.
+    TotpUninspectable,
     /// The encrypted password could not be decrypted, so no strength or reuse
     /// check was possible. This is informational, not a weak password.
     PasswordUninspectable,
@@ -57,6 +61,15 @@ pub enum Finding {
     UriUninspectable,
     /// A card item has no card number.
     NoCardNumber,
+    /// A stored SSH fingerprint does not match the one recomputed from the
+    /// public key line. `computed` is a SHA256 fingerprint, never a secret.
+    SshFingerprintMismatch {
+        /// The fingerprint recomputed from the public key line.
+        computed: String,
+    },
+    /// The SSH public key line could not be parsed, so the stored fingerprint
+    /// could not be checked.
+    SshFingerprintInvalid,
     /// The name is empty.
     Unnamed,
 }
@@ -68,16 +81,25 @@ impl Finding {
             Self::WeakPassword { bits } => format!("弱いパスワード（推定 {bits} bit）"),
             Self::ReusedPassword { count } => format!("{count} 件で同じパスワードを再利用"),
             Self::Stale { days } => format!("{days} 日以上更新されていない"),
+            // `mask_uri` is idempotent, so this also protects findings built
+            // directly with a raw URI (e.g. in tests or by future callers).
             Self::InsecureUri { uri } => {
                 format!("http の URI（{}）", crate::model::mask_uri(uri))
             }
             Self::NoTotp => "TOTP 未設定".to_string(),
+            Self::TotpUninspectable => "TOTP 検査対象外（復号できませんでした）".to_string(),
             Self::PasswordUninspectable => {
                 "パスワード検査対象外（復号できませんでした）".to_string()
             }
             Self::NoUri => "URI 未設定".to_string(),
             Self::UriUninspectable => "URI 検査対象外（復号できませんでした）".to_string(),
             Self::NoCardNumber => "カード番号が空".to_string(),
+            Self::SshFingerprintMismatch { computed } => {
+                format!("SSH フィンガープリントが一致しません（計算値: {computed}）")
+            }
+            Self::SshFingerprintInvalid => {
+                "SSH 公開鍵を解析できないためフィンガープリントを検証できません".to_string()
+            }
             Self::Unnamed => "名前が空".to_string(),
         }
     }
@@ -85,12 +107,16 @@ impl Finding {
     /// How severe the finding is, for sorting and colouring.
     pub const fn severity(&self) -> Severity {
         match self {
-            Self::ReusedPassword { .. } | Self::InsecureUri { .. } => Severity::High,
+            Self::ReusedPassword { .. }
+            | Self::InsecureUri { .. }
+            | Self::SshFingerprintMismatch { .. } => Severity::High,
             Self::WeakPassword { .. } | Self::Stale { .. } | Self::NoCardNumber => Severity::Medium,
             Self::NoTotp
+            | Self::TotpUninspectable
             | Self::PasswordUninspectable
             | Self::NoUri
             | Self::UriUninspectable
+            | Self::SshFingerprintInvalid
             | Self::Unnamed => Severity::Low,
         }
     }
@@ -261,7 +287,9 @@ pub struct Thresholds {
 impl Default for Thresholds {
     fn default() -> Self {
         Self {
-            weak_bits: 50,
+            // Same boundary as `Strength::from_bits`, so the generator's
+            // "Weak" label and this audit's threshold cannot disagree.
+            weak_bits: WEAK_BITS,
             stale_days: 365,
         }
     }
@@ -277,6 +305,12 @@ impl Default for Thresholds {
 pub fn estimate_entropy(password: &str) -> u32 {
     if password.is_empty() {
         return 0;
+    }
+    // A generated passphrase has a word-list entropy, not a character-pool
+    // entropy. Score it with the generator's model so the audit and the
+    // generator's strength meter report the same number.
+    if let Some(bits) = passphrase_estimate(password) {
+        return bits;
     }
     let chars: Vec<char> = password.chars().collect();
     let mut pool = 0usize;
@@ -336,6 +370,51 @@ pub fn estimate_entropy(password: &str) -> u32 {
     adjusted.round().clamp(0.0, 1000.0) as u32
 }
 
+/// Score a generated passphrase with the generator's word-list model.
+///
+/// Recognizes only the exact shape [`PassphraseSettings`](crate::generator::PassphraseSettings)
+/// can emit: at least two words from the shared list, joined by one repeated
+/// non-alphanumeric separator, each optionally capitalized, with an optional
+/// single trailing digit. Anything else falls back to the character-pool
+/// estimate in [`estimate_entropy`].
+fn passphrase_estimate(value: &str) -> Option<u32> {
+    let (body, with_number) = match value.as_bytes().last() {
+        Some(byte) if byte.is_ascii_digit() => (&value[..value.len() - 1], true),
+        _ => (value, false),
+    };
+    let separator_char = body
+        .chars()
+        .find(|character| !character.is_alphanumeric())?;
+    let separator = separator_char.to_string();
+    let words: Vec<&str> = body.split(separator.as_str()).collect();
+    if words.len() < 2 {
+        return None;
+    }
+    // Exactly one repeated separator, not a mixture of different ones.
+    if words.join(separator.as_str()) != body {
+        return None;
+    }
+    let mut capitalized = false;
+    for word in &words {
+        if word.is_empty() {
+            return None;
+        }
+        let lower = word.to_lowercase();
+        if !WORDS.contains(&lower.as_str()) {
+            return None;
+        }
+        capitalized |= word.chars().next().is_some_and(char::is_uppercase);
+    }
+    let mut bits = entropy_bits(WORDS.len(), words.len());
+    if capitalized {
+        bits += words.len() as f64;
+    }
+    if with_number {
+        bits += (10.0f64).log2();
+    }
+    Some(bits.round().clamp(0.0, 1000.0) as u32)
+}
+
 fn strip_trailing_digits(value: &str) -> Option<&str> {
     let trimmed = value.trim_end_matches(|c: char| c.is_ascii_digit());
     (trimmed.len() != value.len() && !trimmed.is_empty()).then_some(trimmed)
@@ -344,9 +423,10 @@ fn strip_trailing_digits(value: &str) -> Option<&str> {
 /// The longest `"password"`-prefixed value still treated as a dictionary guess
 /// by `is_common_password`.
 ///
-/// The cap is chosen relative to `Thresholds::weak_bits` (50 by default).
-/// Capped values take the dictionary estimate from `entropy_bits(2_000, 1)`
-/// (~11 bit, ~12 with an uppercase letter), well below 50, so short guesses
+/// The cap is chosen relative to `Thresholds::weak_bits` ([`WEAK_BITS`] = 40
+/// by default). Capped values take the dictionary estimate from
+/// `entropy_bits(2_000, 1)` (~11 bit, ~12 with an uppercase letter), well below
+/// 40, so short guesses
 /// such as `password123` are flagged `WeakPassword`. Without the cap their raw
 /// pool x length score would already clear the threshold (`password123` scores
 /// ~57 bit), letting them slip through. Longer values keep their real estimate,
@@ -409,6 +489,26 @@ fn is_common_password(lower: &str) -> bool {
         || (lower.starts_with("qwerty") && lower.len() <= QWERTY_PREFIX_LIMIT)
 }
 
+/// Whether `item` has a TOTP field that can actually produce a code.
+///
+/// This is the single source of truth for the TOTP badge in the list, the
+/// `Report::with_totp` counter and the per-item `NoTotp` finding, so those
+/// three views cannot drift apart. A field that exists but could not be
+/// decrypted is not usable (see [`has_totp_field`]).
+pub fn has_usable_totp(item: &VaultItem) -> bool {
+    item.totp_secret()
+        .is_some_and(|secret| !is_undecryptable_totp(secret) && is_valid_secret(secret))
+}
+
+/// Whether `item` carries a TOTP field at all, including one that could not be
+/// decrypted.
+///
+/// A decryption failure must not be collapsed into "no TOTP": the login is
+/// known to be 2FA-enabled, only the secret is uninspectable.
+pub fn has_totp_field(item: &VaultItem) -> bool {
+    item.totp_secret().is_some_and(|secret| !secret.is_empty())
+}
+
 /// Audit `vault` with `thresholds` at `now` (Unix seconds).
 ///
 /// Reuse is computed across all logins in the vault, including ones that are
@@ -435,7 +535,7 @@ pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
         audit_item(item, thresholds, now, &passwords, &mut findings);
         if item.kind() == ItemKind::Login {
             report.logins += 1;
-            if item.totp_secret().is_some_and(is_valid_secret) {
+            if has_usable_totp(item) {
                 report.with_totp += 1;
             }
         }
@@ -500,13 +600,27 @@ fn audit_item(
                     }
                 }
             }
-            if !is_valid_secret(totp) {
+            if is_undecryptable_totp(totp) {
+                // The field exists but its ciphertext could not be opened.
+                // Preserve the "2FA is configured" information instead of
+                // misreporting it as an unset TOTP.
+                findings.push(Finding::TotpUninspectable);
+            } else if !is_valid_secret(totp) {
                 findings.push(Finding::NoTotp);
             }
         }
         crate::model::ItemData::Card(card) if card.number.trim().is_empty() => {
             findings.push(Finding::NoCardNumber);
         }
+        crate::model::ItemData::SshKey(key) => match key.verify_fingerprint() {
+            FingerprintVerify::Match => {}
+            FingerprintVerify::Mismatch { computed } => {
+                findings.push(Finding::SshFingerprintMismatch { computed });
+            }
+            FingerprintVerify::InvalidPublicKey => {
+                findings.push(Finding::SshFingerprintInvalid);
+            }
+        },
         _ => {}
     }
 

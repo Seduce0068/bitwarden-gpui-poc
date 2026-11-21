@@ -33,6 +33,8 @@ jobs:
         markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
         # シークレットスキャンは pre-commit を主軸とし、CI を最終ゲートとする。
         GITLEAKS_VERSION=8.28.0
+        # pre-commit と CI の版がずれないようにする（片方だけの更新を検出）。
+        grep -q "rev: v${GITLEAKS_VERSION}" .pre-commit-config.yaml
         GITLEAKS_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
         curl -sSfL \
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GITLEAKS_ARCHIVE}" \
@@ -44,6 +46,10 @@ jobs:
         tar -xzf "/tmp/${GITLEAKS_ARCHIVE}" -C /tmp gitleaks
         /tmp/gitleaks dir --redact --config .gitleaks.toml
         # pre-commit を回避して投入された秘密を履歴からも検出する。
-        git fetch --unshallow >/dev/null 2>&1 || true
+        # 浅いクローンのまま走ると過去の秘密を見逃すため、必要なときだけ
+        # 全履歴を取得し、失敗した場合はゲートを失敗させる。
+        if git rev-parse --is-shallow-repository | grep -q '^true$'; then
+          git fetch --unshallow
+        fi
         /tmp/gitleaks git --redact --config .gitleaks.toml
       # Clippy lints (unwrap/expect/panic/unsafe) are denied via Cargo.toml [lints.clippy].

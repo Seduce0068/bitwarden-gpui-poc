@@ -21,9 +21,27 @@ mod unicode_normalize {
         input.chars().nfkd().collect()
     }
 
-    /// Case-folded NFKD key shared by search and duplicate-name detection.
+    /// Fully case-folded NFKD key shared by search, duplicate-name detection
+    /// and sorting.
+    ///
+    /// `str::to_lowercase` alone is not a full Unicode case fold: `ß`/`ẞ`
+    /// stay distinct from `ss`, and the final sigma `ς` stays distinct from
+    /// `σ`. The small mapping below covers those well-known cases without a
+    /// new dependency (`unicode-normalization` provides NFKD only, not case
+    /// folding). Every other character uses the standard library's mapping.
+    /// The result is idempotent, so normalizing an already-normalized needle
+    /// a second time is harmless.
     pub(crate) fn comparison_key(input: &str) -> String {
-        nfkd(input).to_lowercase()
+        let mut out = String::new();
+        for character in nfkd(input).chars() {
+            match character {
+                'ß' | 'ẞ' => out.push_str("ss"),
+                'ς' => out.push('σ'),
+                'ſ' => out.push('s'),
+                other => out.extend(other.to_lowercase()),
+            }
+        }
+        out
     }
 }
 pub(crate) use unicode_normalize::comparison_key;
@@ -47,6 +65,12 @@ pub fn mask_uri(value: &str) -> String {
     // as a plausible-looking scheme; show the status instead.
     if value.starts_with('\0') {
         return "（復号できませんでした）".to_string();
+    }
+    // Already-masked values and status markers must survive another pass
+    // unchanged: findings may be constructed with a raw URI or with the
+    // output of this function, and both paths share `Finding::message()`.
+    if value == "（復号できませんでした）" || value == "(不正な URI)" {
+        return value.to_string();
     }
     match url::Url::parse(value) {
         Ok(url) => {
@@ -595,12 +619,17 @@ impl VaultItem {
         out
     }
 
-    /// Whether any searchable field contains `needle` (already normalized
-    /// and lowercased by [`Vault::view`]).
+    /// Whether any searchable field contains `needle`.
+    ///
+    /// `Vault::view` already passes a normalized needle, but this is a public
+    /// method and callers may pass raw user input, so `needle` is normalized
+    /// here too. `comparison_key` is idempotent, so the double normalization
+    /// on the `view()` path cannot change the result.
     pub fn matches_query(&self, needle: &str) -> bool {
+        let needle = comparison_key(needle);
         self.haystacks()
             .iter()
-            .any(|field| comparison_key(field.as_ref()).contains(needle))
+            .any(|field| comparison_key(field.as_ref()).contains(needle.as_str()))
     }
 }
 

@@ -392,3 +392,136 @@ fn settings_keys_adjust_seconds_fields() {
     value.key = "6";
     assert_eq!(classify_key(&value), UiAction::AdjustClipboardRestore(-1));
 }
+
+#[test]
+fn settings_editing_keeps_every_letter_as_text() {
+    let mut value = ctx("w");
+    value.panel = Panel::Settings;
+    assert_eq!(classify_key(&value), UiAction::SaveSettings);
+    value.editing_settings = true;
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertSettingsText("w".into()),
+        "typing w in a URL must not save the settings"
+    );
+    for key in ["c", "l", "d"] {
+        value.key = key;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSettingsText(key.into()),
+            "{key} must be plain text while editing a settings field"
+        );
+    }
+    value.key = "enter";
+    assert_eq!(classify_key(&value), UiAction::FinishSettingsEdit);
+}
+
+#[test]
+fn auth_editing_digits_and_enter_are_text_and_confirmation() {
+    let mut value = ctx("1");
+    value.screen = Screen::Locked;
+    assert_eq!(
+        classify_key(&value),
+        UiAction::EditAuthField(AuthField::ServerUrl)
+    );
+    value.editing_auth = true;
+    for key in ["1", "2", "3", "4", "5"] {
+        value.key = key;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertAuthText(key.into()),
+            "{key} selects a field only outside editing mode"
+        );
+    }
+    value.key = "enter";
+    assert_eq!(
+        classify_key(&value),
+        UiAction::FinishAuthEdit,
+        "Enter confirms the field; authentication is a separate action"
+    );
+}
+
+#[test]
+fn generator_and_settings_save_discard_keys() {
+    let mut value = ctx("w");
+    value.panel = Panel::Generator;
+    assert_eq!(classify_key(&value), UiAction::SaveSettings);
+    value.key = "d";
+    assert_eq!(classify_key(&value), UiAction::DiscardSettings);
+
+    value.panel = Panel::Settings;
+    assert_eq!(classify_key(&value), UiAction::DiscardSettings);
+    value.key = "w";
+    assert_eq!(classify_key(&value), UiAction::SaveSettings);
+}
+
+#[test]
+fn audit_focus_action_carries_the_item_id() {
+    let action = UiAction::FocusAuditItem("item-42".into());
+    assert_eq!(action, UiAction::FocusAuditItem("item-42".into()));
+    assert_ne!(action, UiAction::FocusAuditItem("other".into()));
+}
+
+#[test]
+fn global_keys_are_scoped_without_ambiguous_bindings() {
+    for screen in [Screen::Locked, Screen::Unlocked] {
+        for panel in [
+            Panel::Vault,
+            Panel::Audit,
+            Panel::Generator,
+            Panel::Settings,
+        ] {
+            let mut base = ctx("x");
+            base.screen = screen;
+            base.panel = panel;
+
+            // `l` locks from every unlocked panel; the lock screen has no
+            // vault to lock and therefore keeps the key inert.
+            base.key = "l";
+            let expected = if screen == Screen::Unlocked {
+                UiAction::Lock
+            } else {
+                UiAction::None
+            };
+            assert_eq!(classify_key(&base), expected, "{screen:?}/{panel:?}");
+
+            // Save/discard belong only to the settings-owning panels; elsewhere
+            // the same keys must stay inert instead of dispatching another
+            // global action.
+            let owns_settings =
+                screen == Screen::Unlocked && matches!(panel, Panel::Settings | Panel::Generator);
+            for key in ["w", "d"] {
+                base.key = key;
+                let action = classify_key(&base);
+                assert!(
+                    if owns_settings {
+                        matches!(action, UiAction::SaveSettings | UiAction::DiscardSettings)
+                    } else {
+                        action == UiAction::None
+                    },
+                    "{screen:?}/{panel:?}/{key} -> {action:?}"
+                );
+            }
+
+            // While a settings field is being edited, no key may escape into a
+            // global action; all of them become text or editing commands.
+            base.panel = Panel::Settings;
+            base.editing_settings = true;
+            for key in ["w", "d", "l", "c", "1", "2"] {
+                base.key = key;
+                let action = classify_key(&base);
+                assert!(
+                    !matches!(
+                        action,
+                        UiAction::SaveSettings
+                            | UiAction::DiscardSettings
+                            | UiAction::Lock
+                            | UiAction::SetPanel(_)
+                            | UiAction::Authenticate
+                    ),
+                    "{key} escaped editing: {action:?}"
+                );
+            }
+        }
+    }
+}

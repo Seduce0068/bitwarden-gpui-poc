@@ -166,10 +166,68 @@ fn unlocked_vault(ciphers: &[serde_json::Value]) -> openwarden::Vault {
     vault
 }
 
+/// Build a vault that keeps duplicate ciphers, bypassing `parse_sync`'s
+/// pre-sync dedup. The import layer's `ImportAudit` contract is defined for
+/// duplicates handed directly to `import_logins_with_audit`, so those tests
+/// construct their vault this way instead of going through `parse_sync`.
+fn unlocked_vault_raw(ciphers: &[serde_json::Value]) -> openwarden::Vault {
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    let body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [],
+        "ciphers": ciphers,
+    })
+    .to_string();
+    let sync = openwarden::SyncData::from_json(body.as_bytes()).expect("sync JSON should parse");
+    vault.apply_sync(sync).expect("sync should apply");
+    vault
+}
+
+fn vault_from_body(body: &[u8]) -> openwarden::Vault {
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    let sync = parse_sync(body).expect("sync JSON should parse");
+    vault.apply_sync(sync).expect("sync should apply");
+    vault
+}
+
+/// Uppercase the first ASCII letter of every JSON key, recursively, to mimic
+/// a Vaultwarden server that returns PascalCase wire keys.
+fn pascalize(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, mut child) in std::mem::take(map) {
+                pascalize(&mut child);
+                let mut chars = key.chars();
+                let pascal = match chars.next() {
+                    Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                    None => String::new(),
+                };
+                map.insert(pascal, child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                pascalize(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn duplicate_ids_are_collapsed_before_remove() {
     let id = "dup-1";
-    let vault = unlocked_vault(&[
+    let vault = unlocked_vault_raw(&[
         cipher(id, "2024-01-01T00:00:00Z"),
         cipher(id, "2024-01-02T00:00:00Z"),
     ]);
@@ -194,7 +252,7 @@ fn regressed_revision_is_clipped_and_recorded() {
     let id = "rev-1";
     let kept = parse_revision(Some("2024-02-01T00:00:00Z")).unwrap();
     let dropped = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
-    let vault = unlocked_vault(&[
+    let vault = unlocked_vault_raw(&[
         cipher(id, "2024-02-01T00:00:00Z"),
         cipher(id, "2024-01-01T00:00:00Z"),
     ]);
@@ -223,7 +281,7 @@ fn newer_duplicate_replaces_the_older_revision() {
     let id = "rev-2";
     let old = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
     let new = parse_revision(Some("2024-03-01T00:00:00Z")).unwrap();
-    let vault = unlocked_vault(&[
+    let vault = unlocked_vault_raw(&[
         cipher(id, "2024-01-01T00:00:00Z"),
         cipher(id, "2024-03-01T00:00:00Z"),
     ]);
@@ -242,7 +300,7 @@ fn newer_duplicate_replaces_the_older_revision() {
 fn duplicate_with_same_revision_is_ignored() {
     let id = "rev-3";
     let revision = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
-    let vault = unlocked_vault(&[
+    let vault = unlocked_vault_raw(&[
         cipher(id, "2024-01-01T00:00:00Z"),
         cipher(id, "2024-01-01T00:00:00Z"),
     ]);
@@ -265,6 +323,35 @@ fn duplicate_with_same_revision_is_ignored() {
 }
 
 #[test]
+fn duplicate_ciphers_use_the_latest_revisions_decrypted_content() {
+    // Regression: `openwarden::Vault::cipher(id)` returns the first matching
+    // row, so a newer `LoginInfo` used to be paired with the older cipher's
+    // decrypted password. Pre-sync dedup keeps metadata and fields consistent.
+    let id = "dup-content";
+    let mut old = encrypted_login(id, "OLD_PASSWORD_VALUE", REAL_TOTP);
+    old["revisionDate"] = serde_json::json!("2024-01-01T00:00:00Z");
+    let mut newest = encrypted_login(id, "NEW_PASSWORD_VALUE", REAL_TOTP);
+    newest["revisionDate"] = serde_json::json!("2024-03-01T00:00:00Z");
+    // A unique id must survive alongside the collapsed duplicate.
+    let other = encrypted_login("unique-1", "UNIQUE_PASSWORD_VALUE", REAL_TOTP);
+    let vault = unlocked_vault(&[old, newest, other]);
+    let model = import_logins(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 2, "duplicate collapsed, unique kept");
+    let item = model.item(id).expect("the duplicate id must survive");
+    assert_eq!(
+        item.revision_date,
+        parse_revision(Some("2024-03-01T00:00:00Z")).unwrap()
+    );
+    assert_eq!(item.password(), Some("NEW_PASSWORD_VALUE"));
+    assert_eq!(item.totp_secret(), Some(REAL_TOTP));
+    assert_eq!(
+        model.item("unique-1").unwrap().password(),
+        Some("UNIQUE_PASSWORD_VALUE")
+    );
+}
+
+#[test]
 fn audit_log_never_contains_secrets() {
     let id = "secret-1";
     let marker = "SHOULD_NOT_APPEAR_IN_AUDIT";
@@ -273,7 +360,7 @@ fn audit_log_never_contains_secrets() {
     secret_cipher["login"]["username"] = serde_json::json!(marker);
     secret_cipher["login"]["password"] = serde_json::json!(marker);
     secret_cipher["login"]["totp"] = serde_json::json!(marker);
-    let vault = unlocked_vault(&[secret_cipher, cipher(id, "2024-01-02T00:00:00Z")]);
+    let vault = unlocked_vault_raw(&[secret_cipher, cipher(id, "2024-01-02T00:00:00Z")]);
     let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
 
     assert_eq!(model.items.len(), 1);
@@ -288,7 +375,7 @@ fn audit_log_never_contains_secrets() {
 #[test]
 fn plain_import_still_skips_duplicates_and_reports_locked_vault() {
     let id = "plain-1";
-    let vault = unlocked_vault(&[
+    let vault = unlocked_vault_raw(&[
         cipher(id, "2024-01-01T00:00:00Z"),
         cipher(id, "2024-01-02T00:00:00Z"),
     ]);
@@ -436,7 +523,12 @@ fn undecryptable_password_keeps_the_vault_and_is_excluded_from_audit() {
     assert!(crate::totp::code_at(good.totp_secret().unwrap(), TOTP_AT).is_ok());
 
     assert_eq!(bad.password(), Some(UNDECRYPTABLE_PASSWORD));
-    assert_eq!(bad.totp_secret(), Some(""));
+    // A broken TOTP ciphertext keeps the "2FA configured" information instead
+    // of being collapsed into "no TOTP".
+    assert_eq!(bad.totp_secret(), Some(UNDECRYPTABLE_TOTP));
+    assert!(is_undecryptable_totp(bad.totp_secret().unwrap()));
+    assert!(crate::health::has_totp_field(bad));
+    assert!(!crate::health::has_usable_totp(bad));
     assert!(crate::totp::code_at(bad.totp_secret().unwrap(), TOTP_AT).is_err());
 
     // No ciphertext plaintext lands in the model, the audit, or their
@@ -465,6 +557,50 @@ fn missing_totp_is_empty_instead_of_an_available_marker() {
     let model = import_logins(&vault).expect("import should succeed");
     assert_eq!(model.items[0].totp_secret(), Some(""));
     assert!(crate::totp::code_at(model.items[0].totp_secret().unwrap(), TOTP_AT).is_err());
+}
+
+#[test]
+fn undecryptable_totp_keeps_the_has_totp_information() {
+    let mut bad = cipher("totp-bad", "2024-01-01T00:00:00Z");
+    bad["login"]["totp"] = serde_json::json!("NEVER_IN_THE_MODEL_TOTP");
+    let unset = cipher("totp-unset", "2024-01-01T00:00:00Z");
+    let vault = unlocked_vault(&[bad, unset]);
+    let model = import_logins(&vault).expect("import should succeed");
+
+    let bad_item = model.item("totp-bad").unwrap();
+    let unset_item = model.item("totp-unset").unwrap();
+    assert_eq!(bad_item.totp_secret(), Some(UNDECRYPTABLE_TOTP));
+    assert_eq!(unset_item.totp_secret(), Some(""));
+    // The audit/UI can still tell that the first login is 2FA-enabled.
+    assert!(crate::health::has_totp_field(bad_item));
+    assert!(!crate::health::has_totp_field(unset_item));
+    assert!(!crate::health::has_usable_totp(bad_item));
+
+    let report = crate::health::audit(
+        &model,
+        crate::health::Thresholds::default(),
+        i64::try_from(TOTP_AT).unwrap(),
+    );
+    let bad_report = report
+        .items
+        .iter()
+        .find(|item| item.id == "totp-bad")
+        .unwrap();
+    assert!(bad_report
+        .findings
+        .contains(&crate::health::Finding::TotpUninspectable));
+    assert!(!bad_report
+        .findings
+        .contains(&crate::health::Finding::NoTotp));
+    let unset_report = report
+        .items
+        .iter()
+        .find(|item| item.id == "totp-unset")
+        .unwrap();
+    assert!(unset_report
+        .findings
+        .contains(&crate::health::Finding::NoTotp));
+    assert_eq!(report.with_totp, 0);
 }
 
 #[test]
@@ -522,33 +658,33 @@ fn camel_case_keys_and_values_are_left_unchanged() {
 
 #[test]
 fn pascal_case_cipher_fields_are_normalized_end_to_end() {
-    let body = br#"{
-        "Profile": {
-            "Id": "user-1",
-            "Key": "2.encrypted",
-            "PrivateKey": "2.private"
-        },
-        "Folders": [{"Id": "f1", "Name": "2.folder"}],
-        "Ciphers": [{
-            "Id": "cipher-1",
-            "OrganizationId": null,
-            "FolderId": "f1",
-            "Type": 1,
-            "Name": "2.name",
-            "RevisionDate": "2024-01-01T00:00:00Z",
-            "Login": {
-                "Username": "2.user",
-                "Password": "2.pass",
-                "Totp": "2.totp",
-                "Uris": [{"Uri": "2.uri", "Match": 0}]
-            }
-        }]
-    }"#;
-    let data = parse_sync(body).expect("nested PascalCase keys must be normalized");
-    assert_eq!(data.user_id(), "user-1");
-    // openwarden's typed fields are private; a successful parse of the nested
-    // cipher/folder/URI proves the PascalCase keys were recognized.
-    assert_eq!(data.user_id(), "user-1");
+    // Build a real encrypted login, then rewrite every JSON key to PascalCase.
+    // Unlike a duplicate `user_id` assertion, importing the result proves that
+    // the nested cipher/login/URI keys were actually recognized: a missed key
+    // would leave the password, TOTP, folder or revision at their defaults.
+    let mut encrypted = encrypted_login("cipher-1", REAL_PASSWORD, REAL_TOTP);
+    encrypted["folderId"] = serde_json::json!("f1");
+    let mut body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [],
+        "ciphers": [encrypted],
+    });
+    pascalize(&mut body);
+    let vault = vault_from_body(body.to_string().as_bytes());
+    let model = import_logins(&vault).expect("nested PascalCase keys must be normalized");
+
+    assert_eq!(model.items.len(), 1);
+    let item = &model.items[0];
+    assert_eq!(item.id, "cipher-1");
+    assert_eq!(item.password(), Some(REAL_PASSWORD));
+    assert_eq!(item.totp_secret(), Some(REAL_TOTP));
+    assert_eq!(
+        item.revision_date,
+        parse_revision(Some("2024-01-01T00:00:00Z")).unwrap()
+    );
+    assert_eq!(item.folder_id.as_deref(), Some("f1"));
+    assert_eq!(item.uris().len(), 1);
+    assert_eq!(item.uris()[0].uri, "https://example.com");
 }
 
 #[test]

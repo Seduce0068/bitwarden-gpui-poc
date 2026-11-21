@@ -83,6 +83,9 @@ impl BitwardenApp {
             }
             UiAction::FinishSettingsEdit => {
                 self.editing = None;
+                // Enter/Escape only confirm the field; point at the explicit
+                // save/discard keys so the edit is not mistaken for a save.
+                self.status = "入力を確定しました（w: 保存 / d: 破棄）".to_string();
                 cx.notify();
             }
             UiAction::InsertAuthText(text) => {
@@ -144,30 +147,37 @@ impl BitwardenApp {
             UiAction::CycleFilter => self.cycle_filter(cx),
             UiAction::CycleSort => {
                 self.view.sort = self.view.sort.next();
-                self.view.selected_id = None;
+                self.view.deselect_and_rewind();
+                self.sync_totp_to_selection();
                 cx.notify();
             }
             UiAction::StartSearch => {
                 self.view.searching = true;
                 self.view.query.clear();
-                self.view.selected_id = None;
+                self.view.deselect_and_rewind();
+                self.sync_totp_to_selection();
                 cx.notify();
             }
             UiAction::SaveSettings => self.save_settings(cx),
+            UiAction::DiscardSettings => self.discard_settings(cx),
+            UiAction::FocusAuditItem(id) => self.focus_audit_item(&id, cx),
             UiAction::AdjustThreshold(delta) => {
                 self.settings.thresholds =
                     crate::ui::logic::adjust_thresholds(self.settings.thresholds, delta);
+                self.mark_settings_dirty();
                 self.refresh_audit();
                 cx.notify();
             }
             UiAction::AdjustIdleLock(delta) => {
                 self.settings.idle_lock_seconds =
                     crate::ui::logic::adjust_idle_lock(self.settings.idle_lock_seconds, delta);
+                self.mark_settings_dirty();
                 cx.notify();
             }
             UiAction::AdjustLoginTimeout(delta) => {
                 self.settings.login_timeout_seconds =
                     crate::ui::logic::adjust_seconds(self.settings.login_timeout_seconds, delta);
+                self.mark_settings_dirty();
                 cx.notify();
             }
             UiAction::AdjustClipboardRestore(delta) => {
@@ -175,15 +185,22 @@ impl BitwardenApp {
                     self.settings.clipboard_restore_seconds,
                     delta,
                 );
+                self.mark_settings_dirty();
                 cx.notify();
             }
             UiAction::Generator(option) => self.toggle_generator(option, cx),
             UiAction::SelectRow(index) => {
+                // A mouse click is an explicit selection: leaving search mode
+                // here keeps the row click and the keyboard path consistent.
+                if self.view.searching {
+                    self.view.finish_search();
+                }
                 if self.view.select_index(index) {
                     self.view
                         .scroll_handle
                         .scroll_to_item(index, gpui_kit::ScrollStrategy::Nearest);
                 }
+                self.sync_totp_to_selection();
                 cx.notify();
             }
             UiAction::None => {}

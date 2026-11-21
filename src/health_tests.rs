@@ -2,7 +2,7 @@
 
 use crate::generator::{entropy_bits, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::health::*;
-use crate::model::{CardData, ItemData, LoginUri, VaultItem};
+use crate::model::{CardData, ItemData, LoginUri, SshKeyData, VaultItem};
 use crate::vault_sync::{is_undecryptable_password, UNDECRYPTABLE_PASSWORD};
 use zeroize::Zeroizing;
 
@@ -371,10 +371,15 @@ fn every_finding_has_a_nonempty_message() {
             uri: "http://example.com".into(),
         },
         Finding::NoTotp,
+        Finding::TotpUninspectable,
         Finding::PasswordUninspectable,
         Finding::NoUri,
         Finding::UriUninspectable,
         Finding::NoCardNumber,
+        Finding::SshFingerprintMismatch {
+            computed: "SHA256:AAAA".into(),
+        },
+        Finding::SshFingerprintInvalid,
         Finding::Unnamed,
     ];
     for finding in findings {
@@ -745,4 +750,257 @@ fn invisible_characters_do_not_hide_an_insecure_uri() {
         assert_eq!(uri, "http://example.com", "raw: {raw:?}");
         assert!(finding.message().contains("http://example.com"));
     }
+}
+
+#[test]
+fn uppercase_and_control_character_http_uris_are_detected() {
+    for raw in [
+        "HTTP://example.com",
+        "Http://Example.com",
+        "h\u{0007}ttp://example.com",
+        "\u{200b}HTTP://example.com",
+    ] {
+        let report = report_of(vec![login("1", "A", "vT7#kQm2!zR9wP4$xL8@", raw, "SECRET")]);
+        let finding = report.items[0]
+            .findings
+            .iter()
+            .find(|finding| matches!(finding, Finding::InsecureUri { .. }))
+            .unwrap_or_else(|| panic!("insecure URI hidden in {raw:?}"));
+        let Finding::InsecureUri { uri } = finding else {
+            unreachable!()
+        };
+        assert_eq!(uri, "http://example.com", "raw: {raw:?}");
+    }
+}
+
+#[test]
+fn insecure_uri_message_shows_the_stored_mask_once() {
+    // `audit_item` stores an already-masked URI (scheme + host only).
+    // `mask_uri` is idempotent, so rendering it again must keep that value.
+    let finding = Finding::InsecureUri {
+        uri: "http://example.com:8080".into(),
+    };
+    assert_eq!(finding.message(), "http の URI（http://example.com:8080）");
+    // A status marker must not be reinterpreted as an invalid URI.
+    let marker = Finding::InsecureUri {
+        uri: "（復号できませんでした）".into(),
+    };
+    assert_eq!(marker.message(), "http の URI（（復号できませんでした））");
+}
+
+#[test]
+fn stale_boundary_is_inclusive_at_the_threshold() {
+    let mut d364 = login(
+        "364",
+        "D364",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "SECRET",
+    );
+    d364.revision_date = NOW - 364 * 86_400;
+    let mut d365 = login(
+        "365",
+        "D365",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://b.example",
+        "SECRET",
+    );
+    d365.revision_date = NOW - 365 * 86_400;
+    let mut d366 = login(
+        "366",
+        "D366",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://c.example",
+        "SECRET",
+    );
+    d366.revision_date = NOW - 366 * 86_400;
+    let report = report_of(vec![d364, d365, d366]);
+    let stale: Vec<&str> = report
+        .items
+        .iter()
+        .filter(|item| {
+            item.findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::Stale { .. }))
+        })
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(stale, vec!["365", "366"]);
+    assert!(report
+        .items
+        .iter()
+        .find(|item| item.id == "365")
+        .unwrap()
+        .findings
+        .contains(&Finding::Stale { days: 365 }));
+    assert!(report
+        .items
+        .iter()
+        .find(|item| item.id == "366")
+        .unwrap()
+        .findings
+        .contains(&Finding::Stale { days: 366 }));
+}
+
+#[test]
+fn custom_thresholds_change_the_findings() {
+    let mut item = login("1", "Custom", "vT7#kQm2!zR9", "https://a.example", "SECRET");
+    item.revision_date = NOW - 20 * 86_400;
+    let vault = Vault {
+        items: vec![item],
+        folders: Vec::new(),
+    };
+
+    let loose = audit(&vault, Thresholds::default(), NOW);
+    assert!(!loose.items.iter().any(|report| {
+        report.findings.iter().any(|finding| {
+            matches!(
+                finding,
+                Finding::WeakPassword { .. } | Finding::Stale { .. }
+            )
+        })
+    }));
+
+    let strict = audit(
+        &vault,
+        Thresholds {
+            weak_bits: 100,
+            stale_days: 10,
+        },
+        NOW,
+    );
+    assert_eq!(strict.items.len(), 1);
+    let findings = &strict.items[0].findings;
+    assert!(findings
+        .iter()
+        .any(|finding| matches!(finding, Finding::WeakPassword { .. })));
+    assert!(findings.contains(&Finding::Stale { days: 20 }));
+}
+
+#[test]
+fn qwerty_prefix_cap_boundary_changes_the_estimate() {
+    let at_cap = "qwerty123456"; // exactly 12 characters
+    let past_cap = "qwerty1234567"; // 13 characters
+    assert_eq!(at_cap.len(), 12);
+    assert_eq!(past_cap.len(), 13);
+    let at_bits = estimate_entropy(at_cap);
+    let past_bits = estimate_entropy(past_cap);
+    assert!(at_bits < 20, "{at_bits}");
+    assert!(past_bits >= Thresholds::default().weak_bits, "{past_bits}");
+    assert!(past_bits > at_bits);
+}
+
+#[test]
+fn generator_and_audit_share_the_weak_boundary() {
+    let weak = Thresholds::default().weak_bits;
+    assert_eq!(weak, crate::generator::WEAK_BITS);
+    let bits = f64::from(weak);
+    assert_eq!(Strength::from_bits(bits - 0.1), Strength::Weak);
+    assert_eq!(Strength::from_bits(bits), Strength::Fair);
+}
+
+#[test]
+fn passphrase_estimate_matches_the_generator_model() {
+    use crate::generator::{passphrase_entropy, PassphraseSettings};
+
+    for settings in [
+        PassphraseSettings::default(),
+        PassphraseSettings {
+            capitalize: false,
+            include_number: true,
+            ..PassphraseSettings::default()
+        },
+    ] {
+        let phrase = settings.generate().expect("passphrase should generate");
+        let expected = passphrase_entropy(&settings);
+        let actual = estimate_entropy(&phrase);
+        assert!(
+            (f64::from(actual) - expected).abs() <= 1.0,
+            "{phrase}: {actual} vs {expected}"
+        );
+        assert_eq!(
+            password_strength(&phrase).1,
+            Strength::from_bits(expected),
+            "{phrase}"
+        );
+    }
+}
+
+#[test]
+fn totp_helpers_agree_with_the_report() {
+    let with = login(
+        "1",
+        "With",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    );
+    let without = login(
+        "2",
+        "Without",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://b.example",
+        "",
+    );
+    assert!(has_usable_totp(&with));
+    assert!(has_totp_field(&with));
+    assert!(!has_usable_totp(&without));
+    assert!(!has_totp_field(&without));
+    let vault = Vault {
+        items: vec![with, without],
+        folders: Vec::new(),
+    };
+    let report = audit(&vault, Thresholds::default(), NOW);
+    assert_eq!(report.logins, 2);
+    assert_eq!(report.with_totp, 1);
+}
+
+#[test]
+fn ssh_fingerprint_checks_are_wired_into_the_audit() {
+    const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMVYTn6DgHoRS29obD0RhrnbKgHhM1eqLvmbTWMGwSmR fp-test@example";
+    const FP: &str = "SHA256:rU5/Ssu4iQF+Dh5DRCbEpCjexkxaSKWYzYW9pUPi7R0";
+    let ssh = |id: &str, public_key: &str, fingerprint: &str| {
+        VaultItem::new(
+            id,
+            id,
+            ItemData::SshKey(SshKeyData {
+                public_key: public_key.into(),
+                private_key: String::new(),
+                fingerprint: fingerprint.into(),
+            }),
+        )
+    };
+    let vault = Vault {
+        items: vec![
+            ssh("ssh-good", KEY, FP),
+            ssh(
+                "ssh-bad",
+                KEY,
+                "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
+            ssh("ssh-invalid", "not a key", FP),
+        ],
+        folders: Vec::new(),
+    };
+    let report = audit(&vault, Thresholds::default(), NOW);
+    assert!(
+        !report.items.iter().any(|item| item.id == "ssh-good"),
+        "a valid fingerprint must not create a finding"
+    );
+    let bad = report
+        .items
+        .iter()
+        .find(|item| item.id == "ssh-bad")
+        .expect("mismatch must be reported");
+    assert!(bad
+        .findings
+        .iter()
+        .any(|finding| matches!(finding, Finding::SshFingerprintMismatch { .. })));
+    assert_eq!(bad.worst(), Some(Severity::High));
+    let invalid = report
+        .items
+        .iter()
+        .find(|item| item.id == "ssh-invalid")
+        .expect("invalid key must be reported");
+    assert!(invalid.findings.contains(&Finding::SshFingerprintInvalid));
 }

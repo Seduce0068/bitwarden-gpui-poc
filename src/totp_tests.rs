@@ -186,6 +186,23 @@ fn tick_caches_within_a_period_and_refreshes_across_it() {
 }
 
 #[test]
+fn tick_is_fresh_uses_the_codes_own_period() {
+    // A non-default period must drive the freshness window, not the usual
+    // 30-second TOTP period.
+    let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&period=60");
+    let tick = Tick::sample(&uri, 59);
+    assert_eq!(tick.code.as_ref().map(Code::period), Some(60));
+    assert_eq!(tick.remaining(), Some(1));
+    // The first 60-second window is 0..=59, so 59 is the last fresh instant.
+    assert!(tick.is_fresh(59));
+    assert!(!tick.is_fresh(60));
+    assert!(!tick.is_fresh(58), "a backwards clock is never fresh");
+    let next = Tick::sample(&uri, 119);
+    assert!(next.is_fresh(119));
+    assert!(!next.is_fresh(120));
+}
+
+#[test]
 fn now_unix_is_plausible() {
     let now = now_unix();
     // 2020-01-01 .. 2100-01-01

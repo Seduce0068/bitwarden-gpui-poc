@@ -1,7 +1,10 @@
 //! GPUI render implementations for the app.
 
 use crate::ui::app::BitwardenApp;
-use crate::ui::panels::{audit_panel, auth_row, generator_panel, panel_button, settings_panel};
+use crate::ui::logic::auth_hint;
+use crate::ui::panels::{
+    audit_panel, auth_row, generator_panel, panel_button, settings_panel, totp_badge,
+};
 use crate::ui::state::{AuthField, Panel, Screen};
 use gpui_kit::prelude::*;
 use gpui_kit::StatefulInteractiveElement;
@@ -62,7 +65,7 @@ impl BitwardenApp {
                     .rounded_md()
                     .bg(rgb(0x313244))
                     .text_sm()
-                    .child("1-5: 入力 / Enter: 検証して開く / Esc: 終了"),
+                    .child(auth_hint(self.auth.field().is_some())),
             )
     }
 
@@ -88,11 +91,10 @@ impl BitwardenApp {
                         } else {
                             rgb(0x1e1e2e)
                         };
-                        let (username, totp) = item
+                        let username = item
                             .login()
-                            .map_or(("-".to_string(), false), |(user, _, totp, _)| {
-                                (user.to_string(), !totp.trim().is_empty())
-                            });
+                            .map_or("-".to_string(), |(user, _, _, _)| user.to_string());
+                        let badge = totp_badge(item);
                         rows.push(
                             div()
                                 .id(index)
@@ -120,12 +122,13 @@ impl BitwardenApp {
                                         .text_color(if selected {
                                             rgb(0xf9e2af)
                                         } else {
-                                            rgb(0x6c7086)
+                                            rgb(0xa6adc8)
                                         })
                                         .child(if selected { ">" } else { "" }),
                                 )
                                 .child(
                                     div()
+                                        .id(SharedString::from(format!("favorite-{index}")))
                                         .w(px(18.0))
                                         .text_xs()
                                         .text_color(if item.favorite {
@@ -133,6 +136,24 @@ impl BitwardenApp {
                                         } else {
                                             rgb(0x45475a)
                                         })
+                                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                                            // The parent row also has a click
+                                            // handler; stop the bubble so it
+                                            // cannot reselect another row after
+                                            // the favorite filter removed ours.
+                                            cx.stop_propagation();
+                                            // Select the clicked row first, so
+                                            // the star toggle can never target
+                                            // a different item.
+                                            this.apply_action(
+                                                crate::ui::keys::UiAction::SelectRow(index),
+                                                cx,
+                                            );
+                                            this.apply_action(
+                                                crate::ui::keys::UiAction::ToggleFavorite,
+                                                cx,
+                                            );
+                                        }))
                                         .child(if item.favorite { "★" } else { "☆" }),
                                 )
                                 .child(
@@ -160,12 +181,8 @@ impl BitwardenApp {
                                     div()
                                         .w(px(40.0))
                                         .text_xs()
-                                        .text_color(if totp {
-                                            rgb(0xa6e3a1)
-                                        } else {
-                                            rgb(0x6c7086)
-                                        })
-                                        .child(if totp { "TOTP" } else { "" }),
+                                        .text_color(rgb(badge.color))
+                                        .child(badge.label),
                                 ),
                         );
                     }
@@ -209,7 +226,7 @@ impl BitwardenApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_color(rgb(0x6c7086))
+                    .text_color(rgb(0xa6adc8))
                     .child("一致する項目がありません")
                     .into_any_element()
             } else {
@@ -233,6 +250,7 @@ impl Render for BitwardenApp {
         // One normalized panel value for the header tabs, the key context and
         // the body, so a stale Audit request cannot disagree with the drawing.
         let panel = crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some());
+        let has_report = self.view.audit_report.is_some();
         let header = div()
             .flex()
             .items_center()
@@ -265,14 +283,27 @@ impl Render for BitwardenApp {
                         cx,
                     ))
                     .child(panel_button(
-                        "[監査]",
+                        if has_report {
+                            "[監査]"
+                        } else {
+                            "[監査 (未生成)]"
+                        },
                         Panel::Audit,
                         panel,
-                        |this, cx| {
-                            this.apply_action(
-                                crate::ui::keys::UiAction::SetPanel(Panel::Audit),
-                                cx,
-                            );
+                        move |this, cx| {
+                            if has_report {
+                                this.apply_action(
+                                    crate::ui::keys::UiAction::SetPanel(Panel::Audit),
+                                    cx,
+                                );
+                            } else {
+                                // The button stays visible for discoverability,
+                                // but explains why it cannot open a panel.
+                                this.status =
+                                    "監査レポートがありません（ログイン後に生成されます）"
+                                        .to_string();
+                                cx.notify();
+                            }
                         },
                         cx,
                     ))
@@ -304,7 +335,7 @@ impl Render for BitwardenApp {
             } else {
                 div()
                     .text_xs()
-                    .text_color(rgb(0x6c7086))
+                    .text_color(rgb(0xa6adc8))
                     .child("gpui-kit 0.9.1 + model::Vault")
                     .into_any_element()
             });
@@ -318,14 +349,25 @@ impl Render for BitwardenApp {
                 .child(self.render_locked(cx))
                 .into_any_element(),
             (Screen::Unlocked, Panel::Audit) => match &self.view.audit_report {
-                Some(report) => audit_panel(report).into_any_element(),
+                Some(report) => audit_panel(
+                    report,
+                    |this, id, cx| {
+                        this.apply_action(
+                            crate::ui::keys::UiAction::FocusAuditItem(id.to_string()),
+                            cx,
+                        );
+                    },
+                    cx,
+                )
+                .into_any_element(),
                 None => self.render_unlocked(cx).into_any_element(),
             },
             (Screen::Unlocked, Panel::Generator) => {
-                generator_panel(&self.settings, &self.generator).into_any_element()
+                generator_panel(&self.settings, &self.generator, self.settings_dirty)
+                    .into_any_element()
             }
             (Screen::Unlocked, Panel::Settings) => {
-                settings_panel(&self.settings, self.editing).into_any_element()
+                settings_panel(&self.settings, self.editing, self.settings_dirty).into_any_element()
             }
             (Screen::Unlocked, _) => self.render_unlocked(cx).into_any_element(),
         };

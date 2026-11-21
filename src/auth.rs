@@ -38,11 +38,14 @@ pub struct AuthConfig {
 
 /// Errors the authentication layer can report.
 ///
-/// This stays a small `Copy` enum because the UI matches and formats it
-/// directly. The underlying failure is kept in [`AppError`], which this type
-/// converts to and from, so `Error::source()` remains available to callers that
-/// need the cause chain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Most variants stay cheap to copy so the UI can match and format them
+/// directly. Two variants (the `Detail` ones) own a `String`: a cause-carrying
+/// `AppError` cannot stay `Copy` while its rendered detail is surfaced in the
+/// status bar, so those variants retain the text that would otherwise be
+/// dropped by [`From<AppError> for AuthError`]. The full typed cause chain still
+/// lives in [`AppError`] and remains reachable through `Error::source()` for
+/// callers that convert before the UI boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthError {
     /// A required field was empty.
     MissingField(&'static str),
@@ -58,19 +61,24 @@ pub enum AuthError {
     Prelogin,
     /// The API-key login failed.
     Login,
+    /// The API-key login failed; keeps the underlying detail for the status bar.
+    LoginDetail(String),
     /// The sync call failed.
     Sync,
+    /// Sync failed and the offline cache could not be restored; keeps a
+    /// composed detail so the original failure is not silently discarded.
+    SyncDetail(String),
     /// The KDF policy rejected the account's settings.
     KdfRejected,
     /// The login sequence did not finish within the allotted time.
     Timeout,
-    /// A failure from another layer that this `Copy` enum cannot describe.
+    /// A failure from another layer that this small enum cannot describe.
     Other(&'static str),
 }
 
 impl AuthError {
     /// A short message for the status bar.
-    pub const fn message(self) -> &'static str {
+    pub const fn message(&self) -> &'static str {
         match self {
             Self::MissingField(_) => "認証情報が未入力です",
             Self::InvalidServerUrl => "サーバー URL が不正です（HTTPS または loopback の HTTP）",
@@ -78,11 +86,27 @@ impl AuthError {
             Self::InvalidEmail => "メールアドレスの形式が不正です",
             Self::ClientSetup => "クライアントを初期化できませんでした",
             Self::Prelogin => "サーバー情報の取得に失敗しました",
-            Self::Login => "ログインに失敗しました",
-            Self::Sync => "同期に失敗しました",
+            Self::Login | Self::LoginDetail(_) => "ログインに失敗しました",
+            Self::Sync | Self::SyncDetail(_) => "同期に失敗しました",
             Self::KdfRejected => "KDF 設定がポリシーで拒否されました",
             Self::Timeout => "ログインがタイムアウトしました",
             Self::Other(text) => text,
+        }
+    }
+
+    /// A status-bar message that keeps the distinguishing detail.
+    ///
+    /// `message()` stays a cheap `&'static str` for callers that only need the
+    /// family; this method appends the field name for [`Self::MissingField`]
+    /// and the retained cause text for the `Detail` variants, so a user can see
+    /// *which* credential is missing or why the API-key login failed.
+    pub fn status_message(&self) -> String {
+        match self {
+            Self::MissingField(field) => format!("{}（{field}）", self.message()),
+            Self::LoginDetail(detail) | Self::SyncDetail(detail) if !detail.is_empty() => {
+                format!("{}（{detail}）", self.message())
+            }
+            _ => self.message().to_string(),
         }
     }
 }
@@ -105,7 +129,9 @@ impl From<AuthError> for AppError {
             AuthError::ClientSetup => Self::ClientSetup,
             AuthError::Prelogin => Self::Prelogin,
             AuthError::Login => Self::Login,
+            AuthError::LoginDetail(detail) => Self::LoginCause(BoxedCause::text(detail.clone())),
             AuthError::Sync => Self::Sync,
+            AuthError::SyncDetail(detail) => Self::SyncCause(BoxedCause::text(detail.clone())),
             AuthError::KdfRejected => Self::KdfRejected,
             AuthError::Timeout => Self::Timeout,
             AuthError::Other(text) => Self::Other(text.to_string()),
@@ -115,8 +141,9 @@ impl From<AuthError> for AppError {
 
 impl From<AppError> for AuthError {
     fn from(error: AppError) -> Self {
-        // A cause-carrying variant keeps the status text of its plain sibling;
-        // dropping the cause here is the price of the UI's `Copy` error type.
+        // The `Detail` variants keep the rendered cause text for the status bar.
+        // Other families still map to their plain sibling, matching the
+        // `AppError::PartialEq` rule that a cause is diagnostic context only.
         match error {
             AppError::MissingField(field) => AuthError::MissingField(field),
             AppError::InvalidServerUrl | AppError::InvalidServerUrlCause(_) => {
@@ -126,18 +153,22 @@ impl From<AppError> for AuthError {
             AppError::InvalidEmail => AuthError::InvalidEmail,
             AppError::ClientSetup | AppError::ClientSetupCause(_) => AuthError::ClientSetup,
             AppError::Prelogin | AppError::PreloginCause(_) => AuthError::Prelogin,
-            AppError::Login | AppError::LoginCause(_) => AuthError::Login,
+            AppError::Login => AuthError::Login,
+            // Keep the rendered detail of a cause-carrying login failure: the
+            // `Copy`-era conversion used to drop it and show only a generic
+            // status. `AppError` still owns the typed cause for `source()`.
+            AppError::LoginCause(cause) => AuthError::LoginDetail(cause.to_string()),
             // A malformed sync body (e.g. unexpected key casing) is a sync
             // failure, not an unexpected error, and must be retryable with `r`.
-            AppError::Sync
-            | AppError::SyncCause(_)
-            | AppError::InvalidLogin(_)
-            | AppError::InvalidLoginCause(_, _) => AuthError::Sync,
+            AppError::Sync => AuthError::Sync,
+            AppError::SyncCause(cause) => AuthError::SyncDetail(cause.to_string()),
+            AppError::InvalidLogin(text) | AppError::InvalidLoginCause(text, _) => {
+                AuthError::SyncDetail(text.clone())
+            }
             AppError::KdfRejected | AppError::KdfRejectedCause(_) => AuthError::KdfRejected,
             AppError::Timeout => AuthError::Timeout,
-            // This type is `Copy`, so an owned detail cannot survive the
-            // conversion. An honest generic message is better than silently
-            // reporting an unrelated sync failure.
+            // An honest generic message is better than silently reporting an
+            // unrelated domain failure for an error this enum cannot describe.
             _ => AuthError::Other(crate::error::OTHER_ERROR_MESSAGE),
         }
     }
@@ -161,8 +192,17 @@ impl From<UnlockError> for AppError {
         match error {
             UnlockError::MissingProtectedKey => Self::MissingProtectedKey,
             UnlockError::UnlockFailed(detail) => Self::unlock_failed(detail),
+            UnlockError::UnlockFailedCause(detail, cause) => {
+                Self::unlock_failed_cause(detail, cause)
+            }
             UnlockError::ApplySyncFailed(detail) => Self::apply_sync_failed(detail),
+            UnlockError::ApplySyncFailedCause(detail, cause) => {
+                Self::apply_sync_failed_cause(detail, cause)
+            }
             UnlockError::ImportFailed(detail) => Self::import_failed(detail),
+            UnlockError::ImportFailedCause(detail, cause) => {
+                Self::import_failed_cause(detail, cause)
+            }
             UnlockError::Other(detail) => Self::Other(detail),
         }
     }
@@ -172,23 +212,37 @@ impl From<AppError> for UnlockError {
     fn from(error: AppError) -> Self {
         match error {
             AppError::MissingProtectedKey => UnlockError::MissingProtectedKey,
-            AppError::UnlockFailedStructured(_, detail)
-            | AppError::UnlockFailedStructuredCause(_, detail, _) => {
+            AppError::UnlockFailedStructured(_, detail) => {
                 UnlockError::UnlockFailed(detail.clone())
+            }
+            AppError::UnlockFailedStructuredCause(_, detail, cause) => {
+                UnlockError::UnlockFailedCause(detail.clone(), cause)
             }
             // Legacy variants still carry a formatted message; keep the strip
             // fallback for values constructed before the structured variants.
-            AppError::UnlockFailed(text) | AppError::UnlockFailedCause(text, _) => {
+            AppError::UnlockFailed(text) => {
                 UnlockError::UnlockFailed(unlock_detail(&text, "復号キーを取得できません（"))
             }
-            AppError::ApplySyncFailed(text) | AppError::ApplySyncFailedCause(text, _) => {
+            AppError::UnlockFailedCause(text, cause) => UnlockError::UnlockFailedCause(
+                unlock_detail(&text, "復号キーを取得できません（"),
+                cause,
+            ),
+            AppError::ApplySyncFailed(text) => {
                 UnlockError::ApplySyncFailed(unlock_detail(&text, "同期データを取り込めません（"))
             }
-            AppError::ImportFailed(text) | AppError::ImportFailedCause(text, _) => {
+            AppError::ApplySyncFailedCause(text, cause) => UnlockError::ApplySyncFailedCause(
+                unlock_detail(&text, "同期データを取り込めません（"),
+                cause,
+            ),
+            AppError::ImportFailed(text) => {
                 UnlockError::ImportFailed(unlock_detail(&text, "vault 変換に失敗しました（"))
             }
-            // Keep the real message here: unlike `AuthError`, this type can
-            // own a `String`, so no cause text is lost on conversion.
+            AppError::ImportFailedCause(text, cause) => UnlockError::ImportFailedCause(
+                unlock_detail(&text, "vault 変換に失敗しました（"),
+                cause,
+            ),
+            // Keep the real message here: this type owns its detail, so no
+            // status text is lost when an unrelated failure crosses layers.
             unexpected => UnlockError::Other(unexpected.message().to_string()),
         }
     }
@@ -296,13 +350,18 @@ pub(crate) fn has_format_character(value: &str) -> bool {
 }
 
 /// A minimal structural check: at most [`MAX_EMAIL_LEN`] characters, exactly
-/// one `@`, no whitespace or format characters, and a dotted domain.
+/// one `@`, no whitespace/control/format characters, and a dotted domain.
 /// Regex-level RFC 5322 validation is out of scope for the PoC.
 pub fn valid_email(value: &str) -> bool {
     let value = value.trim();
     if value.is_empty()
         || value.chars().count() > MAX_EMAIL_LEN
         || value.chars().any(char::is_whitespace)
+        // `char::is_control` covers the Cc category (U+0000..=U+001F and
+        // U+007F..=U+009F). Cc characters such as NUL and C1 controls are not
+        // whitespace, so `is_whitespace` alone let them through; like the Cf
+        // characters below they can hide or alter an address in the UI.
+        || value.chars().any(char::is_control)
         || has_format_character(value)
     {
         return false;
@@ -497,9 +556,7 @@ pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
         return Err(AuthError::BlockedServerUrl);
     }
     ServerUrls::self_hosted(config.server_url.trim()).map_err(|error| {
-        AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::text(
-            error.to_string(),
-        )))
+        AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::new(error)))
     })?;
     Ok(())
 }
@@ -531,17 +588,27 @@ pub struct AuthenticatedVault {
 /// Failures while turning a successful login into a usable vault.
 ///
 /// Kept as its own enum for the UI's status formatting; [`AppError`] carries the
-/// original cause and `From` converts between the two.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// original cause and `From` converts between the two. The `*Cause` variants
+/// keep that cause reachable through `Error::source()` instead of discarding it
+/// at the UI boundary. Equality follows [`AppError`]'s rule: a cause-carrying
+/// variant equals its plain sibling because the cause is diagnostic context,
+/// not part of the failure's identity.
+#[derive(Clone, Debug)]
 pub enum UnlockError {
     /// The token response contained no protected key.
     MissingProtectedKey,
     /// The master key could not decrypt the protected key.
     UnlockFailed(String),
+    /// The master key could not decrypt the protected key; retains the cause.
+    UnlockFailedCause(String, BoxedCause),
     /// The sync payload could not be applied to the decrypted vault.
     ApplySyncFailed(String),
+    /// The sync payload could not be applied; retains the cause.
+    ApplySyncFailedCause(String, BoxedCause),
     /// The decrypted vault could not be converted into the local model.
     ImportFailed(String),
+    /// The vault conversion failed; retains the cause.
+    ImportFailedCause(String, BoxedCause),
     /// An unexpected failure, keeping the original message for the status bar.
     Other(String),
 }
@@ -551,10 +618,43 @@ impl UnlockError {
     pub fn message(&self) -> String {
         match self {
             Self::MissingProtectedKey => "復号キーが応答にありません".to_string(),
-            Self::UnlockFailed(detail) => format!("復号キーを取得できません（{detail}）"),
-            Self::ApplySyncFailed(detail) => format!("同期データを取り込めません（{detail}）"),
-            Self::ImportFailed(detail) => format!("vault 変換に失敗しました（{detail}）"),
+            Self::UnlockFailed(detail) | Self::UnlockFailedCause(detail, _) => {
+                format!("復号キーを取得できません（{detail}）")
+            }
+            Self::ApplySyncFailed(detail) | Self::ApplySyncFailedCause(detail, _) => {
+                format!("同期データを取り込めません（{detail}）")
+            }
+            Self::ImportFailed(detail) | Self::ImportFailedCause(detail, _) => {
+                format!("vault 変換に失敗しました（{detail}）")
+            }
             Self::Other(detail) => detail.clone(),
+        }
+    }
+}
+
+impl PartialEq for UnlockError {
+    /// Compare rendered messages only, mirroring `AppError`'s `PartialEq`: a
+    /// retained cause must not change whether two failures count as the same.
+    fn eq(&self, other: &Self) -> bool {
+        self.message() == other.message()
+    }
+}
+
+impl Eq for UnlockError {}
+
+impl std::fmt::Display for UnlockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for UnlockError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnlockFailedCause(_, cause)
+            | Self::ApplySyncFailedCause(_, cause)
+            | Self::ImportFailedCause(_, cause) => Some(cause.as_error()),
+            _ => None,
         }
     }
 }
@@ -581,26 +681,29 @@ pub fn unlock_and_import(
         return Err(UnlockError::MissingProtectedKey);
     }
     let kdf = authenticated.session.kdf();
+    // Keep the typed errors as causes (`BoxedCause::new`) instead of flattening
+    // them into text: the source chain stays reachable through `Error::source()`
+    // on the returned `UnlockError` and on the `AppError` it converts to.
     let mut open_vault = OpenVault::unlock(&authenticated.master_key, &protected_key, kdf)
         .map_err(|error| {
             let detail = error.to_string();
             UnlockError::from(AppError::unlock_failed_cause(
-                detail.clone(),
-                BoxedCause::text(detail),
+                detail,
+                BoxedCause::new(error),
             ))
         })?;
     open_vault.apply_sync(authenticated.sync).map_err(|error| {
         let detail = error.to_string();
         UnlockError::from(AppError::apply_sync_failed_cause(
-            detail.clone(),
-            BoxedCause::text(detail),
+            detail,
+            BoxedCause::new(error),
         ))
     })?;
     crate::vault_sync::import_logins(&open_vault).map_err(|error| {
         let detail = error.to_string();
         UnlockError::from(AppError::import_failed_cause(
-            detail.clone(),
-            BoxedCause::text(detail),
+            detail,
+            BoxedCause::new(error),
         ))
     })
 }
@@ -657,31 +760,48 @@ pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
     }
     // The classification itself lives in the cache layer; this function only
     // wraps the reason in a status message so the two cannot drift apart.
-    use crate::cache::{
-        cache_error_message, REASON_CORRUPT, REASON_EXPIRED, REASON_MISSING, REASON_OUTDATED,
-        REASON_SERVER_MISMATCH, REASON_TOO_LARGE, REASON_UNREADABLE, REASON_USER_MISMATCH,
-    };
-    match cache_error_message(error) {
-        REASON_CORRUPT => AuthError::Other("同期に失敗しました（キャッシュが破損しています）"),
-        REASON_UNREADABLE => AuthError::Other("同期に失敗しました（キャッシュを読み込めません）"),
-        REASON_OUTDATED => {
-            AuthError::Other("同期に失敗しました（キャッシュのバージョンが古いです）")
-        }
-        REASON_EXPIRED => {
-            AuthError::Other("同期に失敗しました（キャッシュが有効期限を過ぎています）")
-        }
-        REASON_USER_MISMATCH => {
-            AuthError::Other("同期に失敗しました（キャッシュが別のアカウントのものです）")
-        }
-        REASON_SERVER_MISMATCH => {
-            AuthError::Other("同期に失敗しました（キャッシュが別のサーバーのものです）")
-        }
-        REASON_TOO_LARGE => {
-            AuthError::Other("同期に失敗しました（キャッシュがサイズ上限を超えています）")
-        }
-        REASON_MISSING => AuthError::Sync,
-        _ => AuthError::Other("同期に失敗しました（キャッシュを復元できませんでした）"),
+    match crate::cache::cache_restore_status(error) {
+        Some(status) => AuthError::Other(status),
+        None => AuthError::Sync,
     }
+}
+
+/// Compose the status when both the live sync and its cache fallback fail.
+///
+/// `cause` is the discarded sync/parse failure. Folding its detail into a
+/// [`AuthError::SyncDetail`] keeps the sync classification and stops the
+/// original reason from vanishing when the cache also fails. The cache reason
+/// supplied as `fallback` stays first so an existing, tested status string is
+/// preserved verbatim when there is no sync cause.
+fn sync_fallback_failure(fallback: AuthError, cause: Option<AppError>) -> AuthError {
+    let Some(cause) = cause else {
+        return fallback;
+    };
+    let detail = std::error::Error::source(&cause)
+        .map(|source| source.to_string())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| cause.message().to_string());
+    if detail.is_empty() {
+        return fallback;
+    }
+    // `status_message()` adds the family prefix for `SyncDetail`, so the
+    // composed detail must not repeat it. The cache fallback may itself be an
+    // `Other` whose message already starts with that prefix and a parenthesized
+    // reason; strip both before composing the final detail.
+    let fallback_text = fallback.message();
+    let mut reason = fallback_text
+        .strip_prefix(AuthError::Sync.message())
+        .unwrap_or(fallback_text);
+    reason = reason
+        .strip_prefix('（')
+        .and_then(|text| text.strip_suffix('）'))
+        .unwrap_or(reason);
+    let detail = if reason.is_empty() {
+        detail
+    } else {
+        format!("{reason}（{detail}）")
+    };
+    AuthError::SyncDetail(detail)
 }
 
 async fn authenticate_inner(
@@ -699,38 +819,42 @@ async fn authenticate_inner(
     if smol::unblock(move || is_blocked_server_url(&server_url)).await {
         return Err(AuthError::BlockedServerUrl);
     }
+    // `openwarden::Error` implements `std::error::Error + Send + Sync`, so box
+    // the concrete value with `new()` and keep its typed source chain instead
+    // of flattening it into text with `text()`.
     let urls = ServerUrls::self_hosted(config.server_url.trim()).map_err(|error| {
-        AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::text(
-            error.to_string(),
-        )))
+        AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::new(error)))
     })?;
-    let client =
-        Client::new(urls, device_for_installation(device_identifier)).map_err(|error| {
-            AuthError::from(AppError::ClientSetupCause(BoxedCause::text(
-                error.to_string(),
-            )))
-        })?;
+    let client = Client::new(urls, device_for_installation(device_identifier))
+        .map_err(|error| AuthError::from(AppError::ClientSetupCause(BoxedCause::new(error))))?;
     let kdf = client
         .prelogin(config.email.trim())
         .await
-        .map_err(|error| {
-            AuthError::from(AppError::PreloginCause(BoxedCause::text(error.to_string())))
-        })?;
+        .map_err(|error| AuthError::from(AppError::PreloginCause(BoxedCause::new(error))))?;
     let api_key = ApiKey {
         client_id: config.client_id.trim().to_string(),
         client_secret: config.client_secret.clone(),
     };
-    let session = client.login_api_key(&api_key).await.map_err(|error| {
-        AuthError::from(AppError::LoginCause(BoxedCause::text(error.to_string())))
-    })?;
+    let session = client
+        .login_api_key(&api_key)
+        .await
+        .map_err(|error| AuthError::from(AppError::LoginCause(BoxedCause::new(error))))?;
     // Fetch the raw body so our normalizer can accept Vaultwarden's
     // PascalCase keys (openwarden 0.1.0's `Client::sync` rejected them).
     // openwarden 0.1.1 exposes `sync_body` without requiring our own HTTP
     // client or token handling. On failure fall back to the encrypted cache.
-    let raw_sync = client.sync_body(&session).await.ok();
-    let parsed = raw_sync
-        .as_ref()
-        .and_then(|body| crate::vault_sync::parse_sync(body).ok());
+    //
+    // Keep the failure instead of calling `.ok()` twice: a transport error
+    // becomes a `SyncCause` and a malformed body keeps `parse_sync`'s
+    // `InvalidLoginCause`, so the offline cache can still restore the vault
+    // while a *failed* fallback reports why the live sync was unusable.
+    let (parsed, sync_cause) = match client.sync_body(&session).await {
+        Ok(body) => match crate::vault_sync::parse_sync(&body) {
+            Ok(sync) => (Some(sync), None),
+            Err(error) => (None, Some(error)),
+        },
+        Err(error) => (None, Some(AppError::SyncCause(BoxedCause::new(error)))),
+    };
     let (sync, from_cache) = match parsed {
         Some(sync) => (sync, false),
         // A transport failure or an unparsable (e.g. PascalCase) body both
@@ -738,7 +862,12 @@ async fn authenticate_inner(
         // case, as the pre-0.1.1 path did.
         None => match crate::cache::cached_sync_for_detailed(config.server_url.trim()) {
             Ok(sync) => (sync, true),
-            Err(cache_error) => return Err(cache_restore_failure(cache_error)),
+            Err(cache_error) => {
+                return Err(sync_fallback_failure(
+                    cache_restore_failure(cache_error),
+                    sync_cause,
+                ));
+            }
         },
     };
     // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
@@ -747,11 +876,7 @@ async fn authenticate_inner(
     let policy = KdfPolicy::default();
     let master_key = smol::unblock(move || MasterKey::derive(&password, &email, &kdf, &policy))
         .await
-        .map_err(|error| {
-            AuthError::from(AppError::KdfRejectedCause(BoxedCause::text(
-                error.to_string(),
-            )))
-        })?;
+        .map_err(|error| AuthError::from(AppError::KdfRejectedCause(BoxedCause::new(error))))?;
     Ok(AuthenticatedVault {
         session,
         sync,

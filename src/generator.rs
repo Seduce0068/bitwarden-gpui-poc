@@ -241,6 +241,13 @@ pub fn entropy_bits(alphabet: usize, length: usize) -> f64 {
     length as f64 * (alphabet as f64).log2()
 }
 
+/// Entropy boundary between `Weak` and `Fair`, in bits.
+///
+/// Also used by the health audit's default [`crate::health::Thresholds`], so a
+/// password the generator calls `Weak` cannot be scored as acceptable by the
+/// audit (and vice versa).
+pub const WEAK_BITS: u32 = 40;
+
 /// A coarse strength bucket derived from entropy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Strength {
@@ -257,7 +264,7 @@ pub enum Strength {
 impl Strength {
     /// Bucket `bits`.
     pub fn from_bits(bits: f64) -> Self {
-        if bits < 40.0 {
+        if bits < f64::from(WEAK_BITS) {
             Self::Weak
         } else if bits < 64.0 {
             Self::Fair
@@ -294,13 +301,22 @@ pub fn password_entropy(settings: &PasswordSettings) -> f64 {
 }
 
 /// The entropy of a drawn passphrase.
+///
+/// The word choices dominate; capitalizing a word adds one free bit (upper or
+/// lower first letter) and the optional trailing digit adds `log2(10)`. The
+/// separator carries no entropy: the word list is prefix-free, so boundaries
+/// are unambiguous even with an empty separator. The audit uses the same
+/// model when it recognizes a generated passphrase (see
+/// [`crate::health::estimate_entropy`]).
 pub fn passphrase_entropy(settings: &PassphraseSettings) -> f64 {
-    let base = entropy_bits(WORDS.len(), settings.words);
-    if settings.include_number {
-        base + (10.0f64).log2()
-    } else {
-        base
+    let mut bits = entropy_bits(WORDS.len(), settings.words);
+    if settings.capitalize {
+        bits += settings.words as f64;
     }
+    if settings.include_number {
+        bits += (10.0f64).log2();
+    }
+    bits
 }
 
 #[cfg(test)]

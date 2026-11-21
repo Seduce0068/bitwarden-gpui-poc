@@ -23,6 +23,10 @@ pub(super) struct VaultViewState {
     pub(super) audit_report: Option<Report>,
     /// Scroll position of the item list.
     pub(super) scroll_handle: UniformListScrollHandle,
+    /// Test-only record of `deselect_and_rewind` calls. Keeps the rewind
+    /// contract observable without reading gpui-pre's private scroll state.
+    #[cfg(test)]
+    pub(super) rewind_calls: usize,
 }
 
 impl Default for VaultViewState {
@@ -43,6 +47,8 @@ impl VaultViewState {
             selected_id: None,
             audit_report: None,
             scroll_handle: UniformListScrollHandle::new(),
+            #[cfg(test)]
+            rewind_calls: 0,
         }
     }
 
@@ -66,6 +72,10 @@ impl VaultViewState {
     pub(super) fn deselect_and_rewind(&mut self) {
         self.selected_id = None;
         self.scroll_to_top();
+        #[cfg(test)]
+        {
+            self.rewind_calls += 1;
+        }
     }
 
     /// Reset the view when locking the vault.
@@ -105,6 +115,19 @@ impl VaultViewState {
         }
         self.selected_id = Some(id);
         true
+    }
+
+    /// Select a row by stable id (used when following an audit finding).
+    ///
+    /// Returns the visible-row index so the caller can scroll to it. An id
+    /// that is filtered out is not silently replaced by the first row.
+    pub(super) fn select_id(&mut self, id: &str) -> Option<usize> {
+        let index = {
+            let visible = self.visible_items();
+            visible.iter().position(|item| item.id == id)?
+        };
+        self.selected_id = Some(id.to_string());
+        Some(index)
     }
 
     /// Compute the next selection index for a relative move, without mutating
@@ -256,19 +279,6 @@ mod tests {
         assert_eq!(state.query, "日本語");
     }
 
-    /// The deferred scroll request queued by `scroll_to_item`.
-    ///
-    /// Reading it keeps these tests window-independent: gpui's scroll handle
-    /// stores the request in a public `RefCell`, so no layout pass is needed.
-    fn scroll_request(state: &VaultViewState) -> Option<(usize, gpui_kit::ScrollStrategy)> {
-        state
-            .scroll_handle
-            .0
-            .borrow()
-            .deferred_scroll_to_item
-            .map(|request| (request.item_index, request.strategy))
-    }
-
     #[test]
     fn cycle_filter_clears_selection() {
         let mut state = state_with_items();
@@ -281,8 +291,7 @@ mod tests {
     #[test]
     fn every_deselection_path_rewinds_to_the_first_row() {
         // One observable result shared by all deselection paths: no selection
-        // and a deferred scroll to row 0 with the Top strategy.
-        let expected = Some((0, gpui_kit::ScrollStrategy::Top));
+        // and exactly one rewind request.
 
         type DeselectPath = (&'static str, fn(&mut VaultViewState));
         let paths: Vec<DeselectPath> = vec![
@@ -301,26 +310,30 @@ mod tests {
         for (name, apply) in paths {
             let mut state = state_with_items();
             state.selected_id = Some("a".into());
-            // Start away from the top so the assertion proves the path really
-            // rewinds instead of merely leaving an old request in place.
-            state
-                .scroll_handle
-                .scroll_to_item(1, gpui_kit::ScrollStrategy::Nearest);
-            assert_eq!(
-                scroll_request(&state),
-                Some((1, gpui_kit::ScrollStrategy::Nearest)),
-                "{name}: dirty scroll setup"
-            );
+            let before = state.rewind_calls;
 
             apply(&mut state);
 
             assert_eq!(state.selected_id, None, "{name}: selection must be cleared");
-            assert_eq!(
-                scroll_request(&state),
-                expected,
-                "{name}: scroll must rewind"
-            );
+            assert_eq!(state.rewind_calls, before + 1, "{name}: scroll must rewind");
         }
+    }
+
+    #[test]
+    fn select_id_follows_a_stable_id_without_a_first_row_fallback() {
+        let mut state = state_with_items();
+        assert_eq!(state.select_id("b"), Some(1));
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+        assert_eq!(state.select_id("missing"), None);
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+
+        state.query = "Alpha".into();
+        assert_eq!(
+            state.select_id("b"),
+            None,
+            "a filtered-out id must not select row 0"
+        );
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
     }
 
     #[test]
