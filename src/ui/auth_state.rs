@@ -18,10 +18,7 @@ use crate::ui::state::AuthField;
 /// that was pre-filled beyond its cap by a caller.
 fn push_capped(target: &mut String, text: &str, limit: usize) {
     let room = limit.saturating_sub(target.chars().count());
-    let fitting = text
-        .char_indices()
-        .nth(room)
-        .map_or(text, |(index, _)| &text[..index]);
+    let fitting = crate::limits::char_boundary_at(text, room).map_or(text, |index| &text[..index]);
     target.push_str(fitting);
     truncate_to_limit(target, limit);
 }

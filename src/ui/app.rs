@@ -550,9 +550,13 @@ impl BitwardenApp {
                 } else {
                     self.totp_text(&secret)
                 };
+                let password_label = if crate::vault_sync::is_undecryptable_password(&password) {
+                    "復号不可".to_string()
+                } else {
+                    format!("{}文字", password.chars().count())
+                };
                 format!(
-                    "{base} | {username} | パスワード: {}文字 | TOTP: {code} | URI: {}",
-                    "*".repeat(password.chars().count()),
+                    "{base} | {username} | パスワード: {password_label} | TOTP: {code} | URI: {}",
                     uris.first()
                         .map_or("なし".into(), |uri| { crate::model::mask_uri(&uri.uri) })
                 )

@@ -328,7 +328,8 @@ impl From<AppError> for UnlockError {
 // ---------------------------------------------------------------------------
 
 pub(crate) use crate::limits::{
-    truncate_to_limit, DEFAULT_LOGIN_TIMEOUT, MAX_EMAIL_LEN, MAX_SERVER_URL_LEN,
+    has_format_character, truncate_to_limit, DEFAULT_LOGIN_TIMEOUT, MAX_EMAIL_LEN,
+    MAX_SERVER_URL_LEN,
 };
 
 /// Maximum length of a Client ID, in characters. Bitwarden keys are short
@@ -361,41 +362,6 @@ pub fn clamp_auth_config(config: &mut AuthConfig) {
     truncate_to_limit(&mut config.client_id, MAX_CLIENT_ID_LEN);
     truncate_secret_to_limit(&mut config.client_secret, MAX_CLIENT_SECRET_LEN);
     truncate_secret_to_limit(&mut config.master_password, MAX_MASTER_PASSWORD_LEN);
-}
-
-/// Whether `value` contains a Unicode `Cf` (format) character.
-///
-/// Zero-width spaces, bidi overrides and similar invisible controls can hide
-/// lookalike addresses or change how an address is rendered, so they are
-/// rejected explicitly instead of being silently tolerated by the structural
-/// check below. The list is the `Cf` category of Unicode 16.0.
-pub(crate) fn has_format_character(value: &str) -> bool {
-    value.chars().any(|ch| {
-        matches!(
-            ch,
-            '\u{ad}'
-                | '\u{600}'..='\u{605}'
-                | '\u{61c}'
-                | '\u{6dd}'
-                | '\u{70f}'
-                | '\u{890}'..='\u{891}'
-                | '\u{8e2}'
-                | '\u{180e}'
-                | '\u{200b}'..='\u{200f}'
-                | '\u{202a}'..='\u{202e}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{206f}'
-                | '\u{feff}'
-                | '\u{fff9}'..='\u{fffb}'
-                | '\u{110bd}'
-                | '\u{110cd}'
-                | '\u{13430}'..='\u{1343f}'
-                | '\u{1bca0}'..='\u{1bca3}'
-                | '\u{1d173}'..='\u{1d17a}'
-                | '\u{e0001}'
-                | '\u{e0020}'..='\u{e007f}'
-        )
-    })
 }
 
 /// A minimal structural check: at most `MAX_EMAIL_LEN` characters, exactly

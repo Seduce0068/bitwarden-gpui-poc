@@ -28,6 +28,14 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 完了
 
+- [x] 第53弾のレビュー指摘 3 件を完結（2026-11-22）
+  - `has_format_character` を limits へ移動し、health の認証層依存を解消。
+    UI 入力の UTF-8 境界計算も `char_boundary_at` へ集約。
+  - 復号不能パスワードの詳細表示を「復号不可」とし、桁数を誤示さない
+    ようにした。
+  - 起動エージェント: 5 体（バックログ補充、指摘は 3 件のみ）。
+  - 検証: fmt / check / test（366 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
 - [x] 第52弾のレビュー指摘 7 件を完結（2026-11-22）
   - `load_advisories` の直接テスト、未選択時の ↓ が先頭を選ぶ規則、
     ログイン成功ステータスの「項目」表記を追加・修正。

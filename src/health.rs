@@ -644,7 +644,7 @@ fn audit_item(
             .filter(|ch| {
                 !ch.is_whitespace()
                     && !ch.is_control()
-                    && !crate::auth::has_format_character(&ch.to_string())
+                    && !crate::limits::has_format_character(&ch.to_string())
             })
             .collect();
         if visible.to_lowercase().starts_with("http://") {
