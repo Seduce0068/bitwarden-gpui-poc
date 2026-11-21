@@ -512,7 +512,7 @@ r1-corr-state / r1-ops-build / r1-sec-secrets / r1-ops-runtime。
 - **[DOC1] [Medium] README の cd 例がリポジトリルート基準で失敗し内部作業階層も露出**
   - File: README.md:91
   - `cd work/bitwarden-gpui-poc` はリポジトリ内に存在せず（glob 確認）、コピペで失敗。
-    ローカル固有階層 `default-workspace/work/` も公開想定 README に載っている。
+    ローカル固有の作業ディレクトリ階層も公開想定 README に載っていた。
   - Remediation: cd 行を削除するかリポジトリ直下実行手順に修正。
   - Confidence: high
 - **[DOC2] [Low] ADR 索引が同ディレクトリの log.md を列挙していない**
