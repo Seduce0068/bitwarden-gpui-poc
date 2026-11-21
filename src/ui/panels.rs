@@ -62,6 +62,7 @@ pub(super) fn audit_panel<'a, V: 'static>(
     report: &'a Report,
     selected: Option<usize>,
     dirty: bool,
+    scroll_handle: &'a ScrollHandle,
     on_focus: impl Fn(&mut V, &str, &mut Context<V>) + 'static,
     cx: &mut Context<V>,
 ) -> impl IntoElement + 'a {
@@ -75,6 +76,7 @@ pub(super) fn audit_panel<'a, V: 'static>(
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
+        .track_scroll(scroll_handle)
         .child(
             div()
                 .text_lg()

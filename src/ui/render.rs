@@ -353,6 +353,7 @@ impl Render for BitwardenApp {
                     report,
                     self.audit_row_selection,
                     self.settings_dirty,
+                    &self.audit_scroll_handle,
                     |this, id, cx| {
                         this.apply_action(
                             crate::ui::keys::UiAction::FocusAuditItem(id.to_string()),

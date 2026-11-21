@@ -64,6 +64,8 @@ pub enum AuthError {
     ClientSetupDetail(String),
     /// The prelogin call failed.
     Prelogin,
+    /// The prelogin call failed; keeps its detail for the status bar.
+    PreloginDetail(String),
     /// The API-key login failed.
     Login,
     /// The API-key login failed; keeps the underlying detail for the status bar.
@@ -93,6 +95,7 @@ impl PartialEq for AuthError {
                 InvalidServerUrl | InvalidServerUrlDetail(_),
             )
             | (ClientSetup | ClientSetupDetail(_), ClientSetup | ClientSetupDetail(_))
+            | (Prelogin | PreloginDetail(_), Prelogin | PreloginDetail(_))
             | (Login | LoginDetail(_), Login | LoginDetail(_))
             | (Sync | SyncDetail(_), Sync | SyncDetail(_)) => true,
             (MissingField(left), MissingField(right)) => left == right,
@@ -121,7 +124,7 @@ impl AuthError {
             Self::ClientSetup | Self::ClientSetupDetail(_) => {
                 "クライアントを初期化できませんでした"
             }
-            Self::Prelogin => "サーバー情報の取得に失敗しました",
+            Self::Prelogin | Self::PreloginDetail(_) => "サーバー情報の取得に失敗しました",
             Self::Login | Self::LoginDetail(_) => "ログインに失敗しました",
             Self::Sync | Self::SyncDetail(_) => "同期に失敗しました",
             Self::KdfRejected => "KDF 設定がポリシーで拒否されました",
@@ -140,7 +143,8 @@ impl AuthError {
     pub fn status_message(&self) -> String {
         match self {
             Self::MissingField(field) => format!("{}（{field}）", self.message()),
-            Self::LoginDetail(detail)
+            Self::PreloginDetail(detail)
+            | Self::LoginDetail(detail)
             | Self::SyncDetail(detail)
             | Self::InvalidServerUrlDetail(detail)
             | Self::ClientSetupDetail(detail)
@@ -176,6 +180,9 @@ impl From<AuthError> for AppError {
                 Self::ClientSetupCause(BoxedCause::text(detail.clone()))
             }
             AuthError::Prelogin => Self::Prelogin,
+            AuthError::PreloginDetail(detail) => {
+                Self::PreloginCause(BoxedCause::text(detail.clone()))
+            }
             AuthError::Login => Self::Login,
             AuthError::LoginDetail(detail) => Self::LoginCause(BoxedCause::text(detail.clone())),
             AuthError::Sync => Self::Sync,
@@ -204,7 +211,8 @@ impl From<AppError> for AuthError {
             AppError::InvalidEmail => AuthError::InvalidEmail,
             AppError::ClientSetup => AuthError::ClientSetup,
             AppError::ClientSetupCause(cause) => AuthError::ClientSetupDetail(cause.to_string()),
-            AppError::Prelogin | AppError::PreloginCause(_) => AuthError::Prelogin,
+            AppError::Prelogin => AuthError::Prelogin,
+            AppError::PreloginCause(cause) => AuthError::PreloginDetail(cause.to_string()),
             AppError::Login => AuthError::Login,
             // Keep the rendered detail of a cause-carrying login failure: the
             // `Copy`-era conversion used to drop it and show only a generic
@@ -299,8 +307,6 @@ impl From<AppError> for UnlockError {
         }
     }
 }
-
-pub use crate::cache::SyncCacheError;
 
 // ---------------------------------------------------------------------------
 // Input length limits
@@ -893,6 +899,9 @@ async fn authenticate_inner(
         .login_api_key(&api_key)
         .await
         .map_err(|error| AuthError::from(AppError::LoginCause(BoxedCause::new(error))))?;
+    // The API secret is no longer needed after login. Drop the clone so it
+    // does not survive through sync, cache restore and KDF derivation.
+    drop(api_key);
     // Fetch the raw body so our normalizer can accept Vaultwarden's
     // PascalCase keys (openwarden 0.1.0's `Client::sync` rejected them).
     // openwarden 0.1.1 exposes `sync_body` without requiring our own HTTP

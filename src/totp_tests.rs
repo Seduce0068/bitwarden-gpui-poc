@@ -54,6 +54,7 @@ fn bare_secret_ignores_spaces_and_padding() {
 #[test]
 fn steam_secrets_produce_five_letter_codes() {
     let code = code_at("steam://GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 59).unwrap();
+    assert_eq!(code.code(), "PV9M4");
     assert_eq!(code.code().len(), 5);
     assert!(code
         .code()
@@ -67,6 +68,8 @@ fn sha256_and_sha512_are_honoured() {
     let sha512 = format!("otpauth://totp/RFC?secret={RFC_SECRET}&algorithm=SHA512&digits=8");
     let a = code_at(&sha256, 59).unwrap();
     let b = code_at(&sha512, 59).unwrap();
+    assert_eq!(a.code(), "32247374");
+    assert_eq!(b.code(), "69342147");
     assert_ne!(a.code(), b.code());
     assert_eq!(a.code().len(), 8);
 }

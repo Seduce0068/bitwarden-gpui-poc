@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第49弾で 13 件すべてを完了）。
+なし（第50弾で 9 件すべてを完了）。
 
 ## 完了
 
+- [x] 第50弾のレビュー指摘 9 件を完結（2026-11-22）
+  - `AuthError::Prelogin` の等価性と `PreloginDetail` を追加し、API 秘密の
+    複製をログイン後に破棄。未使用の `SyncCacheError` 再エクスポートを削除。
+  - TOTP の SHA256 / SHA512 / Steam 既知ベクタ、AppError cause 保持
+    バリアントの表駆動テストを追加。
+  - CHANGELOG に第44〜49弾を反映。監査パネルの選択行スクロール、
+    E2E 任意照合の同一アイテム化、設定パス解決の一元化を実施。
+  - 起動エージェント: 8 体（バックログ補充）。R4 は前イテレーションで
+    実施済みのため本イテレーションでは省略。
+  - 検証: fmt / check / test（361 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+  - 未検証: E2E の同一アイテム照合はコンパイル確認のみ（実サーバー環境は
+    破棄済み）。
 - [x] 第49弾のレビュー・発掘タスク 13 件を完結（2026-11-22）
   - 対応: README の上限記述・CI ゲート一覧・cargo doc --locked、
     AuthError の detail variant と PartialEq、`save_device_id_only` の

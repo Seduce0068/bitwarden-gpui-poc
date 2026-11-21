@@ -828,3 +828,22 @@ fn auth_detail_variants_compare_equal_to_plain_siblings() {
         AuthError::MissingField("url")
     );
 }
+
+#[test]
+fn prelogin_is_reflexive_and_keeps_its_detail() {
+    assert_eq!(AuthError::Prelogin, AuthError::Prelogin);
+    assert_eq!(
+        AuthError::PreloginDetail("server unavailable".into()),
+        AuthError::Prelogin
+    );
+    assert_eq!(
+        AuthError::PreloginDetail("server unavailable".into()).message(),
+        AuthError::Prelogin.message()
+    );
+    assert!(AuthError::PreloginDetail("server unavailable".into())
+        .status_message()
+        .contains("server unavailable"));
+    let app: crate::error::AppError = AuthError::PreloginDetail("server unavailable".into()).into();
+    assert!(matches!(app, crate::error::AppError::PreloginCause(_)));
+    assert!(std::error::Error::source(&app).is_some());
+}

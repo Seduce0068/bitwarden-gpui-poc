@@ -136,30 +136,49 @@ async fn real_server_login_sync_and_unlock() {
         .ok()
         .filter(|value| !value.is_empty());
 
-    if let Some(name) = &expected_name {
-        assert!(
-            vault
-                .items
-                .iter()
-                .any(|item| item.login().is_some() && item.name.as_str() == name.as_str()),
-            "E2E_EXPECTED_ITEM_NAME was set but no decrypted login item matched"
-        );
-    }
-    if let Some(password) = &expected_password {
-        assert!(
-            logins
-                .iter()
-                .any(|(_, actual, _, _)| *actual == password.as_str()),
-            "E2E_EXPECTED_PASSWORD was set but no decrypted login password matched"
-        );
-    }
-    if let Some(totp) = &expected_totp {
-        assert!(
-            logins
-                .iter()
-                .any(|(_, _, actual, _)| *actual == totp.as_str()),
-            "E2E_EXPECTED_TOTP was set but no decrypted login TOTP secret matched"
-        );
+    match (&expected_name, &expected_password, &expected_totp) {
+        (Some(name), Some(password), Some(totp)) => {
+            // All three values were supplied: require one single login item
+            // that carries all of them, so a field mix-up between different
+            // items cannot pass as green.
+            assert!(
+                vault.items.iter().any(|item| {
+                    item.name.as_str() == name.as_str()
+                        && item.login().is_some_and(|(_, actual_pw, actual_totp, _)| {
+                            actual_pw == password.as_str() && actual_totp == totp.as_str()
+                        })
+                }),
+                "E2E_EXPECTED_* values must belong to the same decrypted login item"
+            );
+        }
+        _ => {
+            // Backwards compatible: each supplied value is checked on its own.
+            if let Some(name) = &expected_name {
+                assert!(
+                    vault
+                        .items
+                        .iter()
+                        .any(|item| item.login().is_some() && item.name.as_str() == name.as_str()),
+                    "E2E_EXPECTED_ITEM_NAME was set but no decrypted login item matched"
+                );
+            }
+            if let Some(password) = &expected_password {
+                assert!(
+                    logins
+                        .iter()
+                        .any(|(_, actual, _, _)| *actual == password.as_str()),
+                    "E2E_EXPECTED_PASSWORD was set but no decrypted login password matched"
+                );
+            }
+            if let Some(totp) = &expected_totp {
+                assert!(
+                    logins
+                        .iter()
+                        .any(|(_, _, actual, _)| *actual == totp.as_str()),
+                    "E2E_EXPECTED_TOTP was set but no decrypted login TOTP secret matched"
+                );
+            }
+        }
     }
 
     eprintln!(

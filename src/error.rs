@@ -438,3 +438,61 @@ impl Error for AppError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_cause_carrying_variant_keeps_a_source_and_a_message() {
+        let cause = || BoxedCause::text("probe");
+        let cases: Vec<(&str, AppError)> = vec![
+            (
+                "invalid_server_url",
+                AppError::InvalidServerUrlCause(cause()),
+            ),
+            ("client_setup", AppError::ClientSetupCause(cause())),
+            ("prelogin", AppError::PreloginCause(cause())),
+            ("login", AppError::LoginCause(cause())),
+            ("sync", AppError::SyncCause(cause())),
+            ("kdf", AppError::KdfRejectedCause(cause())),
+            (
+                "unlock",
+                AppError::UnlockFailedCause("detail".into(), cause()),
+            ),
+            (
+                "unlock_structured",
+                AppError::UnlockFailedStructuredCause("status".into(), "detail".into(), cause()),
+            ),
+            (
+                "apply_sync",
+                AppError::ApplySyncFailedCause("detail".into(), cause()),
+            ),
+            (
+                "import",
+                AppError::ImportFailedCause("detail".into(), cause()),
+            ),
+            (
+                "invalid_login",
+                AppError::InvalidLoginCause("detail".into(), cause()),
+            ),
+            ("cache_parse", AppError::CacheParse(cause())),
+            ("cache_redact", AppError::CacheRedact(cause())),
+            ("cache_serialize", AppError::CacheSerialize(cause())),
+            ("read_failed", AppError::ReadFailedCause(cause())),
+            ("parse_failed", AppError::ParseFailedCause(cause())),
+            (
+                "settings_save",
+                AppError::SettingsSaveCause("detail".into(), cause()),
+            ),
+            ("totp_invalid", AppError::InvalidCause(cause())),
+        ];
+        for (name, error) in cases {
+            assert!(!error.message().is_empty(), "{name}: empty message");
+            assert!(
+                std::error::Error::source(&error).is_some(),
+                "{name}: missing source"
+            );
+        }
+    }
+}

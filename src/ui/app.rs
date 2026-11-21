@@ -28,6 +28,9 @@ pub struct BitwardenApp {
     /// Kept on the app rather than the (out-of-scope) panel renderer so the
     /// keyboard path can remember the row between keystrokes.
     pub(super) audit_row_selection: Option<usize>,
+    /// Scroll handle for the audit panel, kept so keyboard row selection can
+    /// bring the highlighted row into view.
+    pub(super) audit_scroll_handle: ScrollHandle,
     pub(super) editing: Option<SettingsField>,
     pub(super) auth: crate::ui::auth_state::AuthState,
     pub(super) login_generation: crate::ui::login_generation::LoginGeneration,
@@ -165,6 +168,7 @@ impl BitwardenApp {
             settings,
             settings_dirty: false,
             audit_row_selection: None,
+            audit_scroll_handle: ScrollHandle::new(),
             editing: None,
             auth: crate::ui::auth_state::AuthState::new(),
             login_generation: crate::ui::login_generation::LoginGeneration::default(),
@@ -443,6 +447,9 @@ impl BitwardenApp {
             .map_or(0, |report| report.items.len());
         let next = next_audit_row(self.audit_row_selection, delta, len);
         self.audit_row_selection = next;
+        if let Some(index) = next {
+            self.audit_scroll_handle.scroll_to_item(index);
+        }
         let Some(index) = next else {
             self.status = status_with_unsaved(
                 "監査する問題がありません（↑↓で行を選択できません）",

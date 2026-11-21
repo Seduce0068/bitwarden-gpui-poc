@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 全体改善（第44〜49弾 / 2026-11-21〜22）
+
+- 暗号キャッシュの redact を PascalCase / snake_case 含む全形式へ拡張し、
+  重複 ID を最新 revision の 1 件へ集約
+- 認証エラーの cause 保持と status 具体化、Settings 保存 / スキーマの
+  堅牢化、UI の選択必須化・TOTP 同期・未保存表示・監査キー導線を改善
+- CI に週次 schedule と pre-commit / CI の gitleaks 版整合チェックを追加
+- opt-in E2E を kiri 上の Vaultwarden 1.30.2 に対して実行し成功。
+  任意の既知値照合と説明を追加
+- 公開リポジトリ化に伴うメタデータ・ドキュメント・gitleaks 設定の整備
+
 ### ドキュメント（現行状態への整合）
 
 - README / ADR の実サーバー E2E 記述を 0.1.1 の `sync_body()` 接続と

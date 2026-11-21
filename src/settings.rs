@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::auth::{truncate_to_limit, MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
 use crate::error::{AppError, BoxedCause};
@@ -499,8 +500,15 @@ impl Settings {
     }
 
     /// The default config file path.
+    ///
+    /// Resolved once per process so every UI call site observes the same
+    /// location even if the environment changes later.
     pub fn default_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("settings.json"))
+        static PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+        PATH.get_or_init(|| {
+            dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("settings.json"))
+        })
+        .clone()
     }
 
     /// Load settings from `path`, distinguishing missing, unreadable,
