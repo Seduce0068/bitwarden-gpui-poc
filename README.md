@@ -34,7 +34,8 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   `src/ui/keys_tests.rs`
 - `src/main.rs`: アプリケーションの起動のみ
 - 一覧のフィルタ・ソート・検索は `Vault::view()` に委譲しており、テストと同じロジックを通る
-- TOTP は実際の6桁コードを生成し、1秒ごとのカウントダウンを表示する
+- TOTP は RFC 6238 の6桁コード、または Steam の可変長コードを生成し、
+  1秒ごとのカウントダウンを表示する
 - 設定は `XDG_CONFIG_HOME` 配下（既定は `~/.config`）の
   `bitwarden-gpui-poc/settings.json` に保存する（パスワードや鍵は保存しない）
 - 認証入力と TOTP 表示の秘密は `Zeroizing<String>` で保持し、ロック時に消去する
@@ -47,23 +48,29 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - ロック画面で Personal API key（Client ID / Client Secret）とマスターパスワードを
   入力し、`openwarden` による実ログイン・同期・復号を試せる。`Enter` は常に実認証
   であり、モック vault は `m` で明示的に開く
+- API key はセッショントークン取得に使う。マスターパスワードはメールアドレスと
+  KDF パラメータから復号鍵 `MasterKey` を導出するために使い、設定ファイルには
+  保存しない
 - KDF 計算と同期データの復号は blocking thread で実行し、待機中も UI は操作できる
-- ログイン全体にタイムアウトを設定し（設定ファイルで指定、既定30秒）、失敗時は `r` で再試行できる
+- ログインのタイムアウトは認証（prelogin / API key ログイン / sync）から
+  KDF による復号鍵導出までを対象とし（設定ファイルで指定、既定30秒）、
+  失敗時は `r` で再試行できる。タイムアウト後の vault 復号・取り込みは対象外
 - 実ログインではログイン項目の名前 / username / URI に加え、パスワードと
   TOTP シークレットも復号してメモリ上のモデルへ保持する。パスワードは
   監査の強度判定にのみ使い、UI には桁数だけを表示して平文は出さない。
-  TOTP は6桁コード生成に使い、シークレット自体は表示・コピーしない
-- **実サーバー E2E は未成功**。opt-in テスト
-  （`tests/real_server_e2e.rs`）でローカル Vaultwarden 1.30.2 への API key
-  認証と `/api/sync` の HTTP 200 までは確認したが、同サーバーの sync JSON が
-  PascalCase で openwarden 0.1.0 の camelCase パーサーと不一致のため、
-  復号前のパースに失敗する。キャッシュ経由のボディはキー正規化で
-  解析可能だが、生の認証経路は上流の `Client::sync()` が内部で
-  パースするため未解決（ADR に詳細を記録）
+  TOTP は6桁または Steam の可変長コード生成に使い、シークレット自体は
+  表示・コピーしない。実ログイン後は一覧で `p` / `u` / `y` により
+  復号済みパスワード / ユーザー名 / TOTP コードをコピーできる
+  （実サーバーでの `p` / `u` / `y` の動作確認は未実施）
+- **実サーバー E2E は成功**（2026-11-21、ローカル Vaultwarden 1.30.2）。
+  openwarden 0.1.1 の `Client::sync_body()` で生 body を取得し、既存の
+  PascalCase 正規化を本番認証経路へ接続した。opt-in テスト
+  （`tests/real_server_e2e.rs`）は実ログイン・sync・復号・取り込みまでを
+  検証する。ただし UI のコピー操作 `p` / `u` / `y` の実サーバー確認は未実施
 - `src/cache.rs` に、暗号化済みアイテムを含む平文 JSON キャッシュを実装済み
-  （キーは保存しない、ファイルは 0600 で作成）。取得時刻から 7 日で期限切れ。
-  読み出しは同期失敗時の復元経路へ接続済みだが、openwarden 0.1.0 の
-  API 制約で書き出しは本番経路から呼ばれていない（詳細は ADR を参照）
+  （鍵素材は保存しない、ファイルは 0600 で作成）。取得時刻から 7 日で期限切れ。
+  読み出しは同期失敗時の復元経路へ接続済み。0.1.1 で生 body が取得できる
+  ようになったが、書き出しは接続しない方針（ADR の再裁定を参照）
 
 ## 実サーバー接続と注意事項
 
@@ -86,11 +93,26 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   ログイン成功時に消去する（`Debug` 出力でもマスクされる）。ただし入力画面は
   共有環境の肩越し閲覧を避けること。
 - 復号したパスワードと TOTP シークレットの平文は UI へ表示しない。
-  パスワードは監査に使用し、TOTP は6桁コード生成に使用する。Vault パネルでは
-  `p` で復号済みパスワード、`u` でユーザー名、`y` で TOTP コードを
-  クリップボードへコピーできる（既定30秒で復元）。復号不能・空値・
-  ログイン項目以外ではコピーせず理由を表示する（実サーバーでの
-  動作確認は未実施）
+  パスワードは監査に使用し、TOTP は6桁または Steam の可変長コード生成に
+  使用する。Vault パネルでは `p` で復号済みパスワード、`u` でユーザー名、
+  `y` で TOTP コードをクリップボードへコピーできる（既定30秒で復元）。
+  復号不能・空値・ログイン項目以外ではコピーせず理由を表示する。
+  実ログイン後も同じ操作が使えるが、実サーバーでの `p` / `u` / `y` の
+  動作確認は未実施
+
+### 同期キャッシュ
+
+オフライン復元用の `sync-cache.json` の仕様は次のとおりです。
+
+- 保存先: `$XDG_CACHE_HOME/bitwarden-gpui-poc/sync-cache.json`
+  （未設定時は `$HOME/.cache/bitwarden-gpui-poc/sync-cache.json`）。
+  旧設定ディレクトリ配下のファイルは読み取り専用のフォールバック
+- 有効期限: 取得時刻から 7 日。期限切れは復元に使わず理由を表示する
+- フィールド: `version`（スキーマ版数）、`user_id`、`server_url`、
+  `body`（暗号化済み同期 JSON の生バイト）、`created_at`（Unix 秒）
+- `profile.key` / `privateKey` は保存前に除去し、復号鍵・マスターパスワード・
+  API 秘密は書き出さない
+- 読み出しのみ本番経路へ接続済み。書き出しは ADR の裁定により未接続
 
 ## 画面と操作
 
@@ -112,7 +134,12 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 | `n` | パスワード生成パネル |
 | `c` | 設定パネル |
 | `l` | ロック |
+| `w` | 設定 / 生成パネルの変更を保存 |
+| `d` | 設定 / 生成パネルの未保存変更を破棄 |
 | `Esc` | 終了（編集中は入力を確定。キャンセルではない） |
+
+実ログイン後のログイン項目でも `p` / `u` / `y` は同様に動作する（実サーバー
+での動作確認は未実施）。
 
 マウスでも操作できます。一覧の行をクリックすると選択でき、ヘッダーの
 `[一覧]` / `[監査]` / `[生成]` / `[設定]` ボタンでパネルを切り替えられます。
@@ -121,6 +148,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 `+` / `-` で長さと単語数、`,` で区切り文字を変更します。
 `p` でパスワード、`h` で passphrase を生成します。
 `y` でパスワード、`Y`（Shift+y）で passphrase をクリップボードにコピーします。
+設定変更は `w` で保存、`d` で破棄できます。
 
 設定パネルでは `1` / `2` でサーバーURL とメールを編集し、`Enter` で確定します。
 `+` / `-` で監査閾値、`i` / `u` で自動ロック時間（1〜60分）、`3` / `4` で
@@ -132,9 +160,13 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 に保存されます。パスワードや API key は保存されません。スキーマ v1 の
 フィールドと既定値は次のとおりです（手編集時は型と範囲に注意）。
 
-| JSON キー | 型 | 既定値 | 範囲・説明 |
+下表のドット区切りは JSON のネストを表すパスであり、キー名そのものでは
+ありません。たとえば `password_generator.length` は
+`{"password_generator": {"length": 20}}` のように保存されます。
+
+| JSON パス | 型 | 既定値 | 範囲・説明 |
 | --- | --- | --- | --- |
-| `schema_version` | number | `1` | 将来版（>1）は破棄して既定値へ。欠落は v1 として扱う |
+| `schema_version` | number | `1` | 将来版（>1）は破棄。欠落・型違反は legacy（0）として保存時に昇格 |
 | `server_url` | string | `https://vault.bitwarden.com` | 最大 2048 文字 |
 | `email` | string | `""` | 最大 254 文字 |
 | `device_id` | string | `""` | UUID v4。初回ログイン時に生成・永続化 |
@@ -148,7 +180,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 | `passphrase_generator.separator` | string | `"-"` | 単語区切り |
 | `passphrase_generator.capitalize` | bool | `true` | 単語を大文字開始に |
 | `passphrase_generator.include_number` | bool | `false` | 数字を 1 桁追加 |
-| `thresholds.weak_bits` | number | `50` | 1〜200（推定エントロピー） |
+| `thresholds.weak_bits` | number | `40` | 1〜200（推定エントロピー） |
 | `thresholds.stale_days` | number | `365` | 1〜3650（更新からの日数） |
 | `idle_lock_seconds` | number | `300` | 60〜3600（1〜60 分） |
 | `login_timeout_seconds` | number | `30` | 1〜3600 |
@@ -219,6 +251,49 @@ clippy の `unwrap_used` / `expect_used` / `panic` /
 CI バッジは upstream（push 先）が未設定のため記載していません。設定後に
 `.github/workflows/ci.yml` のステータスバッジを追加できます。
 
+## 依存のセキュリティ更新
+
+`Cargo.toml` の `gpui-kit` / `openwarden` は `=` でピンしています。これは
+gpui-kit の API を固定する明示的な判断であり、ピンを外して解決範囲を広げる
+ことはしません。脆弱性が公表された場合は、次の手順で迅速に更新します。
+
+1. `cargo audit` と公表情報（RUSTSEC / GitHub Advisory）で該当クレートと
+   影響範囲を確認する
+2. 安全なバージョンを特定し、`Cargo.toml` の `=` ピンをそのバージョンへ
+   書き換える（現行は openwarden 0.1.1 / gpui-kit 0.9.1）
+3. `cargo update -p <crate> --precise <安全なバージョン>` でロックファイルを
+   更新する
+4. 次のゲートを順に実行する:
+
+   ```bash
+   cargo fmt --all -- --check
+   cargo check --all-targets --locked
+   cargo test --all-targets --locked
+   cargo clippy --all-targets --locked -- -D warnings
+   cargo deny check
+   cargo audit
+   ```
+
+5. API 変更があればコードを追従させ、CHANGELOG の `[Unreleased]` と
+   openwarden の場合は ADR も更新する
+
+gpui-kit のマイナー更新で API が壊れる場合は、ピン解除ではなく移行作業として
+別途対応します。
+
+## ツール版の管理
+
+CI（`.github/workflows/ci.yml`）と pre-commit で共通して使うツールの版は、
+次の場所で管理します。
+
+| ツール | CI | pre-commit |
+| --- | --- | --- |
+| gitleaks | `GITLEAKS_VERSION` | `rev`（`.pre-commit-config.yaml`） |
+| cargo-deny | `cargo install --version` | — |
+| markdownlint-cli | `npm install --global` | — |
+
+gitleaks は CI 起動時に pre-commit の `rev` と一致するか検査し、ずれがあれば
+ゲートを失敗させます。更新時は両方を同じ版へ変更してください。
+
 ## ドキュメント
 
 - 設計記録・レビュー結果: [docs/index.md](docs/index.md)
@@ -247,7 +322,7 @@ CI バッジは upstream（push 先）が未設定のため記載していませ
 - パスワードと TOTP シークレットは機密のため検索対象外（監査での有無判定には使用）
 - ログインのタイムアウトは設定ファイルの `login_timeout_seconds` で変更可能（既定30秒）
 - 実ログイン時は link-local アドレス / クラウドメタデータホスト / DNS 解決先の
-  link-local IP を拒否するが、openwarden 0.1.0 がリダイレクトを追従しないため
+  link-local IP を拒否するが、openwarden 0.1.1 がリダイレクトを追従しないため
   リダイレクト先の検査と DNS rebinding 後の IP ピン留めは未対応
 - 構造化ログ・メトリクス・監視は未実装
 - 本番利用を意図したものではありません

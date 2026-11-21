@@ -6,6 +6,14 @@
   実サーバー E2E が成功
 - 階層別エラー型の別名を維持する決定を記録
 - From 変換 impl を型定義側へ移し、error.rs の逆依存を解消
+- writer 再検討トリガー#1（raw sync body の公開）の発動を記録し、
+  現状維持を再裁定（redact 修正は完了済みで、判断根拠には使わない）
+
+## 2026-11-20
+
+- `vault_sync::parse_sync` が PascalCase の sync JSON キーを camelCase へ
+  正規化。キャッシュ経由のボディは解析可能になったが、当時は生認証経路が
+  `Client::sync()` の内部パースを通るため E2E は未成功
 
 ## 2026-11-19
 
