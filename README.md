@@ -126,8 +126,10 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 
 テストアカウントには、復号可能なパスワードと TOTP シークレットを持つ
 ログイン項目を 1 件以上登録してください。API key は Web vault のアカウント
-設定、または `POST /api/accounts/api-key` で取得できます。実行後は
-`kiri rm -f vw-e2e` でコンテナを破棄してください。
+設定、または `POST /api/accounts/api-key` で取得できます。誤アカウントや誤復号を
+検出したい場合は `E2E_EXPECTED_ITEM_NAME` / `E2E_EXPECTED_PASSWORD` /
+`E2E_EXPECTED_TOTP` に既知値を設定すると照合されます（未設定なら必須では
+ありません）。実行後は `kiri rm -f vw-e2e` でコンテナを破棄してください。
 
 ### 同期キャッシュ
 
@@ -217,7 +219,7 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 
 数値は型として表現できる範囲外の値がクランプされ、負数・小数など型として
 表現できない値は既定値へ置き換えられます。`server_url` / `email` の上限は
-認証時に切り詰められます（設定ファイルの読み込み時にはクランプされません）。
+認証時だけでなく、設定ファイルの読み込み時にも適用されます。
 ファイル全体の上限は 1 MiB です。
 
 ## ビルドと検証
@@ -231,7 +233,7 @@ cargo check --all-targets --locked
 cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
 cargo audit
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 cargo deny check
 markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
 cargo run
@@ -268,7 +270,8 @@ mise use rust@1.95
 `.github/workflows/ci.yml` から共通ワークフロー
 `Seduce0068/workflows/.github/workflows/rust-gates.yml@v1` を呼び出します。
 fmt → check → test → clippy → `cargo audit` → doc → `cargo deny check` →
-markdownlint のゲートを実行します。markdownlint は CI で
+markdownlint → gitleaks（dir と git 履歴）のゲートを実行します。
+markdownlint は CI で
 `markdownlint-cli@0.50.0` に固定しています。
 clippy の `unwrap_used` / `expect_used` / `panic` /
 `undocumented_unsafe_blocks` deny は `Cargo.toml` の `[lints.clippy]` で
@@ -277,8 +280,8 @@ clippy の `unwrap_used` / `expect_used` / `panic` /
 監査は脆弱性検出時に失敗し、unmaintained の warning は失敗させません。
 
 変更を送る前に、上記のローカルゲートを同じ順序で実行してください。
-CI バッジは upstream（push 先）が未設定のため記載していません。設定後に
-`.github/workflows/ci.yml` のステータスバッジを追加できます。
+CI の結果は GitHub の Actions タブで確認できます（`master` は `origin/master`
+を追跡しています）。
 
 ## 依存のセキュリティ更新
 

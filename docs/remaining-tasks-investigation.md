@@ -164,7 +164,8 @@ login-race 2→1、item-kind 2→1、license 2→1。
 - defer: openwarden の書き込み API 未利用
   - high effort。read 側の完全接続と実接続検証を先に片付ける。
 - defer: repository / homepage メタデータ
-  - git remote 空・upstream 未設定で値が確定しない。
+  - 当時は git remote 空・upstream 未設定で値が確定しなかったが、
+    2026-11-21 に public リポジトリを作成し `Cargo.toml` へ設定済み。
 - defer: テスト・型の整理残り
   - 設計変更を伴う型境界再設計は PoC 目的に直結しない。
 - defer: Searchable Select 等の UI 採用

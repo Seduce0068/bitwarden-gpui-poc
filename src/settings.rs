@@ -141,8 +141,10 @@ impl Settings {
 /// Why settings could not be loaded.
 ///
 /// Kept as its own type so the UI's `&'static str` status messages stay valid.
-/// Read and parse failures are also converted into [`AppError`], which retains
-/// the original `std::io::Error` / `serde_json::Error` in `Error::source()`.
+/// Read and parse failures originate as [`AppError`] with a retained cause, but
+/// converting them to `SettingsLoadError` drops that cause: this type has no
+/// `source()` chain. Diagnostics beyond the status text are only available
+/// while the failure is still an `AppError`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingsLoadError {
     /// The file does not exist yet; defaults are expected on first launch.
@@ -448,8 +450,8 @@ impl Settings {
     /// # Errors
     ///
     /// [`AppError::RandomUnavailableCause`] when no random source is available,
-    /// or [`AppError::SettingsSaveCause`] when the settings file cannot be
-    /// written (the original io error stays in `Error::source()`). There is no
+    /// or [`AppError::SettingsSaveCause`] when the settings file cannot be read
+    /// or written (the original io error stays in `Error::source()`). There is no
     /// hardcoded fallback for the RNG because that would defeat
     /// per-installation uniqueness.
     pub fn ensure_device_id(&mut self, path: Option<&std::path::Path>) -> Result<&str, AppError> {
@@ -474,8 +476,22 @@ impl Settings {
     /// The login screen may hold unsaved shared-field edits; writing `self`
     /// would silently persist them. Re-read the file, replace just the id and
     /// stamp the current schema before writing.
+    ///
+    /// Only [`SettingsLoadError::NotFound`] is treated as "no file yet": any
+    /// other load failure (unreadable, oversized or malformed) is returned as
+    /// an [`std::io::Error`] and the write is aborted, so a broken file is never
+    /// overwritten with defaults and its other fields are not silently lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns `std::io::Error` when the existing file cannot be read/parsed,
+    /// when serialization fails, or when the write itself fails.
     pub fn save_device_id_only(path: &std::path::Path, id: &str) -> std::io::Result<()> {
-        let mut current = Self::load_detailed(path).unwrap_or_default();
+        let mut current = match Self::load_detailed(path) {
+            Ok(settings) => settings,
+            Err(SettingsLoadError::NotFound) => Self::default(),
+            Err(error) => return Err(std::io::Error::other(error)),
+        };
         current.device_id = id.to_string();
         current.schema_version = CURRENT_SCHEMA_VERSION;
         let contents = serde_json::to_string_pretty(&current).map_err(std::io::Error::other)?;

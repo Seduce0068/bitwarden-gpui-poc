@@ -525,3 +525,81 @@ fn global_keys_are_scoped_without_ambiguous_bindings() {
         }
     }
 }
+
+#[test]
+fn audit_panel_has_up_down_enter_keyboard_path() {
+    let mut value = ctx("up");
+    value.panel = Panel::Audit;
+    assert_eq!(classify_key(&value), UiAction::MoveSelection(-1));
+    value.key = "down";
+    assert_eq!(classify_key(&value), UiAction::MoveSelection(1));
+    value.key = "enter";
+    assert_eq!(classify_key(&value), UiAction::focus_selected_audit_row());
+    value.key = "g";
+    assert_eq!(classify_key(&value), UiAction::SetPanel(Panel::Vault));
+    value.key = "l";
+    assert_eq!(classify_key(&value), UiAction::Lock);
+    value.key = "x";
+    assert_eq!(classify_key(&value), UiAction::None);
+}
+
+#[test]
+fn reserved_audit_and_quit_sentinels_do_not_collide_with_item_ids() {
+    assert_ne!(AUDIT_SELECTED_ROW_SENTINEL, QUIT_OR_WARN_SENTINEL);
+    assert_eq!(
+        UiAction::focus_selected_audit_row(),
+        UiAction::FocusAuditItem(AUDIT_SELECTED_ROW_SENTINEL.to_string())
+    );
+    assert_eq!(
+        UiAction::quit_or_warn(),
+        UiAction::FocusAuditItem(QUIT_OR_WARN_SENTINEL.to_string())
+    );
+    assert_ne!(
+        UiAction::focus_selected_audit_row(),
+        UiAction::FocusAuditItem("item-42".into())
+    );
+}
+
+#[test]
+fn escape_uses_the_warn_first_sentinel_outside_editing_modes() {
+    for screen in [Screen::Locked, Screen::Unlocked] {
+        for panel in [
+            Panel::Vault,
+            Panel::Audit,
+            Panel::Generator,
+            Panel::Settings,
+        ] {
+            let mut value = ctx("escape");
+            value.screen = screen;
+            value.panel = panel;
+            assert_eq!(
+                classify_key(&value),
+                UiAction::quit_or_warn(),
+                "{screen:?}/{panel:?}"
+            );
+        }
+    }
+
+    // Editing modes keep their own confirm/finish behaviour.
+    let mut value = ctx("escape");
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    assert_eq!(classify_key(&value), UiAction::FinishSettingsEdit);
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    value.editing_settings = false;
+    assert_eq!(classify_key(&value), UiAction::FinishAuthEdit);
+    value.screen = Screen::Unlocked;
+    value.editing_auth = false;
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::FinishSearch);
+}
+
+#[test]
+fn audit_enter_does_not_leak_into_other_panels() {
+    for panel in [Panel::Vault, Panel::Generator, Panel::Settings] {
+        let mut value = ctx("enter");
+        value.panel = panel;
+        assert_eq!(classify_key(&value), UiAction::None, "{panel:?}");
+    }
+}

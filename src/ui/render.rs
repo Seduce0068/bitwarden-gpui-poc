@@ -351,6 +351,8 @@ impl Render for BitwardenApp {
             (Screen::Unlocked, Panel::Audit) => match &self.view.audit_report {
                 Some(report) => audit_panel(
                     report,
+                    self.audit_row_selection,
+                    self.settings_dirty,
                     |this, id, cx| {
                         this.apply_action(
                             crate::ui::keys::UiAction::FocusAuditItem(id.to_string()),

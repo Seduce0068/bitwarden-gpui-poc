@@ -117,6 +117,9 @@ pub(super) enum UiAction {
     SaveSettings,
     DiscardSettings,
     /// Move to the vault list and select the item named by an audit finding.
+    ///
+    /// Also carries the reserved sentinels defined below for "focus the
+    /// highlighted audit row" and "quit or warn about unsaved settings".
     FocusAuditItem(String),
     AdjustThreshold(i32),
     AdjustIdleLock(i32),
@@ -125,6 +128,31 @@ pub(super) enum UiAction {
     /// Change one typed generator option.
     Generator(GeneratorOption),
     None,
+}
+
+/// Reserved `FocusAuditItem` id meaning "the row highlighted with Up/Down".
+///
+/// `UiAction` is applied by a single dispatcher in `ui::input`; a reserved id
+/// lets the audit panel add commands without changing that dispatcher or its
+/// exhaustive match. Real vault ids are server supplied and never collide.
+pub(super) const AUDIT_SELECTED_ROW_SENTINEL: &str = "__audit_selected_row__";
+
+/// Reserved `FocusAuditItem` id meaning "leave, or warn about unsaved edits".
+///
+/// Resolved by `BitwardenApp::focus_audit_item`, which owns the dirty flag and
+/// can therefore decide between the warning and the existing `Quit` action.
+pub(super) const QUIT_OR_WARN_SENTINEL: &str = "__quit_or_warn__";
+
+impl UiAction {
+    /// Focus the audit row currently highlighted by the keyboard.
+    pub(super) fn focus_selected_audit_row() -> Self {
+        Self::FocusAuditItem(AUDIT_SELECTED_ROW_SENTINEL.to_string())
+    }
+
+    /// Quit, but surface the unsaved-settings warning first when dirty.
+    pub(super) fn quit_or_warn() -> Self {
+        Self::FocusAuditItem(QUIT_OR_WARN_SENTINEL.to_string())
+    }
 }
 
 /// The state needed to classify a keystroke, without GPUI types.
@@ -213,7 +241,7 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             };
         }
         return match key {
-            "escape" => UiAction::Quit,
+            "escape" => UiAction::quit_or_warn(),
             "enter" => UiAction::Authenticate,
             "m" => UiAction::OpenDemoVault,
             "r" if ctx.login_failed => UiAction::RetryLogin,
@@ -238,7 +266,12 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
 
     match ctx.panel {
         Panel::Audit => match key {
-            "escape" => UiAction::Quit,
+            "escape" => UiAction::quit_or_warn(),
+            // The audit rows are navigated with the same up/down intent as the
+            // vault list; `BitwardenApp::move_selection` routes it by panel.
+            "up" => UiAction::MoveSelection(-1),
+            "down" => UiAction::MoveSelection(1),
+            "enter" => UiAction::focus_selected_audit_row(),
             "g" => UiAction::SetPanel(Panel::Vault),
             "l" => UiAction::Lock,
             _ => UiAction::None,
@@ -248,7 +281,7 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 return UiAction::None;
             }
             match key {
-                "escape" => UiAction::Quit,
+                "escape" => UiAction::quit_or_warn(),
                 "n" => UiAction::SetPanel(Panel::Vault),
                 "l" => UiAction::Lock,
                 "p" => UiAction::GeneratePassword,
@@ -286,7 +319,7 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 };
             }
             match key {
-                "escape" => UiAction::Quit,
+                "escape" => UiAction::quit_or_warn(),
                 "c" => UiAction::SetPanel(Panel::Vault),
                 "l" => UiAction::Lock,
                 "d" => UiAction::DiscardSettings,
@@ -305,7 +338,7 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             }
         }
         Panel::Vault => match key {
-            "escape" => UiAction::Quit,
+            "escape" => UiAction::quit_or_warn(),
             "up" => UiAction::MoveSelection(-1),
             "down" => UiAction::MoveSelection(1),
             "l" => UiAction::Lock,

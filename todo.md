@@ -24,10 +24,32 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第48弾で補充分 9 件をすべて完了。イテレーション上限 3 に到達）。
+なし（第49弾で 13 件すべてを完了）。
 
 ## 完了
 
+- [x] 第49弾のレビュー・発掘タスク 13 件を完結（2026-11-22）
+  - 対応: README の上限記述・CI ゲート一覧・cargo doc --locked、
+    AuthError の detail variant と PartialEq、`save_device_id_only` の
+    読込失敗分類、E2E の任意既知値照合、CI 週次 schedule、
+    公開リポジトリのメタデータ、未保存警告の案内と永続表示、
+    監査パネルのキーボード導線と視覚ハイライト、auth.rs の逆依存整理、
+    error.rs / settings.rs の doc 修正。
+  - 起動エージェント: 12 体（補充探索 10 + 実装 2）。R4 独立レビュー 2 体。
+    深度 1、無制限プロファイル（hy4-flash-free）。
+  - R4 で採用: 監査パネルの未保存表示消滅、Esc 判定テストの形骸化、
+    remote/upstream 記述、SettingsLoadError の source 主張、error.rs の
+    メッセージ型、schedule コメントの過大表現、concurrency グループ衝突、
+    監査行ハイライト。すべて修正済み。
+  - R4 で却下: Generator の editing_settings で Esc が消える指摘は、
+    `set_panel` が editing をクリアするため到達不能（speculative）として
+    記録のみ。sentinel の型レベル分離は設計変更が大きいため見送り。
+  - 検証: fmt / check / test（359 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks / YAML パース
+    すべて成功。
+  - 未検証: opt-in E2E は任意照合の追加後のみコンパイル確認。実サーバー
+    環境は前回実行後に破棄済みのため、再実行はしていない。
+  - 完了項目: 上記 13 件（詳細はこのコミットの差分を参照）。
 - [x] opt-in E2E を実サーバーに対して実行（2026-11-22）
   - kiri 上の Vaultwarden 1.30.2 にテスト専用アカウントと
     パスワード／TOTP 付きログイン項目を作成し、`E2E_*` を設定して

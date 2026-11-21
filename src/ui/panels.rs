@@ -60,6 +60,8 @@ pub(super) fn totp_badge(item: &crate::model::VaultItem) -> TotpBadge {
 // when the window is short.
 pub(super) fn audit_panel<'a, V: 'static>(
     report: &'a Report,
+    selected: Option<usize>,
+    dirty: bool,
     on_focus: impl Fn(&mut V, &str, &mut Context<V>) + 'static,
     cx: &mut Context<V>,
 ) -> impl IntoElement + 'a {
@@ -86,12 +88,13 @@ pub(super) fn audit_panel<'a, V: 'static>(
                 .child(report.summary()),
         )
         .child(div().text_xs().text_color(rgb(0xa6adc8)).child(format!(
-            "TOTP 設定済み: {}/{} ({:.0}%) / 行をクリックで対象を選択",
+            "{} TOTP 設定済み: {}/{} ({:.0}%) / ↑↓: 行を選択 / Enter: 対象を選択 / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了",
+            unsaved_marker(dirty),
             report.with_totp,
             report.logins,
             report.totp_coverage() * 100.0
         )));
-    for item in &report.items {
+    for (index, item) in report.items.iter().enumerate() {
         let color = rgb(item.worst().map_or(0xa6adc8, severity_color));
         let id = item.id.clone();
         let focus = focus.clone();
@@ -99,6 +102,11 @@ pub(super) fn audit_panel<'a, V: 'static>(
             div()
                 .id(SharedString::from(format!("audit-row-{id}")))
                 .mt_2()
+                .bg(if selected == Some(index) {
+                    rgb(0x45475a)
+                } else {
+                    rgb(0x1e1e2e)
+                })
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     focus(this, &id, cx);
                 }))
