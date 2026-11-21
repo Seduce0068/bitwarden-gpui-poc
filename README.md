@@ -62,11 +62,13 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   表示・コピーしない。実ログイン後は一覧で `p` / `u` / `y` により
   復号済みパスワード / ユーザー名 / TOTP コードをコピーできる
   （実サーバーでの `p` / `u` / `y` の動作確認は未実施）
-- **実サーバー E2E は成功**（2026-11-21、ローカル Vaultwarden 1.30.2）。
+- **実サーバー E2E は成功**（2026-11-21/22、ローカル Vaultwarden 1.30.2）。
   openwarden 0.1.1 の `Client::sync_body()` で生 body を取得し、既存の
   PascalCase 正規化を本番認証経路へ接続した。opt-in テスト
   （`tests/real_server_e2e.rs`）は実ログイン・sync・復号・取り込みまでを
-  検証する。ただし UI のコピー操作 `p` / `u` / `y` の実サーバー確認は未実施
+  検証する。2026-11-22 に kiri 上の Vaultwarden に対して再実行し、
+  復号済みパスワードと TOTP コードの検証まで含めて 1 passed を確認済み。
+  ただし UI のコピー操作 `p` / `u` / `y` の実サーバー確認は未実施
 - `src/cache.rs` に、暗号化済みアイテムを含む平文 JSON キャッシュを実装済み
   （鍵素材は保存しない、ファイルは 0600 で作成）。取得時刻から 7 日で期限切れ。
   読み出しは同期失敗時の復元経路へ接続済み。0.1.1 で生 body が取得できる
@@ -99,6 +101,33 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   復号不能・空値・ログイン項目以外ではコピーせず理由を表示する。
   実ログイン後も同じ操作が使えるが、実サーバーでの `p` / `u` / `y` の
   動作確認は未実施
+
+### opt-in E2E の実行
+
+ローカルサーバーは Docker 互換 CLI の `kiri` で起動できます（Docker でも可）。
+
+```bash
+echo "--- Vaultwarden 起動（kiri） ---"
+kiri pull vaultwarden/server:1.30.2
+kiri run --detach --name vw-e2e \
+  --env DOMAIN=http://127.0.0.1:8222 \
+  --volume /tmp/vw-e2e-data:/data \
+  --publish 127.0.0.1:8222:80 \
+  vaultwarden/server:1.30.2
+
+echo "--- テスト実行（認証情報はローカルの環境変数で渡す） ---"
+export E2E_SERVER_URL=http://127.0.0.1:8222
+export E2E_EMAIL='テストアカウントのメール'
+export E2E_CLIENT_ID='user.<ユーザー UUID>'
+export E2E_CLIENT_SECRET='テストアカウントの API key'
+export E2E_MASTER_PASSWORD='テストアカウントのマスターパスワード'
+cargo test --test real_server_e2e -- --ignored --nocapture
+```
+
+テストアカウントには、復号可能なパスワードと TOTP シークレットを持つ
+ログイン項目を 1 件以上登録してください。API key は Web vault のアカウント
+設定、または `POST /api/accounts/api-key` で取得できます。実行後は
+`kiri rm -f vw-e2e` でコンテナを破棄してください。
 
 ### 同期キャッシュ
 
