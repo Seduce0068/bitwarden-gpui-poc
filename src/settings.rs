@@ -423,7 +423,7 @@ impl Settings {
     /// 1..=3600 seconds for login/clipboard delays, 4..=128 characters and
     /// 2..=20 words for the generators, 1..=200 bits / 1..=3650 days for the
     /// audit thresholds. The same auth caps apply to `server_url` and `email`,
-    /// reusing the constants from `crate::auth` so the stored value and the
+    /// reusing the constants from `crate::limits` so the stored value and the
     /// effective (clamped) login config cannot diverge.
     pub fn sanitized(&self) -> Self {
         let mut result = self.clone();

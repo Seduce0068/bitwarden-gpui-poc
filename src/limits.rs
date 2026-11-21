@@ -14,7 +14,7 @@ pub const MAX_SERVER_URL_LEN: usize = 2048;
 pub const DEFAULT_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Byte offset just past `limit` characters, or `None` when `value` fits.
-fn char_boundary_at(value: &str, limit: usize) -> Option<usize> {
+pub(crate) fn char_boundary_at(value: &str, limit: usize) -> Option<usize> {
     value.char_indices().nth(limit).map(|(index, _)| index)
 }
 

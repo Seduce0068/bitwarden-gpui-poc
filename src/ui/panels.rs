@@ -11,6 +11,9 @@ use crate::ui::logic::{settings_hint, unsaved_marker};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
 use crate::vault_sync::is_undecryptable_totp;
 
+/// Number of header rows rendered before the first audit item.
+pub(super) const AUDIT_HEADER_ROWS: usize = 3;
+
 /// Colour for a finding's severity, shared by the item header and its rows.
 fn severity_color(severity: Severity) -> u32 {
     match severity {

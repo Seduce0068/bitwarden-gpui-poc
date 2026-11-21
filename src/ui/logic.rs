@@ -158,7 +158,7 @@ pub(super) fn settings_hint(editing: bool) -> &'static str {
 /// A vault restored from the encrypted offline cache may be stale (the sync
 /// call failed), so the status says so instead of implying fresh data.
 pub(super) fn login_success_status(count: usize, from_cache: bool) -> String {
-    let base = format!("ログイン成功: {count} 件のログインを読み込みました");
+    let base = format!("ログイン成功: {count} 件の項目を読み込みました");
     if from_cache {
         format!("{base}（オフラインキャッシュから復元。最新でない可能性があります）")
     } else {
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn login_status_warns_only_for_cache_restores() {
         let fresh = login_success_status(3, false);
-        assert_eq!(fresh, "ログイン成功: 3 件のログインを読み込みました");
+        assert_eq!(fresh, "ログイン成功: 3 件の項目を読み込みました");
 
         let restored = login_success_status(3, true);
         assert!(restored.starts_with(&fresh), "{restored}");

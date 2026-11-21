@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第51弾で 7 件すべてを完了）。
+なし（第52弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第52弾のレビュー指摘 7 件を完結（2026-11-22）
+  - `load_advisories` の直接テスト、未選択時の ↓ が先頭を選ぶ規則、
+    ログイン成功ステータスの「項目」表記を追加・修正。
+  - 設定テストの auth 依存を切断し、`char_boundary_at` を limits の
+    単一実装へ集約。監査ヘッダ行数を共有定数化し、`sanitized()` の
+    doc を limits 由来へ修正。
+  - 起動エージェント: 5 体（バックログ補充）。
+  - 検証: fmt / check / test（366 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+  - 却下（メモ）: `authenticate_with_timeout` の期限切れ後に
+    ブロッキングジョブを停止する案は、以前から既知制約として明記されて
+    おり、協調キャンセルには上流 API 変更が必要なため再掲しない。
 - [x] 第51弾のレビュー指摘 7 件を完結（2026-11-22）
   - `KdfRejectedDetail` を追加し KDF 拒否理由を status へ反映。
     監査行スクロールのヘッダ 3 行分のオフセットを修正。

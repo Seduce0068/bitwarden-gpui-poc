@@ -340,15 +340,10 @@ pub const MAX_CLIENT_SECRET_LEN: usize = 1024;
 /// legitimate, but the in-memory buffer still needs a finite bound.
 pub const MAX_MASTER_PASSWORD_LEN: usize = 1024;
 
-/// Byte offset just past `limit` characters, or `None` when `value` fits.
-fn char_boundary_at(value: &str, limit: usize) -> Option<usize> {
-    value.char_indices().nth(limit).map(|(index, _)| index)
-}
-
 /// Secret counterpart of [`truncate_to_limit`]. Replacing the value drops and
 /// zeroizes the previous secret buffer.
 fn truncate_secret_to_limit(value: &mut SecretString, limit: usize) {
-    let Some(index) = char_boundary_at(value.expose_secret(), limit) else {
+    let Some(index) = crate::limits::char_boundary_at(value.expose_secret(), limit) else {
         return;
     };
     let prefix = value.expose_secret()[..index].to_string();

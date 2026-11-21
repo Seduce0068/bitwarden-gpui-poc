@@ -604,7 +604,7 @@ fn settings_error_round_trip_keeps_status_text() {
 
 #[test]
 fn shared_field_edits_respect_the_auth_caps() {
-    use crate::auth::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+    use crate::limits::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
     use crate::settings::SharedSettingsField;
 
     let mut settings = Settings::default();
@@ -629,7 +629,7 @@ fn shared_field_edits_respect_the_auth_caps() {
 
 #[test]
 fn sanitized_clamps_shared_text_fields() {
-    use crate::auth::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+    use crate::limits::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
 
     let settings = Settings {
         server_url: "s".repeat(MAX_SERVER_URL_LEN + 10),
@@ -798,4 +798,38 @@ fn integral_float_schema_version_is_rejected_as_future() {
     let loaded = Settings::load_detailed(&path).unwrap();
     assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert_ne!(loaded.email, "future@example.com");
+}
+
+#[test]
+fn load_advisories_reports_future_version_and_unknown_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        br#"{"schema_version":99,"email":"e@example.com","mystery_key":1}"#,
+    )
+    .unwrap();
+    let notices = load_advisories(&path);
+    assert!(
+        notices.iter().any(|n| n.contains("バージョン 99")),
+        "{notices:?}"
+    );
+    assert!(
+        notices.iter().any(|n| n.contains("mystery_key")),
+        "{notices:?}"
+    );
+}
+
+#[test]
+fn load_advisories_is_empty_for_valid_or_oversized_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, br#"{"schema_version":1,"email":"e@example.com"}"#).unwrap();
+    assert!(load_advisories(&path).is_empty());
+    let oversized = usize::try_from(MAX_SETTINGS_BYTES + 2).unwrap();
+    std::fs::write(&path, vec![b' '; oversized]).unwrap();
+    assert!(
+        load_advisories(&path).is_empty(),
+        "oversized files are skipped"
+    );
 }

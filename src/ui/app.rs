@@ -108,9 +108,6 @@ pub(super) fn quit_gate_warning(dirty: bool) -> Option<&'static str> {
     dirty.then_some(unsaved_quit_warning_status())
 }
 
-/// Number of header rows rendered before the first audit item.
-const AUDIT_HEADER_ROWS: usize = 3;
-
 /// Clamp a relative audit-row move into a report of `len` rows.
 ///
 /// With no selection, Down starts at the first row and Up at the last one;
@@ -453,7 +450,7 @@ impl BitwardenApp {
         if let Some(index) = next {
             // The panel renders three header rows before the first item.
             self.audit_scroll_handle
-                .scroll_to_item(index + AUDIT_HEADER_ROWS);
+                .scroll_to_item(index + crate::ui::panels::AUDIT_HEADER_ROWS);
         }
         let Some(index) = next else {
             self.status = status_with_unsaved(

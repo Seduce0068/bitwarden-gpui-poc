@@ -143,11 +143,15 @@ impl VaultViewState {
         if visible.is_empty() {
             return None;
         }
-        let current = self
+        let Some(current) = self
             .selected_id
             .as_deref()
             .and_then(|id| visible.iter().position(|item| item.id == id))
-            .unwrap_or(0);
+        else {
+            // With no selection, Down starts at the first row and Up at the
+            // last one, matching the audit panel's keyboard behaviour.
+            return Some(if delta >= 0 { 0 } else { visible.len() - 1 });
+        };
         Some((current as isize + delta).clamp(0, visible.len() as isize - 1) as usize)
     }
 
@@ -224,9 +228,10 @@ mod tests {
         let state = state_with_items();
         assert_eq!(state.visible_items().len(), 2);
         assert_eq!(state.next_index(0), Some(0));
-        assert_eq!(state.next_index(1), Some(1));
-        assert_eq!(state.next_index(1_000), Some(1), "upper clamp");
-        assert_eq!(state.next_index(-1_000), Some(0), "lower clamp");
+        assert_eq!(state.next_index(1), Some(0), "Down starts at the first row");
+        assert_eq!(state.next_index(-1), Some(1), "Up starts at the last row");
+        assert_eq!(state.next_index(1_000), Some(0), "upper clamp");
+        assert_eq!(state.next_index(-1_000), Some(1), "lower clamp");
 
         // From the last row, a further step down stays on the last row.
         let mut state = state_with_items();
