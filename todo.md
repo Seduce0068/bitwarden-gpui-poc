@@ -28,6 +28,16 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 完了
 
+- [x] opt-in E2E を実サーバーに対して実行（2026-11-22）
+  - kiri 上の Vaultwarden 1.30.2 にテスト専用アカウントと
+    パスワード／TOTP 付きログイン項目を作成し、`E2E_*` を設定して
+    `cargo test --test real_server_e2e -- --ignored --nocapture` を実行。
+    `1 passed`（`E2E OK: loaded 1 items (1 logins)`）を確認。
+  - API key は `/api/accounts/api-key` から取得。masterPasswordHash は
+    PBKDF2(password, email, 600000) をさらに PBKDF2(key, password, 1)
+    した base64 であることを Web vault のリクエストから確認。
+  - README に kiri での起動手順と実行方法を追記。認証情報ファイルは
+    実行後に削除し、リポジトリへは含めていない。
 - [x] バックログ補充分 9 件を完結（2026-11-21・第48弾 / イテレーション 3）
   - `load_advisories` にサイズ上限とトップレベル限定を明示。設定破棄時にも
     未来バージョン警告を再表示。キャッシュ理由文言を cache 層へ一元化。
