@@ -20,9 +20,6 @@
 //! The test account must contain at least one login with a decryptable
 //! password and a decryptable TOTP secret; these are asserted after import.
 //!
-//! The test account must contain at least one login with a decryptable
-//! password and a decryptable TOTP secret; these are asserted after import.
-//!
 //! No credentials are stored in this file or in the repository.
 
 #![allow(clippy::expect_used, clippy::panic)]
