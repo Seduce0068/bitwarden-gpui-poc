@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Pinned: the UI code targets gpui-kit 0.9.1's API; a minor bump may break it.
-gpui-kit = "=0.9.1"
+gpui-kit = "=0.10.0"
 # 0.1.1 exposes raw sync bodies so our PascalCase normalizer can be used.
 openwarden = "=0.1.1"
 serde = { version = "1", features = ["derive"] }
