@@ -88,9 +88,10 @@ fn device_is_stable_and_typed_for_linux() {
 }
 
 #[test]
-fn persisted_installation_id_is_forwarded_verbatim_on_every_sync() {
-    // The identifier stored in Settings must reach openwarden unchanged:
-    // login and resync both build the device from that same persisted string.
+fn device_for_installation_forwards_the_identifier_verbatim() {
+    // Pure constructor check: every caller builds the openwarden `Device` from
+    // the same persisted string, so the identifier reaches the network layer
+    // unchanged. This test deliberately does not perform a sync (no network).
     let id = crate::settings::generate_device_id().unwrap();
     let first = device_for_installation(&id);
     let resync = device_for_installation(&id);
@@ -455,7 +456,7 @@ fn cache_restore_failures_are_reported_by_cause() {
     );
     assert_eq!(
         cache_restore_failure(AppError::VersionMismatch).message(),
-        "同期に失敗しました（キャッシュのバージョンが古いです）"
+        "同期に失敗しました（キャッシュのバージョンに互換性がありません）"
     );
     assert_eq!(
         cache_restore_failure(AppError::ServerMismatch).message(),
@@ -508,10 +509,13 @@ fn unlock_detail_survives_a_structural_round_trip() {
         AppError::unlock_failed_cause("cause-detail", BoxedCause::text("original io failure"));
     assert!(std::error::Error::source(&with_cause).is_some());
     let converted = crate::auth::UnlockError::from(with_cause);
+    // The raw detail and the typed cause both survive the UI boundary now.
     assert!(
-        matches!(converted, UnlockError::UnlockFailed(ref restored) if restored == "cause-detail"),
+        matches!(converted, UnlockError::UnlockFailedCause(ref restored, _) if restored == "cause-detail"),
         "cause-carrying detail must survive: {converted:?}"
     );
+    assert!(std::error::Error::source(&converted).is_some());
+    assert_eq!(converted, UnlockError::UnlockFailed("cause-detail".into()));
 }
 
 #[test]
@@ -527,4 +531,172 @@ fn unrelated_errors_are_not_relabeled_as_domain_failures() {
         unexpected.message(),
         "UnlockError owns its detail, so the original message must survive"
     );
+}
+
+#[test]
+fn missing_field_status_message_names_the_offending_field() {
+    for field in [
+        "server_url",
+        "client_id",
+        "client_secret",
+        "email",
+        "master_password",
+    ] {
+        let error = AuthError::MissingField(field);
+        assert_eq!(error.message(), "認証情報が未入力です");
+        let status = error.status_message();
+        assert!(status.contains(field), "{status}");
+        assert!(status.contains(error.message()), "{status}");
+    }
+}
+
+#[test]
+fn login_cause_detail_survives_conversion_to_auth_error() {
+    use crate::error::BoxedCause;
+
+    let app = AppError::LoginCause(BoxedCause::text("login returned HTTP 400 (invalid_client)"));
+    let small = AuthError::from(app);
+    assert_eq!(small.message(), AuthError::Login.message());
+    assert!(small.status_message().contains("invalid_client"));
+
+    // Converting back keeps the detail as a cause instead of collapsing to the
+    // plain `Login` variant; `AppError`'s PartialEq still treats both as equal.
+    let restored = AppError::from(small);
+    assert!(matches!(&restored, AppError::LoginCause(_)));
+    assert!(std::error::Error::source(&restored).is_some());
+    assert_eq!(restored, AppError::Login);
+}
+
+#[test]
+fn sync_cause_detail_survives_conversion_to_auth_error() {
+    use crate::error::BoxedCause;
+
+    let small = AuthError::from(AppError::SyncCause(BoxedCause::text("HTTP timeout")));
+    assert_eq!(small.message(), AuthError::Sync.message());
+    assert!(small.status_message().contains("HTTP timeout"));
+
+    let from_parse = AuthError::from(AppError::InvalidLoginCause(
+        "bad sync key casing".into(),
+        BoxedCause::text("bad sync key casing"),
+    ));
+    assert_eq!(from_parse.message(), AuthError::Sync.message());
+    assert!(from_parse.status_message().contains("bad sync key casing"));
+}
+
+#[test]
+fn sync_fallback_failure_keeps_both_reasons() {
+    use crate::error::BoxedCause;
+
+    let fallback = cache_restore_failure(AppError::CacheParse(BoxedCause::text("corrupt")));
+    let combined = super::sync_fallback_failure(
+        fallback.clone(),
+        Some(AppError::SyncCause(BoxedCause::text("HTTP 503"))),
+    );
+    assert_eq!(combined.message(), AuthError::Sync.message());
+    assert!(
+        combined.status_message().contains("破損"),
+        "{}",
+        combined.status_message()
+    );
+    assert!(combined.status_message().contains("HTTP 503"));
+    assert!(
+        !combined
+            .status_message()
+            .contains("同期に失敗しました（同期に失敗しました"),
+        "the family message must not be prefixed twice: {}",
+        combined.status_message()
+    );
+
+    // With no discarded sync error the tested cache status is unchanged.
+    assert_eq!(
+        super::sync_fallback_failure(fallback.clone(), None),
+        fallback
+    );
+}
+
+#[test]
+fn email_validation_rejects_cc_control_characters() {
+    // Cc is not whitespace, so `is_whitespace` alone let NUL and C1 controls
+    // through. They must be rejected like the Cf characters in the sibling
+    // regression test.
+    for control in ['\u{0}', '\u{1}', '\u{1f}', '\u{7f}', '\u{80}', '\u{9f}'] {
+        let email = format!("alice{control}@example.com");
+        assert!(
+            !valid_email(&email),
+            "Cc character U+{:04X} was accepted",
+            control as u32
+        );
+        let mut value = config();
+        value.email = email;
+        assert_eq!(validate_config(&value), Err(AuthError::InvalidEmail));
+    }
+    assert!(!valid_email("alice@exa\u{0}mple.com"));
+}
+
+#[test]
+fn unlock_error_cause_survives_a_round_trip() {
+    use crate::error::BoxedCause;
+
+    let error = UnlockError::UnlockFailedCause(
+        "bad key".into(),
+        BoxedCause::text("original decryption failure"),
+    );
+    assert!(std::error::Error::source(&error).is_some());
+    let app = AppError::from(error);
+    assert!(matches!(
+        &app,
+        AppError::UnlockFailedStructuredCause(_, _, _)
+    ));
+    let restored = UnlockError::from(app);
+
+    // The cause-carrying variant equals its plain sibling (diagnostic context
+    // is not identity), and both render the same status text.
+    assert_eq!(restored, UnlockError::UnlockFailed("bad key".into()));
+    assert_eq!(restored.message(), "復号キーを取得できません（bad key）");
+    match restored {
+        UnlockError::UnlockFailedCause(detail, cause) => {
+            assert_eq!(detail, "bad key");
+            assert_eq!(cause.to_string(), "original decryption failure");
+        }
+        other => panic!("cause was dropped: {other:?}"),
+    }
+}
+
+#[test]
+fn boxed_cause_new_keeps_the_source_chain() {
+    use crate::error::BoxedCause;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Inner(&'static str);
+    impl fmt::Display for Inner {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Inner {}
+
+    #[derive(Debug)]
+    struct Outer(Inner);
+    impl fmt::Display for Outer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("outer failure")
+        }
+    }
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let app = AppError::LoginCause(BoxedCause::new(Outer(Inner("inner cause"))));
+    let cause = std::error::Error::source(&app).expect("typed cause");
+    assert_eq!(cause.to_string(), "outer failure");
+    let nested = std::error::Error::source(cause).expect("nested cause");
+    assert_eq!(nested.to_string(), "inner cause");
+
+    // `text()` deliberately flattens the chain; keep that documented contrast.
+    let flat = AppError::LoginCause(BoxedCause::text("outer failure"));
+    let flat_cause = std::error::Error::source(&flat).expect("text cause");
+    assert!(std::error::Error::source(flat_cause).is_none());
 }

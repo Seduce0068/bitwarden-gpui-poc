@@ -334,6 +334,59 @@ fn passphrase_entropy_follows_word_count() {
 }
 
 #[test]
+fn avoid_ambiguous_is_reflected_in_the_entropy_estimate() {
+    let full = PasswordSettings {
+        length: 20,
+        ..PasswordSettings::default()
+    };
+    let filtered = PasswordSettings {
+        avoid_ambiguous: true,
+        ..full.clone()
+    };
+    // The estimated pool must shrink by exactly the six removed characters.
+    assert_eq!(
+        full.alphabet().chars().count() - filtered.alphabet().chars().count(),
+        6
+    );
+    assert!(password_entropy(&filtered) < password_entropy(&full));
+    let expected = entropy_bits(filtered.alphabet().chars().count(), filtered.length);
+    assert!((password_entropy(&filtered) - expected).abs() < 1e-9);
+}
+
+#[test]
+fn passphrase_entropy_covers_all_four_flag_combinations() {
+    let base = PassphraseSettings {
+        words: 4,
+        separator: "-".into(),
+        capitalize: false,
+        include_number: false,
+    };
+    let word_bits = entropy_bits(WORDS.len(), base.words);
+    assert!((passphrase_entropy(&base) - word_bits).abs() < 1e-9);
+
+    let capitalized = PassphraseSettings {
+        capitalize: true,
+        ..base.clone()
+    };
+    assert!((passphrase_entropy(&capitalized) - (word_bits + 4.0)).abs() < 1e-9);
+
+    let numbered = PassphraseSettings {
+        include_number: true,
+        ..base.clone()
+    };
+    assert!((passphrase_entropy(&numbered) - (word_bits + (10.0f64).log2())).abs() < 1e-9);
+
+    let both = PassphraseSettings {
+        capitalize: true,
+        include_number: true,
+        ..base
+    };
+    assert!((passphrase_entropy(&both) - (word_bits + 4.0 + (10.0f64).log2())).abs() < 1e-9);
+    assert!(passphrase_entropy(&both) > passphrase_entropy(&capitalized));
+    assert!(passphrase_entropy(&both) > passphrase_entropy(&numbered));
+}
+
+#[test]
 fn random_index_respects_the_bound() {
     for bound in [1u16, 2, 10, 62, 256, WORDS.len() as u16] {
         for _ in 0..256 {

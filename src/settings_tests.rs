@@ -309,8 +309,9 @@ fn default_carries_current_schema_version() {
 #[test]
 fn legacy_file_without_schema_version_is_compatible() {
     let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-legacy.json");
-    // No schema_version key: an old settings file must still load, with the
-    // marker filled in as the current version and every known field honoured.
+    // No schema_version key: an old settings file must still load, but it is
+    // reported as legacy instead of being silently promoted to the current
+    // version. Every known field is still honoured.
     std::fs::write(
         &path,
         br#"{"email":"legacy@example.com","idle_lock_seconds":120}"#,
@@ -319,7 +320,8 @@ fn legacy_file_without_schema_version_is_compatible() {
     let loaded = Settings::load_detailed(&path).unwrap();
     let defaults = Settings::default();
 
-    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
+    assert_ne!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(loaded.email, "legacy@example.com");
     assert_eq!(loaded.idle_lock_seconds, 120);
     assert_eq!(loaded.server_url, defaults.server_url);
@@ -386,14 +388,24 @@ fn wrong_typed_schema_version_cannot_claim_a_future_version() {
     let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-wrong-type.json");
     std::fs::write(
         &path,
-        br#"{"schema_version":"9999","email":"typed@example.com","idle_lock_seconds":180}"#,
+        br#"{"schema_version":{"major":9999},"email":"typed@example.com","idle_lock_seconds":180}"#,
     )
     .unwrap();
     let loaded = Settings::load_detailed(&path).unwrap();
 
-    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
     assert_eq!(loaded.email, "typed@example.com", "siblings survive");
     assert_eq!(loaded.idle_lock_seconds, 180);
+    let _ = std::fs::remove_file(&path);
+
+    // A numeric string still encodes a future version and must be rejected
+    // wholesale, not downgraded to a "compatible" current file.
+    std::fs::write(
+        &path,
+        br#"{"schema_version":"9999","email":"future@example.com"}"#,
+    )
+    .unwrap();
+    assert_eq!(Settings::load_detailed(&path).unwrap(), Settings::default());
     let _ = std::fs::remove_file(&path);
 }
 
@@ -588,4 +600,92 @@ fn settings_error_round_trip_keeps_status_text() {
         SettingsLoadError::from(unexpected).message(),
         OTHER_ERROR_MESSAGE
     );
+}
+
+#[test]
+fn shared_field_edits_respect_the_auth_caps() {
+    use crate::auth::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+    use crate::settings::SharedSettingsField;
+
+    let mut settings = Settings::default();
+    settings.server_url.clear();
+    settings.email.clear();
+    settings.push_shared_text(
+        SharedSettingsField::ServerUrl,
+        &format!("https://u.example/{}", "s".repeat(MAX_SERVER_URL_LEN)),
+    );
+    settings.push_shared_text(
+        SharedSettingsField::Email,
+        &format!("{}@example.com", "a".repeat(MAX_EMAIL_LEN)),
+    );
+    assert_eq!(settings.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(settings.email.chars().count(), MAX_EMAIL_LEN);
+
+    // The caps are applied on every append, not only on save.
+    settings.push_shared_text(SharedSettingsField::Email, "EXTRA");
+    assert_eq!(settings.email.chars().count(), MAX_EMAIL_LEN);
+    assert!(!settings.email.contains("EXTRA"));
+}
+
+#[test]
+fn sanitized_clamps_shared_text_fields() {
+    use crate::auth::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+
+    let settings = Settings {
+        server_url: "s".repeat(MAX_SERVER_URL_LEN + 10),
+        email: "e".repeat(MAX_EMAIL_LEN + 10),
+        ..Default::default()
+    };
+    let safe = settings.sanitized();
+    assert_eq!(safe.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(safe.email.chars().count(), MAX_EMAIL_LEN);
+    // sanitized() must remain a pure clone-based operation.
+    assert_eq!(settings.server_url.chars().count(), MAX_SERVER_URL_LEN + 10);
+    assert_eq!(settings.email.chars().count(), MAX_EMAIL_LEN + 10);
+}
+
+#[test]
+fn save_persists_the_sanitized_values_without_mutating_self() {
+    use crate::auth::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let settings = Settings {
+        server_url: "s".repeat(MAX_SERVER_URL_LEN + 5),
+        email: "e".repeat(MAX_EMAIL_LEN + 5),
+        ..Default::default()
+    };
+    settings.save(&path).unwrap();
+
+    assert_eq!(settings.server_url.chars().count(), MAX_SERVER_URL_LEN + 5);
+    let loaded = Settings::load(&path);
+    assert_eq!(loaded.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(loaded.email.chars().count(), MAX_EMAIL_LEN);
+}
+
+#[test]
+fn future_schema_keeps_a_valid_device_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let valid = generate_device_id().unwrap();
+    let future = CURRENT_SCHEMA_VERSION + 1;
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"schema_version":{future},"email":"future@example.com","device_id":"{valid}"}}"#
+        ),
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.device_id, valid, "opaque id survives a future file");
+    assert_eq!(loaded.email, "", "schema-governed fields still fall back");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+
+    // A malformed id is still discarded.
+    std::fs::write(
+        &path,
+        format!(r#"{{"schema_version":{future},"device_id":"not-a-uuid"}}"#),
+    )
+    .unwrap();
+    assert!(Settings::load_detailed(&path).unwrap().device_id.is_empty());
 }

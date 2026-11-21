@@ -3,7 +3,7 @@
 use crate::model::*;
 use zeroize::Zeroizing;
 
-use super::unicode_normalize::nfkd;
+use super::unicode_normalize::{comparison_key, nfkd};
 
 #[test]
 fn debug_never_reveals_item_secrets() {
@@ -259,12 +259,10 @@ fn password_and_totp_secrets_are_not_searchable() {
         false
     };
     assert!(replaced, "the test item must be a login with a TOTP field");
-    // matches_query expects a lowercased needle; Vault::view() normalizes it.
+    // matches_query is public and normalizes its needle itself, so raw input
+    // works even when the caller bypasses Vault::view().
     assert!(secret_item.matches_query("alice"));
-    assert!(
-        !secret_item.matches_query("ALICE"),
-        "needle must be lowercased"
-    );
+    assert!(secret_item.matches_query("ALICE"));
     assert!(!secret_item.matches_query("super-secret-pw"));
     assert!(!secret_item.matches_query("jbswy3dpehpk3pxp"));
 }
@@ -417,6 +415,52 @@ fn search_absorbs_unicode_form_differences() {
             .len(),
         1
     );
+}
+
+#[test]
+fn comparison_key_applies_full_case_folding_and_is_idempotent() {
+    // `to_lowercase` alone leaves these pairs distinct; the search, duplicate
+    // and sort paths all go through this one key so they agree.
+    assert_eq!(comparison_key("Straße"), comparison_key("STRASSE"));
+    assert_eq!(comparison_key("ß"), comparison_key("ss"));
+    assert_eq!(comparison_key("ẞ"), comparison_key("ss"));
+    assert_eq!(comparison_key("ς"), comparison_key("σ"));
+    assert_eq!(comparison_key("Σ"), comparison_key("σ"));
+    assert_eq!(comparison_key("ſ"), comparison_key("s"));
+    for value in ["Straße", "STRASSE", "ΟΔΟΣ", "οδος", "ſnail", "Café"] {
+        assert_eq!(
+            comparison_key(&comparison_key(value)),
+            comparison_key(value),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn search_and_duplicates_share_the_folded_key() {
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "Straße", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("2", "STRASSE", "u", "p", "https://b.example"));
+    assert_eq!(
+        vault.view(&Filter::All, "strasse", SortKey::NameAsc).len(),
+        2
+    );
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].1, vec!["1".to_string(), "2".to_string()]);
+}
+
+#[test]
+fn matches_query_normalizes_a_raw_needle() {
+    let item = login("1", "Café", "user", "pw", "https://example.com");
+    assert!(item.matches_query("café"));
+    // NFD spelling plus upper case, without going through Vault::view().
+    assert!(item.matches_query("CAFE\u{301}"));
+    assert!(!item.matches_query("tea"));
 }
 
 #[test]

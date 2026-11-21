@@ -4,6 +4,9 @@ use zeroize::Zeroizing;
 
 use crate::totp::Tick;
 
+/// Seconds left at which the displayed code gets an explicit expiry warning.
+pub(super) const EXPIRY_WARNING_SECONDS: u64 = 5;
+
 /// Holds the secret currently being displayed and its cached code.
 ///
 /// The secret buffer is wiped when replaced or on lock.
@@ -22,6 +25,35 @@ impl TotpState {
     /// Whether a secret is currently being displayed.
     pub(super) fn has_secret(&self) -> bool {
         !self.secret.is_empty()
+    }
+
+    /// Whether the cached secret is exactly `secret`.
+    ///
+    /// Used to notice that the selection moved to a non-TOTP item (or to a
+    /// different secret) so the old secret can be wiped instead of keeping the
+    /// ticker redrawing a stale code every second.
+    pub(super) fn matches_secret(&self, secret: &str) -> bool {
+        self.secret.as_str() == secret
+    }
+
+    /// The code currently on screen, without its countdown suffix.
+    ///
+    /// Copying this value keeps the clipboard in sync with what the user saw,
+    /// even across a period boundary where a freshly generated code could
+    /// differ from the cached one.
+    pub(super) fn current_code(&self) -> Option<&str> {
+        self.tick
+            .as_ref()
+            .and_then(|tick| tick.code.as_ref())
+            .map(|code| code.code())
+    }
+
+    /// The cached generation failure, if any.
+    pub(super) fn error_message(&self) -> Option<String> {
+        self.tick
+            .as_ref()
+            .and_then(|tick| tick.error.as_ref())
+            .map(|error| error.message().to_string())
     }
 
     /// Drop the cached code so the next display samples a fresh one.
@@ -46,7 +78,14 @@ impl TotpState {
             self.tick = Some(Tick::sample(secret, now));
         }
         match self.tick.as_ref().and_then(|tick| tick.code.as_ref()) {
-            Some(code) => format!("{} (あと{}秒)", code.grouped(), code.remaining()),
+            Some(code) => {
+                let base = format!("{} (あと{}秒)", code.grouped(), code.remaining());
+                if code.expires_within(EXPIRY_WARNING_SECONDS) {
+                    format!("{base} / まもなく期限切れ")
+                } else {
+                    base
+                }
+            }
             None => "コード生成失敗".to_string(),
         }
     }
@@ -104,5 +143,46 @@ mod tests {
         let mut state = TotpState::new();
         let value = state.display("not base32!", 0);
         assert_eq!(value, "コード生成失敗");
+        assert!(
+            state
+                .error_message()
+                .is_some_and(|message| message.contains("TOTP")),
+            "the copy path needs the cached reason instead of a fresh code"
+        );
+    }
+
+    #[test]
+    fn display_warns_shortly_before_expiry() {
+        let mut state = TotpState::new();
+        // A 30-second period leaves 4 seconds at t=26 and 20 at t=40.
+        let expiring = state.display(SECRET, 26);
+        assert!(expiring.contains("まもなく期限切れ"), "{expiring}");
+
+        let mut state = TotpState::new();
+        let fresh = state.display(SECRET, 40);
+        assert!(!fresh.contains("まもなく期限切れ"), "{fresh}");
+    }
+
+    #[test]
+    fn current_code_and_secret_identity_track_the_displayed_snapshot() {
+        let mut state = TotpState::new();
+        assert_eq!(state.current_code(), None);
+        assert!(state.matches_secret(""));
+
+        let displayed = state.display(SECRET, 40);
+        assert!(displayed.starts_with("287 082"), "{displayed}");
+        assert_eq!(state.current_code(), Some("287082"));
+        assert!(state.matches_secret(SECRET));
+        assert!(!state.matches_secret("JBSWY3DPEHPK3PXP"));
+
+        state.invalidate();
+        assert_eq!(
+            state.current_code(),
+            None,
+            "invalidate drops the cached code"
+        );
+
+        state.clear();
+        assert!(state.matches_secret(""));
     }
 }

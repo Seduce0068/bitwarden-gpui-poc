@@ -1,6 +1,6 @@
 //! Authentication flow helpers on the app state.
 
-use crate::auth::{validate_config, AuthConfig, AuthError, UnlockError};
+use crate::auth::{clamp_auth_config, validate_config, AuthConfig, AuthError, UnlockError};
 use crate::ui::app::BitwardenApp;
 use crate::ui::mock::mock_vault;
 use crate::ui::state::{AuthField, Panel, Screen};
@@ -35,26 +35,40 @@ impl LoginFailure {
     /// Status-bar guidance. "r で再試行" is shown only for retryable failures.
     fn status(&self) -> String {
         match self {
-            Self::Auth(error) => {
-                format!("ログイン失敗: {}（r で再試行）", error.message())
-            }
-            Self::Unlock(error) => format!(
-                "ログイン失敗: {}（認証情報を確認してください）",
-                error.message()
-            ),
+            Self::Auth(error) => format!("ログイン失敗: {}（r で再試行）", error.status_message()),
+            // A wrong master password/protected key will fail again with the
+            // same input, so ask for corrected credentials and do not advertise
+            // `r`. Every other unlock-family failure is about the vault data or
+            // a transient step, so point there instead and keep `r` available.
+            Self::Unlock(error) => match error {
+                UnlockError::UnlockFailed(_) | UnlockError::UnlockFailedCause(_, _) => format!(
+                    "ログイン失敗: {}（認証情報を確認してください）",
+                    error.message()
+                ),
+                _ => format!(
+                    "ログイン失敗: {}（vault の状態を確認し、必要なら r で再試行）",
+                    error.message()
+                ),
+            },
         }
     }
 }
 
 impl BitwardenApp {
     pub(super) fn auth_config(&self) -> AuthConfig {
-        AuthConfig {
+        let mut config = AuthConfig {
             server_url: self.settings.server_url.clone(),
             client_id: self.auth.client_id().to_string(),
             client_secret: SecretString::from(self.auth.client_secret().to_string()),
             email: self.settings.email.clone(),
             master_password: SecretString::from(self.auth.master_password().to_string()),
-        }
+        };
+        // Clamp before validating. `authenticate_with_timeout` clamps its own
+        // private copy as a backstop, but callers must not see a length-only
+        // validation failure for a value that would immediately be clamped
+        // into a valid one. Stored and effective values now agree.
+        clamp_auth_config(&mut config);
+        config
     }
 
     /// Validate credentials and start a real network login.
@@ -64,13 +78,17 @@ impl BitwardenApp {
     pub(super) fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
         // Any new attempt cancels an in-flight one, even when validation fails.
         self.login_generation.invalidate();
+        // Clear the previous attempt's failure marker before validation: a
+        // validation error must not leave the stale "login failed" UI state on.
+        self.auth.set_login_failed(false);
         let config = self.auth_config();
         if let Err(error) = validate_config(&config) {
-            self.status = error.message().to_string();
+            // `status_message` names the offending field, so "which credential
+            // is missing" is visible instead of a generic message.
+            self.status = error.status_message();
             cx.notify();
             return;
         }
-        self.auth.set_login_failed(false);
         let generation = self.login_generation.begin();
         self.status = "ログイン中…".to_string();
         cx.notify();
@@ -96,31 +114,37 @@ impl BitwardenApp {
             move |this: gpui_kit::WeakEntity<Self>, cx: &mut gpui_kit::AsyncApp| {
                 let cx = cx.clone();
                 async move {
-                    let result =
-                        match crate::auth::authenticate_with_timeout(&config, &device_id, timeout)
+                    // Only the network phase needs the credential copies. Drop
+                    // them as soon as it ends so a superseded or still-running
+                    // task does not keep secrets alive through the (potentially
+                    // long) unlock/import phase or after the user locks. The
+                    // known limitation is unchanged: retrying does not cancel
+                    // the previous task, so its copies now have a shorter life.
+                    let auth_result =
+                        crate::auth::authenticate_with_timeout(&config, &device_id, timeout).await;
+                    drop(config);
+                    let result = match auth_result {
+                        Ok(authenticated) => {
+                            // Keep the cache-origin flag before the vault is
+                            // consumed by the import step, so the UI can warn
+                            // that the data may be stale.
+                            let from_cache = authenticated.from_cache;
+                            // Decryption and import scale with the number of items;
+                            // keep them off the UI thread and the 1s ticker.
+                            // The generation token discards a stale result, but
+                            // a job already running on the blocking pool is not
+                            // cancelled; repeated logins can overlap here.
+                            match smol::unblock(move || {
+                                crate::auth::unlock_and_import(authenticated)
+                            })
                             .await
-                        {
-                            Ok(authenticated) => {
-                                // Keep the cache-origin flag before the vault is
-                                // consumed by the import step, so the UI can warn
-                                // that the data may be stale.
-                                let from_cache = authenticated.from_cache;
-                                // Decryption and import scale with the number of items;
-                                // keep them off the UI thread and the 1s ticker.
-                                // The generation token discards a stale result, but
-                                // a job already running on the blocking pool is not
-                                // cancelled; repeated logins can overlap here.
-                                match smol::unblock(move || {
-                                    crate::auth::unlock_and_import(authenticated)
-                                })
-                                .await
-                                {
-                                    Ok(vault) => LoginResult::Vault { vault, from_cache },
-                                    Err(error) => LoginResult::UnlockFailed(error),
-                                }
+                            {
+                                Ok(vault) => LoginResult::Vault { vault, from_cache },
+                                Err(error) => LoginResult::UnlockFailed(error),
                             }
-                            Err(error) => LoginResult::AuthFailed(error),
-                        };
+                        }
+                        Err(error) => LoginResult::AuthFailed(error),
+                    };
                     cx.update(|cx| {
                         this.update(cx, |view, cx| view.finish_login(result, generation, cx))
                             .ok();
@@ -192,7 +216,10 @@ impl BitwardenApp {
 
     pub(super) fn edit_auth_field(&mut self, text: &str) {
         match self.auth.field().and_then(AuthField::shared) {
-            Some(field) => self.settings.push_shared_text(field, text),
+            Some(field) => {
+                self.settings.push_shared_text(field, text);
+                self.mark_settings_dirty();
+            }
             None => self.auth.push_text(text),
         }
     }
@@ -200,6 +227,7 @@ impl BitwardenApp {
     pub(super) fn backspace_auth_field(&mut self) {
         if let Some(field) = self.auth.field().and_then(AuthField::shared) {
             self.settings.pop_shared_char(field);
+            self.mark_settings_dirty();
             return;
         }
         self.auth.pop_char();
@@ -234,24 +262,57 @@ mod tests {
             AuthError::Sync,
             AuthError::Timeout,
         ] {
+            let expected = error.status_message();
             let status = LoginFailure::Auth(error).status();
             assert!(status.contains("r で再試行"), "{status}");
-            assert!(status.contains(error.message()), "{status}");
+            assert!(status.contains(&expected), "{status}");
         }
     }
 
     #[::core::prelude::v1::test]
     fn unlock_failures_do_not_advertise_retry() {
+        // A bad password or protected key will fail identically on retry, so
+        // the guidance asks for corrected credentials and never offers `r`.
         for error in [
-            UnlockError::MissingProtectedKey,
             UnlockError::UnlockFailed("detail".into()),
-            UnlockError::ApplySyncFailed("detail".into()),
-            UnlockError::ImportFailed("detail".into()),
+            UnlockError::UnlockFailedCause(
+                "detail".into(),
+                crate::error::BoxedCause::text("cause"),
+            ),
         ] {
             let status = LoginFailure::Unlock(error).status();
             assert!(!status.contains("r で再試行"), "{status}");
             assert!(status.contains("認証情報を確認してください"), "{status}");
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn non_credential_unlock_failures_use_other_guidance() {
+        for error in [
+            UnlockError::MissingProtectedKey,
+            UnlockError::ApplySyncFailed("detail".into()),
+            UnlockError::ImportFailed("detail".into()),
+        ] {
+            let expected = error.message();
+            let status = LoginFailure::Unlock(error).status();
+            assert!(!status.contains("認証情報を確認してください"), "{status}");
+            assert!(status.contains("vault の状態を確認"), "{status}");
+            assert!(status.contains(&expected), "{status}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_status_names_the_missing_field() {
+        let status = LoginFailure::Auth(AuthError::MissingField("client_secret")).status();
+        assert!(status.contains("client_secret"), "{status}");
+        assert!(status.contains("認証情報が未入力です"), "{status}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_status_keeps_the_login_detail() {
+        let status = LoginFailure::Auth(AuthError::LoginDetail("invalid_client".into())).status();
+        assert!(status.contains("invalid_client"), "{status}");
+        assert!(status.contains(AuthError::Login.message()), "{status}");
     }
 
     #[::core::prelude::v1::test]

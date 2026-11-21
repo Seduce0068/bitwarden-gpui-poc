@@ -88,13 +88,14 @@ fn wrong_version_is_rejected() {
 }
 
 #[test]
-fn validation_checks_account_and_server() {
+fn validation_checks_only_what_the_restore_path_can_know() {
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     assert!(validate(&cache, "user-1", "https://vault.example.com").is_ok());
-    assert_eq!(
-        validate(&cache, "other", "https://vault.example.com"),
-        Err(SyncCacheError::UserMismatch)
-    );
+    // The production restore path runs after a failed sync, so it has no fresh
+    // user id. `validate` documents that it cannot reject a different account
+    // instead of offering a check that is unreachable in production.
+    assert!(validate(&cache, "other", "https://vault.example.com").is_ok());
+    assert_eq!(cache.user_id, "user-1");
     assert_eq!(
         validate(&cache, "user-1", "https://other.example.com"),
         Err(SyncCacheError::ServerMismatch)
@@ -131,6 +132,60 @@ fn profile_keys_are_stripped_before_storage() {
 }
 
 #[test]
+fn pascal_case_profile_keys_are_stripped_before_storage() {
+    // A raw body may spell the profile and its key fields in PascalCase,
+    // upper case or snake_case. All of them are protected key material and
+    // must never reach the on-disk cache, even though `from_body` parses a
+    // normalized *copy* of this body for the user id.
+    let body = br#"{
+        "Profile": {
+            "Id": "user-1",
+            "Key": "TEST_PASCAL_KEY",
+            "PrivateKey": "TEST_PASCAL_PRIVATE_KEY",
+            "private_key": "TEST_SNAKE_PRIVATE_KEY",
+            "KEY": "TEST_UPPER_KEY",
+            "KeyId": "keep-me"
+        },
+        "Ciphers": []
+    }"#;
+    let cache = SyncCache::from_body(body.to_vec(), "https://vault.example.com").unwrap();
+    let stored = String::from_utf8(cache.body.clone()).unwrap();
+    for secret in [
+        "TEST_PASCAL_KEY",
+        "TEST_PASCAL_PRIVATE_KEY",
+        "TEST_SNAKE_PRIVATE_KEY",
+        "TEST_UPPER_KEY",
+    ] {
+        assert!(!stored.contains(secret), "leaked {secret}: {stored}");
+    }
+    assert!(!stored.contains("\"Key\""), "{stored}");
+    assert!(!stored.contains("\"PrivateKey\""), "{stored}");
+    // A similarly named but non-secret field must survive the redactor.
+    assert!(stored.contains("keep-me"), "{stored}");
+    assert!(cache.sync().is_ok());
+}
+
+#[test]
+fn every_profile_spelling_is_stripped_before_storage() {
+    // A crafted body can carry several case variants of `profile`. Redacting
+    // only the first one would leave protected keys on disk.
+    let body = br#"{
+        "PROFILE": { "Id": "user-1" },
+        "profile": {
+            "Id": "user-1",
+            "Key": "SECOND_PROFILE_KEY",
+            "PrivateKey": "SECOND_PROFILE_PRIVATE_KEY"
+        },
+        "Ciphers": []
+    }"#;
+    let cache = SyncCache::from_body(body.to_vec(), "https://vault.example.com").unwrap();
+    let stored = String::from_utf8(cache.body.clone()).unwrap();
+    assert!(!stored.contains("SECOND_PROFILE_KEY"), "{stored}");
+    assert!(!stored.contains("SECOND_PROFILE_PRIVATE_KEY"), "{stored}");
+    assert!(cache.sync().is_ok());
+}
+
+#[test]
 fn invalid_body_is_rejected() {
     assert_eq!(
         SyncCache::from_body(b"not json".to_vec(), "https://vault.example.com"),
@@ -159,7 +214,7 @@ fn cache_errors_are_not_all_reported_as_corruption() {
     assert_eq!(corrupt, "キャッシュが破損しています");
     assert_eq!(unreadable, "キャッシュを読み込めません");
     assert_eq!(missing, "キャッシュがありません");
-    assert_eq!(outdated, "キャッシュのバージョンが古いです");
+    assert_eq!(outdated, "キャッシュのバージョンに互換性がありません");
     assert_eq!(other, crate::error::OTHER_ERROR_MESSAGE);
     assert_ne!(unreadable, corrupt);
     assert_ne!(missing, corrupt);
@@ -352,12 +407,24 @@ fn cache_expiry_uses_a_fixed_window_and_keeps_legacy_files() {
     assert!(!is_cache_expired(Some(now), now));
     assert!(!is_cache_expired(Some(now - MAX_CACHE_AGE_SECS), now));
     assert!(is_cache_expired(Some(now - MAX_CACHE_AGE_SECS - 1), now));
-    // A clock moved backwards must not mark a fresh cache as stale.
-    assert!(!is_cache_expired(Some(now + 100), now));
+    // A capture time in the future cannot be trusted and is expired, not
+    // treated as an infinitely fresh cache.
+    assert!(is_cache_expired(Some(now + 100), now));
     assert_eq!(
         cache_error_message(SyncCacheError::CacheExpired),
         REASON_EXPIRED
     );
+}
+
+#[test]
+fn future_and_sentinel_capture_times_are_expired() {
+    let now = 1_800_000_000_i64;
+    assert!(is_cache_expired(Some(now + 1), now));
+    assert!(is_cache_expired(Some(i64::MAX), now));
+    // The sentinel stays expired even if the reader's clock is equally broken.
+    assert!(is_cache_expired(Some(i64::MAX), i64::MAX));
+    assert!(!is_cache_expired(Some(now - 1), now));
+    assert!(!is_cache_expired(None, i64::MAX));
 }
 
 #[test]
@@ -405,6 +472,67 @@ fn oversized_cache_is_rejected_before_parsing() {
         cache_error_message(CacheLoadError::CacheTooLarge),
         REASON_TOO_LARGE
     );
+}
+
+#[test]
+fn from_body_rejects_an_oversized_raw_body() {
+    let oversized = vec![b'x'; MAX_CACHE_BODY_BYTES + 1];
+    assert_eq!(
+        SyncCache::from_body(oversized, "https://vault.example.com"),
+        Err(SyncCacheError::CacheTooLarge)
+    );
+    let at_limit = vec![b' '; MAX_CACHE_BODY_BYTES];
+    // The limit itself must pass the size gate; parsing may still fail.
+    let at_limit_result = SyncCache::from_body(at_limit, "https://vault.example.com");
+    assert!(
+        at_limit_result.is_err(),
+        "invalid JSON at the boundary must fail"
+    );
+    assert!(
+        !matches!(at_limit_result, Err(SyncCacheError::CacheTooLarge)),
+        "the size gate must be inclusive at MAX_CACHE_BODY_BYTES"
+    );
+}
+
+#[test]
+fn every_corrupt_group_error_maps_to_the_corrupt_reason() {
+    use crate::error::BoxedCause;
+    for error in [
+        SyncCacheError::InvalidCache,
+        SyncCacheError::CacheParse(BoxedCause::text("bad json")),
+        SyncCacheError::CacheRedact(BoxedCause::text("bad json")),
+        SyncCacheError::CacheSerialize(BoxedCause::text("write failed")),
+        SyncCacheError::ParseFailed,
+        SyncCacheError::ParseFailedCause(BoxedCause::text("bad json")),
+    ] {
+        assert_eq!(cache_error_message(error), REASON_CORRUPT);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn expired_cache_is_rejected_by_the_restore_path() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-expired-restore-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let cache_home = root.join("xdg-cache-home");
+    let config_home = root.join("xdg-config-home");
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
+
+    let stale = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: body(),
+        created_at: Some(1),
+    };
+    save_default(&stale).unwrap();
+    assert_eq!(
+        cached_sync_for_detailed("https://vault.example.com").err(),
+        Some(SyncCacheError::CacheExpired)
+    );
+    assert!(cached_sync_for("https://vault.example.com").is_none());
 }
 
 #[test]

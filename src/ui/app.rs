@@ -18,6 +18,11 @@ pub struct BitwardenApp {
     pub(super) panel: Panel,
     pub(super) generator: GeneratorState,
     pub(super) settings: Settings,
+    /// In-memory setting edits that have not been persisted yet.
+    ///
+    /// Leaving the settings panel, locking or quitting never saves silently;
+    /// the flag keeps that visible until `w` saves or `d` discards.
+    pub(super) settings_dirty: bool,
     pub(super) editing: Option<SettingsField>,
     pub(super) auth: crate::ui::auth_state::AuthState,
     pub(super) login_generation: crate::ui::login_generation::LoginGeneration,
@@ -68,10 +73,19 @@ impl BitwardenApp {
             Some(path) => Settings::load_detailed(path),
             None => Ok(Settings::default()),
         };
-        let load_notice = match &loaded {
-            Err(crate::settings::SettingsLoadError::NotFound) => None,
-            Err(error) => Some(error.message()),
-            Ok(_) => None,
+        let mut notices: Vec<String> = Vec::new();
+        match &loaded {
+            Err(crate::settings::SettingsLoadError::NotFound) => {}
+            Err(error) => notices.push(error.message().to_string()),
+            Ok(_) => {}
+        }
+        if let Some(path) = path.as_ref() {
+            notices.extend(crate::settings::load_advisories(path));
+        }
+        let load_notice = if notices.is_empty() {
+            None
+        } else {
+            Some(notices.join(" / "))
         };
         let settings = loaded.unwrap_or_default();
         let mut this = Self {
@@ -84,6 +98,7 @@ impl BitwardenApp {
             panel: Panel::Vault,
             generator: GeneratorState::default(),
             settings,
+            settings_dirty: false,
             editing: None,
             auth: crate::ui::auth_state::AuthState::new(),
             login_generation: crate::ui::login_generation::LoginGeneration::default(),
@@ -140,7 +155,7 @@ impl BitwardenApp {
                         .unwrap_or_else(std::time::Instant::now);
                     loop {
                         smol::Timer::at(deadline).await;
-                        let alive = cx.update(|cx| {
+                        let tick = cx.update(|cx| {
                             this.update(cx, |view, cx| {
                                 let instant = std::time::Instant::now();
                                 let unlocked = view.screen == Screen::Unlocked;
@@ -154,9 +169,7 @@ impl BitwardenApp {
                                                 view.settings.idle_lock_seconds,
                                             ),
                                         ),
-                                    unlocked
-                                        && view.panel == Panel::Vault
-                                        && view.totp.has_secret(),
+                                    unlocked && view.totp.has_secret(),
                                 );
                                 for effect in effects {
                                     match effect {
@@ -179,9 +192,12 @@ impl BitwardenApp {
                                     }
                                 }
                             })
-                            .is_ok()
                         });
-                        if !alive {
+                        // A silent loop exit used to hide both a released view
+                        // and a failed context update. Keep the reason so a
+                        // dead ticker is observable in the host log.
+                        if let Err(error) = tick {
+                            eprintln!("[totp-ticker] ティッカーを終了しました: {error}");
                             break;
                         }
                         deadline = crate::ui::timing::next_tick_deadline(
@@ -224,7 +240,12 @@ impl BitwardenApp {
         self.view.audit_report = None;
         self.panel = Panel::Vault;
         self.screen = Screen::Locked;
-        self.status = "ロックしました（Enter: ログイン / m: モック）".to_string();
+        let unsaved = if self.settings_dirty {
+            "（未保存の設定変更があります / 再ログイン後に保存してください）"
+        } else {
+            ""
+        };
+        self.status = format!("ロックしました{unsaved}（Enter: ログイン / m: モック）");
         cx.notify();
     }
 
@@ -233,10 +254,56 @@ impl BitwardenApp {
     /// Leaving a settings field, auth field or search active would swallow
     /// every key in the destination panel ("dead keys").
     pub(super) fn set_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
+        let owns_settings = matches!(self.panel, Panel::Settings | Panel::Generator);
+        if owns_settings && panel != self.panel && self.settings_dirty {
+            // Leaving the panel does not persist anything. Say so before the
+            // destination panel overwrites the status message.
+            self.status = "未保存の設定変更があります（w: 保存 / d: 破棄）".to_string();
+        }
         self.editing = None;
         self.auth.take_field();
         self.view.finish_search();
         self.panel = crate::ui::logic::effective_panel(panel, self.view.audit_report.is_some());
+        cx.notify();
+    }
+
+    /// Mark the current in-memory settings as not persisted yet.
+    pub(super) fn mark_settings_dirty(&mut self) {
+        self.settings_dirty = true;
+    }
+
+    /// Drop the cached TOTP secret when the selection no longer supplies one.
+    ///
+    /// Without this the ticker keeps invalidating a stale code every second,
+    /// and a later copy could use the previous item's secret.
+    pub(super) fn sync_totp_to_selection(&mut self) {
+        let visible = self.view.visible_items();
+        let secret =
+            crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible)
+                .and_then(|index| visible[index].totp_secret())
+                .unwrap_or("")
+                .to_string();
+        if !self.totp.matches_secret(&secret) {
+            self.totp.clear();
+        }
+    }
+
+    /// Follow an audit finding: show the vault list and select its item.
+    pub(super) fn focus_audit_item(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.set_panel(Panel::Vault, cx);
+        self.view.filter = Filter::All;
+        self.view.query.clear();
+        self.view.finish_search();
+        if let Some(index) = self.view.select_id(id) {
+            self.view
+                .scroll_handle
+                .scroll_to_item(index, ScrollStrategy::Nearest);
+            self.status = format!("監査の指摘項目を選択しました: {id}");
+        } else {
+            self.view.deselect_and_rewind();
+            self.status = "指摘項目が一覧に見つかりません".to_string();
+        }
+        self.sync_totp_to_selection();
         cx.notify();
     }
 
@@ -251,22 +318,26 @@ impl BitwardenApp {
             self.view
                 .scroll_handle
                 .scroll_to_item(next, ScrollStrategy::Nearest);
+            self.sync_totp_to_selection();
             cx.notify();
         }
     }
 
     pub(super) fn cycle_filter(&mut self, cx: &mut Context<Self>) {
         self.view.cycle_filter();
+        self.sync_totp_to_selection();
         cx.notify();
     }
 
     pub(super) fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.view.selected_id.clone().or_else(|| {
-            self.view
-                .visible_items()
-                .first()
-                .map(|item| item.id.clone())
-        }) else {
+        let id = {
+            let visible = self.view.visible_items();
+            crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible)
+                .map(|index| visible[index].id.clone())
+        };
+        let Some(id) = id else {
+            self.status = crate::ui::logic::no_selection_status().to_string();
+            cx.notify();
             return;
         };
         if let Some(favorite) = self.view.vault.toggle_favorite(&id) {
@@ -276,6 +347,7 @@ impl BitwardenApp {
             );
             // Under the Favorites filter the item may have just left the view.
             self.view.revalidate_selection();
+            self.sync_totp_to_selection();
             cx.notify();
         }
     }
@@ -286,25 +358,28 @@ impl BitwardenApp {
     }
 
     pub(super) fn selected_detail(&mut self) -> String {
-        let Some((base, data)) = (|| {
+        // Rendering is the last place a stale TOTP secret can linger: clear it
+        // before deciding what the current selection shows.
+        self.sync_totp_to_selection();
+        let selected = {
             let visible = self.view.visible_items();
-            let item = self
-                .view
-                .selected_id
-                .as_deref()
-                .and_then(|id| visible.iter().find(|item| item.id == id))
-                .or_else(|| visible.first())?;
-            Some((
-                format!(
-                    "{} | {} | 更新: {}",
-                    item.kind().label(),
-                    item.name,
-                    item.revision_date
-                ),
-                item.data.clone(),
-            ))
-        })() else {
-            return "項目なし".to_string();
+            crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible).map(
+                |index| {
+                    let item = visible[index];
+                    (
+                        format!(
+                            "{} | {} | 更新: {}",
+                            item.kind().label(),
+                            item.name,
+                            item.revision_date
+                        ),
+                        item.data.clone(),
+                    )
+                },
+            )
+        };
+        let Some((base, data)) = selected else {
+            return crate::ui::logic::no_selection_status().to_string();
         };
         match data {
             ItemData::Login {
@@ -453,15 +528,15 @@ mod tests {
             .scroll_handle
             .scroll_to_item(7, ScrollStrategy::Nearest);
 
+        let before = state.view.rewind_calls;
         reset(&mut state, now);
 
         assert_eq!(state.view.selected_id, None);
-        let request = state.view.scroll_handle.0.borrow().deferred_scroll_to_item;
         assert_eq!(
-            request.map(|request| (request.item_index, request.strategy)),
-            Some((0, ScrollStrategy::Top)),
-            "the lock/unlock reset must land on the same visible range as \
-             filter, search and revalidation paths"
+            state.view.rewind_calls,
+            before + 1,
+            "the lock/unlock reset must rewind the same way as filter, \
+             search and revalidation paths"
         );
     }
 

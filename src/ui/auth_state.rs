@@ -316,6 +316,28 @@ mod tests {
     }
 
     #[test]
+    fn a_zeroizing_snapshot_outlives_clearing_the_source_state() {
+        // The spawned login task keeps its own credential snapshot. Wrapping
+        // that copy in `Zeroizing` bounds its lifetime explicitly, while
+        // clearing the lock-screen state does not disturb the in-flight task.
+        let mut state = AuthState::new();
+        state.set_field(Some(AuthField::ClientSecret));
+        state.push_text("secret");
+        state.set_field(Some(AuthField::MasterPassword));
+        state.push_text("password");
+
+        let snapshot = Zeroizing::new(state.client_secret().to_string());
+        assert_eq!(snapshot.as_str(), "secret");
+
+        state.clear_secrets();
+        assert!(state.client_secret().is_empty());
+        assert!(state.master_password().is_empty());
+        // The task's copy is independent and is wiped when it is dropped.
+        assert_eq!(snapshot.as_str(), "secret");
+        drop(snapshot);
+    }
+
+    #[test]
     fn shared_fields_still_ignore_pushes_beyond_any_cap() {
         // ServerUrl/Email are owned by Settings; their input caps are applied
         // by clamp_auth_config when the AuthConfig is assembled, not here.

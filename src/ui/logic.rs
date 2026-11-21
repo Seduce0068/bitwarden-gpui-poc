@@ -16,7 +16,9 @@ pub(super) fn has_credentials(client_id: &str, client_secret: &str, master_passw
 
 /// Whether `selected_id` still names an item in the current view.
 ///
-/// `None` is valid: the UI falls back to showing the first item.
+/// `None` means "there is nothing to validate" and is left untouched. The
+/// actions that *require* a selection use [`required_item_index`] instead;
+/// they never fall back to the first visible row.
 pub(super) fn selection_in_view<'a>(
     selected_id: Option<&str>,
     ids: impl IntoIterator<Item = &'a str>,
@@ -25,6 +27,23 @@ pub(super) fn selection_in_view<'a>(
         None => true,
         Some(id) => ids.into_iter().any(|candidate| candidate == id),
     }
+}
+
+/// Index of the explicitly selected item, or `None` when nothing is selected.
+///
+/// Actions that act on "the current item" must go through this predicate so a
+/// stale or absent selection can never silently target `visible[0]`.
+pub(super) fn required_item_index(
+    selected_id: Option<&str>,
+    visible: &[&crate::model::VaultItem],
+) -> Option<usize> {
+    let id = selected_id?;
+    visible.iter().position(|item| item.id == id)
+}
+
+/// Status shown when an action needs a selection but none is active.
+pub(super) fn no_selection_status() -> &'static str {
+    "項目を選択してください"
 }
 
 /// Run the vault health audit with an explicit clock value.
@@ -96,6 +115,42 @@ pub(super) fn no_generated_status(kind: &str) -> String {
 /// Status text when the selected item has no copyable value for `field`.
 pub(super) fn no_field_status(field: &str) -> String {
     format!("コピーできる {field} がありません（復号できない場合も同様です）")
+}
+
+/// Status when a pending clipboard restore could not be confirmed.
+///
+/// The write API returns no result, so the caller verifies it by reading the
+/// clipboard back. A mismatch must be visible instead of claiming success.
+pub(super) fn clipboard_restore_failure_status() -> &'static str {
+    "クリップボードの復元を確認できませんでした（コピーした内容を手動で消去してください）"
+}
+
+/// Label appended to settings panels while in-memory changes are not saved.
+pub(super) fn unsaved_marker(dirty: bool) -> &'static str {
+    if dirty {
+        "[未保存]"
+    } else {
+        ""
+    }
+}
+
+/// Hint for the lock screen. While a field is active `1`-`5` insert text and
+/// `Enter` only confirms that field; it never starts authentication.
+pub(super) fn auth_hint(editing: bool) -> &'static str {
+    if editing {
+        "入力中: 1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 確定"
+    } else {
+        "1-5: 欄を選択 / Enter: 検証して開く / Esc: 終了"
+    }
+}
+
+/// Hint for the settings panel, switched while a field is being edited.
+pub(super) fn settings_hint(editing: bool) -> &'static str {
+    if editing {
+        "入力中: w/c/l/d も文字として入力（保存はしません） / Backspace: 削除 / Enter: 確定（保存はしません） / Esc: 確定"
+    } else {
+        "1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログイン制限 / 5,6: 復元 / w: 保存 / d: 破棄 / c: 戻る / l: ロック / Esc: 終了"
+    }
 }
 
 /// Status text after a successful login.
@@ -185,6 +240,55 @@ mod tests {
         assert!(selection_in_view(Some("2"), ids));
         assert!(!selection_in_view(Some("4"), ids));
         assert!(!selection_in_view(Some("1"), []));
+    }
+
+    #[test]
+    fn required_item_index_never_falls_back_to_the_first_row() {
+        use crate::model::{ItemData, VaultItem};
+
+        let first = VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::SecureNote {
+                text: String::new(),
+            },
+        );
+        let second = VaultItem::new(
+            "b",
+            "Beta",
+            ItemData::SecureNote {
+                text: String::new(),
+            },
+        );
+        let visible = [&first, &second];
+        assert_eq!(required_item_index(Some("b"), &visible), Some(1));
+        assert_eq!(required_item_index(Some("a"), &visible), Some(0));
+        // No selection and a stale id are both refused instead of hitting the
+        // first row.
+        assert_eq!(required_item_index(None, &visible), None);
+        assert_eq!(required_item_index(Some("missing"), &visible), None);
+        assert_eq!(required_item_index(Some("a"), &[]), None);
+    }
+
+    #[test]
+    fn selection_related_status_texts_are_explicit() {
+        assert_eq!(no_selection_status(), "項目を選択してください");
+        assert!(clipboard_restore_failure_status().contains("手動で消去"));
+        assert_eq!(unsaved_marker(true), "[未保存]");
+        assert_eq!(unsaved_marker(false), "");
+    }
+
+    #[test]
+    fn editing_hints_never_promise_a_save_or_an_authentication() {
+        let locked = auth_hint(true);
+        assert!(locked.contains("1-5 も文字として入力"));
+        assert!(locked.contains("認証はしません"));
+        assert!(auth_hint(false).contains("Enter: 検証して開く"));
+
+        let settings = settings_hint(true);
+        assert!(settings.contains("保存はしません"));
+        assert!(settings.contains("w/c/l/d も文字として入力"));
+        assert!(settings_hint(false).contains("w: 保存 / d: 破棄"));
     }
 
     #[test]

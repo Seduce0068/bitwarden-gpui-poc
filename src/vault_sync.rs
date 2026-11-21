@@ -40,6 +40,17 @@ pub fn is_undecryptable_password(value: &str) -> bool {
     value == UNDECRYPTABLE_PASSWORD
 }
 
+/// Marker used in place of a login's TOTP field when the field exists but its
+/// ciphertext could not be decrypted. Without it the audit would mistake a
+/// decryption failure for a genuinely missing TOTP and discard the fact that
+/// the login is 2FA-enabled.
+pub const UNDECRYPTABLE_TOTP: &str = "\u{0}openwarden:totp-undecryptable";
+
+/// Whether a model TOTP value is the undecryptable status marker.
+pub fn is_undecryptable_totp(value: &str) -> bool {
+    value == UNDECRYPTABLE_TOTP
+}
+
 /// A secret-free record of a decision made while importing a login row.
 ///
 /// Only item ids and revision timestamps are kept: names, usernames, URIs,
@@ -73,6 +84,11 @@ pub type SyncError = crate::error::AppError;
 
 /// Parse a `/api/sync` response body, including folder names.
 ///
+/// PascalCase keys are normalized to camelCase and duplicate cipher ids are
+/// collapsed to their newest revision before the `SyncData` is built, so
+/// `Vault::apply_sync` never sees two rows for one id (see
+/// `dedup_ciphers_by_revision`).
+///
 /// # Errors
 ///
 /// [`SyncError::InvalidLogin`] when `openwarden` rejects the body.
@@ -84,6 +100,7 @@ pub fn parse_sync(body: &[u8]) -> Result<openwarden::SyncData, SyncError> {
     normalize_sync_keys(&mut value).map_err(|detail| {
         SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
     })?;
+    dedup_ciphers_by_revision(&mut value);
     let normalized = serde_json::to_vec(&value).map_err(|error| {
         let detail = format!("sync: {error}");
         SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
@@ -138,6 +155,64 @@ fn normalize_sync_keys(value: &mut serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Collapse duplicate cipher ids to one row before `Vault::apply_sync`.
+///
+/// `openwarden::Vault::cipher(id)` returns the **first** matching cipher, and
+/// every field reader (`name`, `password`, `totp_secret`, `uris`, …) goes
+/// through it. Leaving a stale duplicate in the sync body therefore makes the
+/// import read the old row's decrypted values even when
+/// `import_logins_with_audit` has correctly selected a newer revision's
+/// `LoginInfo`. Dropping the older rows here keeps the metadata and the
+/// decrypted fields from the same cipher.
+///
+/// The winner is the row with the highest `revisionDate` (missing/unparsable
+/// dates count as [`crate::model::UNKNOWN_REVISION`]); ties keep the first row
+/// so normalization and parsing stay deterministic.
+fn dedup_ciphers_by_revision(value: &mut serde_json::Value) {
+    let Some(ciphers) = value
+        .get_mut("ciphers")
+        .and_then(|entry| entry.as_array_mut())
+    else {
+        return;
+    };
+    let mut best: HashMap<String, (usize, i64)> = HashMap::new();
+    let mut drop: HashSet<usize> = HashSet::new();
+    for (index, cipher) in ciphers.iter().enumerate() {
+        let Some(id) = cipher.get("id").and_then(|entry| entry.as_str()) else {
+            // Malformed rows are left for openwarden to skip as usual.
+            continue;
+        };
+        let revision = cipher
+            .get("revisionDate")
+            .and_then(|entry| entry.as_str())
+            .and_then(|value| parse_revision(Some(value)))
+            .unwrap_or(crate::model::UNKNOWN_REVISION);
+        match best.entry(id.to_string()) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let (best_index, best_revision) = *entry.get();
+                if revision > best_revision {
+                    drop.insert(best_index);
+                    entry.insert((index, revision));
+                } else {
+                    drop.insert(index);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert((index, revision));
+            }
+        }
+    }
+    if drop.is_empty() {
+        return;
+    }
+    let mut index = 0usize;
+    ciphers.retain(|_| {
+        let keep = !drop.contains(&index);
+        index += 1;
+        keep
+    });
+}
+
 /// Folder id and decrypted name from an unlocked `openwarden` vault.
 ///
 /// A folder whose name cannot be decrypted keeps its id and gets a
@@ -173,7 +248,8 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
 /// audit counts as excluded), an unusable TOTP field is left empty (which the
 /// audit reports as `NoTotp`), and a failed URI field becomes
 /// [`UNDECRYPTABLE_URI`] (reported as `Finding::UriUninspectable` rather than
-/// `NoUri`).
+/// `NoUri`), and an unusable TOTP field becomes [`UNDECRYPTABLE_TOTP`]
+/// (reported as `Finding::TotpUninspectable` rather than `NoTotp`).
 fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
     let id = info.id.as_str().to_string();
     let name = vault
@@ -213,9 +289,11 @@ fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
     };
     let totp = match vault.totp_secret(&info.id) {
         Ok(Some(secret)) => Zeroizing::new(secret.expose_secret().to_string()),
-        // A missing or undecryptable TOTP leaves no usable secret; the audit
-        // reports `NoTotp` for it and no TOTP code can be generated.
-        Ok(None) | Err(_) => Zeroizing::new(String::new()),
+        // No TOTP field at all: genuinely unset, so the audit reports `NoTotp`.
+        Ok(None) => Zeroizing::new(String::new()),
+        // Decryption failed: keep a marker so the audit can tell "2FA is
+        // configured but uninspectable" from "no 2FA at all".
+        Err(_) => Zeroizing::new(UNDECRYPTABLE_TOTP.to_string()),
     };
     let mut item = VaultItem::new(
         id.clone(),
