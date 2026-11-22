@@ -862,3 +862,91 @@ fn save_device_id_only_aborts_on_string_and_float_future_schema() {
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 }
+
+#[test]
+fn save_aborts_on_a_future_schema_file() {
+    // `save` must honour the same guard as `save_device_id_only`, regardless
+    // of how the future writer encoded the marker.
+    for body in [
+        br#"{"schema_version":999,"email":"future@example.com"}"#.as_slice(),
+        br#"{"schema_version":"999","email":"future@example.com"}"#.as_slice(),
+        br#"{"schema_version":99.0,"email":"future@example.com"}"#.as_slice(),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original = body.to_vec();
+        std::fs::write(&path, &original).unwrap();
+
+        let error = Settings::default().save(&path).unwrap_err();
+        assert!(error.to_string().contains("未対応"), "{error}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "a future file must never be overwritten"
+        );
+    }
+}
+
+#[test]
+fn save_still_replaces_current_and_legacy_schema_files() {
+    // The guard only rejects future markers; a legacy file is still upgraded
+    // by the normal stamped write.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, br#"{"schema_version":0,"email":"old@example.com"}"#).unwrap();
+
+    Settings {
+        email: "new@example.com".to_string(),
+        ..Default::default()
+    }
+    .save(&path)
+    .unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "new@example.com");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn schema_version_beyond_u64_is_treated_as_future() {
+    const BEYOND_U64: &str = "18446744073709551616";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // `parse::<u64>()` fails, but this is plainly a future version and must
+    // not be downgraded to a compatible legacy file by any write path.
+    let original = format!(r#"{{"schema_version":"{BEYOND_U64}","email":"future@example.com"}}"#);
+    std::fs::write(&path, &original).unwrap();
+
+    assert_eq!(super::file_schema_version(&path), Some(u64::MAX));
+    assert_eq!(Settings::load_detailed(&path).unwrap(), Settings::default());
+    assert!(Settings::default().save(&path).is_err());
+    let id = generate_device_id().unwrap();
+    assert!(Settings::save_device_id_only(&path, &id).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn file_schema_version_reads_only_the_marker_without_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+
+    std::fs::write(&path, br#"{"schema_version":7,"email":"x@example.com"}"#).unwrap();
+    assert_eq!(super::file_schema_version(&path), Some(7));
+    std::fs::write(&path, br#"{"email":"x@example.com"}"#).unwrap();
+    assert_eq!(super::file_schema_version(&path), None);
+    std::fs::write(&path, b"not json").unwrap();
+    assert_eq!(super::file_schema_version(&path), None);
+}
+
+#[test]
+fn file_schema_version_ignores_oversized_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // The cap must be applied before parsing so a hostile file cannot force a
+    // full read just to inspect one number.
+    let mut body = br#"{"schema_version":999}"#.to_vec();
+    body.resize(MAX_SETTINGS_BYTES as usize + 1, b' ');
+    std::fs::write(&path, &body).unwrap();
+
+    assert_eq!(super::file_schema_version(&path), None);
+}

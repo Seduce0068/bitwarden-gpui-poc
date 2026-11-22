@@ -1004,3 +1004,49 @@ fn ssh_fingerprint_checks_are_wired_into_the_audit() {
         .expect("invalid key must be reported");
     assert!(invalid.findings.contains(&Finding::SshFingerprintInvalid));
 }
+
+#[test]
+fn empty_names_use_a_placeholder_in_the_report() {
+    // The placeholder branch only covers a truly empty name; whitespace-only
+    // names keep their raw value (see `unnamed_items_are_reported`).
+    let mut item = login(
+        "1",
+        "",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    );
+    item.revision_date = NOW;
+    let report = report_of(vec![item]);
+
+    let reported = report
+        .items
+        .iter()
+        .find(|entry| entry.id == "1")
+        .expect("the unnamed item must be reported");
+    assert_eq!(reported.name, "(名称未設定)");
+    assert!(reported.findings.contains(&Finding::Unnamed));
+    assert!(report.to_text().contains("(名称未設定)"));
+}
+
+#[test]
+fn passphrase_with_an_unknown_word_uses_the_character_pool() {
+    use crate::words::WORDS;
+
+    const UNKNOWN: &str = "zzznotaword";
+    assert!(!WORDS.contains(&UNKNOWN), "pick a genuinely unknown word");
+    let phrase = format!("{}-{UNKNOWN}", WORDS[0]);
+    // One unknown word makes `passphrase_estimate` return None, so the
+    // estimator falls back to the same character-pool model as any password.
+    let pool = LOWERCASE.len() + SYMBOLS.len();
+    let expected = entropy_bits(pool, phrase.chars().count()).round() as u32;
+    assert_eq!(estimate_entropy(&phrase), expected);
+
+    // A real two-word passphrase is scored with the word-list model instead.
+    let genuine = format!("{}-{}", WORDS[0], WORDS[1]);
+    assert_ne!(
+        estimate_entropy(&genuine),
+        expected,
+        "a known passphrase must not use the character-pool fallback"
+    );
+}

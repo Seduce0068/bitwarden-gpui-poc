@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 全体改善（第54〜56弾 / 2026-11-22）
+
+- WCAG 観点（選択行コントラスト・☆ 可視性・F1 案内・TOTP バッジ）を改善
+- 更新日時の可読化、Vault 項目 Debug の username マスク、
+  gitleaks checksum の空検証防止、固定ツール版の README 突き合わせを実装
+- キー分岐・検索フィールド・到達不能分岐・ADR 記述のテストと整合を追加
+
 ### 全体改善（第50〜53弾 / 2026-11-22）
 
 - `AuthError::PreloginDetail` / `KdfRejectedDetail` を追加し、サーバー情報取得

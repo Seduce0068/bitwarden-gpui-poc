@@ -786,6 +786,11 @@ pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
 /// original reason from vanishing when the cache also fails. The cache reason
 /// supplied as `fallback` stays first so an existing, tested status string is
 /// preserved verbatim when there is no sync cause.
+///
+/// Current constraint: only the *first* [`std::error::Error::source()`] level
+/// of `cause` is rendered. A nested inner cause is not flattened further, so
+/// its text may still be absent from the status bar. A cause that yields no
+/// text at all leaves the fallback message unchanged.
 fn sync_fallback_failure(fallback: AuthError, cause: Option<AppError>) -> AuthError {
     let Some(cause) = cause else {
         return fallback;

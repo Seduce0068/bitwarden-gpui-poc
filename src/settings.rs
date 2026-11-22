@@ -282,24 +282,44 @@ pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
     notices
 }
 
+/// Interpret a version marker encoded as a floating-point number.
+///
+/// A future writer can serialize a marker as `2.0` or as a numeric string that
+/// no longer fits [`u64`]. Integral values stay on the future side of the
+/// guard: the `as` cast saturates at [`u64::MAX`], and an infinity is mapped to
+/// the same sentinel. Negative, fractional and `NaN` values are not version
+/// markers and return `None` (legacy).
+fn version_from_float(value: f64) -> Option<u64> {
+    if value.is_nan() || value < 0.0 {
+        return None;
+    }
+    if value.is_infinite() {
+        return Some(u64::MAX);
+    }
+    (value.fract() == 0.0).then_some(value as u64)
+}
+
 /// Read a schema marker as a number regardless of its JSON type.
 ///
 /// A future writer might have serialized the version as a string (e.g.
 /// `"9999"`). Treating that as "wrong type, therefore current" would silently
 /// downgrade an unknown schema to one we claim to understand, so numeric
 /// strings are parsed here and rejected by the same future-version guard as a
-/// JSON number. Non-numeric values return `None` and are treated as legacy.
+/// JSON number. A string beyond [`u64`] is still numeric and is classified as
+/// the maximum version, never as legacy. Non-numeric values return `None` and
+/// are treated as legacy.
 fn schema_version_of(value: Option<&Value>) -> Option<u64> {
     match value? {
-        Value::Number(number) => number.as_u64().or_else(|| {
-            // JSON `2.0` is a number too; treat an integral float as a version
-            // marker so a future writer cannot slip past the guard.
-            number
-                .as_f64()
-                .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
-                .map(|value| value as u64)
-        }),
-        Value::String(text) => text.trim().parse::<u64>().ok(),
+        Value::Number(number) => number
+            .as_u64()
+            .or_else(|| number.as_f64().and_then(version_from_float)),
+        Value::String(text) => {
+            let trimmed = text.trim();
+            trimmed
+                .parse::<u64>()
+                .ok()
+                .or_else(|| trimmed.parse::<f64>().ok().and_then(version_from_float))
+        }
         _ => None,
     }
 }
@@ -308,9 +328,24 @@ fn schema_version_of(value: Option<&Value>) -> Option<u64> {
 ///
 /// `load_detailed` intentionally falls back to defaults for a future version,
 /// but write paths must not replace such a file: doing so would destroy keys
-/// whose meaning this build does not understand.
+/// whose meaning this build does not understand. The read is capped at
+/// [`MAX_SETTINGS_BYTES`] just like [`Settings::load_detailed`]: an oversized
+/// file returns `None` rather than being loaded into memory just to inspect a
+/// marker. Unreadable and malformed files are likewise treated as "no marker".
 fn file_schema_version(path: &std::path::Path) -> Option<u64> {
-    let contents = std::fs::read_to_string(path).ok()?;
+    let file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > MAX_SETTINGS_BYTES {
+        return None;
+    }
+    // Read at most one byte past the limit so a file that grew between the
+    // metadata call and the read is not parsed or loaded without bound.
+    let mut contents = String::new();
+    file.take(MAX_SETTINGS_BYTES.saturating_add(1))
+        .read_to_string(&mut contents)
+        .ok()?;
+    if contents.len() as u64 > MAX_SETTINGS_BYTES {
+        return None;
+    }
     let value: Value = serde_json::from_str(&contents).ok()?;
     schema_version_of(value.get("schema_version"))
 }
@@ -656,16 +691,29 @@ impl Settings {
 
     /// Save settings to `path`, creating parent directories if needed.
     ///
-    /// The file always records [`CURRENT_SCHEMA_VERSION`], so loading a
-    /// compatible legacy struct upgrades it on the next write. The write uses
+    /// A compatible file records [`CURRENT_SCHEMA_VERSION`] on write, so
+    /// loading a legacy struct upgrades it on the next save. As in
+    /// [`Self::save_device_id_only`], a *future* marker already on disk aborts
+    /// the write: replacing such a file with a struct this build claims to
+    /// understand would destroy keys whose meaning it does not know. Missing,
+    /// oversized, unreadable and malformed files are still replaced with the
+    /// sanitized struct, matching the existing load fallbacks. The write uses
     /// [`Self::sanitized`] on a clone so the persisted value matches the
     /// effective (clamped) one; `self` is never mutated.
     ///
     /// # Errors
     ///
-    /// Returns `std::io::Error` on filesystem or serialization failure.
+    /// Returns `std::io::Error` on filesystem or serialization failure, or
+    /// when the existing file carries a future schema version.
     pub fn save(&self, path: impl AsRef<std::path::Path>) -> Result<(), std::io::Error> {
         let path = path.as_ref();
+        if let Some(version) = file_schema_version(path) {
+            if version > u64::from(CURRENT_SCHEMA_VERSION) {
+                return Err(std::io::Error::other(format!(
+                    "設定ファイルのバージョン {version} は未対応のため上書きを中止しました"
+                )));
+            }
+        }
         let mut stamped = self.sanitized();
         stamped.schema_version = CURRENT_SCHEMA_VERSION;
         let contents = serde_json::to_string_pretty(&stamped)?;

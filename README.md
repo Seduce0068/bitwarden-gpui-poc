@@ -306,8 +306,8 @@ gpui-kit の API を固定する明示的な判断であり、ピンを外して
    cargo check --all-targets --locked
    cargo test --all-targets --locked
    cargo clippy --all-targets --locked -- -D warnings
-   cargo deny check
    cargo audit
+   cargo deny check
    ```
 
 5. API 変更があればコードを追従させ、CHANGELOG の `[Unreleased]` と

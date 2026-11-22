@@ -218,3 +218,23 @@ fn error_messages_are_present() {
     assert!(!TotpError::Missing.message().is_empty());
     assert!(!TotpError::Invalid.message().is_empty());
 }
+
+#[test]
+fn surrounding_whitespace_is_trimmed_before_parsing() {
+    // Copy/paste commonly adds a trailing newline or leading spaces; the
+    // presentation layer strips them before handing the value to openwarden.
+    let padded = format!("  \t{RFC_SECRET}\n ");
+    assert_eq!(
+        code_at(&padded, 59).unwrap().code(),
+        code_at(RFC_SECRET, 59).unwrap().code()
+    );
+    assert!(is_valid_secret(&padded));
+
+    let padded_uri = format!("\n otpauth://totp/RFC?secret={RFC_SECRET}&digits=8 \t");
+    assert_eq!(code_at(&padded_uri, 59).unwrap().code(), "94287082");
+    assert!(is_valid_secret(&padded_uri));
+
+    // A whitespace-only field is missing, not invalid, even with mixed
+    // whitespace characters.
+    assert_eq!(code_at(" \t\n\u{3000}", 0), Err(TotpError::Missing));
+}

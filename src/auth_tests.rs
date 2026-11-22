@@ -861,3 +861,113 @@ fn kdf_rejection_is_reflexive_and_keeps_its_detail() {
     let app: crate::error::AppError = AuthError::KdfRejectedDetail("policy".into()).into();
     assert!(matches!(app, crate::error::AppError::KdfRejectedCause(_)));
 }
+
+#[test]
+fn missing_cache_plus_sync_failure_reports_only_the_sync_cause() {
+    use crate::error::{AppError, BoxedCause};
+
+    // A missing cache is the normal first-launch case, so its fallback is the
+    // plain Sync status. The discarded sync error must still reach the bar.
+    let fallback = cache_restore_failure(AppError::NotFound);
+    assert_eq!(fallback, AuthError::Sync);
+    let combined = super::sync_fallback_failure(
+        fallback,
+        Some(AppError::SyncCause(BoxedCause::text("HTTP 503"))),
+    );
+    assert_eq!(combined, AuthError::Sync);
+    assert!(matches!(
+        &combined,
+        AuthError::SyncDetail(detail) if detail.as_str() == "HTTP 503"
+    ));
+    assert_eq!(combined.status_message(), "同期に失敗しました（HTTP 503）");
+    assert!(!combined.status_message().contains("キャッシュ"));
+}
+
+#[test]
+fn sync_fallback_without_a_cause_keeps_the_cache_status_verbatim() {
+    use crate::error::AppError;
+
+    let fallback = cache_restore_failure(AppError::CacheExpired);
+    let expected = fallback.status_message();
+    assert_eq!(
+        super::sync_fallback_failure(fallback.clone(), None).status_message(),
+        expected
+    );
+    // A cause that renders to no text at all (no source, empty message) also
+    // leaves the fallback untouched.
+    let combined = super::sync_fallback_failure(fallback, Some(AppError::Other(String::new())));
+    assert_eq!(combined.status_message(), expected);
+}
+
+#[test]
+fn sync_fallback_flattens_only_the_first_source_level() {
+    use crate::error::{AppError, BoxedCause};
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Inner(&'static str);
+    impl fmt::Display for Inner {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Inner {}
+
+    #[derive(Debug)]
+    struct Outer(Inner);
+    impl fmt::Display for Outer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("outer failure")
+        }
+    }
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let cause = AppError::SyncCause(BoxedCause::new(Outer(Inner("inner failure"))));
+    let combined =
+        super::sync_fallback_failure(cache_restore_failure(AppError::NotFound), Some(cause));
+    let status = combined.status_message();
+    assert!(status.contains("outer failure"), "{status}");
+    // Documented PoC constraint: the nested cause is not flattened further.
+    assert!(!status.contains("inner failure"), "{status}");
+}
+
+#[test]
+fn empty_detail_variants_do_not_add_empty_parentheses() {
+    let cases = [
+        AuthError::InvalidServerUrlDetail(String::new()),
+        AuthError::ClientSetupDetail(String::new()),
+        AuthError::PreloginDetail(String::new()),
+        AuthError::LoginDetail(String::new()),
+        AuthError::SyncDetail(String::new()),
+        AuthError::KdfRejectedDetail(String::new()),
+    ];
+    for error in cases {
+        let status = error.status_message();
+        assert_eq!(status, error.message(), "{error:?}");
+        assert!(!status.contains("（）"), "{status}");
+    }
+}
+
+#[test]
+fn timeout_wins_when_the_login_budget_expires() {
+    // Loopback keeps this test free of DNS and external traffic while still
+    // passing validation, so the call reaches the race. With a zero-length
+    // budget the timer must win over the first network step of the login
+    // future.
+    let mut local = config();
+    local.server_url = "http://127.0.0.1:8080".into();
+    let result = smol::block_on(authenticate_with_timeout(
+        &local,
+        "device",
+        std::time::Duration::ZERO,
+    ));
+    assert_eq!(result.err(), Some(AuthError::Timeout));
+    assert_eq!(
+        AuthError::Timeout.status_message(),
+        "ログインがタイムアウトしました"
+    );
+}

@@ -11,6 +11,18 @@ fn body() -> Vec<u8> {
     .to_vec()
 }
 
+/// Write a fixture with the same owner-only mode the production writer uses.
+/// Raw `std::fs::write` creates group/world-readable files under a typical
+/// umask, which the read-side private-file check now refuses.
+fn write_fixture(path: &std::path::Path, contents: &[u8]) {
+    std::fs::write(path, contents).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
 #[test]
 fn cache_round_trips_through_file() {
     let dir = std::env::temp_dir().join("bitwarden-gpui-poc-cache-test");
@@ -31,7 +43,7 @@ fn missing_and_broken_files_return_none() {
     assert!(load(&missing).is_none());
 
     let path = std::env::temp_dir().join("bitwarden-gpui-poc-broken-cache.json");
-    std::fs::write(&path, b"not json").unwrap();
+    write_fixture(&path, b"not json");
     assert!(load(&path).is_none());
 }
 
@@ -45,7 +57,7 @@ fn load_detailed_distinguishes_failure_modes() {
     );
 
     let broken = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-broken.json");
-    std::fs::write(&broken, b"not json").unwrap();
+    write_fixture(&broken, b"not json");
     assert_eq!(
         load_detailed(&broken).err(),
         Some(CacheLoadError::ParseFailed)
@@ -348,7 +360,7 @@ fn corrupt_primary_does_not_silently_fall_back_to_legacy() {
     )
     .unwrap();
     std::fs::create_dir_all(new.parent().unwrap()).unwrap();
-    std::fs::write(&new, b"not json").unwrap();
+    write_fixture(&new, b"not json");
 
     assert_eq!(
         load_with_fallback(&new, &old).err(),
@@ -396,7 +408,7 @@ fn cached_sync_for_restores_only_a_usable_cache_for_this_server() {
 
     // A corrupted cache is ignored just like a missing one.
     let path = default_path().expect("cache path");
-    std::fs::write(&path, b"not json").unwrap();
+    write_fixture(&path, b"not json");
     assert!(cached_sync_for("https://vault.example.com").is_none());
 }
 
@@ -437,7 +449,7 @@ fn legacy_json_without_created_at_stays_restorable() {
         "server_url": "https://vault.example.com",
         "body": body(),
     });
-    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    write_fixture(&path, &serde_json::to_vec(&legacy).unwrap());
 
     let loaded = load_detailed(&path).unwrap();
     assert_eq!(loaded.created_at, None);
@@ -547,5 +559,45 @@ fn oversized_cache_body_is_rejected_after_parsing() {
         created_at: None,
     };
     save(&path, &cache).unwrap();
+    assert_eq!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge));
+}
+
+#[cfg(unix)]
+#[test]
+fn group_or_world_access_is_refused_on_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.json");
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&path, &cache).unwrap();
+
+    // Any group/other read or write bit violates the private_file policy,
+    // including a group-write-only mode that has no read bit.
+    for mode in [0o644u32, 0o660, 0o606, 0o620] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        let error = load_detailed(&path).unwrap_err();
+        assert!(
+            matches!(&error, CacheLoadError::ReadFailedCause(_)),
+            "mode {mode:04o} must be refused: {error:?}"
+        );
+        assert_eq!(cache_error_message(error), REASON_UNREADABLE);
+        assert!(load(&path).is_none());
+    }
+
+    // Owner-only modes still load.
+    for mode in [0o600u32, 0o700] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(load_detailed(&path).unwrap(), cache, "mode {mode:04o}");
+    }
+}
+
+#[test]
+fn oversized_world_readable_file_keeps_its_size_classification() {
+    // The size gate runs before the permission gate, so callers still get the
+    // specific "too large" reason rather than a generic unreadable status.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.json");
+    std::fs::write(&path, vec![b'x'; (MAX_CACHE_BYTES + 1) as usize]).unwrap();
     assert_eq!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge));
 }

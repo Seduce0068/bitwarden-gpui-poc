@@ -245,11 +245,19 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
 /// buffers so the audit and the TOTP copy action work on real values. A field
 /// that fails to decrypt never discards the rest of the vault: the password is
 /// replaced with the [`UNDECRYPTABLE_PASSWORD`] status marker (which the health
-/// audit counts as excluded), an unusable TOTP field is left empty (which the
-/// audit reports as `NoTotp`), and a failed URI field becomes
-/// [`UNDECRYPTABLE_URI`] (reported as `Finding::UriUninspectable` rather than
-/// `NoUri`), and an unusable TOTP field becomes [`UNDECRYPTABLE_TOTP`]
-/// (reported as `Finding::TotpUninspectable` rather than `NoTotp`).
+/// audit excludes from password checks), a URI field whose ciphertext cannot
+/// be opened becomes [`UNDECRYPTABLE_URI`] (reported as
+/// `Finding::UriUninspectable` rather than `NoUri`), and a TOTP field that
+/// exists but cannot be decrypted becomes [`UNDECRYPTABLE_TOTP`] (reported as
+/// `Finding::TotpUninspectable` rather than `NoTotp`). A genuinely absent TOTP
+/// field stays empty and is reported as `NoTotp`.
+///
+/// Known limitation: the model's `favorite` and `notes` keep their defaults.
+/// `openwarden` 0.1.1's public `LoginInfo` carries only id, folder, revision,
+/// `has_password` and `has_totp`, and `Vault` exposes no public reader for
+/// notes or the favorite flag. Neither value can be imported through the
+/// supported API, so this PoC leaves them untouched rather than inventing
+/// values.
 fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
     let id = info.id.as_str().to_string();
     let name = vault

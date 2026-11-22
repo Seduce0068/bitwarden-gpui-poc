@@ -98,6 +98,18 @@ pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
     format!("{base}{}", unsaved_status_suffix(dirty))
 }
 
+/// Status the ticker leaves on screen after an idle auto-lock.
+///
+/// `lock()` composes its own status (including the unsaved-settings warning),
+/// but the ticker then replaces it to explain *why* the vault locked. Without
+/// re-applying the marker here an idle lock silently drops that warning.
+pub(super) fn auto_lock_status(idle_lock_seconds: u64, dirty: bool) -> String {
+    status_with_unsaved(
+        &format!("無操作のため自動ロックしました（{idle_lock_seconds}秒）"),
+        dirty,
+    )
+}
+
 /// Warning shown when Esc is pressed while settings are still unsaved.
 pub(super) fn unsaved_quit_warning_status() -> &'static str {
     "警告: 未保存の設定変更があります（設定/生成パネルに戻り w: 保存 / d: 破棄）"
@@ -259,9 +271,13 @@ impl BitwardenApp {
                                         }
                                         crate::ui::timing::TickEffect::AutoLock => {
                                             view.lock(cx);
-                                            view.status = format!(
-                                                "無操作のため自動ロックしました（{}秒）",
-                                                view.settings.idle_lock_seconds
+                                            // `lock()` already warned about unsaved
+                                            // settings; keep that marker instead of
+                                            // replacing the whole status with a bare
+                                            // auto-lock reason.
+                                            view.status = auto_lock_status(
+                                                view.settings.idle_lock_seconds,
+                                                view.settings_dirty,
                                             );
                                         }
                                     }
@@ -643,6 +659,18 @@ mod tests {
         let base = "監査行 1/2: example";
         assert!(!status_with_unsaved(base, false).contains("[未保存"));
         assert!(status_with_unsaved(base, true).contains("[未保存"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn auto_lock_status_keeps_the_unsaved_marker() {
+        let clean = auto_lock_status(300, false);
+        assert_eq!(clean, "無操作のため自動ロックしました（300秒）");
+        assert!(!clean.contains("[未保存"));
+
+        let dirty = auto_lock_status(300, true);
+        assert!(dirty.starts_with(&clean));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
+        assert_eq!(dirty, status_with_unsaved(&clean, true));
     }
     use crate::ui::state::AuthField;
     use std::time::{Duration, Instant};

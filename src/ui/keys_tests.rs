@@ -700,3 +700,89 @@ fn audit_enter_does_not_leak_into_other_panels() {
         assert_eq!(classify_key(&value), UiAction::None, "{panel:?}");
     }
 }
+
+#[test]
+fn settings_threshold_accepts_shift_key_aliases() {
+    // Generator aliases are covered by `generator_keys_map_to_typed_options`;
+    // these are the remaining `=`/`_` branches in the settings panel.
+    let mut value = ctx("=");
+    value.panel = Panel::Settings;
+    assert_eq!(classify_key(&value), UiAction::AdjustThreshold(1));
+    value.key = "_";
+    assert_eq!(classify_key(&value), UiAction::AdjustThreshold(-1));
+}
+
+#[test]
+fn alt_guard_suppresses_keys_without_generated_text_while_editing() {
+    let mut value = ctx("backspace");
+    value.searching = true;
+    value.modifiers.alt = true;
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    value.key = "arrowleft";
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    value.searching = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    value.key = "backspace";
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    value.editing_settings = false;
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    value.key = "enter";
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    // A printable layout character satisfies the guard and stays as text.
+    value.screen = Screen::Unlocked;
+    value.editing_auth = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    value.key = "w";
+    value.key_char = Some("w");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertSettingsText("w".into())
+    );
+}
+
+#[test]
+fn alt_outside_editing_stays_inert_even_with_printable_text() {
+    let mut value = ctx("s");
+    value.key_char = Some("ß");
+    value.modifiers.alt = true;
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    value.panel = Panel::Settings;
+    value.key = "w";
+    value.key_char = Some("w");
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    value.screen = Screen::Locked;
+    assert_eq!(classify_key(&value), UiAction::None);
+}
+
+#[test]
+fn empty_key_char_falls_back_to_the_physical_key() {
+    use crate::ui::keys::GeneratorOption;
+
+    let mut value = ctx("a");
+    value.key_char = Some("");
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText("a".into()));
+
+    // Command matching must also fall back when `key_char` carries no glyph.
+    value.searching = false;
+    value.panel = Panel::Generator;
+    value.key = "1";
+    assert_eq!(
+        classify_key(&value),
+        UiAction::Generator(GeneratorOption::Lowercase)
+    );
+
+    // A multi-character key name is still not printable text.
+    value.key = "backspace";
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::BackspaceSearch);
+}

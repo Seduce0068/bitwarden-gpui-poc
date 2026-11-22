@@ -261,6 +261,11 @@ pub type CacheLoadError = crate::error::AppError;
 /// Read a cache entry, distinguishing missing, unreadable, malformed and
 /// outdated files.
 ///
+/// On Unix a file with group/other read or write bits is refused as unreadable:
+/// the encrypted body must stay owner-only, matching the `private_file` policy
+/// that every write applies. The size cap is checked first so an oversized
+/// file keeps its `CacheTooLarge` classification.
+///
 /// # Errors
 ///
 /// [`CacheLoadError`] when the file cannot be used as a cache.
@@ -277,6 +282,22 @@ pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<SyncCache, Cac
         .map_err(|error| CacheLoadError::ReadFailedCause(crate::error::BoxedCause::new(error)))?;
     if metadata.len() > MAX_CACHE_BYTES {
         return Err(CacheLoadError::CacheTooLarge);
+    }
+    // `write_private` creates cache files with 0600. A wider mode means the
+    // file was written by an older build or provisioned out of band, so it is
+    // not trusted with the encrypted body. `#[cfg(unix)]` keeps the check
+    // portable: platforms without Unix permission bits skip it entirely.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = metadata.permissions().mode();
+        if mode & 0o066 != 0 {
+            return Err(CacheLoadError::ReadFailedCause(
+                crate::error::BoxedCause::text(format!(
+                    "キャッシュファイルの権限が安全ではありません（mode {mode:04o}）"
+                )),
+            ));
+        }
     }
     // Read one byte past the limit so a file that grew after `metadata` is
     // still rejected without loading an unbounded body.

@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第56弾で 9 件すべてを完了）。
+なし（第57弾で 13 件すべてを完了）。
 
 ## 完了
 
+- [x] 第57弾（対象16担当・細分化）の指摘 13 件を完結（2026-11-22）
+  - 自動ロック時の未保存マーカー保持、TOTP バッジのコントラスト、
+    タブの非色表示、キー分岐テストを追加。
+  - `Settings::save()` の将来スキーマガード、`file_schema_version` の
+    サイズ上限と u64 超過判定、キャッシュ権限検証、auth の残りテスト、
+    vault_sync の doc 整理、監査/TOTP のテストを追加。
+  - CHANGELOG / ADR / README の残矛盾も修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。観点ではなく
+    対象ファイルを細分化して網羅性を上げた。
+  - 検証: fmt / check / test（400 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第56弾（13 観点・3 回目）の指摘 9 件を完結（2026-11-22）
   - ADR の担当モジュール／行参照、totp doc、generator doc を実態へ修正。
     固定ツール版の README 突き合わせを CI 側の変数値へ変更。

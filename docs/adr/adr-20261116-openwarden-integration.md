@@ -114,7 +114,8 @@ PascalCase で、当時の openwarden 0.1.0 の `SyncWire`（`#[serde(rename_all
 2026-11-21 の完了: openwarden 0.1.1 が `Client::sync_body()` で生 body を
 公開したため、`src/auth.rs` の認証経路から取得した body へ同じ正規化を
 適用した。実サーバー E2E は成功し、ログイン・sync・復号・取り込みまでを
-検証する（288 passed / E2E 1 passed）。ただし opt-in E2E は UI のコピー
+検証する（テスト件数はコミットごとに変わるため固定値は記載しない）。
+ただし opt-in E2E は UI のコピー
 操作を含まないため、`p` / `u` / `y` の実サーバー確認は未実施である。
 
 未解決事項: ログイン項目以外の kind はまだ model に変換されない。

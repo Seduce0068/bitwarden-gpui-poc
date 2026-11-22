@@ -34,6 +34,24 @@ pub(super) struct TotpBadge {
     pub(super) color: u32,
 }
 
+/// Brighter `不正`/`不可` badge colour for a selected row.
+///
+/// The normal rose `0xf38ba8` is only ~3.9:1 against the selected row
+/// background `0x45475a`, below WCAG 1.4.3 for small text. This tint is
+/// ~5.4:1 while still reading as the same warning.
+const SELECTED_INVALID_TOTP_COLOR: u32 = 0xffb3c8;
+
+impl TotpBadge {
+    /// Foreground colour for this badge on the row it is drawn in.
+    pub(super) fn color_for_row(&self, selected: bool) -> u32 {
+        if selected && matches!(self.label, "不正" | "不可") {
+            SELECTED_INVALID_TOTP_COLOR
+        } else {
+            self.color
+        }
+    }
+}
+
 pub(super) fn totp_badge(item: &crate::model::VaultItem) -> TotpBadge {
     if has_usable_totp(item) {
         TotpBadge {
@@ -374,6 +392,19 @@ pub(super) fn settings_panel<'a>(
         )
 }
 
+/// Label shown on a header tab, with a non-colour marker when it is active.
+///
+/// Colour alone cannot convey the active tab. A leading triangle (together
+/// with the bold weight applied in `panel_button`) keeps the state readable
+/// without relying on colour perception.
+pub(super) fn panel_button_label(label: &str, active: bool) -> String {
+    if active {
+        format!("▶ {label}")
+    } else {
+        label.to_string()
+    }
+}
+
 pub(super) fn panel_button<V: 'static>(
     label: &str,
     panel: Panel,
@@ -383,18 +414,26 @@ pub(super) fn panel_button<V: 'static>(
 ) -> AnyElement {
     let active = panel == current;
     let select = std::rc::Rc::new(on_select);
+    // Derive the identity from the original label so switching tabs does not
+    // recreate the element: only the drawn text gets the active marker.
+    let id = SharedString::from(format!("panel-button-{label}"));
     div()
-        .id(SharedString::from(format!("panel-button-{label}")))
+        .id(id)
         .px_2()
         .py_1()
         .rounded_md()
         .bg(if active { rgb(0x45475a) } else { rgb(0x313244) })
         .text_color(if active { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
+        .font_weight(if active {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        })
         .text_xs()
         .on_click(cx.listener(move |this, _event, _window, cx| {
             select(this, cx);
         }))
-        .child(label.to_string())
+        .child(panel_button_label(label, active))
         .into_any_element()
 }
 
@@ -443,6 +482,28 @@ pub(super) fn auth_row<'a>(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    fn channel_luminance(rgb: u32, shift: u32) -> f64 {
+        let value = ((rgb >> shift) & 0xff) as f64 / 255.0;
+        if value <= 0.03928 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn relative_luminance(rgb: u32) -> f64 {
+        0.2126 * channel_luminance(rgb, 16)
+            + 0.7152 * channel_luminance(rgb, 8)
+            + 0.0722 * channel_luminance(rgb, 0)
+    }
+
+    fn contrast_ratio(foreground: u32, background: u32) -> f64 {
+        let fg = relative_luminance(foreground);
+        let bg = relative_luminance(background);
+        let (light, dark) = if fg > bg { (fg, bg) } else { (bg, fg) };
+        (light + 0.05) / (dark + 0.05)
+    }
 
     #[::core::prelude::v1::test]
     fn severity_colours_are_distinct() {
@@ -496,5 +557,50 @@ mod tests {
         );
         assert_eq!(totp_badge(&note).label, "");
         assert_eq!(totp_badge(&login_with_totp("")).label, "");
+    }
+
+    #[::core::prelude::v1::test]
+    fn selected_row_invalid_totp_badge_meets_text_contrast() {
+        const SELECTED_BG: u32 = 0x45475a;
+        let invalid = totp_badge(&login_with_totp("not base32!"));
+        let undecryptable = totp_badge(&login_with_totp(crate::vault_sync::UNDECRYPTABLE_TOTP));
+
+        // The original colour is the bug: below 4.5:1 on the selected row.
+        assert!(contrast_ratio(invalid.color, SELECTED_BG) < 4.5);
+        assert!(contrast_ratio(undecryptable.color, SELECTED_BG) < 4.5);
+
+        for badge in [&invalid, &undecryptable] {
+            assert_eq!(badge.color_for_row(false), badge.color);
+            assert!(
+                contrast_ratio(badge.color_for_row(true), SELECTED_BG) >= 4.5,
+                "badge {:?} must stay readable on the selected row",
+                badge.label
+            );
+        }
+
+        // Healthy and absent badges keep their existing colours on both rows.
+        let valid = totp_badge(&login_with_totp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"));
+        assert_eq!(valid.color_for_row(true), valid.color);
+        let note = crate::model::VaultItem::new(
+            "note",
+            "note",
+            crate::model::ItemData::SecureNote {
+                text: String::new(),
+            },
+        );
+        let absent = totp_badge(&note);
+        assert_eq!(absent.color_for_row(true), absent.color);
+    }
+
+    #[::core::prelude::v1::test]
+    fn active_header_tab_has_a_non_colour_marker() {
+        assert_eq!(panel_button_label("[一覧]", true), "▶ [一覧]");
+        assert_eq!(panel_button_label("[一覧]", false), "[一覧]");
+        assert_ne!(
+            panel_button_label("[一覧]", true),
+            panel_button_label("[一覧]", false)
+        );
+        // Every tab label gets the same cue, including the audit placeholder.
+        assert!(panel_button_label("[監査 (未生成)]", true).starts_with("▶ "));
     }
 }

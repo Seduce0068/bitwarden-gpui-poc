@@ -201,7 +201,7 @@ impl BitwardenApp {
                                     div()
                                         .w(px(40.0))
                                         .text_xs()
-                                        .text_color(rgb(badge.color))
+                                        .text_color(rgb(badge.color_for_row(selected)))
                                         .child(badge.label),
                                 ),
                         );
