@@ -104,6 +104,17 @@ impl KeyModifiers {
     }
 }
 
+/// Which end of a selectable list a `Home`/`End` key targets.
+///
+/// Kept as a typed payload so the edge jump is a distinct `UiAction` instead of
+/// an extreme `MoveSelection` delta: the shared move path interprets a missing
+/// selection by the *sign* of a delta, so `End` cannot simply use `isize::MAX`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SelectionEdge {
+    First,
+    Last,
+}
+
 /// A UI intent derived from a keystroke or a mouse action.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum UiAction {
@@ -126,6 +137,10 @@ pub(super) enum UiAction {
     SetPanel(Panel),
     Lock,
     MoveSelection(isize),
+    /// Move by a whole page (`PageUp`/`PageDown`), not by a single row.
+    MoveSelectionPage(isize),
+    /// Jump to the first or last selectable row (`Home`/`End`).
+    MoveSelectionToEdge(SelectionEdge),
     SelectRow(usize),
     ToggleFavorite,
     OpenAudit,
@@ -331,6 +346,13 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             // vault list; `BitwardenApp::move_selection` routes it by panel.
             "up" => UiAction::MoveSelection(-1),
             "down" => UiAction::MoveSelection(1),
+            // Page/Home/End reuse the list-movement intent but carry their own
+            // actions, so single-row Up/Down keep their existing binding and
+            // `ui::input` can translate the paging into a larger move.
+            "pageup" => UiAction::MoveSelectionPage(-1),
+            "pagedown" => UiAction::MoveSelectionPage(1),
+            "home" => UiAction::MoveSelectionToEdge(SelectionEdge::First),
+            "end" => UiAction::MoveSelectionToEdge(SelectionEdge::Last),
             "enter" => UiAction::focus_selected_audit_row(),
             "g" => UiAction::SetPanel(Panel::Vault),
             "l" => UiAction::Lock,
@@ -407,6 +429,10 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             "escape" => UiAction::quit_or_warn(),
             "up" => UiAction::MoveSelection(-1),
             "down" => UiAction::MoveSelection(1),
+            "pageup" => UiAction::MoveSelectionPage(-1),
+            "pagedown" => UiAction::MoveSelectionPage(1),
+            "home" => UiAction::MoveSelectionToEdge(SelectionEdge::First),
+            "end" => UiAction::MoveSelectionToEdge(SelectionEdge::Last),
             "l" => UiAction::Lock,
             "t" => UiAction::CycleFilter,
             "s" => UiAction::CycleSort,
@@ -640,6 +666,92 @@ mod cursor_key_tests {
             ctx.panel = Panel::Settings;
             ctx.editing_settings = true;
             assert_eq!(classify_key(&ctx), UiAction::None, "settings/{key}");
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod page_navigation_key_tests {
+    use super::*;
+
+    fn panel_ctx(panel: Panel, key: &str) -> KeyContext<'_> {
+        KeyContext {
+            screen: Screen::Unlocked,
+            panel,
+            key,
+            key_char: None,
+            modifiers: KeyModifiers::default(),
+            editing_auth: false,
+            searching: false,
+            editing_settings: false,
+            login_failed: false,
+            has_audit_report: true,
+            query_nonempty: false,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_and_audit_own_page_home_and_end_keys() {
+        for panel in [Panel::Vault, Panel::Audit] {
+            for (key, expected) in [
+                ("pageup", UiAction::MoveSelectionPage(-1)),
+                ("pagedown", UiAction::MoveSelectionPage(1)),
+                ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+                ("end", UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
+            ] {
+                assert_eq!(
+                    classify_key(&panel_ctx(panel, key)),
+                    expected,
+                    "{panel:?}/{key}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn paging_does_not_replace_single_row_or_leak_to_other_panels() {
+        for panel in [Panel::Vault, Panel::Audit] {
+            assert_eq!(
+                classify_key(&panel_ctx(panel, "up")),
+                UiAction::MoveSelection(-1),
+                "{panel:?}/up"
+            );
+            assert_eq!(
+                classify_key(&panel_ctx(panel, "down")),
+                UiAction::MoveSelection(1),
+                "{panel:?}/down"
+            );
+        }
+        // Only the two list-owning panels get a scroll handle; generator and
+        // settings must keep these keys inert (see MOUSE_WHEEL_SCROLL_ONLY_HINT).
+        for panel in [Panel::Generator, Panel::Settings] {
+            for key in ["pageup", "pagedown", "home", "end"] {
+                assert_eq!(
+                    classify_key(&panel_ctx(panel, key)),
+                    UiAction::None,
+                    "{panel:?}/{key}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn paging_keys_stay_unbound_in_every_editing_mode() {
+        for key in ["pageup", "pagedown", "home", "end"] {
+            let mut ctx = panel_ctx(Panel::Vault, key);
+            ctx.searching = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "search/{key}");
+
+            ctx.searching = false;
+            ctx.panel = Panel::Settings;
+            ctx.editing_settings = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "settings/{key}");
+
+            ctx.editing_settings = false;
+            ctx.screen = Screen::Locked;
+            ctx.editing_auth = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "auth/{key}");
         }
     }
 }

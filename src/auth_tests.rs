@@ -569,6 +569,39 @@ fn unrelated_cache_errors_are_not_called_corrupt() {
 }
 
 #[test]
+fn cache_restore_failure_uses_the_generic_cache_wording() {
+    use crate::error::{AppError, OTHER_ERROR_MESSAGE};
+
+    // `cache_restore_failure` delegates classification to the cache layer
+    // (auth.rs:876-886). A failure with no dedicated reason keeps the sync
+    // family and the cache layer's generic fallback text
+    // (cache.rs:820-831); it must neither collapse to a bare `Sync` status nor
+    // be mislabelled as corruption. Pin the exact user-visible wording.
+    const GENERIC: &str = "同期に失敗しました（キャッシュを復元できませんでした）";
+    for error in [
+        AppError::RandomUnavailable,
+        AppError::Other("anything else".to_string()),
+    ] {
+        let status = cache_restore_failure(error);
+        assert!(matches!(&status, AuthError::Other(_)), "{status:?}");
+        assert_eq!(status.message(), GENERIC, "{status:?}");
+        assert_eq!(status.status_message(), GENERIC, "{status:?}");
+        // `Other` owns its text, so it is not equal to the plain `Sync`
+        // variant; the generic text still leads with the sync family message.
+        assert_ne!(status, AuthError::Sync);
+        assert!(status.message().starts_with(AuthError::Sync.message()));
+    }
+    // The generic reason is distinct from every classified reason and from
+    // the "no cache yet" silent case.
+    assert_ne!(GENERIC, cache_restore_failure(AppError::NotFound).message());
+    assert_ne!(
+        GENERIC,
+        cache_restore_failure(AppError::CacheExpired).message()
+    );
+    assert!(!GENERIC.contains(OTHER_ERROR_MESSAGE));
+}
+
+#[test]
 fn expired_cache_message_reaches_the_status_bar() {
     assert_eq!(
         cache_restore_failure(AppError::CacheExpired).message(),
@@ -1247,6 +1280,37 @@ fn urls_without_a_host_fail_open_in_the_ssrf_classifier() {
             "{value}"
         );
         assert!(!is_blocked_server_url_without_dns(value), "{value}");
+    }
+}
+
+#[test]
+fn hostless_urls_fail_open_in_the_classifier_but_are_rejected_by_self_hosted() {
+    // The SSRF classifier has no host to inspect for cannot-be-a-base schemes
+    // and deliberately returns false (auth.rs:495-518). That fail-open is only
+    // safe because the *server base* parser closes the path: `self_hosted`
+    // rejects every host-less URL, so `validate_config` still refuses it.
+    // Pinning both halves stops either layer from silently becoming the sole
+    // guard.
+    use openwarden::ServerUrls;
+
+    for value in [
+        "mailto:alice@example.com",
+        "data:text/plain,hello",
+        "about:blank",
+    ] {
+        assert!(!is_blocked_server_url_without_dns(value), "{value}");
+        assert!(
+            ServerUrls::self_hosted(value).is_err(),
+            "self_hosted must reject the host-less URL {value}"
+        );
+        let mut invalid = config();
+        invalid.server_url = value.into();
+        let error = validate_config(&invalid).unwrap_err();
+        assert_eq!(error, AuthError::InvalidServerUrl, "{value}");
+        assert!(
+            matches!(&error, AuthError::InvalidServerUrlDetail(_)),
+            "the parser reason must survive for {value}: {error:?}"
+        );
     }
 }
 

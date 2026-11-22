@@ -205,6 +205,55 @@ mod tests {
     }
 
     #[test]
+    fn direct_switch_between_invalid_secrets_refreshes_the_cached_error() {
+        let mut state = TotpState::new();
+
+        // A blank field and a malformed secret are both unusable TOTP values,
+        // but they carry different cached reasons (Missing vs Invalid). The
+        // copy path must report the reason for the secret now on screen.
+        assert_eq!(state.display("   ", 40), "コード生成失敗");
+        let blank_reason = state
+            .error_message()
+            .expect("a failed sample caches its reason");
+        assert!(
+            blank_reason.contains("設定されていません"),
+            "{blank_reason}"
+        );
+
+        // Same instant, no clear()/invalidate(): only the `secret != ...`
+        // branch in `display` can replace the cached snapshot.
+        let malformed = "not base32!";
+        assert_eq!(state.display(malformed, 40), "コード生成失敗");
+        let invalid_reason = state
+            .error_message()
+            .expect("a failed sample caches its reason");
+        assert_ne!(
+            invalid_reason, blank_reason,
+            "switching secrets must refresh the cached error message"
+        );
+        assert!(
+            invalid_reason.contains("解釈できません"),
+            "{invalid_reason}"
+        );
+        assert!(state.matches_secret(malformed));
+        assert!(!state.matches_secret("   "));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40));
+
+        // Two different malformed secrets share the same short message, but a
+        // direct switch must still resample instead of keeping the old secret.
+        let other = "!!! also bad";
+        assert_eq!(state.display(other, 40), "コード生成失敗");
+        assert!(state.matches_secret(other));
+        assert!(!state.matches_secret(malformed));
+        assert_eq!(state.error_message(), Some(invalid_reason.clone()));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40));
+
+        // Switching back restores the first malformed secret's reason.
+        assert_eq!(state.display(malformed, 40), "コード生成失敗");
+        assert_eq!(state.error_message(), Some(invalid_reason));
+    }
+
+    #[test]
     fn invalid_secret_reports_failure() {
         let mut state = TotpState::new();
         let value = state.display("not base32!", 0);

@@ -641,7 +641,7 @@ fn search_absorbs_unicode_form_differences() {
 fn comparison_key_folds_the_documented_cases_and_is_idempotent() {
     // `to_lowercase` alone leaves these pairs distinct; the search, duplicate
     // and sort paths all go through this one key so they agree. The doc does
-    // not claim a complete Unicode full case fold (model.rs:24-37): only the
+    // not claim a complete Unicode full case fold (model.rs:24-34): only the
     // explicitly listed mappings are guaranteed.
     assert_eq!(comparison_key("Straße"), comparison_key("STRASSE"));
     assert_eq!(comparison_key("ß"), comparison_key("ss"));
@@ -655,6 +655,23 @@ fn comparison_key_folds_the_documented_cases_and_is_idempotent() {
             comparison_key(value),
             "{value}"
         );
+    }
+}
+
+#[test]
+fn comparison_key_is_idempotent_for_titlecase_dz_variants() {
+    // U+01C4/01C5/01C6 (capital / titlecase / small DZ with caron) all NFKD to
+    // D or d + z + combining caron once lowercasing is applied. The fixed-point
+    // loop (model.rs:20-70) must leave the folded key unchanged on a second
+    // pass; otherwise a normalized needle would drift on the `view()` path.
+    let title = comparison_key("\u{01c5}");
+    let small = comparison_key("\u{01c6}");
+    assert_eq!(title, small);
+    assert_eq!(comparison_key("\u{01c4}"), title);
+    assert_eq!(comparison_key("dz\u{030c}"), title);
+    for key in [&title, &small] {
+        assert_eq!(comparison_key(key), *key, "{key:?}");
+        assert_eq!(comparison_key(&comparison_key(key)), *key, "{key:?}");
     }
 }
 
@@ -1498,6 +1515,34 @@ fn matches_query_trims_a_padded_needle_like_view() {
         vault.view(&Filter::All, "  café  ", SortKey::NameAsc).len(),
         1
     );
+}
+
+#[test]
+fn empty_and_whitespace_needles_match_every_item() {
+    let item = login("1", "Café", "user", "pw", "https://example.com");
+    // `matches_query` trims the raw needle before folding it (model.rs:805-810).
+    // An empty needle is contained in every haystack, so a public caller that
+    // bypasses `Vault::view` still sees every item for blank input.
+    for needle in ["", " ", "   ", "\t", "\n", "\u{3000}", " \t\u{3000}\n "] {
+        assert!(item.matches_query(needle), "needle {needle:?}");
+    }
+
+    let vault = Vault {
+        items: vec![item],
+        folders: Vec::new(),
+    };
+    // `Vault::view` short-circuits on the same empty needle instead of calling
+    // `matches_query`; both paths must keep every item visible (model.rs:972-982).
+    for needle in ["", "   ", "\u{3000}"] {
+        assert_eq!(
+            vault.view(&Filter::All, needle, SortKey::NameAsc).len(),
+            1,
+            "needle {needle:?}"
+        );
+    }
+    // A non-blank needle still narrows the result, so this is not a blanket
+    // "always true" branch.
+    assert!(vault.view(&Filter::All, "tea", SortKey::NameAsc).is_empty());
 }
 
 #[test]

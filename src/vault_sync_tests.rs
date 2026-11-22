@@ -900,6 +900,48 @@ fn camel_case_key_lowercases_only_the_leading_ascii_uppercase() {
 }
 
 #[test]
+fn non_ascii_leading_keys_are_passed_through_verbatim() {
+    // `camel_case_key` only folds a leading *ASCII* uppercase letter
+    // (vault_sync.rs:122-133). A non-ASCII initial code point must survive
+    // unchanged: applying a Unicode lowercase mapping there would invent a
+    // wire key openwarden never sees, and could collide with a real field.
+    for key in ["État", "Äpfel", "Ωmega", "étagère", "日本"] {
+        assert_eq!(camel_case_key(key), key, "{key}");
+    }
+    let lower = camel_case_key("État").to_lowercase();
+    assert_ne!(camel_case_key("État"), lower, "no Unicode case folding");
+
+    // The recursive normalizer reaches the same conclusion: only the nested
+    // ASCII key changes, the non-ASCII parent key keeps its spelling.
+    let mut body = serde_json::json!({
+        "État": {"RevisionDate": "2024-01-01T00:00:00Z"},
+        "Ciphers": []
+    });
+    super::normalize_sync_keys(&mut body).unwrap();
+    assert_eq!(body["État"]["revisionDate"], "2024-01-01T00:00:00Z");
+    assert!(body.get("état").is_none());
+}
+
+#[test]
+fn an_empty_vault_imports_as_an_empty_model_and_audit() {
+    // Importing an unlocked vault with no folders and no ciphers must succeed:
+    // the empty collections are a valid contract, not a lock or parse error
+    // (vault_sync.rs:552-613). Both public entry points agree.
+    let vault = unlocked_vault(&[]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("empty vault import");
+    assert!(model.items.is_empty());
+    assert!(model.folders.is_empty());
+    assert!(model.is_empty());
+    assert_eq!(model.len(), 0);
+    assert!(audit.is_empty(), "no rows means no import decisions");
+
+    let plain = import_logins(&vault).expect("plain empty vault import");
+    assert!(plain.items.is_empty());
+    assert!(plain.folders.is_empty());
+    assert!(folders_from(&vault).expect("empty folders").is_empty());
+}
+
+#[test]
 fn revision_dates_combine_fractional_seconds_with_numeric_offsets() {
     // `parse_revision` reads the optional fraction before the numeric offset
     // (vault_sync.rs:392-430). A fraction must not hide the offset, and the

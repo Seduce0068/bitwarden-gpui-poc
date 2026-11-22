@@ -340,6 +340,45 @@ fn settings_entropy_tracks_length_and_classes() {
 }
 
 #[test]
+fn digit_only_ambiguity_filter_uses_the_real_eight_symbol_alphabet() {
+    // With only digits enabled, `avoid_ambiguous` removes `0` and `1` and the
+    // real pool has eight symbols. The meter must use that actual size, not
+    // silently widen it to the audit's ten-symbol PIN model.
+    let settings = PasswordSettings {
+        length: 12,
+        lowercase: false,
+        uppercase: false,
+        digits: true,
+        symbols: false,
+        avoid_ambiguous: true,
+    };
+    assert_eq!(settings.alphabet(), "23456789");
+    assert_eq!(settings.alphabet().chars().count(), 8);
+    let bits = password_entropy(&settings);
+    assert!((bits - entropy_bits(8, 12)).abs() < 1e-9, "{bits}");
+    assert_eq!(bits, 36.0, "12 * log2(8) is exact");
+    assert_eq!(Strength::from_bits(bits), Strength::Weak);
+
+    // Documented known constraint: the audit still assumes ten symbols, so it
+    // reports 40 bits for the same length and the two surfaces disagree. This
+    // is deliberately not "fixed" by overstating the drawn pool.
+    assert_eq!(crate::health::estimate_entropy("234567892345"), 40);
+    assert_eq!(
+        Strength::from_bits(crate::health::estimate_entropy("234567892345") as f64),
+        Strength::Fair
+    );
+
+    // Without the filter the pre-existing alignment holds: the full pool is
+    // ten symbols and the rounded 39.86… bits reach the same 40-bit boundary.
+    let unfiltered = PasswordSettings {
+        avoid_ambiguous: false,
+        ..settings
+    };
+    assert_eq!(unfiltered.alphabet().chars().count(), 10);
+    assert_eq!(password_entropy(&unfiltered), 40.0);
+}
+
+#[test]
 fn passphrase_entropy_follows_word_count() {
     let base = PassphraseSettings {
         words: 4,

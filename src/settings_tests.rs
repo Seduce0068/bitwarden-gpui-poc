@@ -1208,6 +1208,83 @@ fn load_advisories_is_empty_for_valid_or_oversized_files() {
 }
 
 #[test]
+fn load_advisories_is_empty_when_the_file_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // `File::open` on a directory succeeds but `read_to_string` fails with
+    // EISDIR, which `read_bounded_settings_text` classifies as ReadFailed.
+    // The advisory scan shares that reader and collapses the failure to
+    // "no metadata" (settings.rs:371-374).
+    assert!(load_advisories(dir.path()).is_empty());
+    assert_eq!(super::file_schema_version(dir.path()), None);
+
+    // Invalid UTF-8 is another ReadFailed path, not a parse failure. A file
+    // that cannot be decoded cannot yield top-level keys to warn about.
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, b"{\"email\":\"\xff\"}").unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path).err(),
+        Some(SettingsLoadError::ReadFailed)
+    );
+    assert!(load_advisories(&path).is_empty());
+    assert_eq!(super::file_schema_version(&path), None);
+}
+
+#[test]
+fn wrong_typed_nested_leaf_recovers_without_a_nested_advisory() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // One bad leaf in each nested object must fall back to that field's
+    // default while its correctly typed siblings survive
+    // (settings.rs:502-543, 804-861). Advisory scanning only inspects
+    // top-level keys, so the recovery stays silent.
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "email": "nested@example.com",
+            "password_generator": {"length": "long", "lowercase": false, "uppercase": true},
+            "passphrase_generator": {"words": 6, "separator": 7, "capitalize": false},
+            "thresholds": {"weak_bits": "oops", "stale_days": 90}
+        }"#,
+    )
+    .unwrap();
+
+    let defaults = Settings::default();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.email, "nested@example.com");
+
+    assert_eq!(
+        loaded.password_generator.length,
+        defaults.password_generator.length
+    );
+    assert!(
+        !loaded.password_generator.lowercase,
+        "valid sibling survives"
+    );
+    assert!(
+        loaded.password_generator.uppercase,
+        "valid sibling survives"
+    );
+
+    assert_eq!(loaded.passphrase_generator.words, 6);
+    assert_eq!(
+        loaded.passphrase_generator.separator,
+        defaults.passphrase_generator.separator
+    );
+    assert!(!loaded.passphrase_generator.capitalize);
+
+    assert_eq!(loaded.thresholds.weak_bits, defaults.thresholds.weak_bits);
+    assert_eq!(loaded.thresholds.stale_days, 90);
+    assert!(
+        load_advisories(&path).is_empty(),
+        "{:?}",
+        load_advisories(&path)
+    );
+}
+
+#[test]
 fn save_device_id_only_aborts_on_future_schema() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");

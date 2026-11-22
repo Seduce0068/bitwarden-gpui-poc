@@ -28,9 +28,8 @@ fn write_fixture(path: &std::path::Path, contents: &[u8]) {
 
 #[test]
 fn cache_round_trips_through_file() {
-    let dir = std::env::temp_dir().join("bitwarden-gpui-poc-cache-test");
-    let _ = std::fs::remove_dir_all(&dir);
-    let path = dir.join("sync-cache.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sync-cache.json");
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
 
     save(&path, &cache).unwrap();
@@ -42,18 +41,19 @@ fn cache_round_trips_through_file() {
 
 #[test]
 fn missing_and_broken_files_return_none() {
-    let missing = std::env::temp_dir().join("bitwarden-gpui-poc-no-cache.json");
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("no-cache.json");
     assert!(load(&missing).is_none());
 
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-broken-cache.json");
+    let path = dir.path().join("broken-cache.json");
     write_fixture(&path, b"not json");
     assert!(load(&path).is_none());
 }
 
 #[::core::prelude::v1::test]
 fn load_detailed_distinguishes_failure_modes() {
-    let missing = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-missing.json");
-    let _ = std::fs::remove_file(&missing);
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("detailed-missing.json");
     // `AppError`'s PartialEq compares rendered messages, so an `assert_eq!`
     // could pass for a different variant with the same message. Pin the exact
     // variant with `matches!` for every failure mode.
@@ -62,7 +62,7 @@ fn load_detailed_distinguishes_failure_modes() {
         Some(CacheLoadError::NotFound)
     ));
 
-    let broken = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-broken.json");
+    let broken = dir.path().join("detailed-broken.json");
     write_fixture(&broken, b"not json");
     assert!(matches!(
         load_detailed(&broken).err(),
@@ -70,7 +70,7 @@ fn load_detailed_distinguishes_failure_modes() {
     ));
 
     // Reading a directory as a file fails (EISDIR on Unix).
-    let directory = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-dir");
+    let directory = dir.path().join("detailed-dir");
     std::fs::create_dir_all(&directory).unwrap();
     assert!(matches!(
         load_detailed(&directory).err(),
@@ -79,7 +79,7 @@ fn load_detailed_distinguishes_failure_modes() {
 
     let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     cache.version += 1;
-    let outdated = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-old.json");
+    let outdated = dir.path().join("detailed-old.json");
     save(&outdated, &cache).unwrap();
     assert!(matches!(
         load_detailed(&outdated).err(),
@@ -100,7 +100,7 @@ fn load_detailed_distinguishes_failure_modes() {
 #[test]
 fn file_open_non_not_found_error_is_classified_as_read_failed_cause() {
     // `File::open` maps only `NotFound` to the silent missing case; every other
-    // `io::ErrorKind` becomes `ReadFailedCause` (cache.rs:567-573). Opening a
+    // `io::ErrorKind` becomes `ReadFailedCause` (cache.rs:627-633). Opening a
     // directory succeeds on Unix and only fails at `read`, so the sibling test
     // above does not exercise this arm. A regular file used as a directory
     // component makes `open(2)` fail with ENOTDIR: the path exists but cannot be
@@ -133,7 +133,8 @@ fn file_open_non_not_found_error_is_classified_as_read_failed_cause() {
 fn wrong_version_is_rejected() {
     let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     cache.version += 1;
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-version-cache.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("version-cache.json");
     save(&path, &cache).unwrap();
     assert!(load(&path).is_none());
 }
@@ -172,7 +173,7 @@ fn debug_never_reveals_the_body() {
 fn debug_masks_url_embedded_credentials_but_keeps_the_host() {
     // A server URL may carry userinfo (`https://user:pass@host`). `Debug` must
     // drop that part while leaving enough host information for diagnostics
-    // (cache.rs:68-77). The stored field itself stays verbatim for the
+    // (cache.rs:371-381). The stored field itself stays verbatim for the
     // byte-for-byte mismatch check, which is documented as a known constraint.
     let url = "https://user:SECRET-PASS@vault.example.com:8443/path?x=1";
     let cache = SyncCache::from_body(body(), url).unwrap();
@@ -345,7 +346,7 @@ fn nested_per_item_keys_are_stripped_before_storage() {
 
 #[test]
 fn mask_url_userinfo_handles_missing_userinfo_scheme_and_query_at_signs() {
-    // No userinfo: unchanged (cache.rs:88-113).
+    // No userinfo: unchanged (cache.rs:94-119).
     assert_eq!(
         super::mask_url_userinfo("https://vault.example.com/path"),
         "https://vault.example.com/path"
@@ -373,7 +374,7 @@ fn mask_url_userinfo_handles_missing_userinfo_scheme_and_query_at_signs() {
 fn sensitive_param_keys_cover_pass_pwd_pw_and_credential() {
     // A bare `pass`/`pwd`/`pw`/`credential` key is just as secret as
     // `password`/`api_key`; the case-insensitive substring match must catch
-    // them and the common camel/upper-case spellings (cache.rs:98-112).
+    // them and the common camel/upper-case spellings (cache.rs:218-237).
     for key in [
         "pass",
         "pwd",
@@ -413,7 +414,7 @@ fn sensitive_param_keys_cover_pass_pwd_pw_and_credential() {
 fn userinfo_is_masked_when_the_authority_contains_question_or_hash() {
     // A '?' or '#' before the '@' is part of an unescaped userinfo value, not a
     // query/fragment delimiter. Stopping the authority scan there used to hide
-    // the '@' and leave the credential in the diagnostic URL (cache.rs:88-142).
+    // the '@' and leave the credential in the diagnostic URL (cache.rs:94-150).
     for (url, expected) in [
         (
             "https://user:p?ss@vault.example.com/path",
@@ -452,7 +453,7 @@ fn userinfo_is_masked_when_the_authority_contains_question_or_hash() {
 #[test]
 fn userinfo_separator_is_found_even_with_query_at_signs_and_unescaped_delimiters() {
     // The separator is the last '@' of the authority, not the last '@' of the
-    // pre-path text (cache.rs:88-142). A password may itself hold `?`/`#`/`=`
+    // pre-path text (cache.rs:94-150). A password may itself hold `?`/`#`/`=`
     // or an '@', and a query after the host may hold another '@'.
     for (url, expected) in [
         // No path: the query '@' must not be mistaken for the separator.
@@ -524,7 +525,7 @@ fn debug_masks_secret_query_values_but_keeps_harmless_parameters() {
 #[test]
 fn every_sensitive_query_key_is_masked_including_uppercase_spellings() {
     // The audit contract requires secret/password/passwd/auth/sig/session/code
-    // in addition to the original token/key entries (cache.rs:104-140).
+    // in addition to the original token/key entries (cache.rs:218-237).
     for key in [
         "secret", "password", "passwd", "auth", "sig", "session", "code", "token", "key",
     ] {
@@ -596,7 +597,7 @@ fn restore_status_distinguishes_missing_and_user_mismatch() {
 fn cache_restore_status_covers_all_nine_branches_table_driven() {
     use crate::error::BoxedCause;
 
-    // `cache_restore_status` (cache.rs:655-667) has one arm per reason plus
+    // `cache_restore_status` (cache.rs:820-832) has one arm per reason plus
     // the missing-cache arm and the catch-all. A table pins all nine so a
     // future variant cannot silently inherit the generic message.
     const GENERIC: &str = "同期に失敗しました（キャッシュを復元できませんでした）";
@@ -652,7 +653,7 @@ fn cache_restore_status_covers_all_nine_branches_table_driven() {
 #[test]
 fn bounded_read_rechecks_the_size_after_metadata() {
     // `load_detailed` checks `metadata.len()` first, then re-checks while
-    // reading (cache.rs:405-413). The helper is generic so the guard can be
+    // reading (cache.rs:637-658). The helper is generic so the guard can be
     // exercised with a small limit instead of a 64 MiB fixture: a file that
     // grew by one byte is still rejected, and the reader is capped at
     // limit + 1 bytes so no unbounded body is loaded.
@@ -720,7 +721,7 @@ fn error_messages_are_present() {
 #[test]
 fn plain_read_failure_uses_the_unreadable_reason() {
     // The cause-carrying sibling is covered by the bounded-read test; the
-    // plain `ReadFailed` arm (cache.rs:673) must map to the same reason so a
+    // plain `ReadFailed` arm (cache.rs:846) must map to the same reason so a
     // caller that drops the cause still sees "unreadable", not "corrupt".
     assert_eq!(
         cache_error_message(SyncCacheError::ReadFailed),
@@ -811,9 +812,8 @@ fn default_path_uses_cache_dir_and_legacy_path_uses_config_dir() {
 #[test]
 fn xdg_cache_home_selects_cache_dir_and_new_writes_land_there() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-xdg-cache-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let xdg = root.join("xdg-cache-home");
+    let root = tempfile::tempdir().unwrap();
+    let xdg = root.path().join("xdg-cache-home");
     let _env = EnvGuard::set("XDG_CACHE_HOME", &xdg);
 
     let expected = xdg.join("bitwarden-gpui-poc").join("sync-cache.json");
@@ -833,10 +833,9 @@ fn xdg_cache_home_selects_cache_dir_and_new_writes_land_there() {
 
 #[test]
 fn legacy_cache_is_read_but_never_rewritten() {
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-migration-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let new = root.join("cache").join("sync-cache.json");
-    let old = root.join("config").join("sync-cache.json");
+    let root = tempfile::tempdir().unwrap();
+    let new = root.path().join("cache").join("sync-cache.json");
+    let old = root.path().join("config").join("sync-cache.json");
 
     let legacy = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     save(&old, &legacy).unwrap();
@@ -873,10 +872,9 @@ fn legacy_cache_is_read_but_never_rewritten() {
 
 #[test]
 fn corrupt_primary_does_not_silently_fall_back_to_legacy() {
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-fallback-error-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let new = root.join("cache").join("sync-cache.json");
-    let old = root.join("config").join("sync-cache.json");
+    let root = tempfile::tempdir().unwrap();
+    let new = root.path().join("cache").join("sync-cache.json");
+    let old = root.path().join("config").join("sync-cache.json");
 
     save(
         &old,
@@ -894,12 +892,11 @@ fn corrupt_primary_does_not_silently_fall_back_to_legacy() {
 
 #[test]
 fn fallback_returns_not_found_when_both_locations_are_missing() {
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-fallback-missing-test");
-    let _ = std::fs::remove_dir_all(&root);
+    let root = tempfile::tempdir().unwrap();
     assert_eq!(
         load_with_fallback(
-            root.join("cache/sync-cache.json"),
-            root.join("config/sync-cache.json")
+            root.path().join("cache/sync-cache.json"),
+            root.path().join("config/sync-cache.json")
         )
         .err(),
         Some(CacheLoadError::NotFound)
@@ -913,10 +910,9 @@ fn fallback_returns_not_found_when_both_locations_are_missing() {
 #[test]
 fn cached_sync_for_restores_only_a_usable_cache_for_this_server() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-restore-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let cache_home = root.join("xdg-cache-home");
-    let config_home = root.join("xdg-config-home");
+    let root = tempfile::tempdir().unwrap();
+    let cache_home = root.path().join("xdg-cache-home");
+    let config_home = root.path().join("xdg-config-home");
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
 
@@ -1016,10 +1012,9 @@ fn oversized_cache_is_rejected_before_parsing() {
 
 #[test]
 fn load_default_resolves_all_four_location_combinations() {
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-load-default-branches");
-    let _ = std::fs::remove_dir_all(&root);
-    let primary = root.join("primary.json");
-    let fallback = root.join("fallback.json");
+    let root = tempfile::tempdir().unwrap();
+    let primary = root.path().join("primary.json");
+    let fallback = root.path().join("fallback.json");
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
 
     // (None, None): no platform directory at all.
@@ -1060,7 +1055,7 @@ fn load_default_resolves_all_four_location_combinations() {
     );
 
     // (Some, Some): the fallback is used only when the primary is absent.
-    let missing = root.join("missing.json");
+    let missing = root.path().join("missing.json");
     assert_eq!(
         super::load_from_paths(Some(missing), Some(fallback)),
         Ok(different)
@@ -1124,10 +1119,9 @@ fn every_corrupt_group_error_maps_to_the_corrupt_reason() {
 #[test]
 fn expired_cache_is_rejected_by_the_restore_path() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-expired-restore-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let cache_home = root.join("xdg-cache-home");
-    let config_home = root.join("xdg-config-home");
+    let root = tempfile::tempdir().unwrap();
+    let cache_home = root.path().join("xdg-cache-home");
+    let config_home = root.path().join("xdg-config-home");
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
 
@@ -1212,11 +1206,10 @@ fn unreadable_or_outdated_primary_never_falls_back_to_legacy() {
     // The fallback is only for a *missing* primary file (the cache-directory
     // migration). A primary that exists but cannot be trusted must report its
     // own failure, otherwise a broken cache-dir file could silently revive
-    // stale legacy data. See `load_with_fallback` in cache.rs:216-236.
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-fallback-strict-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let new = root.join("cache").join("sync-cache.json");
-    let old = root.join("config").join("sync-cache.json");
+    // stale legacy data. See `load_with_fallback` in cache.rs:546-555.
+    let root = tempfile::tempdir().unwrap();
+    let new = root.path().join("cache").join("sync-cache.json");
+    let old = root.path().join("config").join("sync-cache.json");
     std::fs::create_dir_all(new.parent().unwrap()).unwrap();
     std::fs::create_dir_all(old.parent().unwrap()).unwrap();
     let legacy = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
@@ -1243,10 +1236,9 @@ fn unreadable_or_outdated_primary_never_falls_back_to_legacy() {
 fn unreadable_primary_is_not_replaced_by_the_legacy_fallback() {
     use std::os::unix::fs::PermissionsExt;
 
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-fallback-permission-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let new = root.join("cache").join("sync-cache.json");
-    let old = root.join("config").join("sync-cache.json");
+    let root = tempfile::tempdir().unwrap();
+    let new = root.path().join("cache").join("sync-cache.json");
+    let old = root.path().join("config").join("sync-cache.json");
     std::fs::create_dir_all(new.parent().unwrap()).unwrap();
     std::fs::create_dir_all(old.parent().unwrap()).unwrap();
     let legacy = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
@@ -1269,7 +1261,7 @@ fn unreadable_primary_is_not_replaced_by_the_legacy_fallback() {
 fn secret_profile_keys_ignore_hyphen_and_underscore_separators() {
     // `is_secret_profile_key` folds every separator away before comparing, so
     // a body that spells the fields with hyphens or mixed case cannot smuggle
-    // key material onto disk. See cache.rs:143-158.
+    // key material onto disk. See cache.rs:459-466.
     for key in [
         "key",
         "Key",
@@ -1304,7 +1296,7 @@ fn secret_profile_keys_ignore_hyphen_and_underscore_separators() {
 fn fragment_with_a_late_question_mark_is_masked() {
     // A `?` inside a fragment is not a query delimiter. The old code looked
     // for `?` first and copied everything before it verbatim, leaking the
-    // fragment's credentials (cache.rs:157-173).
+    // fragment's credentials (cache.rs:344-369).
     let url = "https://vault.example.com/cb#access_token=FRAGMENT_SECRET&next=1?x=2";
     let masked = super::mask_url_secrets(url);
     assert!(!masked.contains("FRAGMENT_SECRET"), "{masked}");
@@ -1365,7 +1357,7 @@ fn percent_encoded_nested_urls_are_decoded_and_masked() {
 #[test]
 fn percent_encoded_keys_are_matched_after_decoding() {
     // A key can hide a sensitive name behind escapes. `is_sensitive_param_key`
-    // is fed the decoded form (cache.rs:172), but the diagnostic keeps the
+    // is fed the decoded form (cache.rs:303-304), but the diagnostic keeps the
     // original spelling so the URL stays traceable.
     for (encoded, secret) in [
         ("%74oken", "ENCODED_TOKEN_SECRET"),
@@ -1410,10 +1402,9 @@ fn double_encoded_nested_urls_are_decoded_twice_before_masking() {
 #[test]
 fn cached_sync_for_detailed_reports_a_direct_server_mismatch() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-mismatch-detailed-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.join("xdg-cache-home"));
-    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
 
     save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
     assert!(cached_sync_for_detailed("https://vault.example.com", "user-1").is_ok());
@@ -1455,14 +1446,13 @@ fn sensitive_param_keys_match_camel_case_and_partial_names() {
 #[test]
 fn cached_sync_for_detailed_reports_a_broken_body_in_a_valid_envelope() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-broken-body-restore-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.join("xdg-cache-home"));
-    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
 
     // The envelope passes every load-time check (valid JSON, current version,
     // matching server, no expiry), so `load_default()` succeeds and the only
-    // failure is the final `cache.sync()` call (cache.rs:603-613). This is the
+    // failure is the final `cache.sync()` call (cache.rs:749-765). This is the
     // branch a hand-edited or partially written cache file can reach.
     let broken = SyncCache {
         version: SyncCache::VERSION,
@@ -1483,7 +1473,7 @@ fn cached_sync_for_detailed_reports_a_broken_body_in_a_valid_envelope() {
 
 #[test]
 fn value_less_parameters_survive_masking_verbatim() {
-    // `mask_param_pairs` splits on `=` (cache.rs:171-198). A bare flag has no
+    // `mask_param_pairs` splits on `=` (cache.rs:288-328). A bare flag has no
     // value, so it takes the `else` branch and must be copied verbatim rather
     // than dropped or rewritten.
     assert_eq!(
@@ -1503,7 +1493,7 @@ fn value_less_parameters_survive_masking_verbatim() {
 #[test]
 fn mask_url_userinfo_without_a_path_delimiter_masks_the_authority() {
     // With no '/', '?' or '#' after the authority, `authority_end` is the end
-    // of the string (cache.rs:84-87). The whole remainder is still scanned for
+    // of the string (cache.rs:95-103). The whole remainder is still scanned for
     // the last '@', so userinfo must be masked on this path too.
     assert_eq!(
         super::mask_url_userinfo("https://user:SECRET@vault.example.com"),
@@ -1539,10 +1529,9 @@ fn mask_url_userinfo_without_a_path_delimiter_masks_the_authority() {
 #[test]
 fn future_and_sentinel_created_at_are_expired_on_the_restore_path() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-future-restore-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.join("xdg-cache-home"));
-    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
 
     let now = i64::try_from(crate::totp::now_unix()).unwrap();
     for created_at in [now + MAX_CACHE_AGE_SECS, i64::MAX] {
@@ -1569,7 +1558,7 @@ fn future_and_sentinel_created_at_are_expired_on_the_restore_path() {
 fn doubly_encoded_sensitive_keys_are_still_redacted() {
     // A key needs two decode passes: `%2574oken` -> `%74oken` -> `token`.
     // Decoding only once used to miss the sensitive-key list and leave the
-    // credential value in the diagnostic URL (cache.rs:171-180).
+    // credential value in the diagnostic URL (cache.rs:296-304).
     for (encoded, secret) in [
         ("%2574oken", "DOUBLE_TOKEN_SECRET"),
         ("%2561pi%255Fkey", "DOUBLE_API_KEY_SECRET"),
@@ -1639,14 +1628,13 @@ fn save_and_save_default_report_write_and_path_failures() {
 #[cfg(target_os = "linux")]
 #[test]
 fn legacy_cache_is_used_by_the_offline_restore_path() {
-    // `cached_sync_for_detailed` goes through `load_default` (cache.rs:439-441),
+    // `cached_sync_for_detailed` goes through `load_default` (cache.rs:753),
     // so a cache left in the old config directory is restorable even though
     // all new writes land under the cache directory.
     let _lock = ENV_LOCK.lock().unwrap();
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-legacy-restore-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let cache_home = root.join("xdg-cache-home");
-    let config_home = root.join("xdg-config-home");
+    let root = tempfile::tempdir().unwrap();
+    let cache_home = root.path().join("xdg-cache-home");
+    let config_home = root.path().join("xdg-config-home");
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
 
@@ -1691,9 +1679,9 @@ fn legacy_cache_is_used_by_the_offline_restore_path() {
 
 #[test]
 fn validate_does_not_apply_the_restore_expiry_window() {
-    // `validate` (cache.rs:646-652) checks only the server and body. The
+    // `validate` (cache.rs:796-805) checks only the server and body. The
     // expiry window is a restore-path policy enforced by
-    // `cached_sync_for_detailed` (cache.rs:621-623); an already-held object
+    // `cached_sync_for_detailed` (cache.rs:760-763); an already-held object
     // therefore passes `validate` even when its timestamp is unusable.
     let now = i64::try_from(crate::totp::now_unix()).unwrap();
     for created_at in [
@@ -1730,7 +1718,7 @@ fn validate_does_not_apply_the_restore_expiry_window() {
 fn mask_url_userinfo_handles_ipv6_hosts_and_query_at_signs() {
     // The colons in `[::1]` were read as a `user:password` marker, so a query
     // '@' became the userinfo separator and the real credential stayed in the
-    // diagnostic URL (cache.rs:121-208). Both must now be distinguished.
+    // diagnostic URL (cache.rs:94-208). Both must now be distinguished.
     for (url, expected) in [
         (
             "https://user:SECRET@[::1]?email=a@b",
@@ -1795,10 +1783,9 @@ fn user_id_is_extracted_from_pascal_case_and_uppercase_bodies() {
 #[test]
 fn cached_sync_for_detailed_rejects_a_cache_for_another_account() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let root = std::env::temp_dir().join("bitwarden-gpui-poc-user-mismatch-restore-test");
-    let _ = std::fs::remove_dir_all(&root);
-    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.join("xdg-cache-home"));
-    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
 
     save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
     // Same server and still fresh, but a different account: refuse to restore.
@@ -1839,7 +1826,7 @@ fn bounded_read_consumes_no_more_than_limit_plus_one_byte() {
         }
     }
 
-    // `read_bounded` caps the reader at limit+1 bytes (cache.rs:598-613). The
+    // `read_bounded` caps the reader at limit+1 bytes (cache.rs:603-613). The
     // oversized body must be rejected without draining the remaining bytes.
     let mut over = CountingReader {
         data: vec![b'x'; 1_000],
@@ -1900,7 +1887,7 @@ fn undecryptable_uri_from_a_cached_body_has_no_match_type() {
 #[test]
 fn unclosed_ipv6_bracket_takes_the_no_closing_bracket_branches() {
     // Without a closing ']', `without_ipv6_literals` stops and keeps the text
-    // (cache.rs:161-164), and `host_with_optional_port_ok` refuses the host
+    // (cache.rs:158-171), and `host_with_optional_port_ok` refuses the host
     // (cache.rs:183-186). A truncated `[::1` literal reaches both branches.
     let scan = "user:SECRET@[::1?email=a@b";
     assert_eq!(

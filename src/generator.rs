@@ -297,8 +297,9 @@ impl Strength {
 
 /// The entropy of a drawn password, for the strength meter.
 ///
-/// For a digits-only alphabet this mirrors the health audit's numeric-PIN
-/// model, which rounds the same `entropy_bits(10, len)` value to whole bits
+/// For a digits-only alphabet without the ambiguous-character filter this
+/// mirrors the health audit's numeric-PIN model, which rounds the same
+/// `entropy_bits(10, len)` value to whole bits
 /// (`crate::health::estimate_entropy`). Without that mirror a 12-digit decimal
 /// password is 39.86… bits here, so `Strength::from_bits` calls it `Weak`
 /// while the UI prints "40 bit" and the audit's rounded 40 bits are no longer
@@ -306,11 +307,16 @@ impl Strength {
 /// surfaces on the same side of the 40-bit boundary; mixed-class alphabets
 /// keep the unrounded estimate used by the rest of the generator contract.
 ///
-/// Known constraint: the audit always models an all-digit vault password with
-/// the full 10-symbol pool, even when `avoid_ambiguous` removed `0`/`1` from
-/// the drawn alphabet. The rounded value therefore follows the audit's
-/// classification rather than the narrowed pool; this is intentional so the
-/// strength label cannot disagree with the report.
+/// Known constraint (digits only + `avoid_ambiguous`): the estimate is still
+/// computed from [`PasswordSettings::alphabet`]'s real size — 8 symbols after
+/// `0` and `1` are filtered out — so a 12-character PIN scores `12 * log2(8)`
+/// = 36 bits and is labelled `Weak`. The health audit always models an
+/// all-digit password with the full 10-symbol pool and rounds to 40 bits for
+/// the same length, so a generated PIN can be scored as acceptable by the
+/// report while the meter says `Weak`. Widening this calculation to 10 would
+/// overstate the entropy of the pool actually drawn, so the discrepancy is
+/// recorded instead of hidden. Callers that need the two surfaces to agree
+/// must leave `avoid_ambiguous` off for digit-only passwords.
 pub fn password_entropy(settings: &PasswordSettings) -> f64 {
     let bits = entropy_bits(settings.alphabet().chars().count(), settings.length);
     if !settings.lowercase && !settings.uppercase && settings.digits && !settings.symbols {

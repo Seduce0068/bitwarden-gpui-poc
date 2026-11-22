@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第75弾で 7 件すべてを完了）。
+なし（第76弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第76弾（16 担当・20 回目）の指摘 7 件を完結（2026-11-23）
+  - Vault/Audit に PageUp/PageDown/Home/End を追加、生成ヒントに
+    F1 を追加、pop_query のマルチバイトと不正 secret 切替をテスト。
+  - host-less URL、cache 汎用文言、load_advisories の ReadFailed、
+    型不一致、非 ASCII キー、空 vault をテスト。
+  - `comparison_key` を冪等化し、生成器の ambiguous 既知制約を doc 化。
+  - cache_tests の固定 temp パスを tempfile 化し行参照を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（708 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第75弾（16 担当・19 回目）の指摘 7 件を完結（2026-11-23）
   - 監査選択消滅時のスクロール target 破棄を修正。
   - 入れ子 cause、sync_cause 破棄、KDF 拒否実経路、IPv6 片括弧、

@@ -342,6 +342,49 @@ mod tests {
     }
 
     #[test]
+    fn pop_query_removes_one_whole_multibyte_character() {
+        // `String::pop` removes a whole scalar value, not a byte. A trailing
+        // 3-byte or 4-byte character must disappear completely; a regression
+        // that truncates by bytes would leave invalid UTF-8 behind.
+        let mut state = state_with_items();
+        state.push_query("日本語");
+        assert_eq!(
+            state.query, "日本語",
+            "precondition: IME text is kept whole"
+        );
+        let mut before = state.rewind_calls;
+
+        for expected in ["日本", "日", ""] {
+            state.pop_query();
+            assert_eq!(state.query, expected);
+            assert_eq!(
+                state.rewind_calls,
+                before + 1,
+                "each pop must still rewind like an ASCII backspace"
+            );
+            before = state.rewind_calls;
+        }
+
+        // A 4-byte emoji followed by ASCII must be popped one character at a
+        // time. After both are gone the query is empty again.
+        state.push_query("日本語🙂A");
+        assert_eq!(state.query, "日本語🙂A");
+        state.pop_query();
+        assert_eq!(state.query, "日本語🙂");
+        state.pop_query();
+        assert_eq!(state.query, "日本語");
+        assert_eq!(
+            state.query.len(),
+            "日本語".len(),
+            "no partial UTF-8 remains"
+        );
+        state.pop_query();
+        state.pop_query();
+        state.pop_query();
+        assert_eq!(state.query, "", "the whole multibyte string can be popped");
+    }
+
+    #[test]
     fn cycle_filter_clears_selection() {
         let mut state = state_with_items();
         state.selected_id = Some("a".into());

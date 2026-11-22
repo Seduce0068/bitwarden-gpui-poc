@@ -7,7 +7,7 @@ use gpui_kit::*;
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
 use crate::health::{has_totp_field, has_usable_totp, Report, Severity};
 use crate::settings::Settings;
-use crate::ui::logic::{settings_hint, unsaved_marker};
+use crate::ui::logic::{settings_hint, unsaved_marker, FOCUS_RECOVERY_HINT};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
 use crate::vault_sync::is_undecryptable_totp;
 
@@ -49,10 +49,13 @@ pub(super) fn generator_length_labels(
 
 /// Inline key hint for the generator panel, including its scroll limitation.
 ///
-/// Pure so the wording can be pinned by tests without rendering a GPUI window.
+/// `F1` is the global focus-recovery key and belongs in every persistent hint
+/// just as it does in `settings_hint`; without it a generator user who loses
+/// focus has no on-screen way to find the way back. Pure so the wording can be
+/// pinned by tests without rendering a GPUI window.
 pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String {
     format!(
-        "p/h: 生成 / y: パスワードをコピー / Y: パスフレーズをコピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / n: 一覧に戻る / l: ロック / Esc: 終了 / {MOUSE_WHEEL_SCROLL_ONLY_HINT}"
+        "p/h: 生成 / y: パスワードをコピー / Y: パスフレーズをコピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / n: 一覧に戻る / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT} / {MOUSE_WHEEL_SCROLL_ONLY_HINT}"
     )
 }
 
@@ -688,6 +691,22 @@ mod tests {
         assert!(hint.contains("y: パスワードをコピー"), "{hint}");
         assert!(hint.contains("Y: パスフレーズをコピー"), "{hint}");
         assert!(!hint.contains("y/Y: コピー"), "{hint}");
+        assert!(hint.contains("30秒で復元"), "{hint}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_key_hint_advertises_the_focus_recovery_key_once() {
+        let hint = generator_panel_key_hint(30);
+        assert!(
+            hint.contains(FOCUS_RECOVERY_HINT),
+            "the generator hint must advertise F1: {hint}"
+        );
+        assert_eq!(
+            hint.matches(FOCUS_RECOVERY_HINT).count(),
+            1,
+            "the hint must not repeat the recovery key: {hint}"
+        );
+        assert!(hint.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{hint}");
         assert!(hint.contains("30秒で復元"), "{hint}");
     }
 

@@ -5,7 +5,7 @@
 
 use crate::ui::app::BitwardenApp;
 use crate::ui::keys::{
-    classify_key, KeyContext, KeyModifiers, UiAction, TEXT_EDIT_ARROW_KEYS_HINT,
+    classify_key, KeyContext, KeyModifiers, SelectionEdge, UiAction, TEXT_EDIT_ARROW_KEYS_HINT,
 };
 use crate::ui::state::Panel;
 use gpui_kit::*;
@@ -25,6 +25,38 @@ pub(super) const FOCUS_RECOVERY_KEY: &str = "f1";
 /// key classification can be exercised without a GPUI window.
 pub(super) fn is_focus_recovery_key(key: &str) -> bool {
     key == FOCUS_RECOVERY_KEY
+}
+
+/// Number of rows a single `PageUp`/`PageDown` press moves.
+pub(super) const PAGE_MOVE_ROWS: isize = 10;
+
+/// Delta for a `Home`/`End` jump accepted by the shared `move_selection` path.
+///
+/// `next_index_in` (vault) and `next_audit_row` (audit) both interpret a
+/// *missing* selection from the sign of the delta alone, so an extreme delta
+/// cannot express `End`. With a real selection the exact distance to the
+/// target is returned; the shared path still owns clamping, scrolling, TOTP
+/// sync and the status text. `None` means the list has no selectable row.
+pub(super) fn edge_move_delta(
+    current: Option<usize>,
+    len: usize,
+    edge: SelectionEdge,
+) -> Option<isize> {
+    if len == 0 {
+        return None;
+    }
+    let last = len - 1;
+    let Some(index) = current else {
+        return Some(match edge {
+            SelectionEdge::First => 0, // non-negative: start at the first row
+            SelectionEdge::Last => -1, // negative: start at the last row
+        });
+    };
+    let target = match edge {
+        SelectionEdge::First => 0,
+        SelectionEdge::Last => last,
+    };
+    Some(target as isize - index.min(last) as isize)
 }
 
 /// View-level effect of the `CycleSort` action.
@@ -167,6 +199,35 @@ pub(super) fn threshold_adjust_status(dirty: bool) -> String {
 }
 
 impl BitwardenApp {
+    /// Apply `Home`/`End` through the same dispatcher as Up/Down/Page keys.
+    ///
+    /// Only the delta computation is panel-specific; the actual selection,
+    /// scroll adjustment and status update stay in `BitwardenApp::move_selection`.
+    fn move_selection_to_edge(&mut self, edge: SelectionEdge, cx: &mut Context<Self>) {
+        let delta =
+            if crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some())
+                == Panel::Audit
+            {
+                let len = self
+                    .view
+                    .audit_report
+                    .as_ref()
+                    .map_or(0, |report| report.items.len());
+                edge_move_delta(self.audit_row_selection, len, edge)
+            } else {
+                let visible = self.view.visible_items();
+                let current = self
+                    .view
+                    .selected_id
+                    .as_deref()
+                    .and_then(|id| visible.iter().position(|item| item.id == id));
+                edge_move_delta(current, visible.len(), edge)
+            };
+        if let Some(delta) = delta {
+            self.move_selection(delta, cx);
+        }
+    }
+
     pub(super) fn key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -293,6 +354,12 @@ impl BitwardenApp {
             UiAction::SetPanel(panel) => self.set_panel(panel, cx),
             UiAction::Lock => self.lock(cx),
             UiAction::MoveSelection(delta) => self.move_selection(delta, cx),
+            UiAction::MoveSelectionPage(direction) => {
+                // Direction comes from the classifier as -1/+1; saturating
+                // multiplication keeps an extreme value from overflowing.
+                self.move_selection(direction.saturating_mul(PAGE_MOVE_ROWS), cx)
+            }
+            UiAction::MoveSelectionToEdge(edge) => self.move_selection_to_edge(edge, cx),
             UiAction::ToggleFavorite => self.toggle_favorite(cx),
             UiAction::OpenAudit => self.set_panel(Panel::Audit, cx),
             UiAction::GeneratePassword => self.generate_password(cx),
@@ -772,6 +839,100 @@ mod tests {
             classify_key(&context(Screen::Unlocked, Panel::Vault, "up")),
             UiAction::MoveSelection(-1)
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn page_move_rows_is_a_multi_row_step() {
+        const { assert!(PAGE_MOVE_ROWS > 1, "a page key must move more than one row") };
+        assert_eq!(PAGE_MOVE_ROWS, 10);
+
+        for (key, direction) in [("pageup", -1), ("pagedown", 1)] {
+            for panel in [Panel::Vault, Panel::Audit] {
+                assert_eq!(
+                    classify_key(&context(Screen::Unlocked, panel, key)),
+                    UiAction::MoveSelectionPage(direction),
+                    "{panel:?}/{key}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn edge_move_delta_handles_empty_and_missing_selections() {
+        assert_eq!(edge_move_delta(None, 0, SelectionEdge::First), None);
+        assert_eq!(edge_move_delta(None, 0, SelectionEdge::Last), None);
+        assert_eq!(edge_move_delta(Some(0), 0, SelectionEdge::Last), None);
+
+        // With no selection the shared move helpers use the delta's sign only.
+        assert_eq!(edge_move_delta(None, 5, SelectionEdge::First), Some(0));
+        assert_eq!(edge_move_delta(None, 5, SelectionEdge::Last), Some(-1));
+
+        // With a selection, the delta is the exact distance to the edge and a
+        // stale out-of-range index is clamped before the distance is computed.
+        assert_eq!(edge_move_delta(Some(3), 5, SelectionEdge::First), Some(-3));
+        assert_eq!(edge_move_delta(Some(1), 5, SelectionEdge::Last), Some(3));
+        assert_eq!(edge_move_delta(Some(3), 5, SelectionEdge::Last), Some(1));
+        assert_eq!(edge_move_delta(Some(99), 5, SelectionEdge::Last), Some(0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn edge_delta_selects_the_expected_row_through_the_shared_move_path() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        let mut view = VaultViewState::new();
+        for id in ["a", "b", "c", "d"] {
+            view.vault.items.push(VaultItem::new(
+                id,
+                id,
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            ));
+        }
+        let visible = view.visible_items();
+        assert_eq!(visible.len(), 4, "precondition: four visible rows");
+
+        // No selection: the sign-only branch still reaches the chosen edge.
+        let delta = edge_move_delta(None, visible.len(), SelectionEdge::Last)
+            .expect("four rows are selectable");
+        assert_eq!(view.next_index_in(&visible, delta), Some(3));
+        let delta = edge_move_delta(None, visible.len(), SelectionEdge::First)
+            .expect("four rows are selectable");
+        assert_eq!(view.next_index_in(&visible, delta), Some(0));
+
+        // With a selection in the middle the exact distance lands on the edge
+        // in one step, not one row away.
+        view.select_index(1);
+        let visible = view.visible_items();
+        let delta = edge_move_delta(Some(1), visible.len(), SelectionEdge::Last)
+            .expect("four rows are selectable");
+        assert_eq!(delta, 2);
+        assert_eq!(view.next_index_in(&visible, delta), Some(3));
+        let delta = edge_move_delta(Some(1), visible.len(), SelectionEdge::First)
+            .expect("four rows are selectable");
+        assert_eq!(delta, -1);
+        assert_eq!(view.next_index_in(&visible, delta), Some(0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn edge_delta_also_drives_the_audit_row_clamp() {
+        let next_audit = crate::ui::app::next_audit_row;
+        for (edge, expected) in [
+            (SelectionEdge::First, Some(0)),
+            (SelectionEdge::Last, Some(2)),
+        ] {
+            let delta = edge_move_delta(None, 3, edge).expect("three rows exist");
+            assert_eq!(next_audit(None, delta, 3), expected, "{edge:?}");
+        }
+
+        let delta = edge_move_delta(Some(1), 3, SelectionEdge::Last).expect("three rows exist");
+        assert_eq!(next_audit(Some(1), delta, 3), Some(2));
+
+        // A stale highlight past the end is clamped by the shared helper too.
+        let delta = edge_move_delta(Some(99), 3, SelectionEdge::Last).expect("three rows exist");
+        assert_eq!(delta, 0);
+        assert_eq!(next_audit(Some(99), delta, 3), Some(2));
     }
 
     #[::core::prelude::v1::test]

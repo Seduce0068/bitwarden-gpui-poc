@@ -21,8 +21,7 @@ mod unicode_normalize {
         input.chars().nfkd().collect()
     }
 
-    /// NFKD key with a small set of extra case mappings, shared by search,
-    /// duplicate-name detection and sorting.
+    /// One NFKD + lowercase pass with a small set of extra case mappings.
     ///
     /// This is **not** a complete Unicode full case fold. `str::to_lowercase`
     /// is Unicode lowercasing, which is not the same operation as case folding,
@@ -32,9 +31,8 @@ mod unicode_normalize {
     /// character falls back to the standard library's lowercase mapping.
     /// Other full-fold equivalences are therefore *not* guaranteed to compare
     /// equal here. Callers must not rely on a stronger contract than the
-    /// listed cases. The result is idempotent, so normalizing an already-
-    /// normalized needle a second time is harmless.
-    pub(crate) fn comparison_key(input: &str) -> String {
+    /// listed cases.
+    fn fold_once(input: &str) -> String {
         let mut out = String::new();
         for character in nfkd(input).chars() {
             match character {
@@ -45,6 +43,29 @@ mod unicode_normalize {
             }
         }
         out
+    }
+
+    /// NFKD key with the documented extra case mappings, shared by search,
+    /// duplicate-name detection and sorting.
+    ///
+    /// Lowercasing a decomposed string can surface a code point that NFKD
+    /// would decompose again (for example U+0345 COMBINING GREEK YPOGEGRAMMENI
+    /// lowercases to U+03B9), so a single pass is not guaranteed to be a fixed
+    /// point. Repeating the pass until the text stops changing makes
+    /// `comparison_key(comparison_key(x)) == comparison_key(x)` for every
+    /// input, which is what the search and sort paths rely on when they feed a
+    /// normalized needle back through this function. The loop bound is
+    /// defensive: two passes suffice for the mappings above.
+    pub(crate) fn comparison_key(input: &str) -> String {
+        let mut key = fold_once(input);
+        for _ in 0..3 {
+            let next = fold_once(&key);
+            if next == key {
+                return key;
+            }
+            key = next;
+        }
+        key
     }
 }
 pub(crate) use unicode_normalize::comparison_key;
