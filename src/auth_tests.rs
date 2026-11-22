@@ -1,5 +1,23 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+//! Test-scope notes for `crate::auth`.
+//!
+//! Two production branches deliberately have no injection seam; these notes
+//! record the limit instead of claiming coverage that the tests cannot give.
+//!
+//! * The DNS re-check in `authenticate_inner` (auth.rs:962-971) calls
+//!   `is_blocked_server_url`, whose resolver is the concrete `resolve_host`.
+//!   The injected resolver of `is_blocked_server_url_with` is exercised by the
+//!   classifier tests below, but `authenticate_inner` does not accept that
+//!   seam, so the production re-check cannot be forced to see a link-local
+//!   answer without a real lookup or a production code change. `localhost` is
+//!   used to touch the real resolver with only the local hosts file.
+//! * The `from_cache = true` assignment (auth.rs:1009-1028) lives after
+//!   `Client::sync_body` in the private async login path; there is no seam to
+//!   force that call to fail. The flag tests below pin the observable data
+//!   contract at the `AuthenticatedVault` boundary only, not the assignment
+//!   itself.
+
 use std::net::IpAddr;
 
 use super::{is_blocked_server_url_with, is_blocked_server_url_without_dns, is_link_local_ip};
@@ -2013,11 +2031,14 @@ fn unlock_error_family_messages_are_fixed() {
 
 #[test]
 fn successful_restore_reports_only_the_from_cache_flag() {
-    // auth.rs:1011-1030 consumes `sync_cause` only in the failure arm via
-    // `sync_fallback_failure`. A successful restore returns the vault with
-    // `from_cache = true`; `AuthenticatedVault` has no cause field, so the
-    // success status can only be guided by that flag (stale-data warning).
-    // This pins the observable part of that contract.
+    // Known limit (module docs): the production assignment is in
+    // `authenticate_inner` (auth.rs:1009-1028), after `Client::sync_body`.
+    // There is no seam to force that call to fail, so this test does NOT cover
+    // the assignment itself; it pins only the observable data contract at the
+    // `AuthenticatedVault` boundary. `sync_cause` is consumed only in the
+    // failure arm via `sync_fallback_failure`; a restored vault carries
+    // `from_cache = true`, a fresh one `false`, and the struct has no field
+    // for the discarded cause.
     let (master_key, _protected, sync) = unlock_fixture();
     let session = Session::from_token(
         SecretString::from("test-access-token".to_string()),
@@ -2203,10 +2224,13 @@ fn sync_fallback_renders_only_the_immediate_source_of_a_deep_cause() {
 fn a_successful_cache_restore_has_no_place_to_keep_the_sync_cause() {
     use crate::error::{AppError, BoxedCause};
 
-    // auth.rs:1009-1028 binds `sync_cause` only for the failure arm. A
-    // successful fallback builds `AuthenticatedVault` from `(sync, true)` and
-    // drops the cause: the struct has no field for it, so the success status
-    // can only be guided by `from_cache`. This pins that current behaviour.
+    // Known limit (module docs): `authenticate_inner` has no seam to force a
+    // sync failure, so this cannot drive the production fallback branch. It
+    // pins the current data contract instead: auth.rs:1009-1028 binds
+    // `sync_cause` only for the failure arm, while a successful fallback builds
+    // `AuthenticatedVault` from `(sync, true)` and drops the cause. The struct
+    // has no field for it, so the success status can only be guided by
+    // `from_cache`.
     let (master_key, _protected, sync) = unlock_fixture();
     let session = Session::from_token(
         SecretString::from("test-access-token".to_string()),

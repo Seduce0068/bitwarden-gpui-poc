@@ -1566,6 +1566,42 @@ fn non_login_ciphers_are_excluded_from_import_and_audit() {
 }
 
 #[test]
+fn favorite_and_notes_keep_their_defaults_when_imported_from_sync() {
+    // vault_sync.rs:272-277: openwarden 0.1.1's `LoginInfo` and `Vault` public
+    // readers expose neither the favorite flag nor free-form notes, so even a
+    // wire body that carries both must leave the model defaults untouched.
+    // Pin that on the production importer and on the audit sibling, which
+    // share the same `login_item` conversion.
+    let mut wire_cipher = cipher("fav-notes-1", "2024-01-01T00:00:00Z");
+    wire_cipher["favorite"] = serde_json::json!(true);
+    wire_cipher["notes"] = serde_json::json!("WIRE-NOTES-MUST-NOT-BE-IMPORTED");
+    let vault = unlocked_vault(&[wire_cipher]);
+
+    let model = import_logins(&vault).expect("import should succeed");
+    let item = model.item("fav-notes-1").expect("the login was imported");
+    assert!(!item.favorite, "a wire favorite must not reach the model");
+    assert!(
+        item.notes.is_empty(),
+        "wire notes must not reach the model: {:?}",
+        item.notes
+    );
+    // The source vault did contain the login; only the importer dropped the
+    // two unsupported fields.
+    assert!(vault
+        .logins()
+        .iter()
+        .any(|info| info.id.as_str() == "fav-notes-1"));
+
+    let (audited, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    let audited_item = audited
+        .item("fav-notes-1")
+        .expect("the login was imported with audit");
+    assert!(!audited_item.favorite);
+    assert!(audited_item.notes.is_empty());
+    assert_eq!(audit.len(), 1);
+}
+
+#[test]
 fn password_and_totp_markers_reject_the_other_status_markers() {
     // Each helper is an exact-equality check against its own sentinel
     // (vault_sync.rs:34-60). Treating a sibling marker as "undecryptable

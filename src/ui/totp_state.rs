@@ -205,6 +205,48 @@ mod tests {
     }
 
     #[test]
+    fn valid_code_switches_directly_to_an_empty_secret() {
+        let mut state = TotpState::new();
+        let valid = state.display(SECRET, 40);
+        assert!(valid.starts_with("287 082"), "{valid}");
+        assert_eq!(state.current_code(), Some("287082"));
+        assert_eq!(state.error_message(), None);
+        assert!(state.has_secret());
+
+        // Same instant, no clear()/invalidate(): only the `secret != ...`
+        // branch in `display` (totp_state.rs:74-79) can replace the cached
+        // snapshot when the selection moves to an item with no TOTP secret.
+        let empty = state.display("", 40);
+        assert_eq!(empty, "コード生成失敗");
+        assert_eq!(
+            state.current_code(),
+            None,
+            "the previous code must not linger after switching to an empty secret"
+        );
+        assert!(
+            state
+                .error_message()
+                .is_some_and(|message| message.contains("設定されていません")),
+            "the copy path must report the new Missing reason, not the stale code"
+        );
+        assert!(
+            !state.has_secret(),
+            "an empty secret must not be reported as displayed"
+        );
+        assert!(state.matches_secret(""));
+        assert!(!state.matches_secret(SECRET));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40));
+
+        // Switching back at the same instant resamples the original secret and
+        // drops the cached failure reason again.
+        let restored = state.display(SECRET, 40);
+        assert_eq!(restored, valid);
+        assert_eq!(state.current_code(), Some("287082"));
+        assert_eq!(state.error_message(), None);
+        assert!(state.has_secret());
+    }
+
+    #[test]
     fn direct_switch_between_invalid_secrets_refreshes_the_cached_error() {
         let mut state = TotpState::new();
 

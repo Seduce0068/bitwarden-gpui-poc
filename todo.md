@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第78弾で 7 件すべてを完了）。
+なし（第79弾で 7 件すべてを完了、1 件を誤検知として却下）。
 
 ## 完了
 
+- [x] 第79弾（16 担当・23 回目）の指摘 7 件を完結（2026-11-23）
+  - Separator 未知値、有効 TOTP→空欄切替、期限の飽和、非 ASCII ポート、
+    favorite/notes 既定値、base64 1バイト剰余、VaultItem Debug をテスト。
+  - DNS 再チェック／from_cache の注入シーム不在、health 依存、
+    duplicate_names 未配線を既知制約として doc 化。
+  - CHANGELOG 第77〜78弾と ADR verified メタデータを更新。
+  - TOTP カウントダウン凍結の指摘は 1 秒 ticker の invalidate を
+    Runtime Proof として却下（メモ参照）。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（737 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第78弾（16 担当・22 回目）の指摘 7 件を完結（2026-11-23）
   - ロック画面非編集時のページキー無効、埋め込み link-local の
     他ラベル、手編集ジェネレータのクランプ、KNOWN キー逆方向、
@@ -1022,3 +1035,11 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
   文字プール推定へフォールバックして過大評価する。複数文字セパレータと
   同じ回帰リスクがあり、前回の却下判断を踏まえ実装せず `sanitized()` の
   doc に既知制約として記録した。
+
+### 2026-11-23 TOTP カウントダウン指摘の却下
+
+- `Code::remaining()` はサンプル時の静的な値だが、`start_totp_ticker` が
+  1 秒ごとに `InvalidateTotp` を発行し `TotpState::invalidate()` →
+  `display()` の再サンプルを経て残り秒数が更新される
+  （src/ui/app.rs:569,598-600、src/ui/timing.rs:39-40）。
+  README の「1秒ごとのカウントダウン」と矛盾しないため却下。

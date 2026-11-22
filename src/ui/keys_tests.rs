@@ -237,6 +237,29 @@ fn generator_keys_toggle_options_and_clamp_lengths() {
 }
 
 #[test]
+fn separator_falls_back_to_dash_for_unknown_values() {
+    // The documented cycle is "-" -> "." -> "_" -> "" -> "-". A hand-edited
+    // or legacy value outside that set must land on "-" through the `_` arm
+    // in `apply_generator_key` (keys.rs:72), rather than being kept or cleared.
+    let mut settings = Settings::default();
+    for unknown in ["x", "::", "unknown"] {
+        settings.passphrase_generator.separator = unknown.into();
+        apply_generator_key(&mut settings, GeneratorOption::Separator);
+        assert_eq!(
+            settings.passphrase_generator.separator, "-",
+            "unknown separator {unknown:?} must fall back to '-'"
+        );
+
+        // After the fallback the next press re-enters the normal cycle.
+        apply_generator_key(&mut settings, GeneratorOption::Separator);
+        assert_eq!(
+            settings.passphrase_generator.separator, ".",
+            "the fallback value must be the cycle's '-' state"
+        );
+    }
+}
+
+#[test]
 fn vault_keys_map_to_actions() {
     assert_eq!(classify_key(&ctx("up")), UiAction::MoveSelection(-1));
     assert_eq!(classify_key(&ctx("down")), UiAction::MoveSelection(1));

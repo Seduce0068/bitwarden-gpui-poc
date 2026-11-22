@@ -14,6 +14,13 @@
 //! ciphertexts (see `undecryptable_password_keeps_the_vault_and_is_excluded_from_audit`).
 //! A private decryptor seam was considered and rejected: it would change the
 //! public import signature and fork the real reader path these tests exercise.
+//!
+//! Known constraint: [`crate::model::Vault::duplicate_names`] is a model-layer
+//! helper with no production caller. Neither the auth/unlock path nor the UI
+//! invokes it, so duplicate display names are never surfaced to the user
+//! after a real sync; today it is exercised only by model tests. The import
+//! layer's own duplicate handling is by cipher **id** (see
+//! [`import_logins_with_audit`]) and is unrelated to name collisions.
 
 use std::collections::{HashMap, HashSet};
 

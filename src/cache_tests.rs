@@ -961,6 +961,25 @@ fn future_and_sentinel_capture_times_are_expired() {
 }
 
 #[test]
+fn cache_expiry_upper_saturating_sub_clamp_is_expired() {
+    // cache.rs:441-447: `now.saturating_sub(captured)` overflows i64 when now
+    // is i64::MAX and the capture time is i64::MIN, so it saturates at
+    // i64::MAX. A wrapping subtraction would produce -1 and wrongly report a
+    // freshly captured cache. Guard the premise, then pin the verdict.
+    assert_eq!(i64::MAX.checked_sub(i64::MIN), None);
+    assert!(is_cache_expired(Some(i64::MIN), i64::MAX));
+    // Just below the overflow boundary the ordinary subtraction still runs.
+    assert!(!is_cache_expired(Some(i64::MAX - 1), i64::MAX));
+    assert!(is_cache_expired(
+        Some(i64::MAX - MAX_CACHE_AGE_SECS - 1),
+        i64::MAX
+    ));
+    // The *lower* saturation (captured > now) is intercepted by the explicit
+    // future-time guard at cache.rs:445 rather than by the subtraction.
+    assert!(is_cache_expired(Some(i64::MAX), i64::MIN));
+}
+
+#[test]
 fn legacy_json_without_created_at_stays_restorable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cache.json");
@@ -1982,4 +2001,27 @@ fn host_with_optional_port_ok_rejects_authority_delimiters_and_empty_hosts() {
     // rejections above are about the delimiters rather than about ports.
     assert!(super::host_with_optional_port_ok("vault.example.com"));
     assert!(super::host_with_optional_port_ok("vault.example.com:8443"));
+}
+
+#[test]
+fn host_with_optional_port_ok_rejects_non_ascii_digit_ports() {
+    // cache.rs:207 checks `value.bytes().all(|byte| byte.is_ascii_digit())`,
+    // so Unicode decimal digits are not a port even when they look like one.
+    // Both the plain-host and the bracketed-IPv6 arms must agree.
+    for port in ["１２３", "١٢٣", "१२३", "844３"] {
+        let plain = format!("vault.example.com:{port}");
+        let bracketed = format!("[::1]:{port}");
+        assert!(!super::host_with_optional_port_ok(&plain), "{plain}");
+        assert!(
+            !super::host_with_optional_port_ok(&bracketed),
+            "{bracketed}"
+        );
+    }
+    // ASCII digits still pass on both arms, including a mixed ASCII/Unicode
+    // spelling whose non-ASCII part must still be rejected.
+    assert!(super::host_with_optional_port_ok("vault.example.com:8443"));
+    assert!(super::host_with_optional_port_ok("[::1]:8443"));
+    assert!(!super::host_with_optional_port_ok(
+        "vault.example.com:84４3"
+    ));
 }

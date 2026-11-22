@@ -34,6 +34,24 @@
 //! refactor is outside this module's change scope; the two limits are recorded
 //! here so a reader does not mistake the test coverage for a proof of those
 //! failure branches.
+//!
+//! # Known constraint: direct dependency on `health::Thresholds`
+//!
+//! [`Settings`] stores `thresholds: Thresholds` by value,
+//! [`Settings::sanitized`] clamps `weak_bits` / `stale_days`, and
+//! `Settings::parse_settings` repairs the nested object through
+//! `tolerant_struct::<Thresholds>`. That is a direct dependency from the
+//! persistence layer on the audit layer: the opposite direction from
+//! dependency inversion, where settings would own a neutral DTO/port and
+//! `health` would depend on it.
+//!
+//! This inversion is a known, accepted PoC constraint rather than an
+//! overlooked boundary. The persisted JSON shape *is* the audit's `Thresholds`
+//! shape, the clamp bounds come from the shared `crate::limits` constants,
+//! and introducing a DTO/trait seam would change the serde contract and every
+//! call site that reads `settings.thresholds`. There is no injected seam for
+//! the type here, so this note records the constraint instead of implying a
+//! layer boundary that does not exist.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

@@ -1894,6 +1894,65 @@ fn ssh_base64_codec_handles_plus_and_slash() {
 }
 
 #[test]
+fn ssh_base64_encode_one_byte_remainder_uses_two_chars_and_double_padding() {
+    use super::ssh_fingerprint::{decode, encode};
+
+    // model.rs:443-449: a single leftover byte takes the `[a]` arm, emitting
+    // two alphabet characters followed by `==`. A wrapping or 3-byte-only
+    // implementation would drop the byte or produce the wrong padding.
+    assert_eq!(encode(&[]), "");
+    assert_eq!(encode(&[0x00]), "AA==");
+    assert_eq!(encode(&[0xff]), "/w==");
+    for raw in [[0x00u8], [0x01], [0x7f], [0x80], [0xfe], [0xff]] {
+        let encoded = encode(&raw);
+        assert_eq!(encoded.len(), 4, "{encoded}");
+        assert!(encoded.ends_with("=="), "{encoded}");
+        assert_eq!(decode(encoded.as_bytes()), Some(raw.to_vec()), "{encoded}");
+    }
+    // The neighbouring remainder arms stay distinct (two bytes -> one '=',
+    // three bytes -> no padding), so the one-byte arm cannot swallow them.
+    assert_eq!(encode(&[0x01, 0x02]), "AQI=");
+    assert_eq!(encode(&[0x01, 0x02, 0x03]), "AQID");
+}
+
+#[test]
+fn vault_item_debug_shows_non_secret_metadata_and_masks_notes() {
+    // model.rs:672-685 prints every non-secret metadata field verbatim while
+    // replacing the secret-bearing notes wholesale. Diagnostics must stay
+    // useful (id / folder / favorite / revision) without revealing notes.
+    let mut item = VaultItem::new(
+        "item-42",
+        "Visible Name",
+        ItemData::Login {
+            username: "alice".into(),
+            password: Zeroizing::new("pw-secret".into()),
+            totp: Zeroizing::new("JBSWY3DPEHPK3PXP".into()),
+            uris: vec![],
+        },
+    );
+    item.folder_id = Some("folder-7".into());
+    item.favorite = true;
+    item.revision_date = 1_700_000_000;
+    item.notes = Zeroizing::new("RECOVERY-NOTE-SECRET".into());
+
+    let debug = format!("{item:?}");
+    for visible in [
+        "VaultItem",
+        "item-42",
+        "Visible Name",
+        "folder-7",
+        "favorite: true",
+        "revision_date: 1700000000",
+        "notes: \"[redacted]\"",
+    ] {
+        assert!(debug.contains(visible), "missing {visible:?}: {debug}");
+    }
+    assert!(!debug.contains("RECOVERY-NOTE-SECRET"), "{debug}");
+    assert!(!debug.contains("pw-secret"), "{debug}");
+    assert!(!debug.contains("JBSWY3DPEHPK3PXP"), "{debug}");
+}
+
+#[test]
 fn item_kind_uses_snake_case_strings_on_the_wire() {
     // `ItemKind` derives `#[serde(rename_all = "snake_case")]` (model.rs:94-96):
     // its serde form is a string, not the numeric `to_wire()` value.
