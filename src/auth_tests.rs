@@ -1740,3 +1740,63 @@ fn validate_config_reports_the_first_invalid_field_in_a_fixed_order() {
         assert_eq!(validate_config(&config), Err(expected), "{config:?}");
     }
 }
+
+#[test]
+fn plain_invalid_login_uses_the_same_sync_detail_arm_as_the_cause_variant() {
+    use crate::error::BoxedCause;
+
+    // auth.rs:231 matches both `AppError::InvalidLogin` and
+    // `AppError::InvalidLoginCause` in one arm. The plain form must keep the
+    // parse detail and classify as a retryable Sync failure, exactly like its
+    // cause-carrying sibling.
+    const DETAIL: &str = "bad sync key casing";
+    let plain = AuthError::from(AppError::InvalidLogin(DETAIL.to_string()));
+    let caused = AuthError::from(AppError::InvalidLoginCause(
+        DETAIL.to_string(),
+        BoxedCause::text(DETAIL),
+    ));
+
+    assert_eq!(plain, AuthError::Sync);
+    assert_eq!(plain, caused);
+    assert_eq!(caused, plain);
+    assert_eq!(plain.message(), AuthError::Sync.message());
+    assert!(
+        plain.status_message().contains(DETAIL),
+        "{}",
+        plain.status_message()
+    );
+    assert_eq!(plain.status_message(), caused.status_message());
+}
+
+#[test]
+fn unrepresentable_deadline_takes_the_relative_timer_fallback() {
+    use std::time::{Duration, Instant};
+
+    let now = Instant::now();
+    // Guard the premise: on this platform `Duration::MAX` really does make
+    // `checked_add` fail, so the test exercises the fallback rather than a
+    // very distant absolute deadline.
+    assert_eq!(now.checked_add(Duration::MAX), None);
+
+    assert_eq!(
+        login_deadline(now, Duration::from_secs(30)),
+        LoginDeadline::At(now.checked_add(Duration::from_secs(30)).unwrap())
+    );
+    assert_eq!(
+        login_deadline(now, Duration::MAX),
+        LoginDeadline::Relative(Duration::MAX)
+    );
+    assert_eq!(login_deadline(now, Duration::ZERO), LoginDeadline::At(now));
+
+    // Both watchdog arms still report Timeout when their timer fires. The
+    // relative form is built directly with ZERO so the assertion does not
+    // wait out the sentinel duration (auth.rs:791-829).
+    assert_eq!(
+        smol::block_on(login_watchdog(LoginDeadline::Relative(Duration::ZERO))).err(),
+        Some(AuthError::Timeout)
+    );
+    assert_eq!(
+        smol::block_on(login_watchdog(LoginDeadline::At(Instant::now()))).err(),
+        Some(AuthError::Timeout)
+    );
+}

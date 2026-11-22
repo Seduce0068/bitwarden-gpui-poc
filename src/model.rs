@@ -277,13 +277,16 @@ pub struct IdentityData {
 
 /// SSH key details.
 ///
-/// `Debug` masks the private key.
+/// `Debug` masks the private key, which is also held in a [`ZeroizingText`]
+/// buffer and wiped on drop. Its serde shape stays a plain string so existing
+/// saves and fixtures keep loading unchanged.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SshKeyData {
     /// Public key line.
     pub public_key: String,
-    /// Private key (not persisted by this PoC).
-    pub private_key: String,
+    /// Private key (not persisted by this PoC). Wiped on drop and replacement.
+    #[serde(with = "zeroizing_text_serde")]
+    pub private_key: ZeroizingText,
     /// Key fingerprint.
     pub fingerprint: String,
 }
@@ -353,7 +356,7 @@ mod ssh_fingerprint {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     /// Decode standard base64 (with or without `=` padding).
-    fn decode(input: &[u8]) -> Option<Vec<u8>> {
+    pub(crate) fn decode(input: &[u8]) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(input.len() / 4 * 3);
         let mut acc = 0u32;
         let mut leftover_bits = 0u32;
@@ -409,7 +412,7 @@ mod ssh_fingerprint {
     }
 
     /// Encode with the standard base64 alphabet, keeping `=` padding.
-    fn encode(input: &[u8]) -> String {
+    pub(crate) fn encode(input: &[u8]) -> String {
         let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
         let (chunks, remainder) = input.as_chunks::<3>();
         for chunk in chunks {
@@ -568,8 +571,10 @@ pub enum ItemData {
     },
     /// A secure note.
     SecureNote {
-        /// Note text.
-        text: String,
+        /// Note text. Held in a [`ZeroizingText`] buffer and wiped on drop;
+        /// serde still sees a plain string and `Debug` still masks it.
+        #[serde(with = "zeroizing_text_serde")]
+        text: ZeroizingText,
     },
     /// A payment card.
     Card(CardData),
@@ -738,7 +743,7 @@ impl VaultItem {
                 out.push(Cow::Borrowed(username));
                 out.extend(uris.iter().map(|u| Cow::Borrowed(u.uri.as_str())));
             }
-            ItemData::SecureNote { text } => out.push(Cow::Borrowed(text)),
+            ItemData::SecureNote { text } => out.push(Cow::Borrowed(text.as_str())),
             ItemData::Card(card) => {
                 out.push(Cow::Borrowed(&card.cardholder_name));
                 out.push(Cow::Borrowed(&card.brand));

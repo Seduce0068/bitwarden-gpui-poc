@@ -15,6 +15,9 @@ fn body() -> Vec<u8> {
 /// Raw `std::fs::write` creates group/world-readable files under a typical
 /// umask, which the read-side private-file check now refuses.
 fn write_fixture(path: &std::path::Path, contents: &[u8]) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
     std::fs::write(path, contents).unwrap();
     #[cfg(unix)]
     {
@@ -1454,4 +1457,94 @@ fn save_and_save_default_report_write_and_path_failures() {
     // stray cache file was created beside it.
     assert!(dir.path().is_dir());
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn legacy_cache_is_used_by_the_offline_restore_path() {
+    // `cached_sync_for_detailed` goes through `load_default` (cache.rs:439-441),
+    // so a cache left in the old config directory is restorable even though
+    // all new writes land under the cache directory.
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-legacy-restore-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let cache_home = root.join("xdg-cache-home");
+    let config_home = root.join("xdg-config-home");
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
+
+    let primary = default_path().expect("a cache directory from XDG_CACHE_HOME");
+    let legacy = legacy_path().expect("a config directory from XDG_CONFIG_HOME");
+    assert_ne!(primary, legacy);
+    assert!(!primary.exists(), "the new cache file must not pre-exist");
+
+    // A pre-timestamp cache is the harshest legacy case: it has no created_at
+    // and therefore relies on the documented "legacy stays usable" rule.
+    let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    cache.created_at = None;
+    save(&legacy, &cache).unwrap();
+    let before = std::fs::read(&legacy).unwrap();
+
+    let restored = cached_sync_for_detailed("https://vault.example.com")
+        .expect("the legacy cache must restore through load_default");
+    assert_eq!(restored.user_id(), "user-1");
+    // The fallback is read-only: neither location is created or rewritten.
+    assert!(
+        !primary.exists(),
+        "reading legacy data must not create a new cache"
+    );
+    assert_eq!(
+        std::fs::read(&legacy).unwrap(),
+        before,
+        "legacy file was rewritten"
+    );
+    assert!(matches!(
+        cached_sync_for_detailed("https://other.example.com"),
+        Err(SyncCacheError::ServerMismatch)
+    ));
+
+    // A missing primary still falls back, but an unusable primary does not.
+    write_fixture(&primary, b"not json");
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com"),
+        Err(SyncCacheError::ParseFailedCause(_))
+    ));
+    assert_eq!(std::fs::read(&legacy).unwrap(), before);
+}
+
+#[test]
+fn validate_does_not_apply_the_restore_expiry_window() {
+    // `validate` (cache.rs:646-652) checks only the server and body. The
+    // expiry window is a restore-path policy enforced by
+    // `cached_sync_for_detailed` (cache.rs:621-623); an already-held object
+    // therefore passes `validate` even when its timestamp is unusable.
+    let now = i64::try_from(crate::totp::now_unix()).unwrap();
+    for created_at in [
+        Some(now - MAX_CACHE_AGE_SECS - 1),
+        Some(now + 100),
+        Some(i64::MAX),
+    ] {
+        let cache = SyncCache {
+            version: SyncCache::VERSION,
+            user_id: "user-1".to_string(),
+            server_url: "https://vault.example.com".to_string(),
+            body: body(),
+            created_at,
+        };
+        assert!(is_cache_expired(created_at, now), "{created_at:?}");
+        assert!(
+            validate(&cache, "user-1", "https://vault.example.com").is_ok(),
+            "validate must not consult the clock: {created_at:?}"
+        );
+        // The body check is still applied, so this is not a blanket bypass.
+        let mut corrupt = cache;
+        corrupt.body = b"not json".to_vec();
+        assert!(matches!(
+            validate(&corrupt, "user-1", "https://vault.example.com"),
+            Err(SyncCacheError::CacheParse(_))
+        ));
+    }
+    let fresh = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    assert!(!is_cache_expired(fresh.created_at, now));
+    assert!(validate(&fresh, "user-1", "https://vault.example.com").is_ok());
 }

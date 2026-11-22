@@ -87,6 +87,11 @@ fn debug_masks_server_url_embedded_credentials_without_mutating_settings() {
 
 #[test]
 fn sanitized_clamps_editable_fields() {
+    use crate::limits::{
+        MAX_CLIPBOARD_RESTORE_SECONDS, MAX_PASSPHRASE_WORDS, MAX_PASSWORD_LENGTH, MAX_WEAK_BITS,
+        MIN_IDLE_LOCK_SECONDS, MIN_LOGIN_TIMEOUT_SECONDS, MIN_STALE_DAYS,
+    };
+
     let settings = Settings {
         idle_lock_seconds: 0,
         login_timeout_seconds: 0,
@@ -106,13 +111,18 @@ fn sanitized_clamps_editable_fields() {
         ..Default::default()
     };
     let safe = settings.sanitized();
-    assert_eq!(safe.idle_lock_seconds, 60);
-    assert_eq!(safe.login_timeout_seconds, 1);
-    assert_eq!(safe.clipboard_restore_seconds, 3600);
-    assert_eq!(safe.password_generator.length, 128);
-    assert_eq!(safe.passphrase_generator.words, 20);
-    assert_eq!(safe.thresholds.weak_bits, 200);
-    assert_eq!(safe.thresholds.stale_days, 1);
+    // The clamp bounds live in `crate::limits`, shared with the UI adjusters
+    // and the auth layer; no duplicated magic numbers in this expectation.
+    assert_eq!(safe.idle_lock_seconds, MIN_IDLE_LOCK_SECONDS);
+    assert_eq!(safe.login_timeout_seconds, MIN_LOGIN_TIMEOUT_SECONDS);
+    assert_eq!(
+        safe.clipboard_restore_seconds,
+        MAX_CLIPBOARD_RESTORE_SECONDS
+    );
+    assert_eq!(safe.password_generator.length, MAX_PASSWORD_LENGTH);
+    assert_eq!(safe.passphrase_generator.words, MAX_PASSPHRASE_WORDS);
+    assert_eq!(safe.thresholds.weak_bits, MAX_WEAK_BITS);
+    assert_eq!(safe.thresholds.stale_days, MIN_STALE_DAYS);
     assert_eq!(settings.idle_lock_seconds, 0, "sanitized must not mutate");
     assert_eq!(settings.thresholds.weak_bits, u32::MAX);
 }
@@ -1766,4 +1776,110 @@ fn current_version_as_a_numeric_string_is_not_legacy_or_future() {
     assert_eq!(saved.schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(saved.email, loaded.email);
     assert_eq!(saved.idle_lock_seconds, loaded.idle_lock_seconds);
+}
+
+#[test]
+fn integral_float_zero_is_the_legacy_marker_not_current() {
+    use serde_json::json;
+
+    // Decision: `0.0` is an explicit legacy marker (0), never a claim to be
+    // the current schema. serde cannot coerce a JSON float into the u32
+    // field, so without the raw-marker fallback `tolerant_struct` would leave
+    // the default (1) and silently promote the file (settings.rs:807-825).
+    assert_eq!(super::schema_version_of(Some(&json!(0.0))), Some(0));
+    let loaded = Settings::parse_settings(
+        r#"{"schema_version":0.0,"email":"zero@example.com","idle_lock_seconds":123}"#,
+    )
+    .unwrap();
+    assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
+    assert_ne!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.email, "zero@example.com");
+    assert_eq!(loaded.idle_lock_seconds, 123);
+    assert_eq!(loaded.server_url, Settings::default().server_url);
+
+    // A float marker of 1.0 stays current (it already matched the default,
+    // but the raw-marker assignment must not turn it into legacy).
+    assert_eq!(
+        Settings::parse_settings(r#"{"schema_version":1.0,"email":"one@example.com"}"#)
+            .unwrap()
+            .schema_version,
+        CURRENT_SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn string_and_float_future_schemas_still_rescue_a_valid_device_id() {
+    use serde_json::json;
+
+    let valid = generate_device_id().unwrap();
+    let bodies = [
+        format!(
+            r#"{{"schema_version":"9999","email":"future@example.com","device_id":"{valid}"}}"#
+        ),
+        format!(r#"{{"schema_version":2.0,"email":"future@example.com","device_id":"{valid}"}}"#),
+    ];
+    for body in bodies {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, body.as_bytes()).unwrap();
+        let loaded = Settings::load_detailed(&path).unwrap();
+        assert_eq!(loaded.device_id, valid, "opaque id survives {body}");
+        assert_eq!(loaded.email, "", "schema-governed fields fall back");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+    // The numeric-string spelling is also accepted by the raw helper, and a
+    // malformed id is still dropped on the same future-version path.
+    assert_eq!(super::schema_version_of(Some(&json!("9999"))), Some(9999));
+    assert_eq!(super::schema_version_of(Some(&json!(2.0))), Some(2));
+    assert_eq!(
+        Settings::parse_settings(r#"{"schema_version":2.0,"device_id":"not-a-uuid"}"#)
+            .unwrap()
+            .device_id,
+        ""
+    );
+}
+
+#[test]
+fn non_hex_characters_are_rejected_in_device_ids() {
+    let valid = generate_device_id().unwrap();
+    let mut bad_ascii = valid.clone().into_bytes();
+    bad_ascii[2] = b'g'; // outside 0-9 / a-f / A-F
+    let bad_ascii = std::str::from_utf8(&bad_ascii).unwrap();
+    assert!(!bad_ascii.as_bytes()[2].is_ascii_hexdigit());
+    assert!(!is_valid_device_id(bad_ascii), "{bad_ascii}");
+
+    // Uppercase hex is accepted (sibling test), but a Unicode lookalike is
+    // not: the byte-wise validator rejects the extra bytes and the non-ASCII
+    // code point.
+    let wide = valid.replacen(&valid[2..3], "ａ", 1);
+    assert_eq!(wide.len(), valid.len() + 2);
+    assert!(!is_valid_device_id(&wide), "{wide}");
+    let emoji = valid.replacen(&valid[2..3], "🔑", 1);
+    assert!(!is_valid_device_id(&emoji), "{emoji}");
+
+    // The rejected value is cleared by sanitize(), just like any other
+    // malformed identifier, so it can never reach the login request.
+    let safe = Settings {
+        device_id: bad_ascii.to_string(),
+        ..Settings::default()
+    }
+    .sanitized();
+    assert!(safe.device_id.is_empty());
+}
+
+#[test]
+fn ui_clamp_bounds_come_from_the_shared_limits_module() {
+    use crate::limits::{
+        MAX_CLIPBOARD_RESTORE_SECONDS, MAX_IDLE_LOCK_MINUTES, MAX_IDLE_LOCK_SECONDS,
+        MAX_LOGIN_TIMEOUT_SECONDS, MIN_CLIPBOARD_RESTORE_SECONDS, MIN_IDLE_LOCK_MINUTES,
+        MIN_IDLE_LOCK_SECONDS, MIN_LOGIN_TIMEOUT_SECONDS,
+    };
+
+    // The UI adjusts idle lock in whole minutes and the other delays in
+    // seconds. Both spellings are defined once, in `crate::limits`, so a UI
+    // tweak and `Settings::sanitized()` cannot silently disagree.
+    assert_eq!(MIN_IDLE_LOCK_MINUTES * 60, MIN_IDLE_LOCK_SECONDS);
+    assert_eq!(MAX_IDLE_LOCK_MINUTES * 60, MAX_IDLE_LOCK_SECONDS);
+    assert_eq!(MIN_LOGIN_TIMEOUT_SECONDS, MIN_CLIPBOARD_RESTORE_SECONDS);
+    assert_eq!(MAX_LOGIN_TIMEOUT_SECONDS, MAX_CLIPBOARD_RESTORE_SECONDS);
 }

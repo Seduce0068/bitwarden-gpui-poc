@@ -432,6 +432,11 @@ pub fn load_with_fallback(
 /// Read the cache from [`default_path`], falling back to the read-only
 /// [`legacy_path`] when no cache-dir file exists yet.
 ///
+/// This is the loader used by [`cached_sync_for_detailed`], so the offline
+/// restore path also accepts a cache left in the legacy config directory.
+/// The fallback is a pure read: no copy, move or rewrite is performed, and a
+/// primary file that exists but is unreadable/stale never falls back.
+///
 /// # Errors
 ///
 /// [`CacheLoadError`] when no usable cache exists, or when no platform
@@ -638,6 +643,15 @@ pub fn cached_sync_for(server_url: &str) -> Option<openwarden::SyncData> {
 /// branch here would suggest the restore path rejects cross-account caches
 /// when it cannot. The account id is still stored and exposed on [`SyncCache`]
 /// for callers that do have a trusted id (for example a fresh sync response).
+///
+/// Unlike [`cached_sync_for_detailed`], this helper deliberately does **not**
+/// apply the [`MAX_CACHE_AGE_SECS`] expiry window: it checks an object the
+/// caller already holds and never consults the clock. An outdated cache can
+/// therefore pass `validate` while the restore path rejects it with
+/// [`SyncCacheError::CacheExpired`] (see
+/// `validate_does_not_apply_the_restore_expiry_window`). Callers that need
+/// the restore's freshness guarantee must check `is_cache_expired` on
+/// `cache.created_at` themselves.
 ///
 /// # Errors
 ///

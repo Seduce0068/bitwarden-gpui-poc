@@ -25,6 +25,14 @@ pub const DEFAULT_CLIPBOARD_RESTORE_SECONDS: u64 = 30;
 pub const MIN_IDLE_LOCK_SECONDS: u64 = 60;
 /// Maximum inactivity before auto-lock, in seconds.
 pub const MAX_IDLE_LOCK_SECONDS: u64 = 3600;
+/// Minimum idle-lock value expressed in the UI's minute step.
+///
+/// The UI adjuster works in whole minutes; these two constants and their
+/// seconds counterparts above are the single source of truth so the stored
+/// value, the clamp and the displayed range cannot drift apart.
+pub const MIN_IDLE_LOCK_MINUTES: u64 = 1;
+/// Maximum idle-lock value expressed in the UI's minute step.
+pub const MAX_IDLE_LOCK_MINUTES: u64 = 60;
 /// Minimum login time budget, in seconds.
 pub const MIN_LOGIN_TIMEOUT_SECONDS: u64 = 1;
 /// Maximum login time budget, in seconds.

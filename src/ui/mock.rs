@@ -108,7 +108,7 @@ pub(super) fn mock_vault() -> Vault {
         "Laptop Key",
         ItemData::SshKey(SshKeyData {
             public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMVYTn6DgHoRS29obD0RhrnbKgHhM1eqLvmbTWMGwSmR alice@laptop".into(),
-            private_key: String::new(),
+            private_key: String::new().into(),
             fingerprint: "SHA256:rU5/Ssu4iQF+Dh5DRCbEpCjexkxaSKWYzYW9pUPi7R0".into(),
         }),
     );

@@ -887,3 +887,136 @@ fn multi_character_key_char_falls_back_to_the_physical_key() {
     value.key_char = Some("Y");
     assert_eq!(classify_key(&value), UiAction::CopyPassphrase);
 }
+
+#[test]
+fn command_modifiers_are_suppressed_in_every_editing_mode() {
+    // Ctrl, Cmd/Windows and Fn are platform shortcuts: editing text never
+    // gives them priority, not even when a printable key_char is present.
+    for modifiers in [
+        KeyModifiers {
+            control: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            platform: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            function: true,
+            ..Default::default()
+        },
+    ] {
+        let mut value = ctx("a");
+        value.key_char = Some("a");
+        value.modifiers = modifiers;
+
+        value.screen = Screen::Locked;
+        value.editing_auth = true;
+        assert_eq!(classify_key(&value), UiAction::None, "auth/{modifiers:?}");
+
+        value.editing_auth = false;
+        value.screen = Screen::Unlocked;
+        value.searching = true;
+        assert_eq!(classify_key(&value), UiAction::None, "search/{modifiers:?}");
+
+        value.searching = false;
+        value.panel = Panel::Settings;
+        value.editing_settings = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "settings/{modifiers:?}"
+        );
+    }
+
+    // Ctrl+Alt stays suppressed when it produced no glyph.
+    let mut value = ctx("a");
+    value.key_char = None;
+    value.modifiers = KeyModifiers {
+        control: true,
+        alt: true,
+        ..Default::default()
+    };
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    assert_eq!(classify_key(&value), UiAction::None, "auth/ctrl-alt");
+    value.editing_auth = false;
+    value.screen = Screen::Unlocked;
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::None, "search/ctrl-alt");
+    value.searching = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    assert_eq!(classify_key(&value), UiAction::None, "settings/ctrl-alt");
+
+    // Even with a glyph, an additional Cmd/Fn modifier wins over AltGr.
+    value.key_char = Some("a");
+    for modifiers in [
+        KeyModifiers {
+            control: true,
+            alt: true,
+            platform: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            control: true,
+            alt: true,
+            function: true,
+            ..Default::default()
+        },
+    ] {
+        value.modifiers = modifiers;
+        assert_eq!(classify_key(&value), UiAction::None, "{modifiers:?}");
+    }
+}
+
+#[test]
+fn space_key_inserts_a_space_in_all_editing_modes() {
+    let mut value = ctx("space");
+
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText(" ".into()));
+
+    value.searching = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertSettingsText(" ".into())
+    );
+
+    value.panel = Panel::Vault;
+    value.editing_settings = false;
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    assert_eq!(classify_key(&value), UiAction::InsertAuthText(" ".into()));
+
+    // A layout-provided space wins, and an empty `key_char` still falls back
+    // to the `space` key name in every mode.
+    value.key_char = Some(" ");
+    assert_eq!(classify_key(&value), UiAction::InsertAuthText(" ".into()));
+    value.key_char = Some("");
+    assert_eq!(classify_key(&value), UiAction::InsertAuthText(" ".into()));
+
+    value.key_char = Some(" ");
+    value.editing_auth = false;
+    value.screen = Screen::Unlocked;
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText(" ".into()));
+    value.key_char = Some("");
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText(" ".into()));
+
+    value.searching = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    value.key_char = Some(" ");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertSettingsText(" ".into())
+    );
+    value.key_char = Some("");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertSettingsText(" ".into())
+    );
+}

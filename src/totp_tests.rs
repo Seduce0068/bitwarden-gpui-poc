@@ -293,3 +293,37 @@ fn surrounding_whitespace_is_trimmed_before_parsing() {
     // whitespace characters.
     assert_eq!(code_at(" \t\n\u{3000}", 0), Err(TotpError::Missing));
 }
+
+#[test]
+fn non_ascii_secrets_are_rejected_without_panicking() {
+    // openwarden 0.1.1 checks `secret[..10]` for the `otpauth://` prefix. Four
+    // three-byte characters put byte 10 in the middle of a code point, which
+    // panics in the old code path (totp.rs:97-104). These are exactly the
+    // values an audit of untrusted vault fields could encounter.
+    let panicking_prefix = "あいうえおotpauth://totp/x?secret=GEZDGNBVGY3TQOJQ";
+    assert!(
+        std::str::from_utf8(&panicking_prefix.as_bytes()[..10]).is_err(),
+        "byte 10 must fall inside a code point for this to be the panic case"
+    );
+    for secret in [
+        panicking_prefix,
+        "あ",
+        "éGEZDGNBVGY3TQOJQ",
+        "GEZDGNBVGY3TQOJQあ",
+        "あotpauth://totp/x?secret=GEZDGNBVGY3TQOJQ",
+    ] {
+        // The call must return an ordinary error, not unwind.
+        assert_eq!(code_at(secret, 59), Err(TotpError::Invalid), "{secret:?}");
+        assert!(!is_valid_secret(secret), "{secret:?}");
+        let tick = Tick::sample(secret, 59);
+        assert!(tick.code.is_none(), "{secret:?}");
+        assert_eq!(tick.error, Some(TotpError::Invalid), "{secret:?}");
+        assert!(tick.is_fresh(59), "a rejected field stays rejected");
+    }
+    // ASCII fields keep working after the guard: the guard is about byte
+    // boundaries, not about rejecting legitimate base32/URI/steam forms.
+    assert_eq!(code_at(RFC_SECRET, 59).unwrap().code(), "287082");
+    assert!(is_valid_secret(&format!(
+        "otpauth://totp/x?secret={RFC_SECRET}"
+    )));
+}

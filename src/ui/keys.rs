@@ -93,6 +93,15 @@ impl KeyModifiers {
     pub(super) fn has_command(self) -> bool {
         self.control || self.platform || self.function
     }
+
+    /// Whether the modifiers are exactly the macOS AltGr equivalent.
+    ///
+    /// macOS reports AltGr as Ctrl+Alt, with the layout glyph in `key_char`.
+    /// Any additional command-like modifier (Cmd/Windows or Fn) keeps the
+    /// combination reserved for the platform, so it is not AltGr.
+    pub(super) fn is_ctrl_alt(self) -> bool {
+        self.control && self.alt && !self.platform && !self.function
+    }
 }
 
 /// A UI intent derived from a keystroke or a mouse action.
@@ -256,13 +265,20 @@ fn is_text_cursor_key(key: &str) -> bool {
 /// not lock the vault. Keybindings with command-like modifiers are ignored so
 /// they can be handled by the platform (e.g. Ctrl+C).
 pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
-    if ctx.modifiers.has_command() {
+    let editing_text = ctx.editing_auth || ctx.searching || ctx.editing_settings;
+    // macOS reports AltGr as Ctrl+Alt. In a text field the layout character in
+    // `key_char` is the intended input, so give it priority over the command
+    // guard. A bare Ctrl/Cmd/Fn (or Ctrl+Alt without a generated glyph) stays
+    // suppressed even while editing.
+    let altgr_text = ctx.modifiers.is_ctrl_alt()
+        && editing_text
+        && ctx.key_char.is_some_and(|text| !text.is_empty());
+    if ctx.modifiers.has_command() && !altgr_text {
         return UiAction::None;
     }
     // Alt alone may still produce a printable layout character (e.g. Option+S
     // -> "ß"). Allow it only while editing text and only when it produced one;
     // in command panels Alt+key must stay inert.
-    let editing_text = ctx.editing_auth || ctx.searching || ctx.editing_settings;
     if ctx.modifiers.alt && !(editing_text && typed_text(ctx).is_some()) {
         return UiAction::None;
     }
@@ -372,6 +388,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 "d" => UiAction::DiscardSettings,
                 "1" => UiAction::EditSettingsField(SettingsField::ServerUrl),
                 "2" => UiAction::EditSettingsField(SettingsField::Email),
+                // These keys are bound only in a settings-owning panel. The
+                // report they recompute must not replace that panel's status
+                // (see `audit_refresh_status_for_panel` in `ui::app`).
                 "+" | "=" => UiAction::AdjustThreshold(1),
                 "-" | "_" => UiAction::AdjustThreshold(-1),
                 "i" => UiAction::AdjustIdleLock(1),
@@ -484,6 +503,76 @@ mod alt_text_tests {
 
         ctx.panel = Panel::Settings;
         assert_eq!(classify_key(&ctx), UiAction::None);
+    }
+
+    #[::core::prelude::v1::test]
+    fn ctrl_alt_layout_glyph_is_inserted_in_every_editing_mode() {
+        // macOS AltGr arrives as Ctrl+Alt with the composed glyph in
+        // `key_char`; it must reach the same insert path as plain Alt text.
+        let mut ctx = auth_ctx("s", Some("ß"), false);
+        ctx.modifiers = KeyModifiers {
+            control: true,
+            alt: true,
+            ..KeyModifiers::default()
+        };
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertAuthText("ß".into()),
+            "auth"
+        );
+
+        ctx.screen = Screen::Unlocked;
+        ctx.editing_auth = false;
+        ctx.searching = true;
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertSearchText("ß".into()),
+            "search"
+        );
+
+        ctx.searching = false;
+        ctx.panel = Panel::Settings;
+        ctx.editing_settings = true;
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertSettingsText("ß".into()),
+            "settings"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn ctrl_alt_without_a_glyph_or_outside_editing_is_inert() {
+        let ctrl_alt = KeyModifiers {
+            control: true,
+            alt: true,
+            ..KeyModifiers::default()
+        };
+        let mut ctx = auth_ctx("l", None, false);
+        ctx.modifiers = ctrl_alt;
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::None,
+            "without key_char the physical key must not be inserted"
+        );
+
+        ctx.key_char = Some("ß");
+        ctx.editing_auth = false;
+        assert_eq!(classify_key(&ctx), UiAction::None, "outside editing");
+
+        ctx.editing_auth = true;
+        for extra in [
+            KeyModifiers {
+                platform: true,
+                ..ctrl_alt
+            },
+            KeyModifiers {
+                function: true,
+                ..ctrl_alt
+            },
+        ] {
+            ctx.modifiers = extra;
+            assert_eq!(classify_key(&ctx), UiAction::None, "{extra:?}");
+        }
     }
 }
 

@@ -147,7 +147,10 @@ pub(super) fn auth_hint(editing: bool) -> &'static str {
     if editing {
         "入力中: 1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 確定 / F1: フォーカス復帰"
     } else {
-        "1-5: 欄を選択 / Enter: 検証して開く / Esc: 終了 / F1: フォーカス復帰"
+        // After Enter/Escape confirms a field this text replaces the "入力中:"
+        // status, so it must keep advertising the lock-screen shortcuts that
+        // are otherwise only shown by the initial lock status.
+        "1-5: 欄を選択 / Enter: 検証して開く / m: デモボルト / r: ログイン失敗時の再試行 / Esc: 終了 / F1: フォーカス復帰"
     }
 }
 
@@ -259,8 +262,14 @@ pub(super) fn clipboard_copy_status(seconds: u64, has_original: bool) -> String 
 /// Adjust the idle auto-lock timeout in one-minute steps, clamped to 1..=60
 /// minutes.
 pub(super) fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
-    let current_minutes = (current_seconds / 60).clamp(1, 60) as i64;
-    let next = (current_minutes + i64::from(delta_minutes)).clamp(1, 60);
+    let current_minutes = (current_seconds / 60).clamp(
+        crate::limits::MIN_IDLE_LOCK_MINUTES,
+        crate::limits::MAX_IDLE_LOCK_MINUTES,
+    ) as i64;
+    let next = (current_minutes + i64::from(delta_minutes)).clamp(
+        crate::limits::MIN_IDLE_LOCK_MINUTES as i64,
+        crate::limits::MAX_IDLE_LOCK_MINUTES as i64,
+    );
     (next * 60) as u64
 }
 
@@ -327,14 +336,14 @@ mod tests {
             "a",
             "Alpha",
             ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         );
         let second = VaultItem::new(
             "b",
             "Beta",
             ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         );
         let visible = [&first, &second];
@@ -366,6 +375,23 @@ mod tests {
         assert!(settings.contains("保存はしません"));
         assert!(settings.contains("w/c/l/d も文字として入力"));
         assert!(settings_hint(false).contains("w: 保存 / d: 破棄"));
+    }
+
+    #[test]
+    fn idle_lock_hint_keeps_demo_and_retry_keys_after_a_field_is_confirmed() {
+        // `FinishAuthEdit` restores `auth_hint(false)` into the status bar;
+        // losing `m`/`r` there hid the only shortcuts left on the lock screen.
+        let idle = auth_hint(false);
+        assert!(idle.contains("Enter: 検証して開く"));
+        assert!(idle.contains("m: デモボルト"), "{idle}");
+        assert!(idle.contains("r: ログイン失敗時の再試行"), "{idle}");
+        assert!(idle.contains(FOCUS_RECOVERY_HINT));
+
+        // While editing, those letters are literal text, not commands.
+        let editing = auth_hint(true);
+        assert!(!editing.contains("m: デモボルト"));
+        assert!(!editing.contains("r: ログイン失敗時の再試行"));
+        assert!(editing.contains("1-5 も文字として入力"));
     }
 
     #[test]
@@ -493,7 +519,7 @@ mod tests {
         assert_eq!(select_copy_value(&empty, false), None);
 
         let note = ItemData::SecureNote {
-            text: "body".to_string(),
+            text: "body".to_string().into(),
         };
         assert_eq!(select_copy_value(&note, true), None);
     }

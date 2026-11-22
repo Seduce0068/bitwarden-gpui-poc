@@ -224,14 +224,14 @@ mod tests {
             "a",
             "Alpha",
             ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         ));
         state.vault.items.push(VaultItem::new(
             "b",
             "Beta",
             ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         ));
         state
@@ -274,7 +274,7 @@ mod tests {
             "s",
             "Solo",
             ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         ));
         assert_eq!(single.next_index(1), Some(0));
@@ -462,7 +462,7 @@ mod tests {
             "c",
             "Gamma",
             ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         ));
         // Hide Alpha behind the Favorites filter; keep Beta and Gamma visible.

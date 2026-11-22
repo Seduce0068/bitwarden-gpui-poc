@@ -95,10 +95,20 @@ pub type TotpError = crate::error::AppError;
 /// [`TotpError::Missing`] when the field is empty; [`TotpError::Invalid`] when
 /// `openwarden` cannot parse it.
 pub fn code_at(secret: &str, unix_time: u64) -> Result<Code, TotpError> {
-    if secret.trim().is_empty() {
+    let secret = secret.trim();
+    if secret.is_empty() {
         return Err(TotpError::Missing);
     }
-    let secret = SecretString::from(secret.trim().to_string());
+    // openwarden 0.1.1 detects the `otpauth://` form with `secret[..10]`
+    // (byte slicing). A field whose first characters are multi-byte can put
+    // byte 10 inside a UTF-8 code point and panic before any error is
+    // returned. Every form openwarden accepts is ASCII, so reject the whole
+    // field here: the health audit calls this on untrusted vault data and
+    // must never crash on it (see `non_ascii_secrets_are_rejected_without_panicking`).
+    if !secret.is_ascii() {
+        return Err(TotpError::Invalid);
+    }
+    let secret = SecretString::from(secret.to_string());
     openwarden::totp::generate(&secret, unix_time)
         .map(|inner| Code { inner })
         .map_err(|error| TotpError::InvalidCause(crate::error::BoxedCause::text(error.to_string())))

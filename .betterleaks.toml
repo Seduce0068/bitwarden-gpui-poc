@@ -12,7 +12,8 @@ filter.matchesAny(finding["secret"], [
   `2\.aWxvdGhlcg==`,
   `テストアカウントのマスターパスワード`,
 ])
-|| filter.containsAny(finding["match"], [`2001:db8::1`, `https://user:pass@host`, `https://u:p@host:8443`, `passwordあいうえお`,
+|| filter.containsAny(finding["match"], [`2001:db8::1`, `https://user:pass@host`,  `https://u:p@host:8443`, `passwordあいうえお`,
+  `secret=GEZDGNBVGY3TQOJQ`,
   `authenticate(&invalid, "device")`])
 || (
   filter.matchesAny(attributes["path"], [`vault_sync_tests\.rs`]) &&

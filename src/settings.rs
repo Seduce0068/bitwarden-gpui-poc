@@ -8,7 +8,9 @@
 //! the marker (missing field) are kept as [`LEGACY_SCHEMA_VERSION`] and never
 //! silently promoted to the current version: they remain compatible field by
 //! field, but the loaded struct reports the legacy marker until it is written
-//! back. A *newer* version is never trusted: the whole file is discarded in
+//! back. An explicit `0` — including the integral float spelling `0.0` — is
+//! the legacy marker, not a claim to be current. A *newer* version is never
+//! trusted: the whole file is discarded in
 //! favour of defaults because its field meanings may differ. The only field
 //! rescued from such a file is a valid `device_id`, which is an opaque local
 //! identifier whose meaning cannot change with the schema.
@@ -59,9 +61,10 @@ pub const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 /// of the JSON type used to encode it.
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
-/// Marker for files written before `schema_version` existed, and for files
-/// whose marker has the wrong type. Their known fields stay usable, but the
-/// value is not promoted to [`CURRENT_SCHEMA_VERSION`] until the next save.
+/// Marker for files written before `schema_version` existed, for files whose
+/// marker has the wrong type, and for an explicit `0` (including `0.0`).
+/// Their known fields stay usable, but the value is not promoted to
+/// [`CURRENT_SCHEMA_VERSION`] until the next save.
 pub const LEGACY_SCHEMA_VERSION: u32 = 0;
 
 /// Top-level settings object.
@@ -760,6 +763,9 @@ impl Settings {
     /// A missing or wrong-typed marker stays compatible and is explicitly
     /// reported as [`LEGACY_SCHEMA_VERSION`], never silently promoted to the
     /// current version. Only a correctly typed numeric marker is trusted.
+    /// An integral numeric marker that serde cannot coerce into the `u32`
+    /// field (notably `0.0`) is reported from the raw JSON value instead of
+    /// falling back to [`CURRENT_SCHEMA_VERSION`]: `0.0` is the legacy marker.
     ///
     /// The nested objects are repaired first so that a single bad leaf does
     /// not discard its correctly typed siblings; the top level is then parsed
@@ -809,6 +815,17 @@ impl Settings {
             // serde's container default would otherwise present a legacy file
             // as if it had explicitly declared the current schema.
             parsed.schema_version = LEGACY_SCHEMA_VERSION;
+        } else if let Some(version) = numeric_version {
+            // A JSON number such as `0.0` cannot be deserialized into the u32
+            // field, so `tolerant_struct` leaves the default (`1`) there.
+            // That would silently promote an explicit legacy marker to the
+            // current schema. Trust the raw numeric marker instead; future
+            // versions already returned above, so this is always in range.
+            if version <= u64::from(u32::MAX) {
+                parsed.schema_version = version as u32;
+            } else {
+                parsed.schema_version = LEGACY_SCHEMA_VERSION;
+            }
         }
         Ok(parsed)
     }

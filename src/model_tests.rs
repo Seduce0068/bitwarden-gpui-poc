@@ -54,7 +54,7 @@ fn debug_never_reveals_item_secrets() {
         "4",
         "Noted",
         ItemData::SecureNote {
-            text: String::new(),
+            text: String::new().into(),
         },
     );
     noted.notes = Zeroizing::new(NOTES_SECRET.to_string());
@@ -839,7 +839,7 @@ fn sort_key_kind_orders_by_wire_number_then_name_and_has_a_label() {
         "note-b",
         "Bravo",
         ItemData::SecureNote {
-            text: String::new(),
+            text: String::new().into(),
         },
     ));
     vault
@@ -942,7 +942,7 @@ const REFERENCE_FINGERPRINT: &str = "SHA256:rU5/Ssu4iQF+Dh5DRCbEpCjexkxaSKWYzYW9
 fn ssh_key(public_key: &str, fingerprint: &str) -> SshKeyData {
     SshKeyData {
         public_key: public_key.to_string(),
-        private_key: String::new(),
+        private_key: String::new().into(),
         fingerprint: fingerprint.to_string(),
     }
 }
@@ -1090,21 +1090,21 @@ fn name_sort_uses_the_same_nfkd_key_as_search() {
         "a-full",
         "Ａ",
         ItemData::SecureNote {
-            text: String::new(),
+            text: String::new().into(),
         },
     ));
     vault.items.push(VaultItem::new(
         "a-decomposed",
         "A\u{0301}",
         ItemData::SecureNote {
-            text: String::new(),
+            text: String::new().into(),
         },
     ));
     vault.items.push(VaultItem::new(
         "b-plain",
         "B",
         ItemData::SecureNote {
-            text: String::new(),
+            text: String::new().into(),
         },
     ));
 
@@ -1325,7 +1325,7 @@ fn search_haystacks_cover_kind_specific_fields() {
         "ssh-title",
         ItemData::SshKey(SshKeyData {
             public_key: "ssh-ed25519 AAAA".into(),
-            private_key: String::new(),
+            private_key: String::new().into(),
             fingerprint: "SHA256:abc".into(),
         }),
     );
@@ -1654,4 +1654,112 @@ fn ssh_fingerprint_discards_the_key_type_field() {
         super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519"),
         None
     );
+}
+
+#[test]
+fn ssh_private_key_and_note_text_are_zeroized_with_unchanged_wire_and_debug() {
+    const KEY_SECRET: &str = "PRIVATE-KEY-CANARY";
+    const NOTE_SECRET: &str = "NOTE-TEXT-CANARY";
+    let ssh = VaultItem::new(
+        "ssh-zero",
+        "Key",
+        ItemData::SshKey(SshKeyData {
+            public_key: "ssh-ed25519 AAAA".into(),
+            private_key: KEY_SECRET.into(),
+            fingerprint: "SHA256:abc".into(),
+        }),
+    );
+    let note = VaultItem::new(
+        "note-zero",
+        "Note",
+        ItemData::SecureNote {
+            text: NOTE_SECRET.into(),
+        },
+    );
+
+    // Manual Debug masks both fields at every level; the type's own Debug
+    // masks them even when rendered outside a VaultItem.
+    for (item, secret) in [(&ssh, KEY_SECRET), (&note, NOTE_SECRET)] {
+        let debug = format!("{item:?}");
+        assert!(!debug.contains(secret), "{debug}");
+        assert!(debug.contains("[redacted]"), "{debug}");
+    }
+    let ssh_data_debug = format!("{:?}", ssh.data);
+    let note_data_debug = format!("{:?}", note.data);
+    assert!(!ssh_data_debug.contains(KEY_SECRET), "{ssh_data_debug}");
+    assert!(!note_data_debug.contains(NOTE_SECRET), "{note_data_debug}");
+
+    // serde shape remains a plain JSON string, so older saves/fixtures round
+    // trip and search still sees the text (only Debug is masked).
+    let ssh_json = serde_json::to_value(&ssh).unwrap();
+    let note_json = serde_json::to_value(&note).unwrap();
+    assert_eq!(
+        ssh_json["data"]["private_key"],
+        serde_json::json!(KEY_SECRET)
+    );
+    assert_eq!(note_json["data"]["text"], serde_json::json!(NOTE_SECRET));
+    let restored_ssh: VaultItem = serde_json::from_value(ssh_json).unwrap();
+    let restored_note: VaultItem = serde_json::from_value(note_json).unwrap();
+    assert_eq!(restored_ssh, ssh);
+    assert_eq!(restored_note, note);
+    assert!(restored_ssh.matches_query("SHA256:abc"));
+    assert!(restored_note.matches_query("NOTE-TEXT"));
+    assert!(!restored_ssh.matches_query(KEY_SECRET));
+}
+
+#[test]
+fn card_haystack_needs_four_ascii_digits_and_ignores_fullwidth_digits() {
+    let card_item = |number: &str| {
+        VaultItem::new(
+            "c",
+            "Card",
+            ItemData::Card(CardData {
+                number: number.into(),
+                ..CardData::default()
+            }),
+        )
+    };
+
+    // Fewer than four ASCII digits never contributes a searchable tail.
+    for number in ["", "12", "1 2 3", "A1B2C3"] {
+        assert!(!card_item(number).matches_query("123"), "{number:?}");
+    }
+    assert!(card_item("A1B2C3D4").matches_query("1234"));
+
+    // Full-width digits are not ASCII digits: the filter skips them, so an
+    // NFKD-foldable full-width PAN cannot be fished out through search.
+    let wide = card_item("４１１１１１１１１１１１１２３４");
+    assert!(
+        !wide.matches_query("1234"),
+        "a full-width PAN must not expose a searchable last four"
+    );
+    assert!(!wide.matches_query("４１２３"));
+
+    // A mixed number exposes only the ASCII last four.
+    let mixed = card_item("4111 ３３３３ 1234");
+    assert!(mixed.matches_query("1234"));
+    assert!(
+        !mixed.matches_query("3333"),
+        "full-width middle stays private"
+    );
+}
+
+#[test]
+fn ssh_base64_codec_handles_plus_and_slash() {
+    use super::ssh_fingerprint::{decode, encode};
+
+    // Three bytes whose six-bit groups are 62 ('+') and 63 ('/').
+    let raw = [0xfb, 0xff, 0xbf];
+    assert_eq!(encode(&raw), "+/+/");
+    assert_eq!(decode(b"+/+/"), Some(raw.to_vec()));
+
+    // A padded multi-group value with both characters must round-trip.
+    let digest = [0xfb, 0xff, 0xbf, 0x00, 0x10];
+    let encoded = encode(&digest);
+    assert!(encoded.contains('+') && encoded.contains('/'), "{encoded}");
+    assert_eq!(decode(encoded.as_bytes()), Some(digest.to_vec()));
+
+    // The URL-safe alphabet is not a substitute for standard base64.
+    assert_eq!(decode(b"-__/"), None);
+    assert_eq!(decode(b"+_+/"), None);
 }

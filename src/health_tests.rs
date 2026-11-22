@@ -1160,7 +1160,7 @@ fn ssh_fingerprint_checks_are_wired_into_the_audit() {
             id,
             ItemData::SshKey(SshKeyData {
                 public_key: public_key.into(),
-                private_key: String::new(),
+                private_key: String::new().into(),
                 fingerprint: fingerprint.into(),
             }),
         )
@@ -1517,4 +1517,58 @@ fn future_revision_never_produces_a_stale_finding() {
             .contains(&Finding::Stale { days: 1 }),
         "{report:?}"
     );
+}
+
+#[test]
+fn severity_labels_cover_medium_and_high() {
+    // health.rs:144-152 maps all three severities to Japanese labels; the
+    // sibling test already pins Low, so pin the other two here.
+    assert_eq!(Severity::Low.label(), "低");
+    assert_eq!(Severity::Medium.label(), "中");
+    assert_eq!(Severity::High.label(), "高");
+}
+
+#[test]
+fn non_ascii_totp_does_not_crash_the_audit() {
+    // The health audit calls `is_valid_secret` on untrusted decrypted fields.
+    // A leading multi-byte character used to panic in openwarden's byte
+    // slicing; the ASCII guard in `code_at` must turn it into an ordinary
+    // `NoTotp` finding instead (totp.rs:97-110).
+    const BAD: &str = "あいうえおotpauth://totp/x?secret=GEZDGNBVGY3TQOJQ";
+    const GOOD: &str = "GEZDGNBVGY3TQOJQ";
+
+    let report = report_of(vec![
+        login(
+            "bad",
+            "Bad",
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            BAD,
+        ),
+        login(
+            "good",
+            "Good",
+            "tQ8#wLr1!eZ5vKp3$sM7@",
+            "https://b.example",
+            GOOD,
+        ),
+    ]);
+
+    let bad = report.items.iter().find(|item| item.id == "bad").unwrap();
+    assert!(bad.findings.contains(&Finding::NoTotp), "{bad:?}");
+    assert!(
+        !bad.findings.contains(&Finding::TotpUninspectable),
+        "a malformed secret is not an undecryptable marker: {bad:?}"
+    );
+    // A clean item is omitted from the report, but it must never produce a
+    // NoTotp finding just because the other item has a malformed secret.
+    assert!(
+        !report.items.iter().any(|item| item.id == "good"),
+        "the valid TOTP login stays clean: {:?}",
+        report.items
+    );
+    assert_eq!(report.logins, 2);
+    assert_eq!(report.with_totp, 1);
+    assert!((report.totp_coverage() - 0.5).abs() < 1e-6);
+    assert!(!crate::totp::is_valid_secret(BAD));
 }

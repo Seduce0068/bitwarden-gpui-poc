@@ -788,6 +788,46 @@ fn unlock_and_import_with(
     })
 }
 
+/// Which timer arms the login watchdog.
+///
+/// Split out from [`authenticate_with_timeout`] so the `checked_add` overflow
+/// fallback is directly testable without a network call or a 584-year wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoginDeadline {
+    /// A representable absolute deadline (`Instant::now() + timeout`).
+    At(std::time::Instant),
+    /// The absolute deadline overflowed; use smol's relative timer instead.
+    Relative(std::time::Duration),
+}
+
+/// Decide the watchdog timer while the race is still being set up.
+///
+/// Keeping this outside the async block preserves the absolute-deadline
+/// anchoring described in [`authenticate_with_timeout`]: a slow first poll of
+/// the login future cannot delay the start of the timeout.
+fn login_deadline(now: std::time::Instant, timeout: std::time::Duration) -> LoginDeadline {
+    match now.checked_add(timeout) {
+        Some(at) => LoginDeadline::At(at),
+        None => LoginDeadline::Relative(timeout),
+    }
+}
+
+/// The timeout half of the login race.
+///
+/// Both arms report the same [`AuthError::Timeout`]; the relative form is the
+/// fallback for an unrepresentable absolute deadline (auth.rs:791-829).
+async fn login_watchdog(deadline: LoginDeadline) -> Result<AuthenticatedVault, AuthError> {
+    match deadline {
+        LoginDeadline::At(at) => {
+            smol::Timer::at(at).await;
+        }
+        LoginDeadline::Relative(duration) => {
+            smol::Timer::after(duration).await;
+        }
+    }
+    Err(AuthError::Timeout)
+}
+
 /// Log in and fetch the vault data with a timeout.
 ///
 /// The KDF derivation is CPU- and memory-heavy; callers should run this
@@ -819,20 +859,11 @@ pub async fn authenticate_with_timeout(
     // snapshot, client setup) used to delay the timer's own start and stretch
     // the caller's budget. With an absolute deadline an already-elapsed budget
     // fires on the first poll, which the zero-duration test seam relies on.
-    let deadline = std::time::Instant::now().checked_add(timeout);
-    let timer = async move {
-        match deadline {
-            Some(at) => {
-                smol::Timer::at(at).await;
-            }
-            // An unrepresentable deadline is not a reason to skip the watchdog:
-            // fall back to smol's relative timer with the original duration.
-            None => {
-                smol::Timer::after(timeout).await;
-            }
-        }
-        Err(AuthError::Timeout)
-    };
+    // An unrepresentable deadline is not a reason to skip the watchdog:
+    // `login_deadline` selects smol's relative timer with the original
+    // duration in that case (auth.rs:808-813).
+    let deadline = login_deadline(std::time::Instant::now(), timeout);
+    let timer = login_watchdog(deadline);
     smol::future::race(login, timer).await
 }
 

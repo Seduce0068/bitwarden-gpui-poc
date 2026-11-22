@@ -758,7 +758,7 @@ mod tests {
             "note",
             "note",
             ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         );
         assert_eq!(totp_badge(&note).label, "");
@@ -791,7 +791,7 @@ mod tests {
             "note",
             "note",
             crate::model::ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         );
         let absent = totp_badge(&note);

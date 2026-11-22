@@ -1382,3 +1382,69 @@ fn plain_import_propagates_a_locked_vault() {
     ));
     assert!(matches!(folders_from(&locked), Err(SyncError::Locked)));
 }
+
+#[test]
+fn non_login_ciphers_are_excluded_from_import_and_audit() {
+    // `openwarden::Vault::logins()` keeps only personal, live ciphers of
+    // `type: 1`. A secure note or card must not become a model login, and
+    // must not produce an `ImportAudit` entry.
+    let note = serde_json::json!({
+        "id": "note-1",
+        "type": 2,
+        "name": "Recovery codes",
+        "notes": "not importable",
+        "revisionDate": "2024-01-01T00:00:00Z",
+    });
+    let card = serde_json::json!({
+        "id": "card-1",
+        "type": 3,
+        "name": "Visa",
+        "revisionDate": "2024-01-01T00:00:00Z",
+    });
+    let vault = unlocked_vault(&[note, card, cipher("login-1", "2024-01-01T00:00:00Z")]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1, "only the login cipher is imported");
+    assert_eq!(model.items[0].id, "login-1");
+    assert!(model.item("note-1").is_none());
+    assert!(model.item("card-1").is_none());
+    assert_eq!(
+        audit,
+        vec![ImportAudit::Added {
+            id: "login-1".to_string(),
+            revision: parse_revision(Some("2024-01-01T00:00:00Z")).unwrap(),
+        }]
+    );
+}
+
+#[test]
+fn password_and_totp_markers_reject_the_other_status_markers() {
+    // Each helper is an exact-equality check against its own sentinel
+    // (vault_sync.rs:34-60). Treating a sibling marker as "undecryptable
+    // password/TOTP" would hide the real classification in the health audit.
+    assert!(is_undecryptable_password(UNDECRYPTABLE_PASSWORD));
+    assert!(is_undecryptable_totp(UNDECRYPTABLE_TOTP));
+    assert!(!is_undecryptable_password(UNDECRYPTABLE_TOTP));
+    assert!(!is_undecryptable_totp(UNDECRYPTABLE_PASSWORD));
+    assert!(!is_undecryptable_password(UNDECRYPTABLE_URI));
+    assert!(!is_undecryptable_totp(UNDECRYPTABLE_URI));
+    assert!(!is_undecryptable_uri(UNDECRYPTABLE_PASSWORD));
+    assert!(!is_undecryptable_uri(UNDECRYPTABLE_TOTP));
+
+    // A marker with a suffix is a different string and must not be accepted.
+    for marker in [
+        UNDECRYPTABLE_PASSWORD,
+        UNDECRYPTABLE_TOTP,
+        UNDECRYPTABLE_URI,
+    ] {
+        let extended = format!("{marker}-x");
+        assert!(
+            !is_undecryptable_password(&extended),
+            "password marker accepted {extended:?}"
+        );
+        assert!(
+            !is_undecryptable_totp(&extended),
+            "TOTP marker accepted {extended:?}"
+        );
+    }
+}

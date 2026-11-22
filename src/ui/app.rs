@@ -326,6 +326,26 @@ pub(super) fn audit_refresh_status_for(
     Some(audit_refresh_status(clamped, len, name.as_deref(), dirty))
 }
 
+/// Status a report refresh is allowed to publish on the current panel.
+///
+/// The threshold keys are bound only in settings-owning panels (see the
+/// `AdjustThreshold` branches in `crate::ui::keys::classify_key`). Changing a
+/// threshold recomputes the report, but the audit-row description must not
+/// replace the settings feedback on those panels. `None` means "keep the
+/// current status"; the report itself is still refreshed in every panel.
+/// Kept pure so the contract can be tested without a GPUI window.
+pub(super) fn audit_refresh_status_for_panel(
+    report: Option<&crate::health::Report>,
+    selection: Option<usize>,
+    dirty: bool,
+    panel: Panel,
+) -> Option<String> {
+    if matches!(panel, Panel::Settings | Panel::Generator) {
+        return None;
+    }
+    audit_refresh_status_for(report, selection, dirty)
+}
+
 impl BitwardenApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let path = Settings::default_path();
@@ -815,11 +835,14 @@ impl BitwardenApp {
             self.audit_scroll_handle.scroll_to_item(scroll_index);
         }
         // Always re-read the row name from the freshly computed report: the
-        // index can stay the same while a different finding occupies it.
-        if let Some(status) = audit_refresh_status_for(
+        // index can stay the same while a different finding occupies it. A
+        // threshold change from a settings panel keeps its own status even
+        // though the report (and its row selection) is refreshed here.
+        if let Some(status) = audit_refresh_status_for_panel(
             self.view.audit_report.as_ref(),
             self.audit_row_selection,
             self.settings_dirty,
+            self.panel,
         ) {
             self.status = status;
         }
@@ -985,6 +1008,43 @@ mod tests {
         assert!(empty.is_some_and(|status| status.contains("監査する問題がありません")));
         // A non-empty report with no selection leaves the previous status alone.
         assert_eq!(audit_refresh_status_for(Some(&second), None, false), None);
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_panels_ignore_the_audit_refresh_status() {
+        use crate::health::ItemReport;
+        use crate::model::ItemKind;
+
+        let report = Report {
+            items: vec![ItemReport {
+                id: "item-1".into(),
+                name: "Example".into(),
+                kind: ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 0,
+            logins: 1,
+        };
+        let normal = audit_refresh_status_for(Some(&report), Some(0), false);
+        assert!(normal.as_ref().is_some_and(|s| s.contains("Example")));
+
+        // `+`/`-` in these panels adjust thresholds and refresh the report;
+        // the settings status must survive that refresh.
+        for panel in [Panel::Settings, Panel::Generator] {
+            assert_eq!(
+                audit_refresh_status_for_panel(Some(&report), Some(0), false, panel),
+                None,
+                "{panel:?} must keep its settings status"
+            );
+        }
+        for panel in [Panel::Vault, Panel::Audit] {
+            assert_eq!(
+                audit_refresh_status_for_panel(Some(&report), Some(0), false, panel),
+                normal,
+                "{panel:?} must still describe the refreshed row"
+            );
+        }
     }
 
     #[::core::prelude::v1::test]

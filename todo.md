@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第69弾で 9 件すべてを完了）。
+なし（第70弾で 11 件すべてを完了）。
 
 ## 完了
 
+- [x] 第70弾（16 担当・14 回目）の指摘 11 件を完結（2026-11-23）
+  - 非 ASCII TOTP secret のパニック防止、AltGr 由来文字の挿入、
+    閾値変更時の status 上書き、認証確定後の m/r 案内を修正。
+  - タイムアウト退避、schema_version 0.0、未来版 device_id 救済、
+    legacy fallback、非ログイン除外、Zeroizing 化、カード haystack、
+    base64、Severity ラベルをテスト／修正。
+  - limits 定数を UI クランプへ集約、clippy/doc/secret の
+    統合時エラーを解消。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（624 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第69弾（16 担当・13 回目）の指摘 9 件を完結（2026-11-23）
   - 認証の絶対デッドラインタイムアウト、カード番号・コード・notes の
     Zeroizing 化、設定読み取りの TOCTOU 共通化とゼロ幅定数集約を修正。

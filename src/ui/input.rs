@@ -358,7 +358,7 @@ mod tests {
             "a",
             "Alpha",
             ItemData::SecureNote {
-                text: String::new(),
+                text: String::new().into(),
             },
         ));
         view.selected_id = Some("a".into());
