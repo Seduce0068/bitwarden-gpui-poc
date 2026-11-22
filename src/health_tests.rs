@@ -1388,3 +1388,16 @@ fn passphrase_estimate_rejects_mixed_separators() {
     let underscored = format!("{}_{}", WORDS[0], WORDS[1]);
     assert!(super::passphrase_estimate(&underscored).is_some());
 }
+
+#[test]
+fn only_digit_suffixes_get_the_word_suffix_discount() {
+    // `estimate_entropy`'s comment now matches the code: only a trailing digit
+    // run is modelled (health.rs:370-377). A symbol suffix keeps the raw
+    // character-pool estimate and must not be silently discounted as well.
+    let digits = estimate_entropy("sunflower42");
+    let symbols = estimate_entropy("sunflower!!");
+    assert!(digits < symbols, "{digits} vs {symbols}");
+    // The documented digit case still beats an unsuffixed word in raw bits.
+    let plain = estimate_entropy("sunflower");
+    assert!(digits > plain, "{digits} vs {plain}");
+}

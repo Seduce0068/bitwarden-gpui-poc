@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第66弾で 10 件すべてを完了）。
+なし（第67弾で 11 件すべてを完了）。
 
 ## 完了
 
+- [x] 第67弾（16 担当・11 回目）の指摘 11 件を完結（2026-11-23）
+  - 監査未選択 Enter の未保存マーカー、生成 y/Y の案内、
+    `TotpState::clear()` と Alt+文字のテストを追加。
+  - `Some(Kdf)` 経路、trim 空判定、設定上限/default_path、
+    cache の parse 失敗と値なしパラメータ、同期の欠落分岐、
+    model の trim/padding/serde 既定値、監査コメントを処理。
+  - CHANGELOG に第65〜66弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（570 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第66弾（16 担当・10 回目）の指摘 10 件を完結（2026-11-23）
   - `VaultItem` の Debug で notes をマスク、`is_common_password` の
     完全一致/接頭辞分岐を分離、InsecureUri のバックスラッシュ正規化を追加。

@@ -1246,3 +1246,42 @@ fn absent_password_is_empty_and_markers_are_exact() {
         );
     }
 }
+
+#[test]
+fn absent_username_field_is_empty_without_a_marker() {
+    // `cipher()` has no `login.username`, so `vault.username()` returns
+    // `Ok(None)`. `login_item` folds that into an empty string with the same
+    // `unwrap_or_default()` used for `Err(_)` (vault_sync.rs:299-304).
+    // The existing sibling test covers the Err(_) half of the fold; this one
+    // pins the Ok(None) half through the real, uninjected openwarden vault.
+    let vault = unlocked_vault(&[cipher("no-username", "2024-01-01T00:00:00Z")]);
+    let model = import_logins(&vault).expect("a missing username must not abort the import");
+    let item = model.item("no-username").unwrap();
+    assert_eq!(item.login().unwrap().0, "");
+    // No sentinel is introduced for usernames: the raw JSON field never
+    // enters the model, even when it is absent rather than undecryptable.
+    assert!(!item.login().unwrap().0.contains("openwarden"));
+}
+
+#[test]
+fn dedup_is_a_no_op_when_ciphers_is_missing_or_not_an_array() {
+    // `dedup_ciphers_by_revision` returns early when `ciphers` is absent or
+    // not an array (vault_sync.rs:181-186). It must neither panic nor rewrite
+    // the remaining document; `parse_sync` may be handed such a body.
+    let mut missing = serde_json::json!({"profile": {"id": "user-1"}, "folders": []});
+    let before = missing.clone();
+    super::dedup_ciphers_by_revision(&mut missing);
+    assert_eq!(missing, before);
+    assert!(missing.get("ciphers").is_none());
+
+    for wrong in [
+        serde_json::json!(null),
+        serde_json::json!("ciphers"),
+        serde_json::json!({"0": "row"}),
+        serde_json::json!(42),
+    ] {
+        let mut value = serde_json::json!({"ciphers": wrong.clone()});
+        super::dedup_ciphers_by_revision(&mut value);
+        assert_eq!(value["ciphers"], wrong, "{wrong}");
+    }
+}

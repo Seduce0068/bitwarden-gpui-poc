@@ -1543,6 +1543,66 @@ fn every_leading_200b_to_200f_character_is_stripped_from_email() {
 }
 
 #[test]
+fn sanitized_clamps_idle_and_login_timeouts_at_the_upper_bound() {
+    use crate::limits::{MAX_IDLE_LOCK_SECONDS, MAX_LOGIN_TIMEOUT_SECONDS};
+
+    // The sibling test pins the lower ends; these two `.clamp()` calls
+    // (settings.rs:597-602) must also reject values above the UI maxima.
+    let settings = Settings {
+        idle_lock_seconds: MAX_IDLE_LOCK_SECONDS + 1,
+        login_timeout_seconds: MAX_LOGIN_TIMEOUT_SECONDS + 1,
+        ..Default::default()
+    };
+    let safe = settings.sanitized();
+    assert_eq!(safe.idle_lock_seconds, MAX_IDLE_LOCK_SECONDS);
+    assert_eq!(safe.login_timeout_seconds, MAX_LOGIN_TIMEOUT_SECONDS);
+    // sanitized() stays a pure clone-based operation.
+    assert_eq!(settings.idle_lock_seconds, MAX_IDLE_LOCK_SECONDS + 1);
+    assert_eq!(
+        settings.login_timeout_seconds,
+        MAX_LOGIN_TIMEOUT_SECONDS + 1
+    );
+
+    // The extremes cannot overflow the clamp or wrap around.
+    let extreme = Settings {
+        idle_lock_seconds: u64::MAX,
+        login_timeout_seconds: u64::MAX,
+        ..Default::default()
+    };
+    let safe = extreme.sanitized();
+    assert_eq!(safe.idle_lock_seconds, MAX_IDLE_LOCK_SECONDS);
+    assert_eq!(safe.login_timeout_seconds, MAX_LOGIN_TIMEOUT_SECONDS);
+}
+
+#[test]
+fn default_path_is_a_stable_settings_json_under_the_config_directory() {
+    // `default_path` caches its result in a OnceLock (settings.rs:705-711), so
+    // every UI call site in one process observes the same location.
+    let first = Settings::default_path();
+    assert_eq!(first, Settings::default_path(), "path must be cached");
+
+    if let Some(path) = first {
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("settings.json")
+        );
+        assert!(
+            path.to_string_lossy().contains("bitwarden-gpui-poc"),
+            "{path:?}"
+        );
+        // The file lives in the app's subdirectory, not the bare config root.
+        assert_eq!(
+            path.parent()
+                .and_then(|dir| dir.file_name())
+                .and_then(|name| name.to_str()),
+            Some("bitwarden-gpui-poc")
+        );
+    }
+    // `dirs::config_dir()` can be None on an unusual host; the stability
+    // assertion above holds for both the Some and None cases.
+}
+
+#[test]
 fn leading_zero_width_run_followed_by_another_cf_is_rejected_wholesale() {
     use crate::settings::SharedSettingsField;
 

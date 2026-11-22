@@ -439,3 +439,30 @@ fn settings_round_trip_through_json() {
     let back: PassphraseSettings = serde_json::from_str(&json).unwrap();
     assert_eq!(phrase, back);
 }
+
+#[test]
+fn missing_generator_fields_are_filled_from_defaults() {
+    // Both settings structs carry `#[serde(default)]` (generator.rs:31-33,
+    // 120-123), so a hand-edited settings file that omits fields still yields
+    // a usable generator configuration instead of a parse failure.
+    let password: PasswordSettings = serde_json::from_str("{}").unwrap();
+    assert_eq!(password, PasswordSettings::default());
+    let passphrase: PassphraseSettings = serde_json::from_str("{}").unwrap();
+    assert_eq!(passphrase, PassphraseSettings::default());
+
+    // A partial object keeps what it supplies and fills every sibling.
+    let partial_password: PasswordSettings =
+        serde_json::from_str(r#"{"length":32,"avoid_ambiguous":true}"#).unwrap();
+    assert_eq!(partial_password.length, 32);
+    assert!(partial_password.avoid_ambiguous);
+    assert!(partial_password.lowercase);
+    assert!(partial_password.uppercase);
+    assert!(partial_password.symbols);
+
+    let partial_passphrase: PassphraseSettings =
+        serde_json::from_str(r#"{"words":6,"separator":"_"}"#).unwrap();
+    assert_eq!(partial_passphrase.words, 6);
+    assert_eq!(partial_passphrase.separator, "_");
+    assert!(partial_passphrase.capitalize);
+    assert!(!partial_passphrase.include_number);
+}

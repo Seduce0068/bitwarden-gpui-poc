@@ -373,6 +373,39 @@ mod tests {
     }
 
     #[test]
+    fn clear_drops_the_cached_code_and_error_message() {
+        let mut state = TotpState::new();
+        let displayed = state.display(SECRET, 40);
+        assert!(displayed.starts_with("287 082"), "{displayed}");
+        assert_eq!(state.current_code(), Some("287082"));
+        assert_eq!(state.error_message(), None);
+
+        state.clear();
+        assert!(!state.has_secret());
+        assert_eq!(
+            state.current_code(),
+            None,
+            "clear must not leave the previous item's code on screen"
+        );
+        assert_eq!(state.error_message(), None);
+
+        // The same contract holds when the cached snapshot was a failure.
+        let mut state = TotpState::new();
+        assert_eq!(state.display("not base32!", 0), "コード生成失敗");
+        assert!(state.error_message().is_some());
+
+        state.clear();
+        assert!(!state.has_secret());
+        assert_eq!(state.current_code(), None);
+        assert_eq!(
+            state.error_message(),
+            None,
+            "clear must drop the cached error along with the secret"
+        );
+        assert!(state.matches_secret(""));
+    }
+
+    #[test]
     fn current_code_and_secret_identity_track_the_displayed_snapshot() {
         let mut state = TotpState::new();
         assert_eq!(state.current_code(), None);

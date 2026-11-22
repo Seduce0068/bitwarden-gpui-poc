@@ -791,8 +791,8 @@ fn sort_key_next_cycles_through_all_four_variants() {
 #[test]
 fn view_sorting_uses_comparison_keys_for_names() {
     // `compare()` normalizes both names with `comparison_key` before ordering
-    // (model.rs:923-926), and `Vault::view` normalizes the query the same way
-    // (model.rs:819-826). NFD/uppercase spellings must therefore sort and
+    // (model.rs:969-972), and `Vault::view` normalizes the query the same way
+    // (model.rs:857-867). NFD/uppercase spellings must therefore sort and
     // search identically to their precomposed/lowercase counterparts.
     let mut vault = Vault::new();
     vault
@@ -982,7 +982,7 @@ fn ssh_fingerprint_ignores_comment_and_extra_whitespace() {
 fn ssh_fingerprint_rejects_extra_base64_padding() {
     // Padding is optional, but a surplus `=` must not decode to the same blob:
     // otherwise distinct public-key lines would share one fingerprint
-    // (model.rs:278-320).
+    // (model.rs:293-346).
     let canonical = super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ== fp");
     assert!(canonical.is_some());
     for extra in [
@@ -1009,7 +1009,7 @@ fn ssh_fingerprint_rejects_extra_base64_padding() {
 #[test]
 fn ssh_fingerprint_rejects_non_canonical_base64_padding_bits() {
     // The decoder must verify the unused low bits of the final base64
-    // character (model.rs:300-311). `AQ==` is canonical for byte 0x01, while
+    // character (model.rs:323-332). `AQ==` is canonical for byte 0x01, while
     // `AR==` decodes to the same 0x01 only if those low bits are ignored.
     // Accepting it would let two different fingerprints map to one key blob.
     let canonical = "ssh-ed25519 AQ== fp";
@@ -1171,7 +1171,7 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
 
 #[test]
 fn page_matching_ties_use_the_folded_name_key_then_the_id() {
-    // `matches_page` shares the `compare` tiebreak (model.rs:841,923-926):
+    // `matches_page` shares the `compare` tiebreak (model.rs:869-889,969-972):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
     let page = "https://example.com/shared";
@@ -1430,4 +1430,53 @@ fn an_item_with_multiple_uris_matches_any_of_them() {
     let hits = vault.matches_page("https://two.example.net/login", &opts);
     assert_eq!(hits.len(), 1, "a matching item must not be duplicated");
     assert_eq!(hits[0].id, "multi");
+}
+
+#[test]
+fn view_trims_surrounding_whitespace_from_the_query() {
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "Café", "user", "pw", "https://example.com"));
+
+    // `Vault::view` trims the raw query before normalizing it (model.rs:858),
+    // so a pasted value with stray whitespace behaves like the bare needle.
+    for query in ["Café", "  Café  ", "\tCafé\n", "  CAFE\u{301}  "] {
+        assert_eq!(
+            vault.view(&Filter::All, query, SortKey::NameAsc).len(),
+            1,
+            "{query:?}"
+        );
+    }
+    // A whitespace-only query is the empty needle: every item stays visible.
+    assert_eq!(vault.view(&Filter::All, "   ", SortKey::NameAsc).len(), 1);
+    assert!(vault
+        .view(&Filter::All, "   tea   ", SortKey::NameAsc)
+        .is_empty());
+}
+
+#[test]
+fn ssh_fingerprint_rejects_insufficient_base64_padding() {
+    // Padding is optional, but when it is present the run of `=` must match
+    // the encoded byte count (model.rs:333-344). A partial run must not decode
+    // to the same key blob as the canonical form.
+    let canonical = super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ== fp");
+    assert!(canonical.is_some());
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ= fp"),
+        None,
+        "one '=' for a one-byte blob is insufficient"
+    );
+
+    // Fully unpadded `AQ` is deliberately accepted and yields the same blob.
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ fp"),
+        canonical
+    );
+    // A two-byte blob still needs exactly one '=' when padding is used.
+    assert!(super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQI= fp").is_some());
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQI== fp"),
+        None
+    );
 }

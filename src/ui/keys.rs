@@ -411,6 +411,84 @@ mod tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod alt_text_tests {
+    use super::*;
+
+    fn auth_ctx<'a>(key: &'a str, key_char: Option<&'a str>, alt: bool) -> KeyContext<'a> {
+        KeyContext {
+            screen: Screen::Locked,
+            panel: Panel::Vault,
+            key,
+            key_char,
+            modifiers: KeyModifiers {
+                alt,
+                ..KeyModifiers::default()
+            },
+            editing_auth: true,
+            searching: false,
+            editing_settings: false,
+            login_failed: false,
+            has_audit_report: false,
+            query_nonempty: false,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn alt_printable_character_is_inserted_into_the_auth_field() {
+        // Option+S on a layout without `s` produces `ß` in `key_char` while
+        // `key` stays the physical character. The Alt guard must let it
+        // through while editing, and the auth fallback must insert the
+        // composed text instead of the ASCII key.
+        let ctx = auth_ctx("s", Some("ß"), true);
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertAuthText("ß".to_string())
+        );
+
+        // The same composed text without Alt follows the same insert path.
+        let ctx = auth_ctx("s", Some("ß"), false);
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertAuthText("ß".to_string())
+        );
+
+        // Multi-character IME text is inserted whole while editing auth.
+        let ctx = auth_ctx("unknown", Some("日本語"), true);
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertAuthText("日本語".to_string())
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn alt_without_printable_text_stays_inert_in_the_auth_field() {
+        // These key names produce no text, so the guard keeps them inert even
+        // while an auth field is focused.
+        for key in ["enter", "backspace", "up", "arrowleft"] {
+            let ctx = auth_ctx(key, None, true);
+            assert_eq!(classify_key(&ctx), UiAction::None, "auth/{key}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn alt_printable_text_outside_editing_does_not_reach_the_auth_insert_path() {
+        // Outside editing modes Alt stays inert even with a printable glyph,
+        // so the guard never leaks into command panels.
+        let mut ctx = auth_ctx("s", Some("ß"), true);
+        ctx.editing_auth = false;
+        assert_eq!(classify_key(&ctx), UiAction::None);
+
+        ctx.screen = Screen::Unlocked;
+        ctx.panel = Panel::Generator;
+        assert_eq!(classify_key(&ctx), UiAction::None);
+
+        ctx.panel = Panel::Settings;
+        assert_eq!(classify_key(&ctx), UiAction::None);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod cursor_key_tests {
     use super::*;
 

@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use super::{is_blocked_server_url_with, is_blocked_server_url_without_dns, is_link_local_ip};
 use crate::auth::*;
 use crate::error::OTHER_ERROR_MESSAGE;
-use openwarden::{EncString, MasterKey};
+use openwarden::{EncString, Kdf, MasterKey};
 
 /// A unique, non-production canary so a leak of the client secret can be
 /// detected unambiguously in debug output.
@@ -1503,4 +1503,73 @@ fn the_clamped_copy_is_what_validation_sees() {
     ));
     assert_eq!(result.err(), Some(AuthError::Timeout));
     assert_eq!(original.email, before_email);
+}
+
+#[test]
+fn whitespace_only_server_url_and_email_are_missing_fields() {
+    // `validate_config` checks `.trim().is_empty()` for the two text fields
+    // that live in Settings (auth.rs:582,591). A whitespace-only value is a
+    // missing field, not an InvalidServerUrl / InvalidEmail failure.
+    let mut value = config();
+    value.server_url = " \t\n\u{3000}".into();
+    assert_eq!(
+        validate_config(&value),
+        Err(AuthError::MissingField("server_url"))
+    );
+
+    let mut value = config();
+    value.email = " \t\n\u{3000}".into();
+    assert_eq!(
+        validate_config(&value),
+        Err(AuthError::MissingField("email"))
+    );
+
+    // The same check tolerates padding around an otherwise valid value: the
+    // trimmed form is what later reaches `ServerUrls` / `valid_email`.
+    let mut padded = config();
+    padded.server_url = "  https://vault.example.com  ".into();
+    padded.email = "  alice@example.com  ".into();
+    assert_eq!(validate_config(&padded), Ok(()));
+}
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set by [`observing_import`] when the production KDF reaches openwarden.
+static SAW_KDF: AtomicBool = AtomicBool::new(false);
+/// A policy-valid PBKDF2 KDF, used to exercise the `Some(Kdf)` path.
+const TEST_KDF: Kdf = Kdf::Pbkdf2 {
+    iterations: 100_000,
+};
+
+fn observing_import(
+    vault: &openwarden::Vault,
+) -> Result<crate::model::Vault, crate::vault_sync::SyncError> {
+    SAW_KDF.store(vault.key_state().kdf == Some(TEST_KDF), Ordering::SeqCst);
+    crate::vault_sync::import_logins(vault)
+}
+
+#[test]
+fn unlock_and_import_forwards_the_session_kdf_to_openwarden() {
+    // Production takes `kdf` from the live `Session` and passes it to
+    // `unlock_and_import_with` (auth.rs:734-741,754-760). `Session::from_token`
+    // is the only public constructor needing no login response and leaves kdf
+    // unset, so the existing branch tests all use `None`. This test supplies a
+    // real `Some(Kdf)` and uses an import stub to observe the KDF that reached
+    // the unlocked vault, covering the same path a real login takes.
+    SAW_KDF.store(false, Ordering::SeqCst);
+
+    let (master_key, protected, sync) = unlock_fixture();
+    let vault = super::unlock_and_import_with(
+        &protected,
+        Some(TEST_KDF),
+        &master_key,
+        sync,
+        observing_import,
+    )
+    .expect("a session-derived Some(Kdf) must unlock like production");
+    assert!(vault.items.is_empty());
+    assert!(
+        SAW_KDF.load(Ordering::SeqCst),
+        "the supplied KDF must reach openwarden's unlocked vault"
+    );
 }

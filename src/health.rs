@@ -367,8 +367,8 @@ pub fn estimate_entropy(password: &str) -> u32 {
         // A dictionary word: roughly the word list plus a little for casing.
         adjusted = adjusted.min(entropy_bits(2_000, 1) + if has_upper { 1.0 } else { 0.0 });
     }
-    // A word with a short digit or symbol suffix can be brute-forced by
-    // trying every suffix, so charge only for the suffix length.
+    // A word with a short trailing digit suffix can be brute-forced by trying
+    // every suffix; only digits are modelled (`strip_trailing_digits`).
     if let Some(stripped) = strip_trailing_digits(&lower) {
         if !common && stripped.len() >= 3 && stripped.chars().all(|c| c.is_ascii_lowercase()) {
             let suffix = lower.len() - stripped.len();

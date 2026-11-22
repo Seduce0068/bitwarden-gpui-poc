@@ -113,6 +113,18 @@ pub(super) fn audit_focus_status(id: &str, found: bool, dirty: bool) -> String {
     status_with_unsaved(&base, dirty)
 }
 
+/// Status when `Enter` is pressed in the audit panel with no row highlighted.
+///
+/// This early-return branch bypasses `audit_focus_status`, so it must compose
+/// through `status_with_unsaved` itself; otherwise the persistent unsaved
+/// warning disappears the moment the user tries to follow a finding.
+pub(super) fn audit_no_selection_status(dirty: bool) -> String {
+    status_with_unsaved(
+        "監査行が選択されていません（↑↓で行を選択してください）",
+        dirty,
+    )
+}
+
 /// Status the ticker leaves on screen after an idle auto-lock.
 ///
 /// `lock()` composes its own status (including the unsaved-settings warning),
@@ -562,7 +574,7 @@ impl BitwardenApp {
             Some(id.to_string())
         };
         let Some(id) = resolved else {
-            self.status = "監査行が選択されていません（↑↓で行を選択してください）".to_string();
+            self.status = audit_no_selection_status(self.settings_dirty);
             cx.notify();
             return;
         };
@@ -819,6 +831,22 @@ mod tests {
         assert_eq!(missing_dirty, status_with_unsaved(&missing_clean, true));
         assert!(missing_dirty.starts_with(&missing_clean));
         assert!(missing_dirty.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_no_selection_status_keeps_the_unsaved_marker() {
+        // The Enter-without-a-row early return used to bypass the common
+        // composer and silently hide the unsaved-settings warning.
+        let clean = audit_no_selection_status(false);
+        assert_eq!(
+            clean,
+            "監査行が選択されていません（↑↓で行を選択してください）"
+        );
+        assert!(!clean.contains("[未保存"));
+
+        let dirty = audit_no_selection_status(true);
+        assert_eq!(dirty, status_with_unsaved(&clean, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
     }
 
     #[::core::prelude::v1::test]

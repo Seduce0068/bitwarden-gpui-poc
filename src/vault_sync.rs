@@ -12,8 +12,8 @@
 //! readers directly, so a test cannot inject a decryption failure through a
 //! parameter; it must instead build a real vault with malformed `EncString`
 //! ciphertexts (see `undecryptable_password_keeps_the_vault_and_is_excluded_from_audit`).
-//! Adding a decryptor trait/closure parameter would change the public import
-//! signature and every caller, which is outside this module's change scope.
+//! A private decryptor seam was considered and rejected: it would change the
+//! public import signature and fork the real reader path these tests exercise.
 
 use std::collections::{HashMap, HashSet};
 

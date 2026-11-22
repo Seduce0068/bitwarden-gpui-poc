@@ -1270,3 +1270,52 @@ fn sensitive_param_keys_match_camel_case_and_partial_names() {
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cached_sync_for_detailed_reports_a_broken_body_in_a_valid_envelope() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-broken-body-restore-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
+
+    // The envelope passes every load-time check (valid JSON, current version,
+    // matching server, no expiry), so `load_default()` succeeds and the only
+    // failure is the final `cache.sync()` call (cache.rs:603-613). This is the
+    // branch a hand-edited or partially written cache file can reach.
+    let broken = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: b"not json".to_vec(),
+        created_at: None,
+    };
+    save_default(&broken).unwrap();
+
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com"),
+        Err(SyncCacheError::CacheParse(_))
+    ));
+    // The best-effort wrapper still collapses the classified reason to None.
+    assert!(cached_sync_for("https://vault.example.com").is_none());
+}
+
+#[test]
+fn value_less_parameters_survive_masking_verbatim() {
+    // `mask_param_pairs` splits on `=` (cache.rs:171-198). A bare flag has no
+    // value, so it takes the `else` branch and must be copied verbatim rather
+    // than dropped or rewritten.
+    assert_eq!(
+        super::mask_param_pairs("flag&token=TOPSECRET&state=ok&bare"),
+        "flag&token=[redacted]&state=ok&bare"
+    );
+    assert_eq!(super::mask_param_pairs("bare"), "bare");
+    assert_eq!(super::mask_param_pairs("a&b&c"), "a&b&c");
+
+    // The same branch is reached from a query and from a fragment.
+    let masked = super::mask_url_secrets("https://vault.example.com/p?flag&token=SECRET#bare");
+    assert!(masked.contains("?flag&token=[redacted]"), "{masked}");
+    assert!(masked.ends_with("#bare"), "{masked}");
+    assert!(!masked.contains("SECRET"), "{masked}");
+}

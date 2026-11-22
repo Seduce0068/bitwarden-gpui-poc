@@ -52,7 +52,7 @@ pub(super) fn generator_length_labels(
 /// Pure so the wording can be pinned by tests without rendering a GPUI window.
 pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String {
     format!(
-        "p/h: 生成 / y/Y: コピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / n: 一覧に戻る / l: ロック / Esc: 終了 / {MOUSE_WHEEL_SCROLL_ONLY_HINT}"
+        "p/h: 生成 / y: パスワードをコピー / Y: パスフレーズをコピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / n: 一覧に戻る / l: ロック / Esc: 終了 / {MOUSE_WHEEL_SCROLL_ONLY_HINT}"
     )
 }
 
@@ -658,6 +658,17 @@ mod tests {
                 "the inline hint must not repeat the status-bar prefix: {settings}"
             );
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_key_hint_names_the_two_copy_targets() {
+        // The hint must mirror the key bindings in `ui::keys`: y copies the
+        // generated password, Y copies the generated passphrase.
+        let hint = generator_panel_key_hint(30);
+        assert!(hint.contains("y: パスワードをコピー"), "{hint}");
+        assert!(hint.contains("Y: パスフレーズをコピー"), "{hint}");
+        assert!(!hint.contains("y/Y: コピー"), "{hint}");
+        assert!(hint.contains("30秒で復元"), "{hint}");
     }
 
     #[::core::prelude::v1::test]

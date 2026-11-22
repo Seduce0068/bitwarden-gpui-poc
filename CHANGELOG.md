@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 全体改善（第65〜66弾 / 2026-11-23）
+
+- Settings / cache の Debug マスクとエンコード済み URL の秘密マスクを改善
+- 監査スクロールのリセット、TOTP 遷移、start_search の共通化
+- `VaultItem` Debug の notes マスク、`is_common_password` の分岐分離、
+  InsecureUri のバックスラッシュ正規化と各層の残りテスト
+
 ### 全体改善（第64弾 / 2026-11-23）
 
 - URL フラグメントとエンコード済み入れ子 URL の秘密マスクを改善
