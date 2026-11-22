@@ -340,6 +340,64 @@ fn debug_masks_secret_query_values_but_keeps_harmless_parameters() {
 }
 
 #[test]
+fn every_sensitive_query_key_is_masked_including_uppercase_spellings() {
+    // The audit contract requires secret/password/passwd/auth/sig/session/code
+    // in addition to the original token/key entries (cache.rs:104-140).
+    for key in [
+        "secret", "password", "passwd", "auth", "sig", "session", "code", "token", "key",
+    ] {
+        let value = format!("SENSITIVE-{key}-VALUE");
+        let url = format!("https://vault.example.com/sync?{key}={value}&state=ok");
+        let masked = super::mask_url_secrets(&url);
+        assert!(!masked.contains(&value), "{masked}");
+        assert!(masked.contains(&format!("{key}=[redacted]")), "{masked}");
+        assert!(masked.contains("state=ok"), "{masked}");
+
+        let upper_key = key.to_ascii_uppercase();
+        let upper_url = format!("https://vault.example.com/sync?{upper_key}={value}");
+        let upper_masked = super::mask_url_secrets(&upper_url);
+        assert!(!upper_masked.contains(&value), "{upper_masked}");
+    }
+}
+
+#[test]
+fn fragment_values_are_masked_like_query_values() {
+    let url = "https://vault.example.com/cb#access_token=FRAGMENT_SECRET&state=ok";
+    let masked = super::mask_url_secrets(url);
+    assert!(!masked.contains("FRAGMENT_SECRET"), "{masked}");
+    assert!(masked.contains("access_token=[redacted]"), "{masked}");
+    assert!(masked.contains("state=ok"), "{masked}");
+    assert!(masked.contains('#'), "{masked}");
+
+    // The same URL reaches Debug through `SyncCache`, and the stored value
+    // remains byte-for-byte identical for the server-mismatch check.
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("FRAGMENT_SECRET"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn nested_url_values_are_masked_recursively() {
+    let url = "https://vault.example.com/login?redirect=https://cb.example.com/done?token=NESTED_SECRET&state=ok";
+    let masked = super::mask_url_secrets(url);
+    assert!(!masked.contains("NESTED_SECRET"), "{masked}");
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+    assert!(
+        masked.contains("redirect=https://cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // A nested fragment value is masked as well.
+    let with_fragment =
+        "https://vault.example.com/login?next=https://cb.example.com/done#code=NESTED_CODE";
+    let masked = super::mask_url_secrets(with_fragment);
+    assert!(!masked.contains("NESTED_CODE"), "{masked}");
+    assert!(masked.contains("code=[redacted]"), "{masked}");
+}
+
+#[test]
 fn restore_status_distinguishes_missing_and_user_mismatch() {
     // A missing cache is the normal first-launch case: no status text.
     assert_eq!(super::cache_restore_status(SyncCacheError::NotFound), None);
@@ -373,6 +431,34 @@ fn bounded_read_rechecks_the_size_after_metadata() {
         super::read_bounded(&mut much_too_many, 8),
         Err(CacheLoadError::CacheTooLarge)
     );
+}
+
+#[test]
+fn bounded_read_reports_a_failing_reader_as_read_failed_cause() {
+    use std::io::{self, Read};
+
+    struct FailingReader;
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "simulated read failure",
+            ))
+        }
+    }
+
+    let error = super::read_bounded(&mut FailingReader, 8).unwrap_err();
+    assert!(
+        matches!(error, CacheLoadError::ReadFailedCause(_)),
+        "{error:?}"
+    );
+    let source = std::error::Error::source(&error).map(ToString::to_string);
+    assert_eq!(
+        source.as_deref(),
+        Some("simulated read failure"),
+        "{error:?}"
+    );
+    assert_eq!(cache_error_message(error), REASON_UNREADABLE);
 }
 
 #[test]

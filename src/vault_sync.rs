@@ -267,13 +267,27 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
 /// notes or the favorite flag. Neither value can be imported through the
 /// supported API, so this PoC leaves them untouched rather than inventing
 /// values.
+///
+/// Known constraint (G07): a login whose name cannot be decrypted gets the
+/// same id-free placeholder as an undecryptable folder name. The internal
+/// cipher id remains in `VaultItem::id` for lookup and filtering, but it is
+/// deliberately not shown in the user-facing name.
+///
+/// Known constraint: unlike password/URI/TOTP, a login's `username` has **no**
+/// undecryptable marker. `vault.username()` returning `Ok(None)` (no field) and
+/// `Err(_)` (ciphertext could not be opened) are both folded into an empty
+/// `String`, so importers cannot distinguish "absent" from "uninspectable".
+/// Adding a sentinel would change `ItemData::Login::username` from a plain
+/// `String` to a tagged value, which is outside this change's model contract;
+/// the health audit does not score usernames, so the current behaviour is
+/// documented rather than silently changed.
 fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
     let id = info.id.as_str().to_string();
     let name = vault
         .name(&info.id)
         .ok()
         .map(|value| value.expose_secret().to_string())
-        .unwrap_or_else(|| format!("ログイン ({id})"));
+        .unwrap_or_else(|| "(復号できませんでした)".to_string());
     let username = vault
         .username(&info.id)
         .ok()

@@ -1030,6 +1030,31 @@ fn empty_names_use_a_placeholder_in_the_report() {
 }
 
 #[test]
+fn audit_report_ties_break_by_lowercased_name_then_id() {
+    // `audit` sorts worst-first, then by lowercased name and id
+    // (health.rs:607-612). Every item carries the same findings (a reused
+    // password and NoTotp), so only the two tiebreakers decide the order.
+    let item = |id: &str, name: &str| {
+        let mut value = login(id, name, "vT7#kQm2!zR9wP4$xL8@", "https://a.example", "");
+        value.revision_date = NOW;
+        value
+    };
+    let report = report_of(vec![
+        item("b-lower", "Alpha"),
+        item("a-upper", "alpha"),
+        item("d-lower", "beta"),
+        item("c-upper", "Beta"),
+    ]);
+
+    let ids: Vec<&str> = report.items.iter().map(|entry| entry.id.as_str()).collect();
+    assert_eq!(ids, vec!["a-upper", "b-lower", "c-upper", "d-lower"]);
+    for entry in &report.items {
+        assert_eq!(entry.worst(), Some(Severity::High));
+        assert!(entry.findings.contains(&Finding::NoTotp));
+    }
+}
+
+#[test]
 fn passphrase_with_an_unknown_word_uses_the_character_pool() {
     use crate::words::WORDS;
 

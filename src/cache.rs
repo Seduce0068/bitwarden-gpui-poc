@@ -95,41 +95,44 @@ fn mask_url_userinfo(url: &str) -> String {
     }
 }
 
-/// Redact secret-bearing query values while keeping the URL's structure.
+/// Whether a query/fragment parameter name denotes a credential.
 ///
-/// A diagnostic URL may carry a token, API key or password in its query. Those
-/// values are credentials just like userinfo and must never reach a log line.
-/// Only values whose key looks sensitive are replaced; harmless parameters
-/// (and the fragment) are preserved so the diagnostic remains useful.
-fn mask_url_secrets(url: &str) -> String {
-    let masked = mask_url_userinfo(url);
-    let Some(query_start) = masked.find('?') else {
-        return masked;
-    };
-    let query_end = masked[query_start..]
-        .find('#')
-        .map(|offset| query_start + offset)
-        .unwrap_or(masked.len());
-    let fragment = &masked[query_end..];
-    let mut out = String::with_capacity(masked.len());
-    out.push_str(&masked[..query_start + 1]);
+/// The match is a case-insensitive substring so common variants such as
+/// `api_key`, `accessToken` and `session_id` are covered by the same small
+/// list. The list deliberately includes every sensitive key named by the
+/// audit contract: `secret`, `password`, `passwd`, `auth`, `sig`, `session`
+/// and `code` (plus the pre-existing `token` and `key`).
+fn is_sensitive_param_key(key: &str) -> bool {
+    let folded = key.to_ascii_lowercase();
+    [
+        "token", "key", "secret", "password", "passwd", "auth", "sig", "session", "code",
+    ]
+    .iter()
+    .any(|needle| folded.contains(needle))
+}
+
+/// Redact secret-bearing `key=value` pairs in a query or a fragment.
+///
+/// A harmless key whose *value* is itself a URL is masked recursively: a
+/// nested `?token=...` or `#code=...` would otherwise survive the top-level
+/// key check and reach a diagnostic log verbatim. Plain values are copied
+/// unchanged so the URL stays useful for debugging.
+fn mask_param_pairs(pairs: &str) -> String {
+    let mut out = String::with_capacity(pairs.len());
     let mut first = true;
-    for pair in masked[query_start + 1..query_end].split('&') {
+    for pair in pairs.split('&') {
         if !first {
             out.push('&');
         }
         first = false;
-        if let Some((key, _value)) = pair.split_once('=') {
-            let folded = key.to_ascii_lowercase();
-            let sensitive = [
-                "token", "key", "secret", "password", "passwd", "auth", "sig", "session", "code",
-            ]
-            .iter()
-            .any(|needle| folded.contains(needle));
-            if sensitive {
+        if let Some((key, value)) = pair.split_once('=') {
+            if is_sensitive_param_key(key) {
+                out.push_str(key);
+                out.push_str("=[redacted]");
+            } else if value.contains('?') || value.contains('#') || value.contains("://") {
                 out.push_str(key);
                 out.push('=');
-                out.push_str("[redacted]");
+                out.push_str(&mask_url_secrets(value));
             } else {
                 out.push_str(pair);
             }
@@ -137,7 +140,41 @@ fn mask_url_secrets(url: &str) -> String {
             out.push_str(pair);
         }
     }
-    out.push_str(fragment);
+    out
+}
+
+/// Redact secret-bearing values in the userinfo, query **and fragment** while
+/// keeping the URL's structure.
+///
+/// A diagnostic URL may carry a token, API key or password in any of those
+/// three components. Those values are credentials and must never reach a log
+/// line. Only values whose key looks sensitive are replaced; harmless
+/// parameters are preserved so the diagnostic remains useful. A URL without a
+/// query is still checked for a fragment, and nested URLs inside a value are
+/// handled by [`mask_param_pairs`].
+fn mask_url_secrets(url: &str) -> String {
+    let masked = mask_url_userinfo(url);
+    let Some(query_start) = masked.find('?') else {
+        return match masked.find('#') {
+            Some(fragment_start) => format!(
+                "{}#{}",
+                &masked[..fragment_start],
+                mask_param_pairs(&masked[fragment_start + 1..])
+            ),
+            None => masked,
+        };
+    };
+    let query_end = masked[query_start..]
+        .find('#')
+        .map(|offset| query_start + offset)
+        .unwrap_or(masked.len());
+    let mut out = String::with_capacity(masked.len());
+    out.push_str(&masked[..query_start + 1]);
+    out.push_str(&mask_param_pairs(&masked[query_start + 1..query_end]));
+    if query_end < masked.len() {
+        out.push('#');
+        out.push_str(&mask_param_pairs(&masked[query_end + 1..]));
+    }
     out
 }
 

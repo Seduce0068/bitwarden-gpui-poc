@@ -115,14 +115,19 @@ pub enum SharedSettingsField {
 
 /// Apply the email `Cf` policy shared by the UI input path and `sanitized()`.
 ///
-/// A single leading zero-width character is common when pasting from a web
-/// form: strip it and keep the rest of the address. Only U+200B..U+200F at
-/// the very beginning of the text is tolerated; any other format character
-/// (a bidi override, a soft hyphen anywhere, a zero-width character in the
-/// middle) rejects the whole value. `None` therefore means "reject wholesale",
-/// and the caller either drops the pasted chunk or clears the stored email.
+/// A leading run of zero-width characters (U+200B..U+200F) is common when
+/// pasting from a web form: strip it and keep the rest of the address. Every
+/// code point in that range is accepted as the first character, including
+/// U+200C (ZWNJ) and U+200D (ZWJ); any other format character (a bidi
+/// override, a soft hyphen anywhere, a zero-width character after the first
+/// non-zero-width character) rejects the whole value. `None` therefore means
+/// "reject wholesale", and the caller either drops the pasted chunk or clears
+/// the stored email.
 fn normalize_email_text(text: &str) -> Option<String> {
-    let only_leading_zero_width = text.starts_with('\u{200b}')
+    let only_leading_zero_width = text
+        .chars()
+        .next()
+        .is_some_and(|first| matches!(first, '\u{200b}'..='\u{200f}'))
         && text
             .chars()
             .skip_while(|ch| matches!(ch, '\u{200b}'..='\u{200f}'))
@@ -537,6 +542,18 @@ impl Settings {
     /// audit thresholds. The same auth caps apply to `server_url` and `email`,
     /// reusing the constants from `crate::limits` so the stored value and the
     /// effective (clamped) login config cannot diverge.
+    ///
+    /// Known constraint: `passphrase_generator.separator` is a free-form
+    /// string, so a single alphanumeric character (e.g. `x`) is accepted here
+    /// and by the generator (`generator.rs:129,169`). The health audit's
+    /// passphrase recognizer only handles a repeated *non*-alphanumeric
+    /// separator or no separator at all, so such a passphrase falls back to
+    /// the character-pool estimate and can be scored far above its real
+    /// word-list entropy. This carries the same regression risk as the
+    /// multiple-character-separator case and is deliberately left unchanged:
+    /// rejecting or rewriting the separator would be a behaviour change
+    /// outside this module's scope. Callers that must avoid the overestimate
+    /// should keep the separator non-alphanumeric (the default `-`) or empty.
     pub fn sanitized(&self) -> Self {
         let mut result = self.clone();
         // A hand-edited, malformed identifier must not be sent to the server;

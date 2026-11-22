@@ -172,7 +172,8 @@ impl LoginUri {
 
 /// Card details.
 ///
-/// `Debug` masks the number and security code.
+/// `Debug` masks the cardholder name, number and security code. The brand and
+/// expiry stay visible as harmless metadata.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardData {
     /// Name on the card.
@@ -400,7 +401,7 @@ impl core::fmt::Debug for IdentityData {
 impl core::fmt::Debug for CardData {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("CardData")
-            .field("cardholder_name", &self.cardholder_name)
+            .field("cardholder_name", &"[redacted]")
             .field("brand", &self.brand)
             .field("number", &"[redacted]")
             .field("exp_month", &self.exp_month)
@@ -838,7 +839,14 @@ impl Vault {
             b.favorite
                 .cmp(&a.favorite)
                 .then_with(|| b.revision_date.cmp(&a.revision_date))
-                .then_with(|| a.name.cmp(&b.name))
+                // Use the same folded name key as `compare` (model.rs:923-926)
+                // and fall back to the id so equal names order deterministically
+                // instead of depending on the input order.
+                .then_with(|| {
+                    comparison_key(&a.name)
+                        .cmp(&comparison_key(&b.name))
+                        .then_with(|| a.id.cmp(&b.id))
+                })
         });
         matched
     }

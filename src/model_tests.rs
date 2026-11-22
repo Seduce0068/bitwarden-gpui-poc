@@ -1047,6 +1047,108 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
 }
 
 #[test]
+fn page_matching_ties_use_the_folded_name_key_then_the_id() {
+    // `matches_page` shares the `compare` tiebreak (model.rs:841,923-926):
+    // folded names order first, and identical folded names fall back to the id
+    // so the result never depends on insertion order.
+    let page = "https://example.com/shared";
+    let mut vault = Vault::new();
+    let mut nfd = login("b-nfd", "cafe\u{301}", "u", "p", page);
+    nfd.favorite = true;
+    nfd.revision_date = 10;
+    let mut nfc = login("a-nfc", "Café", "u", "p", page);
+    nfc.favorite = true;
+    nfc.revision_date = 10;
+    let mut alpha = login("z-alpha", "Apple", "u", "p", page);
+    alpha.favorite = true;
+    alpha.revision_date = 10;
+    vault.items = vec![nfd, nfc, alpha];
+
+    let opts = openwarden::MatchOptions::default();
+    let ids: Vec<&str> = vault
+        .matches_page(page, &opts)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["z-alpha", "a-nfc", "b-nfd"]);
+    assert_eq!(comparison_key("cafe\u{301}"), comparison_key("Café"));
+}
+
+#[test]
+fn cardholder_name_is_redacted_in_debug_but_brand_stays_visible() {
+    let card = VaultItem::new(
+        "c",
+        "Card",
+        ItemData::Card(CardData {
+            cardholder_name: "Ada Lovelace".into(),
+            brand: "Visa".into(),
+            number: "4111111111111234".into(),
+            code: "987".into(),
+            ..CardData::default()
+        }),
+    );
+    let debug = format!("{card:?}");
+    assert!(!debug.contains("Ada Lovelace"), "{debug}");
+    assert!(!debug.contains("Ada"), "{debug}");
+    assert!(!debug.contains("4111111111111234"), "{debug}");
+    assert!(!debug.contains("987"), "{debug}");
+    assert!(debug.contains("Visa"), "{debug}");
+    assert!(debug.contains("[redacted]"), "{debug}");
+}
+
+#[test]
+fn search_hints_exclude_card_code_and_ssh_private_key() {
+    // `haystacks` (model.rs:599-643) lists only non-secret kind-specific
+    // fields. The card security code and SSH private key must not be fished
+    // out through search even though they live in the same item.
+    let card = VaultItem::new(
+        "c",
+        "Card",
+        ItemData::Card(CardData {
+            cardholder_name: "Holder".into(),
+            number: "4111111111111234".into(),
+            code: "987654".into(),
+            ..CardData::default()
+        }),
+    );
+    assert!(!card.matches_query("987654"));
+    assert!(!card.matches_query("987"));
+    assert!(card.matches_query("Holder"));
+    assert!(card.matches_query("1234"));
+
+    let ssh = VaultItem::new(
+        "s",
+        "Key",
+        ItemData::SshKey(SshKeyData {
+            public_key: "ssh-ed25519 AAAA".into(),
+            private_key: "PRIVATE-KEY-MATERIAL".into(),
+            fingerprint: "SHA256:abc".into(),
+        }),
+    );
+    assert!(!ssh.matches_query("PRIVATE-KEY-MATERIAL"));
+    assert!(!ssh.matches_query("KEY-MATERIAL"));
+    assert!(ssh.matches_query("SHA256:abc"));
+}
+
+#[test]
+fn login_username_is_redacted_in_debug() {
+    // Regression for model.rs:490: the manual `ItemData` Debug prints a
+    // placeholder for username, not the actual value.
+    let item = login(
+        "1",
+        "Sample",
+        "alice@example.com",
+        "super-secret-pw",
+        "https://example.com",
+    );
+    let debug = format!("{item:?}");
+    assert!(debug.contains("Sample"), "{debug}");
+    assert!(!debug.contains("alice@example.com"), "{debug}");
+    assert!(!debug.contains("alice"), "{debug}");
+    assert!(!debug.contains("super-secret-pw"), "{debug}");
+}
+
+#[test]
 fn search_haystacks_cover_kind_specific_fields() {
     let note = VaultItem::new(
         "n",

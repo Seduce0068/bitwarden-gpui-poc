@@ -14,6 +14,16 @@ use crate::vault_sync::is_undecryptable_totp;
 /// Number of header rows rendered before the first audit item.
 pub(super) const AUDIT_HEADER_ROWS: usize = 3;
 
+/// Scroll guidance for panels with no keyboard-reachable scroll handle.
+///
+/// Only `audit_panel` receives a `ScrollHandle`, and only the vault list owns
+/// `VaultViewState::scroll_handle`. The generator and settings roots keep their
+/// offset in element state, so there is no handle for `ui::input` to scroll on
+/// Up/Down; adding one would require new state outside this module. Up/Down
+/// therefore stay `UiAction::None` in those panels, and the inline hints say
+/// so explicitly instead of implying a keyboard path exists.
+pub(super) const MOUSE_WHEEL_SCROLL_ONLY_HINT: &str = "スクロールはマウス／ホイールのみ";
+
 /// Labels for the two `+/-` rows in the generator panel.
 ///
 /// Both labels explicitly say that the same key changes the *other* generator
@@ -35,6 +45,28 @@ pub(super) fn generator_length_labels(
         Strength::from_bits(pp_bits).label()
     );
     (password_label, passphrase_label)
+}
+
+/// Inline key hint for the generator panel, including its scroll limitation.
+///
+/// Pure so the wording can be pinned by tests without rendering a GPUI window.
+pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String {
+    format!(
+        "p/h: 生成 / y/Y: コピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / n: 一覧に戻る / l: ロック / Esc: 終了 / {MOUSE_WHEEL_SCROLL_ONLY_HINT}"
+    )
+}
+
+/// Inline key hint for the settings panel, including its scroll limitation.
+///
+/// `settings_hint` already carries the settings-specific keys and avoids the
+/// status bar's "入力中:" prefix; appending the scroll note must not reintroduce
+/// that prefix here.
+pub(super) fn settings_panel_key_hint(editing: bool) -> String {
+    format!(
+        "{} / {}",
+        settings_hint(editing),
+        MOUSE_WHEEL_SCROLL_ONLY_HINT
+    )
 }
 
 /// Colour for a finding's severity on an unselected audit row.
@@ -343,11 +375,7 @@ pub(super) fn generator_panel<'a>(
         .child(
             div()
                 .text_sm()
-                .text_color(if dirty {
-                    rgb(0xf9e2af)
-                } else {
-                    rgb(0xa6adc8)
-                })
+                .text_color(if dirty { rgb(0xf9e2af) } else { rgb(0xa6adc8) })
                 .child(format!(
                     "{} {}",
                     unsaved_marker(dirty),
@@ -363,10 +391,7 @@ pub(super) fn generator_panel<'a>(
                 .mt_4()
                 .text_xs()
                 .text_color(rgb(0xa6adc8))
-                .child(format!(
-                    "p/h: 生成 / y/Y: コピー（{}秒で復元） / w: 設定を保存 / d: 破棄 / n: 一覧に戻る / l: ロック / Esc: 終了",
-                    settings.clipboard_restore_seconds
-                )),
+                .child(generator_panel_key_hint(settings.clipboard_restore_seconds)),
         )
 }
 
@@ -476,11 +501,10 @@ pub(super) fn settings_panel<'a>(
                 .text_xs()
                 .text_color(rgb(0xa6adc8))
                 // The editing state and arrow-key ownership are announced
-                // once by the status bar (`text_edit_start_status`). Drawing
-                // `TEXT_EDIT_ARROW_KEYS_HINT` here as well produced two
-                // "入力中:" lines in a row, so the panel keeps only its own
-                // settings-specific hint.
-                .child(settings_hint(editing.is_some())),
+                // once by the status bar (`text_edit_start_status`). The
+                // helper appends only the scroll note to the settings-specific
+                // hint, so no second "入力中:" line is drawn here.
+                .child(settings_panel_key_hint(editing.is_some())),
         )
 }
 
@@ -610,6 +634,30 @@ mod tests {
         );
         assert!(password.contains("長さ: 20"), "{password}");
         assert!(passphrase.contains("単語数: 4"), "{passphrase}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn panels_without_a_scroll_handle_advertise_mouse_wheel_only() {
+        let generator = generator_panel_key_hint(30);
+        assert!(
+            generator.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT),
+            "{generator}"
+        );
+        assert!(generator.contains("30秒で復元"), "{generator}");
+        assert!(generator.contains("p/h: 生成"), "{generator}");
+
+        for editing in [false, true] {
+            let settings = settings_panel_key_hint(editing);
+            assert!(
+                settings.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT),
+                "{settings}"
+            );
+            assert!(settings.contains(settings_hint(editing)), "{settings}");
+            assert!(
+                !settings.starts_with("入力中:"),
+                "the inline hint must not repeat the status-bar prefix: {settings}"
+            );
+        }
     }
 
     #[::core::prelude::v1::test]

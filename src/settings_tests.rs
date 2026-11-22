@@ -1304,3 +1304,69 @@ fn ensure_device_id_without_a_path_only_uses_memory() {
     // A second call must reuse the in-memory value; no file is involved.
     assert_eq!(settings.ensure_device_id(None).unwrap(), generated);
 }
+
+#[test]
+fn deterministic_uppercase_device_id_variant_is_accepted_and_reused() {
+    // A fixed literal keeps this branch deterministic: no CSPRNG draw is
+    // needed to build an uppercase variant (settings.rs:514-530).
+    const UPPER: &str = "A1B2C3D4-1234-4ABC-8DEF-0123456789AB";
+    assert_eq!(UPPER.len(), 36);
+    assert_eq!(UPPER.as_bytes()[14], b'4');
+    assert_eq!(UPPER.as_bytes()[19], b'8');
+    assert!(is_valid_device_id(UPPER), "{UPPER}");
+    assert!(is_valid_device_id(&UPPER.to_ascii_lowercase()));
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, format!(r#"{{"device_id":"{UPPER}"}}"#).as_bytes()).unwrap();
+    let loaded = Settings::load(&path);
+    assert_eq!(
+        loaded.device_id, UPPER,
+        "uppercase id must be reused verbatim"
+    );
+
+    // A variant nibble outside 8/9/a/b/A/B is still rejected.
+    let mut bad = UPPER.as_bytes().to_vec();
+    bad[19] = b'C';
+    assert!(!is_valid_device_id(std::str::from_utf8(&bad).unwrap()));
+}
+
+#[test]
+fn every_leading_200b_to_200f_character_is_stripped_from_email() {
+    use crate::limits::has_format_character;
+    use crate::settings::SharedSettingsField;
+
+    // U+200C (ZWNJ) used to be rejected unless U+200B came first; the doc
+    // promises the whole U+200B..U+200F run is tolerated at the start
+    // (settings.rs:116-139).
+    for prefix in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{200e}', '\u{200f}'] {
+        let mut settings = Settings::default();
+        settings.email.clear();
+        settings.push_shared_text(
+            SharedSettingsField::Email,
+            &format!("{prefix}alice@example.com"),
+        );
+        assert_eq!(
+            settings.email, "alice@example.com",
+            "prefix U+{:04X}",
+            prefix as u32
+        );
+
+        let from_file = Settings {
+            email: format!("{prefix}alice@example.com"),
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(from_file.email, "alice@example.com");
+        assert!(!has_format_character(&from_file.email));
+        assert!(crate::auth::valid_email(&from_file.email));
+    }
+
+    // A zero-width character after the first visible character is still
+    // rejected wholesale, not filtered in place.
+    let interior = Settings {
+        email: "al\u{200c}ice@example.com".into(),
+        ..Default::default()
+    };
+    assert!(interior.sanitized().email.is_empty());
+}

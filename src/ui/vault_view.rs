@@ -299,6 +299,39 @@ mod tests {
     }
 
     #[test]
+    fn cycle_filter_visits_all_eight_stages_before_wrapping() {
+        use Filter::*;
+
+        let mut state = state_with_items();
+        state.selected_id = Some("a".into());
+        let stages = vec![
+            Favorites,
+            Kind(ItemKind::Login),
+            Kind(ItemKind::SecureNote),
+            Kind(ItemKind::Card),
+            Kind(ItemKind::Identity),
+            Kind(ItemKind::SshKey),
+            NoFolder,
+            All,
+        ];
+        let mut before = state.rewind_calls;
+        for expected in stages {
+            state.cycle_filter();
+            assert_eq!(
+                state.filter, expected,
+                "cycle_filter must advance through every filter stage"
+            );
+            assert_eq!(state.selected_id, None, "each stage clears the selection");
+            assert_eq!(state.rewind_calls, before + 1, "each stage rewinds once");
+            before = state.rewind_calls;
+        }
+
+        // A ninth press wraps back to the first stage of the cycle.
+        state.cycle_filter();
+        assert_eq!(state.filter, Favorites);
+    }
+
+    #[test]
     fn every_deselection_path_rewinds_to_the_first_row() {
         // One observable result shared by all deselection paths: no selection
         // and exactly one rewind request.

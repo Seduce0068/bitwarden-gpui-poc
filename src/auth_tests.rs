@@ -5,6 +5,7 @@ use std::net::IpAddr;
 use super::{is_blocked_server_url_with, is_blocked_server_url_without_dns, is_link_local_ip};
 use crate::auth::*;
 use crate::error::OTHER_ERROR_MESSAGE;
+use openwarden::{EncString, MasterKey};
 
 /// A unique, non-production canary so a leak of the client secret can be
 /// detected unambiguously in debug output.
@@ -282,6 +283,25 @@ fn dns_answers_are_checked_for_link_local_addresses() {
     assert!(is_blocked_server_url_with(
         "http://metadata.google.internal",
         |_| panic!("metadata hostname must not trigger DNS")
+    ));
+}
+
+#[test]
+fn real_resolver_branch_is_exercised_with_localhost_only() {
+    // `resolve_host` is the only network-touching branch of the SSRF guard
+    // (auth.rs:525-542). `localhost` resolves from the local hosts file, so
+    // this test needs no external DNS; loopback is deliberately allowed.
+    let resolved = super::resolve_host("localhost");
+    assert!(!resolved.is_empty(), "localhost must resolve locally");
+    assert!(resolved.iter().any(|ip| ip.is_loopback()), "{resolved:?}");
+    assert!(!is_blocked_server_url("http://localhost:8080"));
+
+    // Link-local answers remain covered by the injected resolver, so the
+    // security-relevant DNS rule is deterministic and network-free.
+    let metadata: IpAddr = "169.254.169.254".parse().unwrap();
+    assert!(is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| vec![metadata]
     ));
 }
 
@@ -1205,6 +1225,116 @@ fn authenticate_with_timeout_clamps_a_copy_and_leaves_the_caller_untouched() {
     ));
     assert_eq!(result.err(), Some(AuthError::MissingField("client_id")));
     assert_eq!(snapshot(&original), before, "caller config was mutated");
+}
+
+/// A locally generated protected key plus a keyless sync body. `Session` has
+/// no public setter for these values, so the `unlock_and_import_with` seam
+/// (auth.rs:720-783) supplies them directly to the four failure branches.
+fn unlock_fixture() -> (MasterKey, String, openwarden::SyncData) {
+    let master_key = MasterKey::from_bytes([0x11; 32]);
+    let stretched = master_key.stretch();
+    let protected = EncString::encrypt(&stretched, &[0x22; 64])
+        .expect("a 64-byte user key must encrypt")
+        .to_string();
+    let sync =
+        crate::vault_sync::parse_sync(br#"{"profile":{"id":"user-1"},"folders":[],"ciphers":[]}"#)
+            .expect("sync JSON should parse");
+    (master_key, protected, sync)
+}
+
+#[test]
+fn unlock_and_import_missing_protected_key_branch() {
+    let (master_key, _protected, sync) = unlock_fixture();
+    let error = super::unlock_and_import_with(
+        "",
+        None,
+        &master_key,
+        sync,
+        crate::vault_sync::import_logins,
+    )
+    .unwrap_err();
+    assert_eq!(error, UnlockError::MissingProtectedKey);
+    assert_eq!(error.message(), "復号キーが応答にありません");
+}
+
+#[test]
+fn unlock_and_import_unlock_failure_keeps_its_typed_cause() {
+    let (master_key, _protected, sync) = unlock_fixture();
+    let error = super::unlock_and_import_with(
+        "not-an-enc-string",
+        None,
+        &master_key,
+        sync,
+        crate::vault_sync::import_logins,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, UnlockError::UnlockFailedCause(ref detail, _) if !detail.is_empty()),
+        "{error:?}"
+    );
+    assert!(error.message().starts_with("復号キーを取得できません（"));
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+#[test]
+fn unlock_and_import_apply_sync_failure_keeps_its_typed_cause() {
+    let (master_key, protected, _sync) = unlock_fixture();
+    // A profile key that differs from the session's protected key makes
+    // `Vault::apply_sync` reject the sync with a typed key-change error.
+    let body = r#"{"profile":{"id":"user-1","key":"2.different-key"},"folders":[],"ciphers":[]}"#;
+    let sync = crate::vault_sync::parse_sync(body.as_bytes()).expect("sync JSON should parse");
+    let error = super::unlock_and_import_with(
+        &protected,
+        None,
+        &master_key,
+        sync,
+        crate::vault_sync::import_logins,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, UnlockError::ApplySyncFailedCause(ref detail, _) if !detail.is_empty()),
+        "{error:?}"
+    );
+    assert!(error.message().starts_with("同期データを取り込めません（"));
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+fn locked_import(
+    _vault: &openwarden::Vault,
+) -> Result<crate::model::Vault, crate::vault_sync::SyncError> {
+    Err(crate::vault_sync::SyncError::Locked)
+}
+
+#[test]
+fn unlock_and_import_import_failure_keeps_its_typed_cause() {
+    let (master_key, protected, sync) = unlock_fixture();
+    // `import_logins` can only fail on a locked vault, which is unreachable
+    // after a successful unlock; the injected stub exercises the mapping.
+    let error = super::unlock_and_import_with(&protected, None, &master_key, sync, locked_import)
+        .unwrap_err();
+    assert!(
+        matches!(error, UnlockError::ImportFailedCause(ref detail, _) if detail.as_str() == "vault がロックされています"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.message(),
+        "vault 変換に失敗しました（vault がロックされています）"
+    );
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+#[test]
+fn unlock_and_import_success_branch_uses_the_real_importer() {
+    let (master_key, protected, sync) = unlock_fixture();
+    let vault = super::unlock_and_import_with(
+        &protected,
+        None,
+        &master_key,
+        sync,
+        crate::vault_sync::import_logins,
+    )
+    .expect("a valid protected key and sync must unlock");
+    assert!(vault.items.is_empty());
 }
 
 #[test]

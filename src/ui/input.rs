@@ -57,6 +57,32 @@ pub(super) fn settings_edit_finished_status(dirty: bool) -> String {
     crate::ui::app::status_with_unsaved("入力を確定しました（w: 保存 / d: 破棄）", dirty)
 }
 
+/// Shared composer for the status restored when a text-editing mode ends.
+///
+/// `EditAuthField`, `EditSettingsField` and `StartSearch` all replace the
+/// status with [`text_edit_start_status`], whose text begins with "入力中:".
+/// Leaving the mode without restoring a normal status leaves that stale
+/// guidance on screen after Enter/Escape. This helper overwrites it with the
+/// caller's normal status while preserving the persistent unsaved marker.
+/// Kept pure so the contract can be tested without a GPUI window.
+pub(super) fn text_edit_finished_status(normal_status: &str, dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved(normal_status, dirty)
+}
+
+/// Normal lock-screen status restored by `FinishAuthEdit`.
+pub(super) fn auth_edit_finished_status(dirty: bool) -> String {
+    text_edit_finished_status(crate::ui::logic::auth_hint(false), dirty)
+}
+
+/// Normal vault status restored by `FinishSearch`.
+///
+/// Confirming a search clears the selection and rewinds the list (see
+/// `VaultViewState::finish_search`), so the restored status matches the detail
+/// line's "nothing selected" state instead of claiming a selection survives.
+pub(super) fn search_finished_status(dirty: bool) -> String {
+    text_edit_finished_status(crate::ui::logic::no_selection_status(), dirty)
+}
+
 impl BitwardenApp {
     pub(super) fn key_down(
         &mut self,
@@ -125,10 +151,16 @@ impl BitwardenApp {
             UiAction::FinishAuthEdit => {
                 self.login_generation.invalidate();
                 self.auth.take_field();
+                // Enter/Escape only confirm the field; drop the "入力中"
+                // guidance installed by EditAuthField.
+                self.status = auth_edit_finished_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::FinishSearch => {
                 self.view.finish_search();
+                // Same contract as the auth field: confirmation is not still
+                // an editing session, so restore the normal vault status.
+                self.status = search_finished_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::FinishSettingsEdit => {
@@ -341,6 +373,56 @@ mod tests {
         assert!(
             dirty.contains("[未保存の設定変更があります]"),
             "confirming a field is not a save: {dirty}"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn confirming_auth_or_search_clears_the_editing_status() {
+        // The start statuses really do carry the "入力中" prefix; otherwise
+        // this test would pass without exercising the stale-status bug.
+        assert!(text_edit_start_status().contains("入力中"));
+        assert!(crate::ui::logic::auth_hint(true).contains("入力中"));
+
+        for dirty in [false, true] {
+            let auth = auth_edit_finished_status(dirty);
+            assert_eq!(
+                auth,
+                crate::ui::app::status_with_unsaved(crate::ui::logic::auth_hint(false), dirty)
+            );
+            assert!(!auth.contains("入力中"), "{auth}");
+            assert!(auth.contains("F1: フォーカス復帰"), "{auth}");
+
+            let search = search_finished_status(dirty);
+            assert_eq!(
+                search,
+                crate::ui::app::status_with_unsaved(crate::ui::logic::no_selection_status(), dirty)
+            );
+            assert!(!search.contains("入力中"), "{search}");
+            assert_eq!(
+                search.contains("[未保存の設定変更があります]"),
+                dirty,
+                "{search}"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_and_settings_panels_keep_up_down_unbound() {
+        // Only the vault list and audit panel own a scroll handle; generator
+        // and settings must not turn Up/Down into a hidden list selection.
+        for panel in [Panel::Generator, Panel::Settings] {
+            for key in ["up", "down", "arrowup", "arrowdown", "pageup", "pagedown"] {
+                assert_eq!(
+                    classify_key(&context(Screen::Unlocked, panel, key)),
+                    UiAction::None,
+                    "{panel:?}/{key}"
+                );
+            }
+        }
+        // The vault list still owns the same keys, so this is panel-local.
+        assert_eq!(
+            classify_key(&context(Screen::Unlocked, Panel::Vault, "up")),
+            UiAction::MoveSelection(-1)
         );
     }
 

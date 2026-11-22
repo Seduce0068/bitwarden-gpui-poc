@@ -408,3 +408,71 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
 #[cfg(test)]
 #[path = "keys_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod cursor_key_tests {
+    use super::*;
+
+    /// Every name accepted by `is_text_cursor_key`, including both the bare
+    /// and the `arrow`-prefixed spellings plus Home/End/PageUp/PageDown.
+    const CURSOR_KEYS: &[&str] = &[
+        "up",
+        "down",
+        "left",
+        "right",
+        "arrowup",
+        "arrowdown",
+        "arrowleft",
+        "arrowright",
+        "home",
+        "end",
+        "pageup",
+        "pagedown",
+    ];
+
+    #[::core::prelude::v1::test]
+    fn is_text_cursor_key_covers_every_native_name() {
+        for key in CURSOR_KEYS {
+            assert!(is_text_cursor_key(key), "{key} must be delegated to GPUI");
+        }
+        for key in ["enter", "escape", "backspace", "a", "", "f1"] {
+            assert!(
+                !is_text_cursor_key(key),
+                "{key} must not be treated as a cursor key"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn every_cursor_key_stays_unbound_in_all_editing_modes() {
+        // A multi-character key must never fall through to `typed_text`, which
+        // would insert e.g. "arrowup" as literal text in a credentials field.
+        for key in CURSOR_KEYS {
+            let mut ctx = KeyContext {
+                screen: Screen::Locked,
+                panel: Panel::Vault,
+                key,
+                key_char: None,
+                modifiers: KeyModifiers::default(),
+                editing_auth: true,
+                searching: false,
+                editing_settings: false,
+                login_failed: false,
+                has_audit_report: false,
+                query_nonempty: false,
+            };
+            assert_eq!(classify_key(&ctx), UiAction::None, "auth/{key}");
+
+            ctx.editing_auth = false;
+            ctx.screen = Screen::Unlocked;
+            ctx.searching = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "search/{key}");
+
+            ctx.searching = false;
+            ctx.panel = Panel::Settings;
+            ctx.editing_settings = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "settings/{key}");
+        }
+    }
+}

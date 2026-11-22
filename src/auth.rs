@@ -15,7 +15,7 @@
 use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 
 use openwarden::{
-    ApiKey, Client, Device, ExposeSecret as _, KdfPolicy, MasterKey, SecretString, ServerUrls,
+    ApiKey, Client, Device, ExposeSecret as _, Kdf, KdfPolicy, MasterKey, SecretString, ServerUrls,
     Session, SyncData,
 };
 
@@ -522,6 +522,12 @@ where
 /// Resolve a DNS name with the standard library only. Resolution failures are
 /// not treated as proof of safety, but openwarden will fail to connect too;
 /// the deterministic rules above have already run at that point.
+///
+/// Testing note: this is the only network-touching branch of the SSRF guard.
+/// Link-local answers are tested deterministically through the injected
+/// resolver of [`is_blocked_server_url_with`]; the real resolver is exercised
+/// only with `localhost`, which resolves from the local hosts file. No test
+/// depends on an external DNS server.
 fn resolve_host(host: &str) -> Vec<IpAddr> {
     let Ok(addresses) = (host, 0).to_socket_addrs() else {
         return Vec::new();
@@ -720,36 +726,60 @@ impl std::error::Error for UnlockError {
 pub fn unlock_and_import(
     authenticated: AuthenticatedVault,
 ) -> Result<crate::model::Vault, UnlockError> {
-    use openwarden::Vault as OpenVault;
-
     let protected_key = authenticated
         .session
         .protected_key()
         .unwrap_or("")
         .to_string();
+    let kdf = authenticated.session.kdf();
+    unlock_and_import_with(
+        &protected_key,
+        kdf,
+        &authenticated.master_key,
+        authenticated.sync,
+        crate::vault_sync::import_logins,
+    )
+}
+
+/// The four failure branches of [`unlock_and_import`] with the session-derived
+/// inputs and the final import step passed in explicitly.
+///
+/// `openwarden::Session` has no public setter for `protected_key`/`kdf` (they
+/// only come from a real login response), and a vault that was just unlocked
+/// cannot be locked before the import step. The seam therefore lets a test
+/// supply a locally generated protected key and an import stub, covering all
+/// four branches with no network and no dependency changes. Production still
+/// calls the same openwarden sequence and the real importer; behaviour is
+/// unchanged.
+fn unlock_and_import_with(
+    protected_key: &str,
+    kdf: Option<Kdf>,
+    master_key: &MasterKey,
+    sync: SyncData,
+    import: fn(&openwarden::Vault) -> Result<crate::model::Vault, crate::vault_sync::SyncError>,
+) -> Result<crate::model::Vault, UnlockError> {
     if protected_key.is_empty() {
         return Err(UnlockError::MissingProtectedKey);
     }
-    let kdf = authenticated.session.kdf();
     // Keep the typed errors as causes (`BoxedCause::new`) instead of flattening
     // them into text: the source chain stays reachable through `Error::source()`
     // on the returned `UnlockError` and on the `AppError` it converts to.
-    let mut open_vault = OpenVault::unlock(&authenticated.master_key, &protected_key, kdf)
-        .map_err(|error| {
+    let mut open_vault =
+        openwarden::Vault::unlock(master_key, protected_key, kdf).map_err(|error| {
             let detail = error.to_string();
             UnlockError::from(AppError::unlock_failed_cause(
                 detail,
                 BoxedCause::new(error),
             ))
         })?;
-    open_vault.apply_sync(authenticated.sync).map_err(|error| {
+    open_vault.apply_sync(sync).map_err(|error| {
         let detail = error.to_string();
         UnlockError::from(AppError::apply_sync_failed_cause(
             detail,
             BoxedCause::new(error),
         ))
     })?;
-    crate::vault_sync::import_logins(&open_vault).map_err(|error| {
+    import(&open_vault).map_err(|error| {
         let detail = error.to_string();
         UnlockError::from(AppError::import_failed_cause(
             detail,

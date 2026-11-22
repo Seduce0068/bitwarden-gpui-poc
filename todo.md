@@ -24,10 +24,27 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第62弾は 9 件を完了、1 件を却下）。
+なし（第63弾で 10 件を完了、1 件を既知制約として記録）。
 
 ## 完了
 
+- [x] 第63弾（16 担当・7 回目）の指摘 10 件を完結（2026-11-22）
+  - 同期の内部 id 開示排除と復号済み name/username の直接検証、
+    `unlock_and_import` の4分岐をテスト可能にする注入シーム、
+    SSRF の実 DNS 経路の決定的テストを追加。
+  - email 先頭 Cf (U+200B..U+200F) の正規化、device ID 大文字 variant の
+    決定的テスト、URL フラグメント/入れ子 URL の秘密マスク、
+    read_bounded のエラー分類、model のマスキング/タイブレーク、
+    監査レポートのタイブレーク、TOTP grouped() の桁数を処理。
+  - UI は生成/設定パネルのスクロールを「マウス／ホイールのみ」と明記、
+    編集中ステータスの後始末、cycle_filter 全段、
+    is_text_cursor_key 全名をテストで固定。
+  - CHANGELOG の gitleaks 表記に Betterleaks 置換を注記。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（506 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第62弾（16 担当・6 回目）の指摘 9 件を完結（2026-11-22）
   - `sanitized()` の email Cf 正規化を UI 入力経路と統一。
     cache Debug の URL クエリ秘密マスク、TOCTOU 境界ヘルパー、
@@ -817,3 +834,11 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
   実装を取り下げ、`health.rs` / `health_tests.rs` は HEAD へ復元した。
   現行の単一文字または空区切りのみを想定する挙動を維持し、
   複数文字セパレータは未対応の既知制約として記録する。
+
+### 2026-11-22 単文字英数字セパレータの既知制約
+
+- `PassphraseSettings::separator` は自由文字列のため単文字英数字（例 `x`）も
+  受理されるが、`passphrase_estimate` は非英数字セパレータのみを認識し、
+  文字プール推定へフォールバックして過大評価する。複数文字セパレータと
+  同じ回帰リスクがあり、前回の却下判断を踏まえ実装せず `sanitized()` の
+  doc に既知制約として記録した。

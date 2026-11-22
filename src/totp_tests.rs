@@ -154,6 +154,32 @@ fn grouping_splits_digits_and_leaves_steam_alone() {
 }
 
 #[test]
+fn grouping_handles_three_four_seven_and_nine_digit_codes() {
+    // `Code::grouped` (totp.rs:71-82) leaves <= 3 digits untouched and splits
+    // longer codes in half by character count, not by a fixed 3+3 shape.
+    for digits in [3u8, 4, 7, 9] {
+        let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&digits={digits}&period=30");
+        let code = code_at(&uri, 59).unwrap();
+        let raw = code.code();
+        assert_eq!(raw.len(), digits as usize, "digits={digits}");
+        assert!(raw.chars().all(|ch| ch.is_ascii_digit()), "{raw}");
+
+        let expected = if raw.len() <= 3 {
+            raw.to_string()
+        } else {
+            let mid = raw.len() / 2;
+            format!("{} {}", &raw[..mid], &raw[mid..])
+        };
+        assert_eq!(code.grouped(), expected, "digits={digits}: {raw}");
+        if digits > 3 {
+            assert_eq!(code.grouped().matches(' ').count(), 1, "{raw}");
+        } else {
+            assert!(!code.grouped().contains(' '), "{raw}");
+        }
+    }
+}
+
+#[test]
 fn debug_never_reveals_the_code() {
     let code = code_at(RFC_SECRET, 59).unwrap();
     let rendered = format!("{code:?}");

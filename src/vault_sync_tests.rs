@@ -452,6 +452,47 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
     assert_eq!(bad.id, "f-bad");
 }
 
+#[test]
+fn undecryptable_login_name_is_placeholdered_without_the_internal_id() {
+    // G07: the login-name fallback must not expose the internal cipher id;
+    // the id stays on `VaultItem::id` for lookup and filtering
+    // (vault_sync.rs:271-286).
+    let mut bad = cipher("login-secret-id", "2024-01-01T00:00:00Z");
+    bad["name"] = serde_json::json!("not-an-enc-string");
+    bad["login"]["username"] = serde_json::json!("USERNAME_SHOULD_NOT_LEAK");
+    let vault = unlocked_vault(&[bad]);
+    let model = import_logins(&vault).expect("a bad name must not abort the import");
+
+    assert_eq!(model.items.len(), 1);
+    let item = &model.items[0];
+    assert_eq!(item.id, "login-secret-id");
+    assert_eq!(item.name, "(復号できませんでした)");
+    assert!(!item.name.contains("login-secret-id"), "{:?}", item.name);
+    let rendered = format!("{item:?} {}", serde_json::to_string(item).unwrap());
+    assert!(!rendered.contains("not-an-enc-string"), "{rendered}");
+    assert!(!rendered.contains("USERNAME_SHOULD_NOT_LEAK"), "{rendered}");
+}
+
+#[test]
+fn undecryptable_username_currently_folds_into_an_empty_string() {
+    // Documented current behaviour (login_item docs): a broken username
+    // ciphertext is folded into an empty string just like an absent field;
+    // there is no `UNDECRYPTABLE_USERNAME` marker. The raw ciphertext never
+    // enters the model, its Debug output or its serde form.
+    let mut bad = cipher("username-bad", "2024-01-01T00:00:00Z");
+    bad["login"]["username"] = serde_json::json!("NEVER_IN_THE_MODEL_USERNAME");
+    let vault = unlocked_vault(&[bad]);
+    let model = import_logins(&vault).expect("a bad username must not abort the import");
+
+    let item = model.item("username-bad").unwrap();
+    assert_eq!(item.login().unwrap().0, "");
+    let rendered = format!("{item:?} {}", serde_json::to_string(item).unwrap());
+    assert!(
+        !rendered.contains("NEVER_IN_THE_MODEL_USERNAME"),
+        "{rendered}"
+    );
+}
+
 /// A personal login whose fields are real `EncString` ciphertexts, matching
 /// what `/api/sync` returns after an actual unlock. The zero user key from
 /// `unlocked_vault` is also the item key when the cipher has no own `key`.
@@ -484,6 +525,16 @@ fn real_login_decrypts_secrets_and_enables_totp_copy() {
 
     assert_eq!(model.items.len(), 1);
     let item = &model.items[0];
+    // The decrypted name/username from `encrypted_login` must survive the
+    // openwarden -> model path, not just the password/TOTP fields
+    // (vault_sync.rs:272-282).
+    assert_eq!(item.name, "Example Login");
+    let (username, password, totp, uris) = item.login().expect("the item is a login");
+    assert_eq!(username, "alice@example.com");
+    assert_eq!(password, REAL_PASSWORD);
+    assert_eq!(totp, REAL_TOTP);
+    assert_eq!(uris.len(), 1);
+    assert_eq!(uris[0].uri, "https://example.com");
     assert_eq!(item.password(), Some(REAL_PASSWORD));
     assert_eq!(item.totp_secret(), Some(REAL_TOTP));
     assert_ne!(item.totp_secret(), Some("available"));
