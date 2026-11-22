@@ -173,10 +173,71 @@ impl LoginUri {
     }
 }
 
+/// A text secret held in a [`Zeroizing<String>`] buffer.
+///
+/// The newtype exists only for construction ergonomics: `zeroize` cannot
+/// implement `From<&str>` for `Zeroizing<String>` itself, so literal fixtures
+/// and mock data would stop compiling if the field were the bare wrapper. The
+/// buffer is still a `Zeroizing<String>`, wiped on drop and on replacement,
+/// and the wire format stays a plain string via `zeroizing_text_serde`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ZeroizingText(Zeroizing<String>);
+
+impl ZeroizingText {
+    /// Wrap `value`, taking ownership of its buffer.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Zeroizing::new(value.into()))
+    }
+
+    /// The plain text for search, rendering and serialization.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<&str> for ZeroizingText {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for ZeroizingText {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl core::ops::Deref for ZeroizingText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_str()
+    }
+}
+
+impl AsRef<str> for ZeroizingText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl core::fmt::Display for ZeroizingText {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl core::fmt::Debug for ZeroizingText {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
 /// Card details.
 ///
 /// `Debug` masks the cardholder name, number and security code. The brand and
-/// expiry stay visible as harmless metadata.
+/// expiry stay visible as harmless metadata. The number and code are wiped on
+/// drop; their serde shape is still a plain string.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardData {
     /// Name on the card.
@@ -184,13 +245,15 @@ pub struct CardData {
     /// Brand (Visa, Mastercard, …).
     pub brand: String,
     /// Card number.
-    pub number: String,
+    #[serde(with = "zeroizing_text_serde")]
+    pub number: ZeroizingText,
     /// Expiry month, 1-12.
     pub exp_month: String,
     /// Expiry year.
     pub exp_year: String,
     /// Security code.
-    pub code: String,
+    #[serde(with = "zeroizing_text_serde")]
+    pub code: ZeroizingText,
 }
 
 /// Identity details.
@@ -458,6 +521,31 @@ mod zeroizing_string_serde {
     }
 }
 
+/// serde adapter for the card fields stored as [`ZeroizingText`].
+///
+/// Same wire contract as [`zeroizing_string_serde`]: a plain JSON string in,
+/// a wiped buffer out. Keeping both adapters next to each other means a schema
+/// change has to be made in one place to affect every secret field.
+mod zeroizing_text_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use super::ZeroizingText;
+
+    pub fn serialize<S>(value: &ZeroizingText, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(value.as_str())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ZeroizingText, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(ZeroizingText::from)
+    }
+}
+
 /// Kind-specific payload.
 ///
 /// `Debug` is implemented manually so login secrets are never printed.
@@ -546,8 +634,9 @@ pub struct VaultItem {
     pub folder_id: Option<String>,
     /// Whether the item is starred.
     pub favorite: bool,
-    /// Free-form notes.
-    pub notes: String,
+    /// Free-form notes. Wiped on drop; serde still sees a plain string.
+    #[serde(with = "zeroizing_string_serde")]
+    pub notes: Zeroizing<String>,
     /// Last modified, in Unix seconds.
     pub revision_date: i64,
     /// The kind-specific payload.
@@ -578,7 +667,7 @@ impl VaultItem {
             name: name.into(),
             folder_id: None,
             favorite: false,
-            notes: String::new(),
+            notes: Zeroizing::new(String::new()),
             revision_date: UNKNOWN_REVISION,
             data,
         }

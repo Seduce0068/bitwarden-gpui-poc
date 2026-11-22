@@ -57,7 +57,7 @@ fn debug_never_reveals_item_secrets() {
             text: String::new(),
         },
     );
-    noted.notes = NOTES_SECRET.into();
+    noted.notes = Zeroizing::new(NOTES_SECRET.to_string());
     let debug = format!("{noted:?}");
     assert!(!debug.contains(NOTES_SECRET), "{debug}");
     assert!(debug.contains("notes: \"[redacted]\""), "{debug}");
@@ -1125,7 +1125,7 @@ fn notes_are_searchable_even_for_non_login_items() {
             text: "different body".into(),
         },
     );
-    item.notes = "recovery-code-7X".into();
+    item.notes = Zeroizing::new("recovery-code-7X".to_string());
     assert!(item.matches_query("recovery-code"));
     assert!(item.matches_query("7X"));
     assert!(!item.matches_query("not-in-this-item"));
@@ -1587,4 +1587,71 @@ fn login_uri_match_enum_maps_wire_zero_one_and_two() {
         assert_eq!(restored.match_enum(), Some(expected));
     }
     assert_eq!(LoginUri::new("https://example.com").match_enum(), None);
+}
+
+#[test]
+fn card_and_notes_secrets_keep_their_wire_and_length_shape() {
+    // Both layers of redaction must survive the Zeroizing change: the manual
+    // `CardData` / `VaultItem` Debug implementations mask the original text,
+    // while search, character counts and serde still see it verbatim.
+    let mut item = VaultItem::new(
+        "zero-1",
+        "Card",
+        ItemData::Card(CardData {
+            number: "4111 1111 1111 1234".into(),
+            code: "987".into(),
+            ..CardData::default()
+        }),
+    );
+    item.notes = Zeroizing::new("recovery-code-7X".to_string());
+
+    let debug = format!("{item:?}");
+    assert!(!debug.contains("4111 1111 1111 1234"), "{debug}");
+    assert!(!debug.contains("recovery-code-7X"), "{debug}");
+    assert!(debug.contains("notes: \"[redacted]\""), "{debug}");
+
+    let json = serde_json::to_value(&item).unwrap();
+    assert_eq!(
+        json["data"]["number"],
+        serde_json::json!("4111 1111 1111 1234")
+    );
+    assert_eq!(json["data"]["code"], serde_json::json!("987"));
+    assert_eq!(json["notes"], serde_json::json!("recovery-code-7X"));
+    let restored: VaultItem = serde_json::from_value(json).unwrap();
+    assert_eq!(restored, item);
+
+    // UI consumers count characters and search the same text as before.
+    let ItemData::Card(card) = &item.data else {
+        panic!("fixture must be a card")
+    };
+    assert_eq!(card.number.len(), 19);
+    assert_eq!(card.code.len(), 3);
+    assert_eq!(item.notes.len(), 16);
+    assert!(item.matches_query("recovery-code"));
+}
+
+#[test]
+fn ssh_fingerprint_discards_the_key_type_field() {
+    // `sha256_fingerprint` hashes only the decoded blob (the second
+    // whitespace-separated field); the algorithm label is read and discarded
+    // (model.rs:445-452). Re-labelling the same blob must not change the
+    // computed fingerprint, even though OpenSSH itself would reject such a
+    // line as inconsistent.
+    let blob = "AAAAC3NzaC1lZDI1NTE5AAAAIMVYTn6DgHoRS29obD0RhrnbKgHhM1eqLvmbTWMGwSmR";
+    let canonical =
+        super::ssh_fingerprint::sha256_fingerprint(&format!("ssh-ed25519 {blob} fp-test@example"));
+    assert_eq!(canonical.as_deref(), Some(REFERENCE_FINGERPRINT));
+
+    for key_type in ["ssh-rsa", "ecdsa-sha2-nistp256", "arbitrary-label"] {
+        let relabelled =
+            super::ssh_fingerprint::sha256_fingerprint(&format!("{key_type} {blob} comment"));
+        assert_eq!(relabelled, canonical, "key_type {key_type:?}");
+    }
+
+    // Without a second field there is no blob to hash, regardless of label.
+    assert_eq!(super::ssh_fingerprint::sha256_fingerprint(blob), None);
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519"),
+        None
+    );
 }

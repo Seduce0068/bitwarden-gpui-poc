@@ -1649,3 +1649,94 @@ fn legacy_apply_sync_cause_text_is_stripped_only_once() {
         format!("同期データを取り込めません（{truncated}）")
     );
 }
+
+#[test]
+fn timeout_error_round_trips_through_app_error() {
+    // `Timeout` is one of the plain variants with no detail sibling, so both
+    // conversion directions must preserve identity, message and equality
+    // (auth.rs:75-108, 171-197, 203-236).
+    let auth = AuthError::Timeout;
+    let app = crate::error::AppError::from(auth.clone());
+    assert!(matches!(&app, crate::error::AppError::Timeout));
+    assert_eq!(app.message(), auth.message());
+    assert_eq!(AuthError::from(app), auth);
+    assert_eq!(auth.status_message(), "ログインがタイムアウトしました");
+    assert_eq!(auth.to_string(), "ログインがタイムアウトしました");
+    assert_eq!(auth, AuthError::Timeout);
+    assert_ne!(auth, AuthError::Other("ログインがタイムアウトしました"));
+
+    // The reverse direction starts from `AppError` and must not be confused
+    // with a cause-carrying failure or the generic `Other` fallback.
+    let from_app = AuthError::from(crate::error::AppError::Timeout);
+    assert!(matches!(&from_app, AuthError::Timeout));
+    assert_eq!(
+        crate::error::AppError::from(from_app),
+        crate::error::AppError::Timeout
+    );
+}
+
+#[test]
+fn validate_config_reports_the_first_invalid_field_in_a_fixed_order() {
+    // The missing-field pass runs in server_url, client_id, client_secret,
+    // email, master_password order; the structural email/URL checks come after
+    // it, with BlockedServerUrl ahead of the URL parser (auth.rs:581-606).
+    let mut all_bad = config();
+    all_bad.server_url = "  ".into();
+    all_bad.client_id = "  ".into();
+    all_bad.client_secret = SecretString::from("  ".to_string());
+    all_bad.email = "not-an-email".into();
+    all_bad.master_password = SecretString::from(String::new());
+    assert_eq!(
+        validate_config(&all_bad),
+        Err(AuthError::MissingField("server_url"))
+    );
+
+    let mut cases = Vec::new();
+
+    let mut without_server = all_bad.clone();
+    without_server.server_url = "https://vault.example.com".into();
+    cases.push((without_server.clone(), AuthError::MissingField("client_id")));
+
+    let mut without_client = without_server.clone();
+    without_client.client_id = "user.1234".into();
+    cases.push((
+        without_client.clone(),
+        AuthError::MissingField("client_secret"),
+    ));
+
+    let mut without_secret = without_client.clone();
+    without_secret.client_secret = SecretString::from(CLIENT_SECRET_CANARY.to_string());
+    without_secret.email = String::new();
+    cases.push((without_secret.clone(), AuthError::MissingField("email")));
+
+    // With a non-empty malformed email the structural check fires before the
+    // later empty-master-password check.
+    let mut malformed_email = without_secret.clone();
+    malformed_email.email = "not-an-email".into();
+    malformed_email.master_password = SecretString::from("pw".to_string());
+    cases.push((malformed_email, AuthError::InvalidEmail));
+
+    // An empty master password wins over both URL-level failures.
+    // `without_secret` still carries an empty email, so the structural email
+    // check fires before the later empty-master-password check.
+    let mut valid_email = without_secret.clone();
+    valid_email.email = "alice@example.com".into();
+    cases.push((
+        valid_email.clone(),
+        AuthError::MissingField("master_password"),
+    ));
+
+    let mut blocked = valid_email.clone();
+    blocked.master_password = SecretString::from("pw".to_string());
+    blocked.server_url = "http://169.254.169.254".into();
+    cases.push((blocked, AuthError::BlockedServerUrl));
+
+    let mut insecure = valid_email.clone();
+    insecure.master_password = SecretString::from("pw".to_string());
+    insecure.server_url = "http://vault.example.com".into();
+    cases.push((insecure, AuthError::InvalidServerUrl));
+
+    for (config, expected) in cases {
+        assert_eq!(validate_config(&config), Err(expected), "{config:?}");
+    }
+}

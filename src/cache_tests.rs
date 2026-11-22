@@ -1384,3 +1384,74 @@ fn future_and_sentinel_created_at_are_expired_on_the_restore_path() {
         assert!(cached_sync_for("https://vault.example.com").is_none());
     }
 }
+
+#[test]
+fn doubly_encoded_sensitive_keys_are_still_redacted() {
+    // A key needs two decode passes: `%2574oken` -> `%74oken` -> `token`.
+    // Decoding only once used to miss the sensitive-key list and leave the
+    // credential value in the diagnostic URL (cache.rs:171-180).
+    for (encoded, secret) in [
+        ("%2574oken", "DOUBLE_TOKEN_SECRET"),
+        ("%2561pi%255Fkey", "DOUBLE_API_KEY_SECRET"),
+        ("%2573ession%255Fid", "DOUBLE_SESSION_SECRET"),
+    ] {
+        let url = format!("https://vault.example.com/sync?{encoded}={secret}&state=ok");
+        let masked = super::mask_url_secrets(&url);
+        assert!(!masked.contains(secret), "leaked {secret}: {masked}");
+        assert!(
+            masked.contains(&format!("{encoded}=[redacted]")),
+            "{masked}"
+        );
+        assert!(masked.contains("state=ok"), "{masked}");
+    }
+
+    // A harmless doubly encoded key is left in its original spelling.
+    let harmless = "https://vault.example.com/p?state%253Dok=plain";
+    assert_eq!(super::mask_url_secrets(harmless), harmless);
+}
+
+#[test]
+fn short_and_trailing_percent_escapes_stay_literal() {
+    // An incomplete escape at the end of input, or one with a non-hex second
+    // digit, is not a `%XX` pair and must be copied verbatim.
+    assert_eq!(super::percent_decode("%"), "%");
+    assert_eq!(super::percent_decode("abc%"), "abc%");
+    assert_eq!(super::percent_decode("abc%2"), "abc%2");
+    assert_eq!(super::percent_decode("%2G"), "%2G");
+    assert_eq!(super::percent_decode("%zz"), "%zz");
+    // An incomplete escape must not swallow a following valid one.
+    assert_eq!(super::percent_decode("%2%74"), "%2t");
+
+    // The masker must not rewrite an otherwise harmless URL just because it
+    // contains such escapes; the sensitive key beside it is still masked.
+    let url = "https://vault.example.com/p?token=ok&state=abc%&next=%2";
+    let masked = super::mask_url_secrets(url);
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+    assert!(masked.contains("state=abc%&next=%2"), "{masked}");
+}
+
+#[test]
+fn save_and_save_default_report_write_and_path_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+
+    // Persisting onto an existing directory fails after the temporary file
+    // has been written; the error must reach the caller unchanged.
+    assert!(save(dir.path(), &cache).is_err());
+
+    // `save_default` has no environment-mutable seam, so its failure branch is
+    // exercised through the shared helper used by the public wrapper.
+    let missing = super::save_to_path(None, &cache).unwrap_err();
+    assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        missing.to_string().contains("no platform cache directory"),
+        "{missing}"
+    );
+    let unwritable = super::save_to_path(Some(dir.path().to_path_buf()), &cache).unwrap_err();
+    assert_ne!(unwritable.kind(), std::io::ErrorKind::NotFound);
+
+    // The destination is untouched on failure: it is still a directory and no
+    // stray cache file was created beside it.
+    assert!(dir.path().is_dir());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}

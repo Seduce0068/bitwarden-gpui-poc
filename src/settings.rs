@@ -32,6 +32,20 @@ use crate::limits::{
     MIN_WEAK_BITS,
 };
 
+/// Leading zero-width code points that may be stripped from a pasted email.
+///
+/// The generic Unicode `Cf` set lives in `crate::limits`; only this narrow
+/// `U+200B..=U+200F` run is treated as a removable prefix. Keeping the two
+/// bounds together means the UI input path and `Settings::sanitized()` cannot
+/// drift apart when the policy is revised.
+const LEADING_ZERO_WIDTH_FIRST: char = '\u{200b}';
+const LEADING_ZERO_WIDTH_LAST: char = '\u{200f}';
+
+/// Whether `ch` belongs to the removable leading zero-width run.
+fn is_leading_zero_width(ch: char) -> bool {
+    (LEADING_ZERO_WIDTH_FIRST..=LEADING_ZERO_WIDTH_LAST).contains(&ch)
+}
+
 /// Maximum accepted size of `settings.json` (1 MiB). Anything larger is
 /// rejected before parsing so a truncated/garbled file cannot consume memory
 /// or hide a single bad field behind a flood of data.
@@ -124,13 +138,10 @@ pub enum SharedSettingsField {
 /// "reject wholesale", and the caller either drops the pasted chunk or clears
 /// the stored email.
 fn normalize_email_text(text: &str) -> Option<String> {
-    let only_leading_zero_width = text
-        .chars()
-        .next()
-        .is_some_and(|first| matches!(first, '\u{200b}'..='\u{200f}'))
+    let only_leading_zero_width = text.chars().next().is_some_and(is_leading_zero_width)
         && text
             .chars()
-            .skip_while(|ch| matches!(ch, '\u{200b}'..='\u{200f}'))
+            .skip_while(|ch| is_leading_zero_width(*ch))
             .all(|ch| !crate::limits::is_format_character(ch));
     if !has_format_character(text) || only_leading_zero_width {
         Some(
@@ -293,32 +304,42 @@ impl core::fmt::Debug for Settings {
     }
 }
 
+/// Read a settings file under the shared size cap.
+///
+/// This is the single bounded read used by every settings path: the full load,
+/// the advisory scan and the write-path marker guard. A `metadata()` length
+/// check followed by `read_to_string()` was a TOCTOU — a file that grew in
+/// between (or whose metadata lies) could be loaded in full just to inspect one
+/// marker. Reading at most one byte past the cap and rejecting that case makes
+/// the cap itself the only boundary; there is no pre-check to race with.
+fn read_bounded_settings_text(path: &std::path::Path) -> Result<String, SettingsLoadError> {
+    let file = std::fs::File::open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            SettingsLoadError::NotFound
+        } else {
+            SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
+        }
+    })?;
+    let mut contents = String::new();
+    file.take(MAX_SETTINGS_BYTES.saturating_add(1))
+        .read_to_string(&mut contents)
+        .map_err(|error| {
+            SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
+        })?;
+    if contents.len() as u64 > MAX_SETTINGS_BYTES {
+        return Err(SettingsLoadError::TooLarge);
+    }
+    Ok(contents)
+}
+
 /// Read a settings file under the shared size cap and parse it as JSON.
 ///
-/// Both `load_advisories` (top-level key inspection) and `file_schema_version`
-/// (write-path guard) need the same bounded read. A plain `metadata()` followed
-/// by `read_to_string()` was a TOCTOU: a file that grew in between, or a hostile
-/// file whose metadata lies, would be loaded in full just to inspect one
-/// marker. Reading one byte past the cap and rejecting that case keeps every
-/// advisory/marker pass bounded. Unreadable, oversized and malformed files are
-/// reported as `None`, which both callers treat as "no metadata".
+/// `load_advisories` (top-level key inspection) and `file_schema_version`
+/// (write-path guard) only need metadata, so both collapse every read or parse
+/// failure into `None` — "no metadata" — while sharing the bounded reader with
+/// the full load.
 fn read_settings_json(path: &std::path::Path) -> Option<Value> {
-    let file = std::fs::File::open(path).ok()?;
-    if !file
-        .metadata()
-        .is_ok_and(|meta| meta.len() <= MAX_SETTINGS_BYTES)
-    {
-        return None;
-    }
-    let mut contents = String::new();
-    if file
-        .take(MAX_SETTINGS_BYTES.saturating_add(1))
-        .read_to_string(&mut contents)
-        .is_err()
-        || contents.len() as u64 > MAX_SETTINGS_BYTES
-    {
-        return None;
-    }
+    let contents = read_bounded_settings_text(path).ok()?;
     serde_json::from_str::<Value>(&contents).ok()
 }
 
@@ -720,33 +741,9 @@ impl Settings {
     ///
     /// [`SettingsLoadError`] when the file cannot be used as settings.
     pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<Self, SettingsLoadError> {
-        let file = std::fs::File::open(path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                SettingsLoadError::NotFound
-            } else {
-                SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
-            }
-        })?;
-        let metadata = file.metadata().map_err(|error| {
-            SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
-        })?;
-        if metadata.is_dir() {
-            return Err(SettingsLoadError::ReadFailed);
-        }
-        if metadata.len() > MAX_SETTINGS_BYTES {
-            return Err(SettingsLoadError::TooLarge);
-        }
-        // Read at most one byte past the limit to detect files that grew
-        // between the metadata call and the read without loading everything.
-        let mut contents = String::new();
-        file.take(MAX_SETTINGS_BYTES.saturating_add(1))
-            .read_to_string(&mut contents)
-            .map_err(|error| {
-                SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
-            })?;
-        if contents.len() as u64 > MAX_SETTINGS_BYTES {
-            return Err(SettingsLoadError::TooLarge);
-        }
+        // The same bounded reader serves the advisory and marker checks, so a
+        // file that grows mid-read is classified identically on every path.
+        let contents = read_bounded_settings_text(path.as_ref())?;
         Ok(Self::parse_settings(&contents)?.sanitized())
     }
 

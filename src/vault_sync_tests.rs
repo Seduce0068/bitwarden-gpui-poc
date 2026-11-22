@@ -1331,3 +1331,54 @@ fn login_without_a_name_keeps_an_empty_name_without_leaking_the_id() {
     assert_eq!(item.name, "");
     assert!(!item.name.contains("nameless-secret-id"));
 }
+
+#[test]
+fn same_revision_duplicate_keeps_the_first_rows_decrypted_fields() {
+    // The `Ignored` audit entry alone cannot show *which* row survived: both
+    // rows must carry a distinguishing field. Raw duplicates (bypassing
+    // `parse_sync`) reach the `revision == old_revision` branch, which keeps
+    // the already pushed item untouched (vault_sync.rs:569-585).
+    let id = "rev-tie-fields";
+    let revision = parse_revision(Some("2024-05-01T00:00:00Z")).unwrap();
+    let mut first = encrypted_login(id, "FIRST_PASSWORD_VALUE", REAL_TOTP);
+    first["revisionDate"] = serde_json::json!("2024-05-01T00:00:00Z");
+    let mut second = encrypted_login(id, "SECOND_PASSWORD_VALUE", REAL_TOTP);
+    second["revisionDate"] = serde_json::json!("2024-05-01T00:00:00Z");
+    let vault = unlocked_vault_raw(&[first, second]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision,
+            },
+            ImportAudit::Ignored {
+                id: id.to_string(),
+                revision,
+            },
+        ]
+    );
+    let item = model.item(id).expect("the duplicate id must survive");
+    assert_eq!(item.revision_date, revision);
+    assert_eq!(item.password(), Some("FIRST_PASSWORD_VALUE"));
+    assert_ne!(item.password(), Some("SECOND_PASSWORD_VALUE"));
+}
+
+#[test]
+fn plain_import_propagates_a_locked_vault() {
+    // `import_logins` is the production seam used by auth; it must forward the
+    // `Locked` error from `import_logins_with_audit` instead of returning an
+    // empty vault. All three public importers share the same guard.
+    let mut locked = unlocked_vault(&[encrypted_login("locked-1", REAL_PASSWORD, REAL_TOTP)]);
+    locked.lock();
+
+    assert!(matches!(import_logins(&locked), Err(SyncError::Locked)));
+    assert!(matches!(
+        import_logins_with_audit(&locked),
+        Err(SyncError::Locked)
+    ));
+    assert!(matches!(folders_from(&locked), Err(SyncError::Locked)));
+}

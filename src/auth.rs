@@ -813,8 +813,24 @@ pub async fn authenticate_with_timeout(
     // without touching the network or the timeout.
     validate_config(config)?;
     let login = authenticate_inner(config, device_identifier);
-    let timer = async {
-        smol::Timer::after(timeout).await;
+    // Anchor the watchdog to the moment the race starts, not to the moment the
+    // timer future is first polled. `smol::future::race` polls `login` first;
+    // any synchronous work before its first `.await` (config clamping, DNS
+    // snapshot, client setup) used to delay the timer's own start and stretch
+    // the caller's budget. With an absolute deadline an already-elapsed budget
+    // fires on the first poll, which the zero-duration test seam relies on.
+    let deadline = std::time::Instant::now().checked_add(timeout);
+    let timer = async move {
+        match deadline {
+            Some(at) => {
+                smol::Timer::at(at).await;
+            }
+            // An unrepresentable deadline is not a reason to skip the watchdog:
+            // fall back to smol's relative timer with the original duration.
+            None => {
+                smol::Timer::after(timeout).await;
+            }
+        }
         Err(AuthError::Timeout)
     };
     smol::future::race(login, timer).await

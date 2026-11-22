@@ -1696,3 +1696,74 @@ fn load_advisories_ignores_unknown_keys_nested_in_known_objects() {
         "{notices:?}"
     );
 }
+
+#[test]
+fn load_advisories_is_empty_for_non_object_and_missing_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+
+    // A missing file has no metadata to report; `read_bounded_settings_text`
+    // maps NotFound to a plain `None` for the advisory/marker readers.
+    assert!(load_advisories(&path).is_empty());
+    assert_eq!(super::file_schema_version(&path), None);
+
+    // A JSON document that is not an object has no top-level keys at all, so
+    // neither the version nor the unknown-key check can fire.
+    for body in [
+        br#"[]"#.as_slice(),
+        br#""just a string""#.as_slice(),
+        br#"null"#.as_slice(),
+        br#"42"#.as_slice(),
+        br#"true"#.as_slice(),
+    ] {
+        std::fs::write(&path, body).unwrap();
+        assert!(load_advisories(&path).is_empty(), "body {body:?}");
+        assert_eq!(super::file_schema_version(&path), None, "body {body:?}");
+    }
+
+    // An empty object parses, but with no schema_version marker it carries no
+    // advisory either; the full loader still accepts it as a legacy file.
+    std::fs::write(&path, br#"{}"#).unwrap();
+    assert!(load_advisories(&path).is_empty());
+    assert_eq!(
+        Settings::load_detailed(&path).unwrap().schema_version,
+        LEGACY_SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn current_version_as_a_numeric_string_is_not_legacy_or_future() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // Some writers emit the marker as a string. A non-number type is treated
+    // as legacy (0) by design: the fields stay compatible and the file is not
+    // rejected as a future version, but the marker itself is not trusted.
+    let current = CURRENT_SCHEMA_VERSION.to_string();
+    let body = format!(
+        r#"{{"schema_version":"{current}","email":"string-version@example.com","idle_lock_seconds":120}}"#
+    );
+    std::fs::write(&path, &body).unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
+    assert_eq!(loaded.email, "string-version@example.com");
+    assert_eq!(loaded.idle_lock_seconds, 120);
+    assert_eq!(
+        super::schema_version_of(Some(&serde_json::json!(current))),
+        Some(u64::from(CURRENT_SCHEMA_VERSION))
+    );
+    assert_eq!(
+        super::file_schema_version(&path),
+        Some(u64::from(CURRENT_SCHEMA_VERSION))
+    );
+    assert!(load_advisories(&path).is_empty());
+
+    // Save must not treat the string marker as an unknown writer and refuse to
+    // overwrite the file.
+    loaded.save(&path).unwrap();
+    // A legacy file is upgraded to the current marker on save.
+    let saved = Settings::load_detailed(&path).unwrap();
+    assert_eq!(saved.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(saved.email, loaded.email);
+    assert_eq!(saved.idle_lock_seconds, loaded.idle_lock_seconds);
+}

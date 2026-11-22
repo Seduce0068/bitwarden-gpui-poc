@@ -170,10 +170,12 @@ fn mask_param_pairs(pairs: &str) -> String {
         first = false;
         if let Some((key, value)) = pair.split_once('=') {
             // A key can hide a credential name behind percent escapes
-            // (`%74oken` is `token`). Decode before the substring match so a
-            // crafted key cannot slip past `is_sensitive_param_key`. The
-            // original spelling is kept in the diagnostic output.
-            let decoded_key = percent_decode(key);
+            // (`%74oken` is `token`), or behind two rounds of them
+            // (`%2574oken` -> `%74oken` -> `token`). Decode twice before the
+            // substring match so a crafted key cannot slip past
+            // `is_sensitive_param_key`. The original spelling is kept in the
+            // diagnostic output.
+            let decoded_key = percent_decode(&percent_decode(key));
             if is_sensitive_param_key(&decoded_key) {
                 out.push_str(key);
                 out.push_str("=[redacted]");
@@ -567,7 +569,17 @@ pub fn save(path: impl AsRef<std::path::Path>, cache: &SyncCache) -> Result<(), 
 /// Returns `std::io::Error` when no platform cache directory is available,
 /// or on a filesystem/serialization failure.
 pub fn save_default(cache: &SyncCache) -> Result<(), std::io::Error> {
-    let path = default_path().ok_or_else(|| {
+    save_to_path(default_path(), cache)
+}
+
+/// Write through a resolved optional default path.
+///
+/// Keeping the "no platform cache directory" branch on a plain `Option`
+/// mirrors `load_from_paths`: the real XDG/HOME environment cannot reliably be
+/// changed inside a test, but the branch can be exercised directly with
+/// `None`. Every filesystem failure still propagates through [`save`].
+fn save_to_path(path: Option<PathBuf>, cache: &SyncCache) -> Result<(), std::io::Error> {
+    let path = path.ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "no platform cache directory available",

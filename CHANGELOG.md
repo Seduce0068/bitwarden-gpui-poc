@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### 全体改善（第67〜68弾 / 2026-11-23）
+
+- 監査未選択 Enter の未保存マーカー、生成 y/Y の案内、
+  `TotpState::clear()` と Alt+文字のテストを追加
+- `Some(Kdf)` 経路、trim 空判定、設定上限/default_path、
+  cache の parse 失敗と値なしパラメータ、同期の欠落分岐、
+  model の trim/padding/serde 既定値をテスト
+- 自動ロック時の案内揃え、0件時の詳細行非表示、i/u の分表記、
+  複数文字 key_char、invalidate/clear 契約を修正
+- ApplySyncFailedCause 往復、settings の非オブジェクト入力、URL マスク、
+  負 revision、serde 往復、match_enum、未来 revision をテスト
+- `matches_query` の trim と NFKD doc を修正
+
 ### 全体改善（第65〜66弾 / 2026-11-23）
 
 - Settings / cache の Debug マスクとエンコード済み URL の秘密マスクを改善
@@ -23,7 +36,6 @@
   矢印キー案内、TOTP 境界、base64 padding を修正
 - 監査 UI の WCAG 対応、passphrase 空区切り監査、設定 TOCTOU、
   auth / vault_sync / model / TOTP の残りテストを追加
-- RUSTSEC-2026-0592（url 2.5.8）を 2.5.9 へ更新
 - 同期の内部 id 開示排除、注入シームによる unlock_and_import 分岐テスト、
   email Cf 正規化、URL フラグメントの秘密マスクを追加
 - 複数文字／単文字英数字セパレータの監査対応は回帰リスクのため却下し、

@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第68弾で 11 件すべてを完了）。
+なし（第69弾で 9 件すべてを完了）。
 
 ## 完了
 
+- [x] 第69弾（16 担当・13 回目）の指摘 9 件を完結（2026-11-23）
+  - 認証の絶対デッドラインタイムアウト、カード番号・コード・notes の
+    Zeroizing 化、設定読み取りの TOCTOU 共通化とゼロ幅定数集約を修正。
+  - パネル間遷移の誤案内、選択スクロール契約、Timeout 往復、
+    validate_config 優先順位、二重エンコード、save 失敗、
+    同 revision の先頭保持、SSH key_type をテスト。
+  - CHANGELOG に第67〜68弾を反映し RUSTSEC 重複を整理。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（602 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第68弾（16 担当・12 回目）の指摘 11 件を完結（2026-11-23）
   - 自動ロック時の案内揃え、0件時の詳細行非表示、i/u の分表記、
     複数文字 key_char、invalidate/clear の契約を UI 側で修正・テスト。

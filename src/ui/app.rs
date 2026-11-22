@@ -81,6 +81,31 @@ pub(super) fn unsaved_panel_exit_status() -> &'static str {
     "未保存の設定変更があります（設定/生成パネルに戻り w: 保存 / d: 破棄）"
 }
 
+/// Decide whether a panel transition needs the "return to the settings panels"
+/// guidance.
+///
+/// Both `Settings` and `Generator` own the `w`/`d` bindings (see
+/// `crate::ui::keys::classify_key`), so switching between them leaves the user
+/// on a panel where saving/discarding still works. Only a transition that
+/// actually leaves those panels (to `Vault` or `Audit`) should point back;
+/// telling someone who just opened the generator to return to the
+/// settings/generator panel is misleading. Kept pure so the contract can be
+/// tested without a GPUI window (this crate does not enable gpui's
+/// `test-support` feature).
+pub(super) fn unsaved_panel_exit_status_for(
+    from: Panel,
+    to: Panel,
+    dirty: bool,
+) -> Option<&'static str> {
+    let from_owns_settings = matches!(from, Panel::Settings | Panel::Generator);
+    let to_owns_settings = matches!(to, Panel::Settings | Panel::Generator);
+    if from_owns_settings && from != to && dirty && !to_owns_settings {
+        Some(unsaved_panel_exit_status())
+    } else {
+        None
+    }
+}
+
 /// Marker appended to transient statuses and to the list detail line.
 ///
 /// Keeping it in one place makes the unsaved state visible outside the
@@ -506,11 +531,12 @@ impl BitwardenApp {
     /// Leaving a settings field, auth field or search active would swallow
     /// every key in the destination panel ("dead keys").
     pub(super) fn set_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
-        let owns_settings = matches!(self.panel, Panel::Settings | Panel::Generator);
-        if owns_settings && panel != self.panel && self.settings_dirty {
-            // Leaving the panel does not persist anything. Say so before the
-            // destination panel overwrites the status message.
-            self.status = unsaved_panel_exit_status().to_string();
+        if let Some(status) = unsaved_panel_exit_status_for(self.panel, panel, self.settings_dirty)
+        {
+            // Leaving the settings-owning panels does not persist anything.
+            // Say so before the destination panel overwrites the status.
+            // Settings <-> Generator are excluded: `w`/`d` still work there.
+            self.status = status.to_string();
         }
         self.editing = None;
         self.auth.take_field();
@@ -1199,6 +1225,55 @@ mod tests {
         assert!(status.contains("未保存"));
         assert!(status.contains("設定/生成パネルに戻り"));
         assert!(status.contains("w: 保存 / d: 破棄"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_return_guidance_only_appears_when_settings_panels_are_left() {
+        // Settings -> Generator (and the reverse) keeps the user on a panel
+        // with `w`/`d`, so the old "go back" text must not be emitted.
+        for (from, to) in [
+            (Panel::Settings, Panel::Generator),
+            (Panel::Generator, Panel::Settings),
+        ] {
+            assert_eq!(
+                unsaved_panel_exit_status_for(from, to, true),
+                None,
+                "{from:?} -> {to:?} stays inside the settings-owning panels"
+            );
+        }
+
+        // Leaving for a panel without `w`/`d` still needs the pointer back.
+        for from in [Panel::Settings, Panel::Generator] {
+            for to in [Panel::Vault, Panel::Audit] {
+                assert_eq!(
+                    unsaved_panel_exit_status_for(from, to, true),
+                    Some(unsaved_panel_exit_status()),
+                    "{from:?} -> {to:?} must point back to the save/discard keys"
+                );
+            }
+        }
+
+        // Clean state, no-op transitions and non-settings origins stay silent.
+        assert_eq!(
+            unsaved_panel_exit_status_for(Panel::Settings, Panel::Vault, false),
+            None
+        );
+        assert_eq!(
+            unsaved_panel_exit_status_for(Panel::Settings, Panel::Settings, true),
+            None
+        );
+        assert_eq!(
+            unsaved_panel_exit_status_for(Panel::Generator, Panel::Generator, true),
+            None
+        );
+        assert_eq!(
+            unsaved_panel_exit_status_for(Panel::Vault, Panel::Settings, true),
+            None
+        );
+        assert_eq!(
+            unsaved_panel_exit_status_for(Panel::Audit, Panel::Vault, true),
+            None
+        );
     }
 
     #[::core::prelude::v1::test]

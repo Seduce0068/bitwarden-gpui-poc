@@ -104,6 +104,10 @@ impl VaultViewState {
     }
 
     /// Select a row by its index, returning whether it changed.
+    ///
+    /// Selection only: this never rewinds the list. The caller decides whether
+    /// to scroll (the click path uses the change flag together with the
+    /// requested index), so choosing a row cannot jump back to the first one.
     pub(super) fn select_index(&mut self, index: usize) -> bool {
         let visible = self.visible_items();
         let Some(item) = visible.get(index) else {
@@ -121,6 +125,8 @@ impl VaultViewState {
     ///
     /// Returns the visible-row index so the caller can scroll to it. An id
     /// that is filtered out is not silently replaced by the first row.
+    /// Selection only: this never rewinds the list, so the caller owns the
+    /// scroll decision just as it does for `select_index`.
     pub(super) fn select_id(&mut self, id: &str) -> Option<usize> {
         let index = {
             let visible = self.visible_items();
@@ -405,6 +411,48 @@ mod tests {
         // Switching to a different visible row is a change.
         assert!(state.select_index(0));
         assert_eq!(state.selected_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn select_index_and_select_id_delegate_scrolling_to_the_caller() {
+        // `deselect_and_rewind` is the only selection helper that may rewind.
+        // The two `select_*` helpers only change `selected_id` and hand back
+        // the information a caller needs to scroll on its own (change flag /
+        // visible-row index); they must never call the rewind path.
+        let mut state = state_with_items();
+        let before = state.rewind_calls;
+
+        assert!(state.select_index(1));
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+        assert_eq!(
+            state.rewind_calls, before,
+            "select_index must leave scrolling to the click handler"
+        );
+
+        assert_eq!(state.select_id("a"), Some(0));
+        assert_eq!(state.selected_id.as_deref(), Some("a"));
+        assert_eq!(
+            state.rewind_calls, before,
+            "select_id returns the index for the caller to scroll to"
+        );
+
+        // Even no-op outcomes must not rewind.
+        assert!(!state.select_index(usize::MAX));
+        assert_eq!(state.select_id("missing"), None);
+        assert_eq!(state.selected_id.as_deref(), Some("a"));
+        assert_eq!(state.rewind_calls, before);
+
+        // An empty view obeys the same contract.
+        let mut empty = VaultViewState::new();
+        assert!(!empty.select_index(0));
+        assert_eq!(empty.select_id("anything"), None);
+        assert_eq!(empty.rewind_calls, 0);
+
+        // Contrast: the shared deselection path still rewinds exactly once,
+        // so the assertion above is not vacuous.
+        state.deselect_and_rewind();
+        assert_eq!(state.selected_id, None);
+        assert_eq!(state.rewind_calls, before + 1);
     }
 
     #[test]
