@@ -2667,3 +2667,72 @@ fn nested_userinfo_password_with_equals_uses_the_pair_start_zero_branch() {
     );
     assert!(masked.contains("state=ok"), "{masked}");
 }
+
+#[test]
+fn leading_slash_scheme_less_authority_userinfo_is_masked() {
+    // A scheme-less nested authority can reach the recursive masker with a
+    // leading '/': `?next=%2Fuser%3ASECRET%40host%2Fp` decodes to
+    // `/user:SECRET@host/p`. `nested_authority_with_userinfo` correctly sends
+    // it down the recursive path, but the old `authority_start` treated that
+    // single '/' as the end of the authority, so `mask_url_userinfo` saw an
+    // empty scan and left the credential untouched (cache.rs:81-107, 132-157).
+    let nested = "/user:LEADING_SLASH_SECRET@cb.example.com/done";
+    assert!(
+        super::nested_authority_with_userinfo(nested),
+        "this value must take the nested-authority recursion path"
+    );
+    assert_eq!(
+        super::authority_start("/user:p@host/p"),
+        1,
+        "the authority starts after the leading '/'"
+    );
+    assert_eq!(super::authority_start("//user:p@host/p"), 2);
+    assert_eq!(super::authority_start("user:p@host/p"), 0);
+
+    assert_eq!(
+        super::mask_url_userinfo("/user:SECRET@host.example.com/p"),
+        "/[redacted]@host.example.com/p"
+    );
+    assert_eq!(
+        super::mask_url_userinfo("/user:SECRET@host.example.com"),
+        "/[redacted]@host.example.com"
+    );
+    // A path-absolute value without userinfo stays verbatim; an '@' in its
+    // query is still not promoted to a userinfo separator.
+    assert_eq!(
+        super::mask_url_userinfo("/vault.example.com/p?email=a@b.example"),
+        "/vault.example.com/p?email=a@b.example"
+    );
+
+    // The same value reaches the recursive masker directly when the query
+    // carries it literally, not only through percent-decoding.
+    let literal =
+        "https://vault.example.com/login?next=/user:LITERAL_SLASH_SECRET@cb.example.com/done";
+    let masked = super::mask_url_secrets(literal);
+    assert!(!masked.contains("LITERAL_SLASH_SECRET"), "{masked}");
+    assert!(
+        masked.contains("next=/[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+
+    // The recursive path: decoding the leading slash must not defeat masking.
+    let encoded = "https://vault.example.com/login?next=%2Fuser%3ALEADING_SLASH_SECRET%40cb.example.com%2Fdone&state=ok";
+    let masked = super::mask_url_secrets(encoded);
+    assert!(!masked.contains("LEADING_SLASH_SECRET"), "{masked}");
+    assert!(
+        masked.contains("next=/[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // Debug reaches the same recursive masker for the stored server URL, and
+    // the stored value remains byte-for-byte identical for the mismatch check.
+    let cache = SyncCache::from_body(body(), encoded).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("LEADING_SLASH_SECRET"), "{rendered}");
+    assert!(
+        rendered.contains("next=/[redacted]@cb.example.com/done"),
+        "{rendered}"
+    );
+    assert_eq!(cache.server_url, encoded);
+}

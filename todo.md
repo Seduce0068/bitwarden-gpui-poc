@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第85弾で 8 件すべてを完了）。
+なし（第86弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第86弾（16 担当・30 回目）の指摘 5 件を完結（2026-11-23）
+  - 先頭スラッシュ付き scheme-less authority のマスク、
+    Settings::save の親ディレクトリ自動作成を修正・テスト。
+  - PascalCase 重複 folder、非オブジェクト要素、RecentlyModified
+    タイブレークをテスト。health doc の自己矛盾、
+    cross-review/ADR ログの記録を是正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（811 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第85弾（16 担当・29 回目）の指摘 8 件を完結（2026-11-23）
   - 監査行クリック時の選択/スクロール同期、status の行名表示、
     Caps Lock の挿入文字を修正・テスト。

@@ -2007,6 +2007,103 @@ fn parse_sync_removes_duplicate_folder_ids_end_to_end() {
 }
 
 #[test]
+fn pascal_case_duplicate_folder_ids_are_removed_before_apply_sync() {
+    // A PascalCase wire body can repeat a folder id. `parse_sync` must
+    // normalize `Folders`/`Id`/`Name` first, then `dedup_folders_by_id`
+    // collapses the duplicate before `apply_sync` builds the vault: a
+    // leftover row would appear twice in `folders()` and shadow the first
+    // name in `folder_name(id)`.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string()
+    };
+    let mut body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [
+            { "id": "f-dup", "name": enc(b"First") },
+            { "id": "f-dup", "name": enc(b"Second") },
+            { "id": "f-other", "name": enc(b"Other") },
+        ],
+        "ciphers": [],
+    });
+    pascalize(&mut body);
+    let sync = parse_sync(body.to_string().as_bytes())
+        .expect("PascalCase duplicate folder ids must parse");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let user_key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let mut vault = openwarden::Vault::open(user_key, state);
+    vault.apply_sync(sync).expect("apply_sync must succeed");
+
+    let folder_ids = vault.folders();
+    let mut ids: Vec<&str> = folder_ids.iter().map(|id| id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["f-dup", "f-other"], "one folder per id");
+
+    let folders = folders_from(&vault).expect("folders must be readable");
+    assert_eq!(folders.len(), 2);
+    let dup = folders
+        .iter()
+        .find(|folder| folder.id == "f-dup")
+        .expect("the first duplicate row must survive");
+    assert_eq!(dup.name, "First", "the first row wins the id");
+}
+
+#[test]
+fn dedup_leaves_non_object_cipher_and_folder_rows_untouched() {
+    // `Value::get("id")` returns None for a non-object, so dedup treats such
+    // elements like rows without a string id and leaves them in place. This
+    // pins the current split of responsibility: dedup collapses only rows
+    // with a real string id; openwarden's parser decides whether the rest
+    // of the body is valid.
+    let mut value = serde_json::json!({
+        "ciphers": [
+            7,
+            "cipher-as-string",
+            null,
+            [1, 2],
+            {"id": "dup", "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "dup", "revisionDate": "2024-02-01T00:00:00Z"},
+        ],
+        "folders": [
+            9,
+            "folder-as-string",
+            null,
+            [3, 4],
+            {"id": "f1", "name": "first"},
+            {"id": "f1", "name": "second"},
+        ],
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    super::dedup_folders_by_id(&mut value);
+
+    let ciphers = value["ciphers"].as_array().expect("ciphers is an array");
+    assert_eq!(
+        ciphers.len(),
+        5,
+        "only the older duplicate cipher is dropped"
+    );
+    assert_eq!(ciphers[0], serde_json::json!(7));
+    assert_eq!(ciphers[1], serde_json::json!("cipher-as-string"));
+    assert_eq!(ciphers[2], serde_json::json!(null));
+    assert_eq!(ciphers[3], serde_json::json!([1, 2]));
+    assert_eq!(ciphers[4]["id"], "dup");
+    assert_eq!(ciphers[4]["revisionDate"], "2024-02-01T00:00:00Z");
+
+    let folders = value["folders"].as_array().expect("folders is an array");
+    assert_eq!(folders.len(), 5, "only the duplicate folder id is dropped");
+    assert_eq!(folders[0], serde_json::json!(9));
+    assert_eq!(folders[1], serde_json::json!("folder-as-string"));
+    assert_eq!(folders[2], serde_json::json!(null));
+    assert_eq!(folders[3], serde_json::json!([3, 4]));
+    assert_eq!(folders[4]["name"], "first");
+}
+
+#[test]
 fn clipped_revision_does_not_overwrite_the_accepted_items_encrypted_fields() {
     // The `Clipped` branch only records the decision and `continue`s
     // (vault_sync.rs:642-649), so the already accepted item keeps its decrypted

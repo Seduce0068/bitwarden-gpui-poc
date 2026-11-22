@@ -86,8 +86,11 @@ pub struct SyncCache {
 /// started the authority scan there, leaving real userinfo unmasked. Skipping
 /// non-scheme candidates keeps the scan in the outer authority. The scheme
 /// check is ASCII-case-insensitive, so `HTTPS://` is recognized as well.
-/// A protocol-relative URL (`//user:pass@host`) starts at its two leading
-/// bytes; without either form the whole text is the authority.
+/// Without a scheme, the authority starts after any leading `/` bytes: a
+/// protocol-relative `//user:pass@host` starts at byte two, and a decoded
+/// scheme-less nested authority such as `/user:pass@host` starts at byte one.
+/// Treating the single leading `/` as the *end* of the authority would leave
+/// its userinfo outside the scan.
 fn authority_start(url: &str) -> usize {
     let mut from = 0usize;
     while let Some(relative) = url[from..].find("://") {
@@ -97,11 +100,10 @@ fn authority_start(url: &str) -> usize {
         }
         from = delimiter + 3;
     }
-    if url.starts_with("//") {
-        2
-    } else {
-        0
-    }
+    // No leading scheme: skip path-absolute prefixes. Counting *all* leading
+    // slashes keeps the protocol-relative form at 2 while also handling a
+    // single-slash scheme-less authority from a decoded nested value.
+    url.bytes().take_while(|byte| *byte == b'/').count()
 }
 
 /// Whether `text` is an RFC 3986 scheme: an ASCII letter followed by ASCII
@@ -119,7 +121,9 @@ fn is_scheme(text: &str) -> bool {
 /// credentials through a log line. The userinfo before the userinfo delimiter
 /// is replaced by `[redacted]`; the host/path that follows is kept so
 /// diagnostics remain useful. A protocol-relative `//user:pass@host/p` skips
-/// its two leading bytes so the authority scan still sees the userinfo.
+/// its two leading bytes so the authority scan still sees the userinfo; the
+/// same applies to a single leading `/` (`/user:pass@host/p`) from a decoded
+/// nested value.
 ///
 /// The delimiter is the last `@` **of the authority**, not the last `@` of the
 /// whole pre-path text: a password may contain `@`, but an `@` in a query or

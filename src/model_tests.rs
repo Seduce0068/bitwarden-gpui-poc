@@ -310,6 +310,35 @@ fn name_sort_id_tiebreak_is_reversed_only_for_name_desc() {
 }
 
 #[test]
+fn recently_modified_breaks_equal_revision_ties_by_name_then_id() {
+    // `compare` orders `RecentlyModified` by revision descending, then reuses
+    // the un-reversed `name + id` ordering (model.rs:1089-1098). With equal
+    // revisions the folded name must win first and the id must break an
+    // exactly equal name, regardless of insertion order.
+    let mut vault = Vault::new();
+    let mut z_alpha = login("z-id", "Alpha", "u", "p", "https://z.example");
+    z_alpha.revision_date = 100;
+    let mut a_beta = login("a-id", "Beta", "u", "p", "https://a.example");
+    a_beta.revision_date = 100;
+    let mut m_alpha = login("m-id", "Alpha", "u", "p", "https://m.example");
+    m_alpha.revision_date = 100;
+    let mut newest = login("n-id", "Zulu", "u", "p", "https://n.example");
+    newest.revision_date = 200;
+    // Deliberately out of sort order.
+    vault.items = vec![z_alpha, a_beta, m_alpha, newest];
+
+    let ids: Vec<&str> = vault
+        .view(&Filter::All, "", SortKey::RecentlyModified)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    // The newer revision wins even though its name sorts last; among the
+    // three tied items "Alpha" precedes "Beta", and the two "Alpha" rows
+    // fall back to ascending ids ("m-id" < "z-id").
+    assert_eq!(ids, vec!["n-id", "m-id", "z-id", "a-id"]);
+}
+
+#[test]
 fn page_matching_uses_bitwarden_rules() {
     let vault = sample();
     let opts = openwarden::MatchOptions::default();

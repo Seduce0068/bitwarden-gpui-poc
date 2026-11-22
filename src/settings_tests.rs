@@ -2529,3 +2529,44 @@ fn non_object_nested_values_fall_back_per_field_without_discarding_siblings() {
     assert_eq!(mixed.thresholds, defaults.thresholds);
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn save_creates_missing_parent_directories() {
+    // `Settings::save` documents that it creates parent directories when
+    // needed (settings.rs:914). It delegates the final write to
+    // `write_private`, whose recursive mkdir must let a caller save several
+    // levels below an existing root without any prior setup.
+    let root = tempfile::tempdir().unwrap();
+    let parent = root
+        .path()
+        .join("config")
+        .join("bitwarden-gpui-poc")
+        .join("nested");
+    let path = parent.join("settings.json");
+    assert!(!parent.exists(), "the fixture must start without parents");
+
+    let settings = Settings {
+        email: "alice@example.com".to_string(),
+        ..Default::default()
+    };
+    settings
+        .save(&path)
+        .expect("save must create the parent dirs");
+
+    assert!(parent.is_dir(), "all intermediate dirs must exist");
+    assert!(path.is_file(), "the settings file must be written");
+    assert_eq!(Settings::load(&path), settings);
+    assert!(
+        !std::fs::read(&path).unwrap().is_empty(),
+        "the file must contain the serialized settings"
+    );
+
+    // write_private creates directories with restrictive permissions, so the
+    // newly created parent must not be group/world accessible on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&parent).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "parent dir is not private: {mode:04o}");
+    }
+}

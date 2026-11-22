@@ -1,9 +1,10 @@
 //! Vault health: the checks behind the "vault health" panel.
 //!
 //! Bitwarden's security audit reports weak, reused, and exposed passwords plus
-//! items missing 2FA and unsecured (`http`) URIs. The PoC can do the first
-//! three from local data alone; the breach check would need an external
-//! service and is deliberately absent.
+//! items missing 2FA and unsecured (`http`) URIs. From local data alone the PoC
+//! implements four checks: weak passwords, reused passwords, missing 2FA and
+//! unsecured (`http`) URIs. The exposed-password (breach) check needs an
+//! external service and is deliberately absent.
 //!
 //! The estimate of how guessable a password is comes from a local,
 //! deliberately simple model — length, character classes, and whether it looks
