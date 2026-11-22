@@ -83,6 +83,18 @@ pub(super) fn search_finished_status(dirty: bool) -> String {
     text_edit_finished_status(crate::ui::logic::no_selection_status(), dirty)
 }
 
+/// Status after a settings seconds field is adjusted with `i`/`u`, `3`/`4` or
+/// `5`/`6`.
+///
+/// The threshold keys already report through `refresh_audit`, but these three
+/// seconds-only branches previously changed the settings without touching the
+/// status bar, leaving whatever the last action had written on screen. Sharing
+/// one status makes the keyboard feedback consistent with the other settings
+/// edits. Kept pure so the contract can be tested without a GPUI window.
+pub(super) fn seconds_adjust_status(dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved("秒数を変更しました（w: 保存 / d: 破棄）", dirty)
+}
+
 impl BitwardenApp {
     pub(super) fn key_down(
         &mut self,
@@ -254,12 +266,14 @@ impl BitwardenApp {
                 self.settings.idle_lock_seconds =
                     crate::ui::logic::adjust_idle_lock(self.settings.idle_lock_seconds, delta);
                 self.mark_settings_dirty();
+                self.status = seconds_adjust_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::AdjustLoginTimeout(delta) => {
                 self.settings.login_timeout_seconds =
                     crate::ui::logic::adjust_seconds(self.settings.login_timeout_seconds, delta);
                 self.mark_settings_dirty();
+                self.status = seconds_adjust_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::AdjustClipboardRestore(delta) => {
@@ -268,6 +282,7 @@ impl BitwardenApp {
                     delta,
                 );
                 self.mark_settings_dirty();
+                self.status = seconds_adjust_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::Generator(option) => self.toggle_generator(option, cx),
@@ -374,6 +389,23 @@ mod tests {
             dirty.contains("[未保存の設定変更があります]"),
             "confirming a field is not a save: {dirty}"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn seconds_adjust_status_keeps_save_hint_and_unsaved_marker() {
+        let clean = seconds_adjust_status(false);
+        assert_eq!(clean, "秒数を変更しました（w: 保存 / d: 破棄）");
+        assert!(!clean.contains("[未保存"), "{clean}");
+
+        // i/u, 3/4 and 5/6 all mark the settings dirty before writing the
+        // status, so the persistent unsaved marker must survive the feedback.
+        let dirty = seconds_adjust_status(true);
+        assert_eq!(
+            dirty,
+            crate::ui::app::status_with_unsaved(clean.as_str(), true)
+        );
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+        assert!(dirty.contains("w: 保存 / d: 破棄"), "{dirty}");
     }
 
     #[::core::prelude::v1::test]

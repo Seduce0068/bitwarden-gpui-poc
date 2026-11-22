@@ -275,6 +275,31 @@ fn entropy_and_strength_buckets() {
 }
 
 #[test]
+fn every_strength_bucket_has_its_own_label() {
+    // The four label branches are part of the detail pane's contract
+    // (generator.rs:278-286); a missing branch must not fall back to another
+    // bucket's text.
+    for (bits, expected) in [
+        (f64::from(WEAK_BITS) - 0.1, Strength::Weak),
+        (f64::from(WEAK_BITS), Strength::Fair),
+        (63.9, Strength::Fair),
+        (64.0, Strength::Good),
+        (89.9, Strength::Good),
+        (90.0, Strength::Strong),
+    ] {
+        assert_eq!(
+            Strength::from_bits(bits).label(),
+            expected.label(),
+            "{bits}"
+        );
+    }
+    assert_eq!(Strength::Weak.label(), "弱い");
+    assert_eq!(Strength::Fair.label(), "ふつう");
+    assert_eq!(Strength::Good.label(), "良い");
+    assert_eq!(Strength::Strong.label(), "強い");
+}
+
+#[test]
 fn password_entropy_uses_the_shared_alphabet() {
     let settings = PasswordSettings {
         length: 16,

@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第63弾で 10 件を完了、1 件を既知制約として記録）。
+なし（第64弾で 12 件すべてを完了）。
 
 ## 完了
 
+- [x] 第64弾（16 担当・8 回目）の指摘 12 件を完結（2026-11-23）
+  - URL マスクのフラグメント/エンコード済み入れ子 URL、
+    `is_common_password` の文字数ベース判定を修正。
+  - auth / settings / cache / sync / model / health / UI の残りテストを
+    追加し、SSH fingerprint の現状を doc に明記。
+  - CHANGELOG 第60〜63弾と ADR ログ 2026-11-22 を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（524 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第63弾（16 担当・7 回目）の指摘 10 件を完結（2026-11-22）
   - 同期の内部 id 開示排除と復号済み name/username の直接検証、
     `unlock_and_import` の4分岐をテスト可能にする注入シーム、

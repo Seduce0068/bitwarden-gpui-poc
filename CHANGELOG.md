@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 全体改善（第60〜63弾 / 2026-11-22）
+
+- email 共有欄の Cf 入力フィルタ、cache redact の再帰化、local part 検証、
+  矢印キー案内、TOTP 境界、base64 padding を修正
+- 監査 UI の WCAG 対応、passphrase 空区切り監査、設定 TOCTOU、
+  auth / vault_sync / model / TOTP の残りテストを追加
+- RUSTSEC-2026-0592（url 2.5.8）を 2.5.9 へ更新
+- 同期の内部 id 開示排除、注入シームによる unlock_and_import 分岐テスト、
+  email Cf 正規化、URL フラグメントの秘密マスクを追加
+- 複数文字／単文字英数字セパレータの監査対応は回帰リスクのため却下し、
+  既知制約として記録
+
 ### 全体改善（第59弾 / 2026-11-22）
 
 - お気に入り／監査再計算時の未保存マーカー保持、F1 案内の一本化、

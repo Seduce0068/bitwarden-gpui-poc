@@ -111,12 +111,55 @@ fn is_sensitive_param_key(key: &str) -> bool {
     .any(|needle| folded.contains(needle))
 }
 
+/// Decode one hexadecimal digit of a percent escape.
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Percent-decode the `%XX` escapes of a value before inspecting it.
+///
+/// Only ASCII escapes are decoded: a raw non-ASCII byte produced by a
+/// sequence such as `%E3%81%82` is kept as its original escape so the
+/// rendered diagnostic stays valid UTF-8. Malformed escapes stay literal as
+/// well; a crafted value must not change the structure of the URL merely by
+/// being decoded.
+fn percent_decode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(first) = rest.chars().next() {
+        if first == '%' {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 3 {
+                if let (Some(high), Some(low)) = (hex_value(bytes[1]), hex_value(bytes[2])) {
+                    let decoded = (high << 4) | low;
+                    if decoded.is_ascii() {
+                        out.push(char::from(decoded));
+                        rest = &rest[3..];
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(first);
+        rest = &rest[first.len_utf8()..];
+    }
+    out
+}
+
 /// Redact secret-bearing `key=value` pairs in a query or a fragment.
 ///
 /// A harmless key whose *value* is itself a URL is masked recursively: a
 /// nested `?token=...` or `#code=...` would otherwise survive the top-level
-/// key check and reach a diagnostic log verbatim. Plain values are copied
-/// unchanged so the URL stays useful for debugging.
+/// key check and reach a diagnostic log verbatim. The nested URL may be
+/// percent-encoded (`%3F`, `%23`, `%3A%2F%2F`): it is decoded first so an
+/// encoded credential cannot hide behind escapes. When a nested URL is found
+/// the decoded, masked form is rendered; plain values are copied unchanged so
+/// the URL stays useful for debugging.
 fn mask_param_pairs(pairs: &str) -> String {
     let mut out = String::with_capacity(pairs.len());
     let mut first = true;
@@ -129,12 +172,18 @@ fn mask_param_pairs(pairs: &str) -> String {
             if is_sensitive_param_key(key) {
                 out.push_str(key);
                 out.push_str("=[redacted]");
-            } else if value.contains('?') || value.contains('#') || value.contains("://") {
-                out.push_str(key);
-                out.push('=');
-                out.push_str(&mask_url_secrets(value));
             } else {
-                out.push_str(pair);
+                // Decode before the nested-URL check: `%3Ftoken=...` is the
+                // same credential as `?token=...`. A decoded value that is
+                // not a nested URL is discarded, leaving the original pair.
+                let decoded = percent_decode(value);
+                if decoded.contains('?') || decoded.contains('#') || decoded.contains("://") {
+                    out.push_str(key);
+                    out.push('=');
+                    out.push_str(&mask_url_secrets(&decoded));
+                } else {
+                    out.push_str(pair);
+                }
             }
         } else {
             out.push_str(pair);
@@ -152,30 +201,36 @@ fn mask_param_pairs(pairs: &str) -> String {
 /// parameters are preserved so the diagnostic remains useful. A URL without a
 /// query is still checked for a fragment, and nested URLs inside a value are
 /// handled by [`mask_param_pairs`].
+///
+/// The first `?`/`#` decides which section follows: a `?` that appears
+/// *after* the `#` belongs to the fragment, not to a query. Treating such a
+/// `?` as a query delimiter would copy the fragment text before it verbatim
+/// into the output and leak its credentials.
 fn mask_url_secrets(url: &str) -> String {
     let masked = mask_url_userinfo(url);
-    let Some(query_start) = masked.find('?') else {
-        return match masked.find('#') {
-            Some(fragment_start) => format!(
-                "{}#{}",
-                &masked[..fragment_start],
-                mask_param_pairs(&masked[fragment_start + 1..])
-            ),
-            None => masked,
-        };
-    };
-    let query_end = masked[query_start..]
-        .find('#')
-        .map(|offset| query_start + offset)
-        .unwrap_or(masked.len());
-    let mut out = String::with_capacity(masked.len());
-    out.push_str(&masked[..query_start + 1]);
-    out.push_str(&mask_param_pairs(&masked[query_start + 1..query_end]));
-    if query_end < masked.len() {
-        out.push('#');
-        out.push_str(&mask_param_pairs(&masked[query_end + 1..]));
+    let fragment_start = masked.find('#');
+    let query_start = masked
+        .find('?')
+        .filter(|at| fragment_start.is_none_or(|fragment| *at < fragment));
+    if let Some(query_start) = query_start {
+        let query_end = fragment_start.unwrap_or(masked.len());
+        let mut out = String::with_capacity(masked.len());
+        out.push_str(&masked[..query_start + 1]);
+        out.push_str(&mask_param_pairs(&masked[query_start + 1..query_end]));
+        if let Some(fragment_start) = fragment_start {
+            out.push('#');
+            out.push_str(&mask_param_pairs(&masked[fragment_start + 1..]));
+        }
+        out
+    } else if let Some(fragment_start) = fragment_start {
+        format!(
+            "{}#{}",
+            &masked[..fragment_start],
+            mask_param_pairs(&masked[fragment_start + 1..])
+        )
+    } else {
+        masked
     }
-    out
 }
 
 impl core::fmt::Debug for SyncCache {

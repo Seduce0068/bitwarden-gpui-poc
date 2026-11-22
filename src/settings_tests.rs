@@ -1332,6 +1332,42 @@ fn deterministic_uppercase_device_id_variant_is_accepted_and_reused() {
 }
 
 #[test]
+fn uppercase_variant_nibbles_a_and_b_are_accepted_deterministically() {
+    // Fixed literals keep the A/B variant branch deterministic: no CSPRNG
+    // draw can be relied on to produce those nibbles (settings.rs:519-535).
+    const UPPER_A: &str = "A1B2C3D4-1234-4ABC-ADEF-0123456789AB";
+    const UPPER_B: &str = "A1B2C3D4-1234-4ABC-BDEF-0123456789AB";
+    for id in [UPPER_A, UPPER_B] {
+        assert_eq!(id.len(), 36);
+        assert_eq!(id.as_bytes()[14], b'4');
+        assert!(matches!(id.as_bytes()[19], b'A' | b'B'), "{id}");
+        assert!(is_valid_device_id(id), "{id}");
+        assert!(is_valid_device_id(&id.to_ascii_lowercase()));
+
+        // A valid uppercase id must survive both sanitizing and a load from
+        // a hand-edited settings file instead of being regenerated.
+        let settings = Settings {
+            device_id: id.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(settings.sanitized().device_id, id);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, format!(r#"{{"device_id":"{id}"}}"#).as_bytes()).unwrap();
+        assert_eq!(Settings::load(&path).device_id, id);
+    }
+
+    // Other variant nibbles stay invalid even when written in upper case.
+    for variant in *b"CDF" {
+        let mut bytes = UPPER_A.as_bytes().to_vec();
+        bytes[19] = variant;
+        let invalid = std::str::from_utf8(&bytes).unwrap();
+        assert!(!is_valid_device_id(invalid), "{invalid}");
+    }
+}
+
+#[test]
 fn every_leading_200b_to_200f_character_is_stripped_from_email() {
     use crate::limits::has_format_character;
     use crate::settings::SharedSettingsField;
@@ -1369,4 +1405,39 @@ fn every_leading_200b_to_200f_character_is_stripped_from_email() {
         ..Default::default()
     };
     assert!(interior.sanitized().email.is_empty());
+}
+
+#[test]
+fn leading_zero_width_run_followed_by_another_cf_is_rejected_wholesale() {
+    use crate::settings::SharedSettingsField;
+
+    // Only a leading U+200B..U+200F run is tolerated (settings.rs:116-144).
+    // A different format character after that run, or a zero-width one after
+    // the first visible character, rejects the whole value instead of
+    // filtering characters in place — both on the UI input path and on load.
+    for raw in [
+        "\u{200b}\u{200c}\u{202e}alice@example.com",
+        "\u{200b}\u{200f}\u{ad}alice@example.com",
+        "\u{200c}\u{200d}\u{200b}al\u{200b}ice@example.com",
+    ] {
+        let mut pushed = Settings::default();
+        pushed.push_shared_text(SharedSettingsField::Email, raw);
+        assert!(pushed.email.is_empty(), "pushed {raw:?}");
+
+        let original = Settings {
+            email: raw.to_string(),
+            ..Default::default()
+        };
+        assert!(original.sanitized().email.is_empty(), "loaded {raw:?}");
+        assert_eq!(original.email, raw, "sanitized() must be a pure clone");
+    }
+
+    // A consecutive leading run with no other Cf is stripped completely.
+    let clean = Settings {
+        email: "\u{200b}\u{200c}\u{200d}alice@example.com".into(),
+        ..Default::default()
+    }
+    .sanitized();
+    assert_eq!(clean.email, "alice@example.com");
+    assert!(crate::auth::valid_email(&clean.email));
 }

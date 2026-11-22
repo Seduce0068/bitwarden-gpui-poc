@@ -534,9 +534,12 @@ fn is_common_password(lower: &str) -> bool {
     // is not a dictionary password. Cap the prefix matches so those values
     // keep their real (high) entropy estimate; see PASSWORD_PREFIX_LIMIT for
     // how the cap relates to the weak-entropy threshold.
+    // Count Unicode characters, not UTF-8 bytes: a multibyte suffix makes the
+    // byte length exceed the cap even when the value is only a short
+    // dictionary guess plus a few letters, which must still be flagged weak.
     COMMON.contains(&lower)
-        || (lower.starts_with("password") && lower.len() <= PASSWORD_PREFIX_LIMIT)
-        || (lower.starts_with("qwerty") && lower.len() <= QWERTY_PREFIX_LIMIT)
+        || (lower.starts_with("password") && lower.chars().count() <= PASSWORD_PREFIX_LIMIT)
+        || (lower.starts_with("qwerty") && lower.chars().count() <= QWERTY_PREFIX_LIMIT)
 }
 
 /// Whether `item` has a TOTP field that can actually produce a code.

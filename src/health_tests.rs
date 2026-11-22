@@ -351,6 +351,44 @@ fn severity_labels_and_ordering() {
 }
 
 #[test]
+fn findings_within_an_item_are_sorted_by_severity() {
+    // The audit sorts each item's findings worst-first (health.rs:592-594).
+    // One item collects all three severities: reuse + insecure URI (High),
+    // weak password + stale (Medium) and a missing TOTP (Low).
+    let mut primary = login("1", "Primary", "1234", "http://a.example", "");
+    primary.revision_date = NOW - 400 * 86_400;
+    let second = login("2", "Second", "1234", "https://b.example", "SECRET");
+    let report = report_of(vec![primary, second]);
+    let item = report
+        .items
+        .iter()
+        .find(|item| item.id == "1")
+        .expect("the item has findings");
+
+    let severities: Vec<Severity> = item.findings.iter().map(Finding::severity).collect();
+    assert_eq!(
+        severities,
+        vec![
+            Severity::High,
+            Severity::High,
+            Severity::Medium,
+            Severity::Medium,
+            Severity::Low,
+        ],
+        "{item:?}"
+    );
+    assert!(matches!(
+        item.findings[0],
+        Finding::ReusedPassword { count: 2 }
+    ));
+    assert!(matches!(item.findings[1], Finding::InsecureUri { .. }));
+    assert!(matches!(item.findings[2], Finding::WeakPassword { .. }));
+    assert!(matches!(item.findings[3], Finding::Stale { .. }));
+    assert_eq!(item.findings[4], Finding::NoTotp);
+    assert_eq!(item.worst(), Some(Severity::High));
+}
+
+#[test]
 fn item_without_findings_has_no_worst_severity() {
     let item = ItemReport {
         id: "x".into(),
@@ -875,6 +913,52 @@ fn custom_thresholds_change_the_findings() {
         .iter()
         .any(|finding| matches!(finding, Finding::WeakPassword { .. })));
     assert!(findings.contains(&Finding::Stale { days: 20 }));
+}
+
+#[test]
+fn non_ascii_suffix_counts_towards_the_prefix_cap_by_characters() {
+    // The caps are expressed in characters. A multibyte suffix used to make
+    // the byte length exceed the cap, so a short dictionary guess escaped the
+    // shortcut and was scored as high-entropy (health.rs:532-539).
+    let password = "passwordあいうえお";
+    assert_eq!(password.chars().count(), 13);
+    assert!(password.len() > PASSWORD_PREFIX_LIMIT, "{}", password.len());
+    assert!(super::is_common_password(&password.to_lowercase()));
+    let bits = estimate_entropy(password);
+    assert!(bits < 20, "{password}: {bits}");
+
+    let qwerty = "qwertyあいうえお";
+    assert_eq!(qwerty.chars().count(), 11);
+    assert!(
+        qwerty.len() > super::QWERTY_PREFIX_LIMIT,
+        "{}",
+        qwerty.len()
+    );
+    assert!(super::is_common_password(qwerty));
+    assert!(estimate_entropy(qwerty) < 20);
+
+    // A genuinely long value with a multibyte suffix still keeps its real
+    // estimate: the cap must not classify every non-ASCII password as common.
+    let long = "passwordあいうえおかきくけこさ";
+    assert!(long.chars().count() > PASSWORD_PREFIX_LIMIT);
+    assert!(!super::is_common_password(long));
+    assert!(estimate_entropy(long) >= Thresholds::default().weak_bits);
+
+    // The audit path applies the same estimate through the WeakPassword
+    // finding, with a valid TOTP and https URI so no other finding appears.
+    let report = report_of(vec![login(
+        "1",
+        "NonAscii",
+        password,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
 }
 
 #[test]

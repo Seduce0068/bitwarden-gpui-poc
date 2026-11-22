@@ -1208,3 +1208,103 @@ fn search_haystacks_cover_kind_specific_fields() {
     );
     assert!(ssh.matches_query("SHA256:abc"));
 }
+
+#[test]
+fn unset_or_foreign_format_fingerprints_are_reported_as_mismatch() {
+    // Current contract: only an unparsable *public key* has a third outcome
+    // (`InvalidPublicKey`). An empty or differently formatted stored
+    // fingerprint is a string mismatch, with the recomputed SHA256 value
+    // returned for diagnostics (model.rs:240-265).
+    let expected = FingerprintVerify::Mismatch {
+        computed: REFERENCE_FINGERPRINT.to_string(),
+    };
+    let lowercase_prefix = REFERENCE_FINGERPRINT.replace("SHA256:", "sha256:");
+    for stored in ["", "  ", "MD5:aa:bb:cc", lowercase_prefix.as_str()] {
+        let key = ssh_key(REFERENCE_PUBLIC_KEY, stored);
+        assert_eq!(key.verify_fingerprint(), expected, "{stored:?}");
+        assert!(!key.fingerprint_matches());
+    }
+    // Whitespace around a correct value is tolerated by the comparison.
+    let padded = ssh_key(
+        REFERENCE_PUBLIC_KEY,
+        &format!("  {REFERENCE_FINGERPRINT}  "),
+    );
+    assert_eq!(padded.verify_fingerprint(), FingerprintVerify::Match);
+}
+
+#[test]
+fn secure_note_debug_masks_the_note_text() {
+    const SECRET: &str = "TOP SECRET NOTE TEXT";
+    let item = VaultItem::new(
+        "n",
+        "Private note",
+        ItemData::SecureNote {
+            text: SECRET.into(),
+        },
+    );
+    let data_debug = format!("{:?}", item.data);
+    let item_debug = format!("{item:?}");
+    let vault_debug = format!(
+        "{:?}",
+        Vault {
+            items: vec![item],
+            folders: Vec::new(),
+        }
+    );
+    for rendered in [&data_debug, &item_debug, &vault_debug] {
+        assert!(!rendered.contains(SECRET), "{rendered}");
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+    }
+    // Search and serde still see the plain text: only Debug is masked.
+    let note = VaultItem::new(
+        "n",
+        "Private note",
+        ItemData::SecureNote {
+            text: SECRET.into(),
+        },
+    );
+    assert!(note.matches_query("TOP SECRET"));
+    assert!(serde_json::to_string(&note).unwrap().contains(SECRET));
+}
+
+#[test]
+fn an_item_with_multiple_uris_matches_any_of_them() {
+    let item = VaultItem::new(
+        "multi",
+        "Multi",
+        ItemData::Login {
+            username: "u".into(),
+            password: Zeroizing::new("p".into()),
+            totp: Zeroizing::new(String::new()),
+            uris: vec![
+                LoginUri {
+                    uri: "https://one.example.com/login".into(),
+                    match_type: Some(3),
+                },
+                LoginUri {
+                    uri: "https://two.example.net/login".into(),
+                    match_type: Some(3),
+                },
+                // `never` must not make the item match its own URI.
+                LoginUri {
+                    uri: "https://never.example.org/".into(),
+                    match_type: Some(5),
+                },
+            ],
+        },
+    );
+    let opts = openwarden::MatchOptions::default();
+    assert!(item.matches_page("https://one.example.com/login", &opts));
+    assert!(item.matches_page("https://two.example.net/login", &opts));
+    assert!(!item.matches_page("https://never.example.org/", &opts));
+    assert!(!item.matches_page("https://elsewhere.example.com/login", &opts));
+
+    // A vault returns a multi-URI item once, not once per matching URI.
+    let vault = Vault {
+        items: vec![item],
+        folders: Vec::new(),
+    };
+    let hits = vault.matches_page("https://two.example.net/login", &opts);
+    assert_eq!(hits.len(), 1, "a matching item must not be duplicated");
+    assert_eq!(hits[0].id, "multi");
+}

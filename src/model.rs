@@ -243,6 +243,16 @@ impl SshKeyData {
     ///
     /// OpenSSH fingerprints the decoded key blob (the second whitespace-
     /// separated field), so a changed key or a stale stored value is detected.
+    ///
+    /// Current contract: only the public key's *parsability* has a third
+    /// outcome ([`FingerprintVerify::InvalidPublicKey`]). An unset fingerprint
+    /// or one in a different format (for example an MD5-style fingerprint) is
+    /// simply a different string and is reported as
+    /// [`FingerprintVerify::Mismatch`] with the computed SHA256 value, not as
+    /// "unset" or "unverifiable". There is deliberately no separate variant:
+    /// adding one would change the audit's public `Finding` set outside this
+    /// change's scope. Callers that need to distinguish the two can compare
+    /// the stored `fingerprint` field with the computed value themselves.
     pub fn verify_fingerprint(&self) -> FingerprintVerify {
         let Some(computed) = ssh_fingerprint::sha256_fingerprint(&self.public_key) else {
             return FingerprintVerify::InvalidPublicKey;

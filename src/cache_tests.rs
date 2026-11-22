@@ -1031,3 +1031,110 @@ fn secret_profile_keys_ignore_hyphen_and_underscore_separators() {
         );
     }
 }
+
+#[test]
+fn fragment_with_a_late_question_mark_is_masked() {
+    // A `?` inside a fragment is not a query delimiter. The old code looked
+    // for `?` first and copied everything before it verbatim, leaking the
+    // fragment's credentials (cache.rs:157-173).
+    let url = "https://vault.example.com/cb#access_token=FRAGMENT_SECRET&next=1?x=2";
+    let masked = super::mask_url_secrets(url);
+    assert!(!masked.contains("FRAGMENT_SECRET"), "{masked}");
+    assert!(masked.contains("access_token=[redacted]"), "{masked}");
+    assert!(masked.contains('#'), "{masked}");
+    assert!(
+        masked.ends_with("access_token=[redacted]&next=1?x=2"),
+        "{masked}"
+    );
+
+    // A late `?` inside a fragment pair makes that pair's key contain
+    // `?token`; the substring match still recognizes the credential.
+    let with_queryish_key = "https://vault.example.com/cb#frag?token=QUERY_IN_FRAGMENT";
+    let masked = super::mask_url_secrets(with_queryish_key);
+    assert!(!masked.contains("QUERY_IN_FRAGMENT"), "{masked}");
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+
+    // A URL with both sections in the canonical order is still handled.
+    let both = "https://vault.example.com/cb?token=QUERY_SECRET#code=FRAGMENT_SECRET";
+    let masked = super::mask_url_secrets(both);
+    assert!(!masked.contains("QUERY_SECRET"), "{masked}");
+    assert!(!masked.contains("FRAGMENT_SECRET"), "{masked}");
+    assert!(
+        masked.contains("token=[redacted]#code=[redacted]"),
+        "{masked}"
+    );
+}
+
+#[test]
+fn percent_encoded_nested_urls_are_decoded_and_masked() {
+    // An encoded `?`/`#` cannot hide a nested URL's credentials from the
+    // recursive masker.
+    let encoded_query = "https://vault.example.com/login?next=https%3A%2F%2Fcb.example.com%2Fdone%3Ftoken%3DNESTED_SECRET&state=ok";
+    let masked = super::mask_url_secrets(encoded_query);
+    assert!(!masked.contains("NESTED_SECRET"), "{masked}");
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    let encoded_fragment =
+        "https://vault.example.com/cb#next=https%3A%2F%2Fcb.example.com%2Fdone%23code%3DFRAG_SECRET";
+    let masked = super::mask_url_secrets(encoded_fragment);
+    assert!(!masked.contains("FRAG_SECRET"), "{masked}");
+    assert!(masked.contains("code=[redacted]"), "{masked}");
+
+    // A literal scheme plus an encoded delimiter must be decoded too.
+    let mixed = "https://vault.example.com/login?redirect=https://cb.example.com/done%3Ftoken%3DMIXED_SECRET";
+    let masked = super::mask_url_secrets(mixed);
+    assert!(!masked.contains("MIXED_SECRET"), "{masked}");
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+
+    // Malformed escapes and harmless encoded values are left verbatim.
+    let literal = "https://vault.example.com/p?state=abc%zz&next=%2Fdone";
+    assert_eq!(super::mask_url_secrets(literal), literal);
+    assert_eq!(super::percent_decode("%3F%23%3a%2F%2F"), "?#://");
+    assert_eq!(super::percent_decode("%E3%81%82"), "%E3%81%82");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cached_sync_for_detailed_reports_a_direct_server_mismatch() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-mismatch-detailed-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
+
+    save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
+    assert!(cached_sync_for_detailed("https://vault.example.com").is_ok());
+    // The detailed entry point keeps the classified reason rather than
+    // collapsing it into `None` like the best-effort wrapper does.
+    assert!(matches!(
+        cached_sync_for_detailed("https://other.example.com"),
+        Err(SyncCacheError::ServerMismatch)
+    ));
+    assert!(cached_sync_for("https://other.example.com").is_none());
+}
+
+#[test]
+fn sensitive_param_keys_match_camel_case_and_partial_names() {
+    // The match is a case-insensitive substring, so casing and word
+    // separators cannot be used to smuggle a credential past the masker.
+    for key in [
+        "accessToken",
+        "token",
+        "api_key",
+        "session_id",
+        "X-Session-ID",
+        "oauth_code",
+        "x-api-key",
+        "Sig",
+        "AuthToken",
+    ] {
+        assert!(super::is_sensitive_param_key(key), "must be masked: {key}");
+    }
+    for key in ["state", "redirect", "nonce", "scope", "expires", "locale"] {
+        assert!(
+            !super::is_sensitive_param_key(key),
+            "harmless key must stay: {key}"
+        );
+    }
+}

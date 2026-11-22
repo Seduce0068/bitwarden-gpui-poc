@@ -985,6 +985,112 @@ fn parse_sync_retains_the_original_failure_as_a_source() {
 }
 
 #[test]
+fn pascal_case_folder_names_and_duplicate_ids_survive_end_to_end() {
+    // A real Vaultwarden body can use PascalCase everywhere and repeat a
+    // cipher id. Normalization must decrypt the folder names and dedup must
+    // keep the newest cipher before `apply_sync` sees the rows.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string()
+    };
+    let mut old = encrypted_login("dup-folder", "OLD_PASSWORD_VALUE", REAL_TOTP);
+    old["revisionDate"] = serde_json::json!("2024-01-01T00:00:00Z");
+    old["folderId"] = serde_json::json!("f-work");
+    let mut newer = encrypted_login("dup-folder", "NEW_PASSWORD_VALUE", REAL_TOTP);
+    newer["revisionDate"] = serde_json::json!("2024-03-01T00:00:00Z");
+    newer["folderId"] = serde_json::json!("f-work");
+    let mut body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [
+            { "id": "f-work", "name": enc(b"Work") },
+            { "id": "f-private", "name": enc(b"Private") },
+        ],
+        "ciphers": [old, newer],
+    });
+    pascalize(&mut body);
+    let vault = vault_from_body(body.to_string().as_bytes());
+    let model = import_logins(&vault).expect("PascalCase folders and duplicates must import");
+
+    assert_eq!(model.folders.len(), 2);
+    assert_eq!(model.folder_name("f-work"), Some("Work"));
+    assert_eq!(model.folder_name("f-private"), Some("Private"));
+    assert_eq!(model.items.len(), 1, "the duplicate id must be collapsed");
+    let item = model.item("dup-folder").expect("the id must survive");
+    assert_eq!(item.password(), Some("NEW_PASSWORD_VALUE"));
+    assert_eq!(item.totp_secret(), Some(REAL_TOTP));
+    assert_eq!(item.folder_id.as_deref(), Some("f-work"));
+    assert_eq!(
+        item.revision_date,
+        parse_revision(Some("2024-03-01T00:00:00Z")).unwrap()
+    );
+}
+
+#[test]
+fn per_item_key_ciphers_decrypt_with_a_nonzero_user_key() {
+    // Unlike the shared helpers, this fixture uses a different user key and
+    // gives the cipher its own item key: fields are encrypted under the item
+    // key, and that key is encrypted under the user key. A path that ignored
+    // `cipher.key` or hard-coded the shared zero key would fail here.
+    let user_bytes = [0x42u8; 64];
+    let user_key = openwarden::UserKey::from_bytes(&user_bytes).expect("a 64-byte user key");
+    let user_symmetric =
+        openwarden::SymmetricKey::from_bytes(&user_bytes).expect("a 64-byte user symmetric key");
+    let item_bytes = [0x43u8; 64];
+    let item_symmetric =
+        openwarden::SymmetricKey::from_bytes(&item_bytes).expect("a 64-byte item key");
+    let encrypted_item_key = openwarden::EncString::encrypt(&user_symmetric, &item_bytes)
+        .expect("the item key should encrypt under the user key")
+        .to_string();
+    let enc = |plain: &[u8]| {
+        openwarden::EncString::encrypt(&item_symmetric, plain)
+            .expect("field should encrypt under the item key")
+            .to_string()
+    };
+    let folder_name = openwarden::EncString::encrypt(&user_symmetric, b"Work")
+        .expect("folder name should encrypt under the user key")
+        .to_string();
+    let body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [{ "id": "f1", "name": folder_name }],
+        "ciphers": [{
+            "id": "item-key-1",
+            "type": 1,
+            "key": encrypted_item_key,
+            "name": enc(b"Item-key Login"),
+            "login": {
+                "username": enc(b"alice@example.com"),
+                "password": enc(REAL_PASSWORD.as_bytes()),
+                "totp": enc(REAL_TOTP.as_bytes()),
+                "uris": [{ "uri": enc(b"https://example.com") }],
+            },
+            "revisionDate": "2024-01-01T00:00:00Z",
+        }],
+    })
+    .to_string();
+    let sync = parse_sync(body.as_bytes()).expect("sync JSON should parse");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(user_key, state);
+    vault.apply_sync(sync).expect("sync should apply");
+    let model = import_logins(&vault).expect("per-item key fields must decrypt");
+
+    assert_eq!(model.folder_name("f1"), Some("Work"));
+    assert_eq!(model.items.len(), 1);
+    let item = &model.items[0];
+    assert_eq!(item.name, "Item-key Login");
+    let (username, password, totp, uris) = item.login().expect("the item is a login");
+    assert_eq!(username, "alice@example.com");
+    assert_eq!(password, REAL_PASSWORD);
+    assert_eq!(totp, REAL_TOTP);
+    assert_eq!(uris.len(), 1);
+    assert_eq!(uris[0].uri, "https://example.com");
+}
+
+#[test]
 fn absent_password_is_empty_and_markers_are_exact() {
     // `vault.password()` returns `Ok(None)` when the field is absent. The
     // importer must map that to a genuinely empty password (vault_sync.rs:

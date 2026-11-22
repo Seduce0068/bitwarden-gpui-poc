@@ -1107,6 +1107,57 @@ fn empty_detail_variants_do_not_add_empty_parentheses() {
 }
 
 #[test]
+fn unlock_error_other_round_trips_through_app_error() {
+    // `UnlockError` owns its detail, unlike `AuthError::Other`'s `&'static
+    // str`, so both directions of the conversion keep the original text
+    // (auth.rs:260-319).
+    let detail = "unexpected unlock backend failure";
+    let small = UnlockError::Other(detail.to_string());
+    assert_eq!(small.message(), detail);
+    assert_eq!(small.to_string(), detail);
+    assert!(std::error::Error::source(&small).is_none());
+
+    let app = AppError::from(small);
+    assert!(matches!(&app, AppError::Other(text) if text == detail));
+    assert_eq!(app.message(), detail);
+    assert_eq!(app, AppError::Other(detail.to_string()));
+
+    let restored = UnlockError::from(app);
+    assert_eq!(restored, UnlockError::Other(detail.to_string()));
+    assert_eq!(restored.message(), detail);
+    assert_ne!(restored, UnlockError::MissingProtectedKey);
+
+    // An empty detail is preserved too instead of being replaced by a
+    // generic family message.
+    let empty = UnlockError::from(AppError::Other(String::new()));
+    assert_eq!(empty, UnlockError::Other(String::new()));
+    assert_eq!(empty.message(), "");
+}
+
+#[test]
+fn urls_without_a_host_fail_open_in_the_ssrf_classifier() {
+    // `Url::host()` is None for cannot-be-a-base schemes (auth.rs:504-519).
+    // The classifier deliberately returns false for them; the separate
+    // `ServerUrls::self_hosted` validation is what rejects such URLs as a
+    // server base. No DNS may be consulted on the host-less path.
+    for value in [
+        "mailto:alice@example.com",
+        "data:text/plain,hello",
+        "about:blank",
+    ] {
+        let parsed = url::Url::parse(value).expect("a parseable URL");
+        assert_eq!(parsed.host(), None, "{value}");
+        assert!(
+            !is_blocked_server_url_with(value, |_| {
+                panic!("a host-less URL must not consult DNS")
+            }),
+            "{value}"
+        );
+        assert!(!is_blocked_server_url_without_dns(value), "{value}");
+    }
+}
+
+#[test]
 fn timeout_wins_when_the_login_budget_expires() {
     // Loopback keeps this test free of DNS and external traffic while still
     // passing validation, so the call reaches the race. With a zero-length

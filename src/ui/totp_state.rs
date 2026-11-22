@@ -139,6 +139,34 @@ mod tests {
     }
 
     #[test]
+    fn display_resamples_when_the_secret_changes_without_clear() {
+        let mut state = TotpState::new();
+        let first = state.display(SECRET, 40);
+        assert!(first.starts_with("287 082"), "{first}");
+        assert_eq!(state.current_code(), Some("287082"));
+        assert!(state.matches_secret(SECRET));
+
+        // No clear() here: the cached tick is still fresh at the same instant,
+        // so only the `secret != ...` branch can replace the code. Without it
+        // the previous item's code would keep being displayed.
+        let different = "JBSWY3DPEHPK3PXP";
+        let second = state.display(different, 40);
+        assert_ne!(second, first, "a direct secret switch must resample");
+        assert!(state.has_secret());
+        assert!(state.matches_secret(different));
+        assert!(!state.matches_secret(SECRET));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40));
+        assert!(state.current_code().is_some());
+        assert_ne!(state.current_code(), Some("287082"));
+
+        // Switching back samples the original secret again instead of reusing
+        // the intermediate snapshot.
+        let back = state.display(SECRET, 40);
+        assert_eq!(back, first);
+        assert!(state.matches_secret(SECRET));
+    }
+
+    #[test]
     fn invalid_secret_reports_failure() {
         let mut state = TotpState::new();
         let value = state.display("not base32!", 0);
