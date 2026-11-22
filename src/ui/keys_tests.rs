@@ -394,6 +394,38 @@ fn settings_keys_adjust_seconds_fields() {
 }
 
 #[test]
+fn generator_navigation_and_generation_keys() {
+    let mut value = ctx("n");
+    value.panel = Panel::Generator;
+    assert_eq!(classify_key(&value), UiAction::SetPanel(Panel::Vault));
+    value.key = "h";
+    assert_eq!(classify_key(&value), UiAction::GeneratePassphrase);
+    value.key = "y";
+    assert_eq!(classify_key(&value), UiAction::CopyPassword);
+}
+
+#[test]
+fn settings_navigation_and_field_selection_keys() {
+    use crate::ui::state::SettingsField;
+
+    let mut value = ctx("c");
+    value.panel = Panel::Settings;
+    assert_eq!(classify_key(&value), UiAction::SetPanel(Panel::Vault));
+    value.key = "1";
+    assert_eq!(
+        classify_key(&value),
+        UiAction::EditSettingsField(SettingsField::ServerUrl)
+    );
+    value.key = "2";
+    assert_eq!(
+        classify_key(&value),
+        UiAction::EditSettingsField(SettingsField::Email)
+    );
+    value.key = "-";
+    assert_eq!(classify_key(&value), UiAction::AdjustThreshold(-1));
+}
+
+#[test]
 fn settings_editing_keeps_every_letter_as_text() {
     let mut value = ctx("w");
     value.panel = Panel::Settings;
@@ -457,9 +489,32 @@ fn generator_and_settings_save_discard_keys() {
 
 #[test]
 fn audit_focus_action_carries_the_item_id() {
-    let action = UiAction::FocusAuditItem("item-42".into());
-    assert_eq!(action, UiAction::FocusAuditItem("item-42".into()));
-    assert_ne!(action, UiAction::FocusAuditItem("other".into()));
+    // A mouse click supplies a real server id. The typed action must keep it
+    // byte-for-byte so the dispatcher can select exactly that audited row.
+    let clicked = UiAction::FocusAuditItem("item-42/é".into());
+    match &clicked {
+        UiAction::FocusAuditItem(id) => {
+            assert_eq!(id.as_str(), "item-42/é");
+            assert_ne!(id.as_str(), AUDIT_SELECTED_ROW_SENTINEL);
+            assert_ne!(id.as_str(), QUIT_OR_WARN_SENTINEL);
+        }
+        other => panic!("expected FocusAuditItem, got {other:?}"),
+    }
+
+    // The keyboard commands put the two reserved sentinels into the same
+    // id-carrying variant; only the constructors know which is which.
+    match (
+        UiAction::focus_selected_audit_row(),
+        UiAction::quit_or_warn(),
+    ) {
+        (UiAction::FocusAuditItem(row), UiAction::FocusAuditItem(exit)) => {
+            assert_eq!(row.as_str(), AUDIT_SELECTED_ROW_SENTINEL);
+            assert_eq!(exit.as_str(), QUIT_OR_WARN_SENTINEL);
+            assert_ne!(row, exit);
+            assert_ne!(row.as_str(), "item-42/é");
+        }
+        other => panic!("expected two sentinels, got {other:?}"),
+    }
 }
 
 #[test]

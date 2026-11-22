@@ -463,13 +463,13 @@ impl core::fmt::Debug for ItemData {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Login {
-                username,
+                username: _,
                 password: _,
                 totp,
                 uris,
             } => f
                 .debug_struct("Login")
-                .field("username", username)
+                .field("username", &"[redacted]")
                 .field("password", &"[redacted]")
                 .field("totp", &if totp.is_empty() { "" } else { "[redacted]" })
                 .field("uris", uris)

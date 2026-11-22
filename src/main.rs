@@ -13,6 +13,11 @@ fn main() {
     app.run(|cx: &mut App| {
         gpui_kit::init(cx);
 
+        // The unsaved-settings gate lives in `Window::on_window_should_close`
+        // below: GPUI documents `on_window_closed` as running after the window
+        // is no longer accessible, so the app entity cannot be read here.
+        // This observer only performs the final quit once the close actually
+        // went through.
         cx.on_window_closed(|cx, _window_id| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -35,6 +40,17 @@ fn main() {
 
         if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
             let view = cx.new(BitwardenApp::new);
+            // Gate the WM close request while the window and the app entity
+            // are still alive. Returning false cancels the close, which keeps
+            // `on_window_closed` (and therefore `cx.quit()`) from firing while
+            // settings are unsaved. A weak handle avoids a window <-> entity
+            // reference cycle.
+            let weak_view = view.downgrade();
+            window.on_window_should_close(cx, move |_window, cx| {
+                weak_view
+                    .update(cx, |app, cx| app.allow_window_close(cx))
+                    .unwrap_or(true)
+            });
             let focus_handle = view.read(cx).focus_handle.clone();
             focus_handle.focus(window, cx);
             view

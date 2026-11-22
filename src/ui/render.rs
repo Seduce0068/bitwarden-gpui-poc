@@ -417,6 +417,7 @@ impl Render for BitwardenApp {
             .id("bitwarden-poc-root")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::key_down))
+            .on_scroll(cx.listener(Self::scrolled))
             .size_full()
             .flex()
             .flex_col()

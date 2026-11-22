@@ -845,3 +845,20 @@ fn save_device_id_only_aborts_on_future_schema() {
     assert!(error.to_string().contains("未対応"), "{error}");
     assert_eq!(std::fs::read(&path).unwrap(), original);
 }
+
+#[test]
+fn save_device_id_only_aborts_on_string_and_float_future_schema() {
+    for body in [
+        br#"{"schema_version":"999","email":"future@example.com"}"#.as_slice(),
+        br#"{"schema_version":99.0,"email":"future@example.com"}"#.as_slice(),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original = body.to_vec();
+        std::fs::write(&path, &original).unwrap();
+        let id = generate_device_id().unwrap();
+        let error = Settings::save_device_id_only(&path, &id).unwrap_err();
+        assert!(error.to_string().contains("未対応"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+}

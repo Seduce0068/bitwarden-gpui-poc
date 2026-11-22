@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第54弾で 9 件すべてを完了）。
+なし（第55弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第55弾（13 観点・2 回目）の指摘 8 件を完結（2026-11-22）
+  - README のキャッシュ期限・Debug マスキングの実態整合、username の
+    マスク、主要キー分岐とセンチネルの実体テスト、ウィンドウクローズ時の
+    未保存警告、スクロールのアイドル判定反映を実装。
+  - 起動エージェント: 14 体（補充探索 13 + UI 実装 1）。
+  - 検証: fmt / check / test（374 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
+    GPUI ウィンドウのクローズ挙動とスクロールの実操作は目視未確認。
 - [x] 第54弾（13 観点）の指摘 9 件を完結（2026-11-22）
   - 13 観点（ST/FG/TQ/DP/VU + EX/DF/AX/I18/CI/SEC/OPS/DX）で 35 件を
     検出。3 観点の絞り込みでは見つからなかった実害を多数確認。
@@ -701,3 +710,11 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
   権限分離は未担保。変更は親が git diff で統合・検証した。
 - 未検証: opt-in E2E は実サーバー環境を破棄後のため再実行しておらず、
   最終変更後はコンパイル確認のみ。GPUI ウィンドウの実起動確認も未実施。
+
+### 2026-11-22 防御的フォールバックの維持判断
+
+- 到達不能と指摘された 3 箇所（TOTP コピーの `Ok(_)` 分岐、
+  パスフレーズの `unwrap_or("word")`、 `days_in_month` の `_ => 0`）は
+  削除せず維持する。根拠: いずれも型／呼び出し側の不変条件に依存する
+  防御的コードであり、削除すると将来の入力経路追加時に panic または
+  未定義の挙動に直結する。機能バグではないため TODO 化しない。

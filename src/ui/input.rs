@@ -54,6 +54,22 @@ impl BitwardenApp {
         self.apply_action(classify_key(&ctx), cx);
     }
 
+    /// Stamp activity for wheel/trackpad scrolls.
+    ///
+    /// `key_down` and `apply_action` already refresh `last_activity`, but a
+    /// user who only scrolls (for example through the audit report) would
+    /// otherwise hit the idle-lock timer. GPUI exposes a public bubble-phase
+    /// `on_scroll` handler, so the root element in `render.rs` forwards
+    /// scrolls here without touching gpui-kit internals.
+    pub(super) fn scrolled(
+        &mut self,
+        _event: &ScrollEvent,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.last_activity = std::time::Instant::now();
+    }
+
     /// Apply a UI action to the app state. Both keyboard and mouse input go
     /// through this single path so state transitions stay consistent.
     pub(super) fn apply_action(&mut self, action: UiAction, cx: &mut Context<Self>) {

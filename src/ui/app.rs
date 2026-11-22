@@ -367,6 +367,22 @@ impl BitwardenApp {
         }
     }
 
+    /// Decide whether a platform window close may proceed.
+    ///
+    /// `App::on_window_closed` runs only after the window is gone, so the dirty
+    /// flag cannot be consulted there. The window's public
+    /// `on_window_should_close` callback calls this instead: unsaved settings
+    /// keep the window open and surface the same warning Esc would show.
+    pub fn allow_window_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(warning) = quit_gate_warning(self.settings_dirty) {
+            self.status = warning.to_string();
+            cx.notify();
+            false
+        } else {
+            true
+        }
+    }
+
     /// Follow an audit finding, or resolve a reserved command sentinel.
     ///
     /// Mouse clicks pass a real item id; `Enter` in the audit panel passes the
