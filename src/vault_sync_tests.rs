@@ -1521,3 +1521,29 @@ fn password_and_totp_markers_reject_the_other_status_markers() {
         );
     }
 }
+
+#[test]
+fn an_empty_uri_list_imports_as_empty_without_the_undecryptable_marker() {
+    // `openwarden::Vault::uris` returns `Ok(vec![])` for a login whose `uris`
+    // array is empty. The Ok arm of `login_item` (vault_sync.rs:305-319) must
+    // map that to an empty model list; the marker is reserved for the Err arm.
+    let vault = unlocked_vault(&[cipher("empty-uris", "2024-01-01T00:00:00Z")]);
+    let model = import_logins(&vault).expect("an empty URI list must not abort");
+    let item = model
+        .item("empty-uris")
+        .expect("the login must be imported");
+    assert!(item.uris().is_empty(), "{:?}", item.uris());
+    assert!(
+        !item.uris().iter().any(|uri| is_undecryptable_uri(&uri.uri)),
+        "an empty list is not a decryption failure"
+    );
+
+    // A sibling with one real encrypted URI proves this is the empty-list
+    // branch and not a fixture that drops URIs for every login.
+    let with_uri = encrypted_login("one-uri", REAL_PASSWORD, REAL_TOTP);
+    let vault = unlocked_vault(&[with_uri]);
+    let model = import_logins(&vault).expect("import should succeed");
+    let item = model.item("one-uri").unwrap();
+    assert_eq!(item.uris().len(), 1);
+    assert_eq!(item.uris()[0].uri, "https://example.com");
+}

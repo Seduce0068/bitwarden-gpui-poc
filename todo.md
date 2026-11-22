@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第74弾で 10 件すべてを完了）。
+なし（第75弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第75弾（16 担当・19 回目）の指摘 7 件を完結（2026-11-23）
+  - 監査選択消滅時のスクロール target 破棄を修正。
+  - 入れ子 cause、sync_cause 破棄、KDF 拒否実経路、IPv6 片括弧、
+    空 URI、ZeroizingText Display、未知 type をテスト。
+  - 固定 temp パスを tempfile 化し、注入シーム doc の根拠を是正。
+  - ADR ログ 2026-11-23 と CHANGELOG 第73〜74弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（689 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第74弾（16 担当・18 回目）の指摘 10 件を完結（2026-11-23）
   - `next_index_in` のオーバーフロー、編集モード別の遷移 status、
     フィルタ/ソートの status、未生成コピーの未保存マーカーを修正。

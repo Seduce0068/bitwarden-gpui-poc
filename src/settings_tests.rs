@@ -20,9 +20,8 @@ fn defaults_are_sensible() {
 
 #[test]
 fn round_trip_through_temp_file() {
-    let dir = std::env::temp_dir().join("bitwarden-gpui-poc-test");
-    let _ = std::fs::remove_dir_all(&dir);
-    let path = dir.join("settings.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
 
     let settings = Settings {
         email: "alice@example.com".to_string(),
@@ -167,7 +166,8 @@ fn load_sanitizes_hand_edited_values() {
         MIN_LOGIN_TIMEOUT_SECONDS, MIN_STALE_DAYS,
     };
 
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-sanitize.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     std::fs::write(
         &path,
         br#"{"idle_lock_seconds":0,"login_timeout_seconds":0,"clipboard_restore_seconds":99999,
@@ -190,21 +190,22 @@ fn load_sanitizes_hand_edited_values() {
 
 #[test]
 fn missing_file_falls_back_to_defaults() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-does-not-exist.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     let settings = Settings::load(&path);
     assert_eq!(settings, Settings::default());
 }
 
 #[test]
 fn load_detailed_distinguishes_missing_and_malformed() {
-    let missing = std::env::temp_dir().join("bitwarden-gpui-poc-load-missing.json");
-    let _ = std::fs::remove_file(&missing);
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.json");
     assert_eq!(
         Settings::load_detailed(&missing).err(),
         Some(SettingsLoadError::NotFound)
     );
 
-    let broken = std::env::temp_dir().join("bitwarden-gpui-poc-load-broken.json");
+    let broken = dir.path().join("broken.json");
     std::fs::write(&broken, b"not json").unwrap();
     assert_eq!(
         Settings::load_detailed(&broken).err(),
@@ -212,7 +213,7 @@ fn load_detailed_distinguishes_missing_and_malformed() {
     );
 
     // Reading a directory as a file fails (EISDIR on Unix).
-    let directory = std::env::temp_dir().join("bitwarden-gpui-poc-load-dir");
+    let directory = dir.path().join("directory");
     std::fs::create_dir_all(&directory).unwrap();
     assert_eq!(
         Settings::load_detailed(&directory).err(),
@@ -247,7 +248,8 @@ fn invalid_utf8_is_a_read_failure_not_a_parse_failure() {
 
 #[test]
 fn missing_nested_objects_keep_top_level_fields() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-nested-missing.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     std::fs::write(
         &path,
         br#"{"email":"bob@example.com","idle_lock_seconds":120}"#,
@@ -267,7 +269,8 @@ fn missing_nested_objects_keep_top_level_fields() {
 
 #[test]
 fn partial_nested_objects_fill_only_missing_fields() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-nested-partial.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     std::fs::write(
         &path,
         br#"{"server_url":"https://custom.example",
@@ -297,7 +300,8 @@ fn partial_nested_objects_fill_only_missing_fields() {
 
 #[test]
 fn wrong_typed_fields_fall_back_without_discarding_siblings() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-type-mixed.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     std::fs::write(
         &path,
         br#"{"server_url":"https://typed.example",
@@ -337,7 +341,8 @@ fn wrong_typed_fields_fall_back_without_discarding_siblings() {
 
 #[test]
 fn out_of_range_numbers_fall_back_per_field() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-range-mixed.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     std::fs::write(
         &path,
         br#"{"server_url":"https://range.example",
@@ -361,7 +366,8 @@ fn out_of_range_numbers_fall_back_per_field() {
 
 #[test]
 fn oversized_file_is_rejected() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-oversized.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     let payload = vec![b' '; MAX_SETTINGS_BYTES as usize + 1];
     std::fs::write(&path, &payload).unwrap();
 
@@ -375,7 +381,8 @@ fn oversized_file_is_rejected() {
 
 #[test]
 fn file_exactly_at_size_limit_is_parsed() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-at-limit.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     let mut payload = br#"{"email":"limit@example.com"}"#.to_vec();
     payload.resize(MAX_SETTINGS_BYTES as usize, b' ');
     std::fs::write(&path, &payload).unwrap();
@@ -387,7 +394,8 @@ fn file_exactly_at_size_limit_is_parsed() {
 
 #[test]
 fn tolerance_stops_at_syntax_and_root_shape() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-bad-root.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     // Per-field recovery only applies to object-shaped settings; an array
     // root or invalid JSON still fails the whole file.
     std::fs::write(&path, b"[]").unwrap();
@@ -413,7 +421,8 @@ fn default_carries_current_schema_version() {
 
 #[test]
 fn legacy_file_without_schema_version_is_compatible() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-legacy.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     // No schema_version key: an old settings file must still load, but it is
     // reported as legacy instead of being silently promoted to the current
     // version. Every known field is still honoured.
@@ -438,7 +447,8 @@ fn legacy_file_without_schema_version_is_compatible() {
 fn current_and_older_schema_versions_are_accepted() {
     let defaults = Settings::default();
     for version in [0, CURRENT_SCHEMA_VERSION] {
-        let path = std::env::temp_dir().join(format!("bitwarden-gpui-poc-schema-v{version}.json"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
         std::fs::write(
             &path,
             format!(r#"{{"schema_version":{version},"email":"v{version}@example.com"}}"#),
@@ -455,7 +465,8 @@ fn current_and_older_schema_versions_are_accepted() {
 
 #[test]
 fn unknown_future_schema_version_falls_back_to_defaults() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-future.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     let future = CURRENT_SCHEMA_VERSION + 1;
     // A newer writer may have changed what these familiar keys mean, so none
     // of them may survive: the file is rejected wholesale, not field by field.
@@ -475,7 +486,8 @@ fn unknown_future_schema_version_falls_back_to_defaults() {
 
 #[test]
 fn extremely_large_schema_version_is_rejected_too() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-huge.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     // u64::MAX no longer fits the u32 field: the raw JSON check must catch it
     // before the tolerance pass can silently replace it with the default.
     std::fs::write(
@@ -490,7 +502,8 @@ fn extremely_large_schema_version_is_rejected_too() {
 
 #[test]
 fn wrong_typed_schema_version_cannot_claim_a_future_version() {
-    let path = std::env::temp_dir().join("bitwarden-gpui-poc-schema-wrong-type.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     std::fs::write(
         &path,
         br#"{"schema_version":{"major":9999},"email":"typed@example.com","idle_lock_seconds":180}"#,
@@ -516,9 +529,8 @@ fn wrong_typed_schema_version_cannot_claim_a_future_version() {
 
 #[test]
 fn save_stamps_current_schema_version() {
-    let dir = std::env::temp_dir().join("bitwarden-gpui-poc-schema-save");
-    let _ = std::fs::remove_dir_all(&dir);
-    let path = dir.join("settings.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
 
     // Even an in-memory struct still carrying a legacy marker must be
     // upgraded when written; the original value is left untouched.
@@ -540,7 +552,6 @@ fn save_stamps_current_schema_version() {
     let loaded = Settings::load_detailed(&path).unwrap();
     assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(loaded.email, "save@example.com");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // --- Stable device identifier: CSPRNG generation, persistence, resync reuse ---
@@ -1135,10 +1146,8 @@ fn ensure_device_id_keeps_its_save_error_classification_on_a_broken_file() {
 
 #[test]
 fn integral_float_schema_version_is_rejected_as_future() {
-    let dir = std::env::temp_dir().join("bitwarden-gpui-poc-float-schema");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("settings.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
     std::fs::write(
         &path,
         br#"{"schema_version":2.0,"email":"future@example.com"}"#,
@@ -2100,4 +2109,46 @@ fn multibyte_utf8_at_the_read_limit_is_classified_by_char_boundaries() {
         Some(SettingsLoadError::ReadFailed)
     );
     assert_eq!(Settings::load(&path), Settings::default());
+}
+
+#[test]
+fn load_detailed_ignores_unknown_top_level_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // `tolerant_struct` skips keys absent from the default struct
+    // (settings.rs:521-526). `load_advisories` still warns about them, but the
+    // loader itself must keep the known fields and never fail on the extra key.
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "email": "known@example.com",
+            "future_field": {"nested": [1, 2, 3]},
+            "totally_unknown": null
+        }"#,
+    )
+    .unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "known@example.com");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.server_url, Settings::default().server_url);
+    let notices = load_advisories(&path);
+    assert!(
+        notices.iter().any(|notice| notice.contains("future_field")),
+        "{notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("totally_unknown")),
+        "{notices:?}"
+    );
+
+    // An unknown key with a scalar value is ignored by the same branch, not
+    // mistaken for a bad value of a known field.
+    std::fs::write(&path, br#"{"email":"still@example.com","future_field":42}"#).unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "still@example.com");
+    assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
 }

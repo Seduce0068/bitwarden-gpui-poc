@@ -1896,3 +1896,26 @@ fn undecryptable_uri_from_a_cached_body_has_no_match_type() {
     );
     assert_eq!(uris[0].match_type, None);
 }
+
+#[test]
+fn unclosed_ipv6_bracket_takes_the_no_closing_bracket_branches() {
+    // Without a closing ']', `without_ipv6_literals` stops and keeps the text
+    // (cache.rs:161-164), and `host_with_optional_port_ok` refuses the host
+    // (cache.rs:183-186). A truncated `[::1` literal reaches both branches.
+    let scan = "user:SECRET@[::1?email=a@b";
+    assert_eq!(
+        super::without_ipv6_literals("user:p?x=1@[::1?email=a@b"),
+        "user:p?x=1@[::1?email=a@b"
+    );
+    assert!(!super::host_with_optional_port_ok("[::1"));
+    assert!(!super::host_with_optional_port_ok("["));
+    // A closed literal still takes the normal arm, so the assertions above
+    // are about the missing bracket rather than IPv6 in general.
+    assert!(super::host_with_optional_port_ok("[::1]"));
+    assert!(super::host_with_optional_port_ok("[::1]:8443"));
+
+    // The host cannot be marked complete without ']', so the '@' after '?'
+    // is not classified as a query separator (cache.rs:135-149).
+    let at = scan.rfind('@').expect("an '@' after the query marker");
+    assert!(!super::at_is_in_query(scan, at));
+}

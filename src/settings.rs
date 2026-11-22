@@ -22,12 +22,18 @@
 //! `std::fs` directly, and [`generate_device_id`] calls `getrandom`
 //! directly. Tests therefore exercise the classification through real
 //! temporary files and assert the structural shape of generated identifiers;
-//! they cannot inject a failing reader or a failing RNG. Adding either seam
-//! would change the signatures of `load_detailed`, `load_advisories`,
-//! `file_schema_version` and `ensure_device_id` (or add a test-only feature in
-//! `Cargo.toml`), which is outside this module's change scope. The two limits
-//! are recorded here so a reader does not mistake the test coverage for a
-//! proof of those failure branches.
+//! they cannot inject a failing reader or a failing RNG.
+//!
+//! This is a scope choice, not an API constraint: a private helper can be
+//! extracted for each source (for example `read_bounded_settings_text_with`
+//! taking a reader factory, or `generate_device_id_with` taking a fill
+//! closure) while [`Settings::load_detailed`], [`load_advisories`],
+//! `file_schema_version` and [`Settings::ensure_device_id`] keep their
+//! public signatures. No test-only feature in `Cargo.toml` is needed either,
+//! because the seam can stay private to this module's test harness. That
+//! refactor is outside this module's change scope; the two limits are recorded
+//! here so a reader does not mistake the test coverage for a proof of those
+//! failure branches.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -552,13 +558,15 @@ const UUID_TEXT_LEN: usize = 36;
 /// Returns [`getrandom::Error`] when the OS random source is unavailable.
 ///
 /// Known constraint (test seam): there is deliberately no injected RNG
-/// parameter here. Adding a mock/failing source would mean changing the
-/// function signature across its callers and adding a test-only dependency or
-/// feature in `Cargo.toml`, which is outside this module's change scope. Tests
-/// therefore cover the structural contract (canonical v4 UUID shape and
-/// non-collision between draws) and the persisted/reused-value paths, but
-/// cannot force the `getrandom::fill` failure branch. The same constraint is
-/// recorded for the file-I/O path in the module docs above.
+/// parameter here. A failing source can be injected without changing this
+/// public signature by extracting a private `generate_device_id_with(fill)`
+/// helper and leaving this function as a thin wrapper that passes
+/// `getrandom::fill`; no test-only dependency or `Cargo.toml` feature is
+/// required. That refactor is outside this module's change scope, so tests
+/// cover the structural contract (canonical v4 UUID shape and non-collision
+/// between draws) and the persisted/reused-value paths, but cannot force the
+/// `getrandom::fill` failure branch. The same constraint is recorded for the
+/// file-I/O path in the module docs above.
 pub fn generate_device_id() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes)?;

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第73〜74弾 / 2026-11-23）
+
+- キャッシュ復元へ client_id 由来のアカウント照合を追加
+- IPv6 マスク、`next_index_in` のオーバーフロー、編集モード別 status、
+  閾値変更のフィードバック、空監査の案内を修正
+- マルチバイト UTF-8 境界、read_bounded の消費量、URI マーカーの
+  match_type、folder_id、match_enum、エントロピー丸めをテスト
+- 注入シーム不在を既知制約として doc 化、ADR を更新
+
 ### 全体改善（第71〜72弾 / 2026-11-23）
 
 - TOTP 非 ASCII ガードを otpauth URI に合わせて狭隘化し、

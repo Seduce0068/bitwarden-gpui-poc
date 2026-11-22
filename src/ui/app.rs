@@ -379,6 +379,29 @@ pub(super) fn reset_audit_scroll(handle: &mut ScrollHandle, selection: &mut Opti
     *selection = None;
 }
 
+/// Re-anchor the audit scroll after a refresh that changed the report.
+///
+/// When a highlight survives the clamp, this queues the same target as the
+/// keyboard path (`move_audit_selection`). When no row is left highlighted,
+/// there is no target to queue, so the previously queued `scroll_to_item`
+/// would survive and drag the refreshed panel back to a vanished finding.
+/// That branch performs the exact handle exchange of `reset_audit_scroll`
+/// (fresh `ScrollHandle`) without touching the already-cleared selection, so
+/// the lock/unlock reset keeps its own contract. Kept as a free function so
+/// both branches can be tested without a GPUI window.
+pub(super) fn refresh_audit_scroll(
+    handle: &mut ScrollHandle,
+    selection: &mut Option<usize>,
+    len: usize,
+) {
+    *selection = clamp_audit_row(*selection, len);
+    if let Some(scroll_index) = audit_row_scroll_index(*selection) {
+        handle.scroll_to_item(scroll_index);
+    } else {
+        *handle = ScrollHandle::new();
+    }
+}
+
 /// Status describing the audit row left highlighted after a refresh.
 ///
 /// Uses the same wording as the keyboard move status, so a threshold edit
@@ -962,13 +985,16 @@ impl BitwardenApp {
             .audit_report
             .as_ref()
             .map_or(0, |report| report.items.len());
-        self.audit_row_selection = clamp_audit_row(self.audit_row_selection, len);
         // A threshold change can shorten the report and clamp the highlight
         // to a different row. Mirror the keyboard path (`move_audit_selection`)
         // so the scroll position follows the row actually left highlighted.
-        if let Some(scroll_index) = audit_row_scroll_index(self.audit_row_selection) {
-            self.audit_scroll_handle.scroll_to_item(scroll_index);
-        }
+        // When no row survives, the helper swaps in a fresh handle so the old
+        // queued `scroll_to_item` target cannot outlive its finding.
+        refresh_audit_scroll(
+            &mut self.audit_scroll_handle,
+            &mut self.audit_row_selection,
+            len,
+        );
         // Always re-read the row name from the freshly computed report: the
         // index can stay the same while a different finding occupies it. A
         // threshold change from a settings panel keeps its own status even
@@ -1452,6 +1478,58 @@ mod tests {
             old.offset().y,
             px(240.0),
             "the old handle is replaced, not mutated: its queued target dies with it"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn refresh_audit_scroll_discards_a_queued_target_when_the_row_vanishes() {
+        let mut handle = ScrollHandle::new();
+        handle.set_offset(Point {
+            x: px(0.0),
+            y: px(240.0),
+        });
+        // The highlight before the refresh had a queued target at this row.
+        handle.scroll_to_item(9);
+        let old = handle.clone();
+
+        let mut selection = Some(4);
+        // The report became empty, so no row survives the clamp.
+        refresh_audit_scroll(&mut handle, &mut selection, 0);
+
+        assert_eq!(
+            selection, None,
+            "the vanished finding must not stay highlighted"
+        );
+        assert_eq!(
+            handle.offset(),
+            Point::default(),
+            "a vanished selection must drop the stale queued target via a fresh handle"
+        );
+        assert_eq!(
+            old.offset().y,
+            px(240.0),
+            "the old handle is replaced, not mutated: its queued target dies with it"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn refresh_audit_scroll_keeps_the_keyboard_target_when_a_row_survives() {
+        let mut handle = ScrollHandle::new();
+        handle.set_offset(Point {
+            x: px(0.0),
+            y: px(240.0),
+        });
+        let old = handle.clone();
+
+        let mut selection = Some(4);
+        // The report shrank but the row survives at a clamped index.
+        refresh_audit_scroll(&mut handle, &mut selection, 3);
+
+        assert_eq!(selection, Some(2), "clamping must keep the row in range");
+        assert_eq!(
+            handle.offset(),
+            old.offset(),
+            "the surviving path queues a target on the same handle instead of resetting it"
         );
     }
 

@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use super::{is_blocked_server_url_with, is_blocked_server_url_without_dns, is_link_local_ip};
 use crate::auth::*;
 use crate::error::OTHER_ERROR_MESSAGE;
-use openwarden::{EncString, Kdf, MasterKey};
+use openwarden::{EncString, Kdf, KdfPolicy, MasterKey};
 
 /// A unique, non-production canary so a leak of the client secret can be
 /// detected unambiguously in debug output.
@@ -2074,4 +2074,131 @@ fn embedded_literal_and_metadata_hosts_normalize_case_and_trailing_dot() {
     let mut blocked = config();
     blocked.server_url = "http://169.254.169.254.NIP.IO.".into();
     assert_eq!(validate_config(&blocked), Err(AuthError::BlockedServerUrl));
+}
+
+#[test]
+fn sync_fallback_renders_only_the_immediate_source_of_a_deep_cause() {
+    use crate::error::{AppError, BoxedCause};
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Innermost(&'static str);
+    impl fmt::Display for Innermost {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Innermost {}
+
+    #[derive(Debug)]
+    struct Middle(Innermost);
+    impl fmt::Display for Middle {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("middle failure")
+        }
+    }
+    impl std::error::Error for Middle {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[derive(Debug)]
+    struct Outer(Middle);
+    impl fmt::Display for Outer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("outer failure")
+        }
+    }
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let cause = AppError::SyncCause(BoxedCause::new(Outer(Middle(Innermost("deepest cause")))));
+    // BoxedCause::new keeps all three levels reachable through source().
+    let first = std::error::Error::source(&cause).expect("typed cause");
+    assert_eq!(first.to_string(), "outer failure");
+    let second = std::error::Error::source(first).expect("second cause level");
+    assert_eq!(second.to_string(), "middle failure");
+    let third = std::error::Error::source(second).expect("third cause level");
+    assert_eq!(third.to_string(), "deepest cause");
+
+    let combined =
+        super::sync_fallback_failure(cache_restore_failure(AppError::NotFound), Some(cause));
+    let status = combined.status_message();
+    assert!(status.contains("outer failure"), "{status}");
+    // Documented PoC constraint (auth.rs:914-917): only the first source
+    // level is flattened into the status, so the deeper text stays absent.
+    assert!(!status.contains("middle failure"), "{status}");
+    assert!(!status.contains("deepest cause"), "{status}");
+}
+
+#[test]
+fn a_successful_cache_restore_has_no_place_to_keep_the_sync_cause() {
+    use crate::error::{AppError, BoxedCause};
+
+    // auth.rs:1009-1028 binds `sync_cause` only for the failure arm. A
+    // successful fallback builds `AuthenticatedVault` from `(sync, true)` and
+    // drops the cause: the struct has no field for it, so the success status
+    // can only be guided by `from_cache`. This pins that current behaviour.
+    let (master_key, _protected, sync) = unlock_fixture();
+    let session = Session::from_token(
+        SecretString::from("test-access-token".to_string()),
+        std::time::Duration::from_secs(3600),
+    )
+    .expect("a one-hour token must be accepted");
+    let restored = AuthenticatedVault {
+        session,
+        sync,
+        master_key,
+        from_cache: true,
+    };
+    assert!(restored.from_cache, "only the stale-data flag survives");
+
+    // The discarded cause is still an AppError at the call site, but there is
+    // no AuthenticatedVault field to forward it to and the success branch
+    // never calls sync_fallback_failure.
+    let discarded = AppError::SyncCause(BoxedCause::text("HTTP 503 before restore"));
+    assert_eq!(
+        std::error::Error::source(&discarded).map(ToString::to_string),
+        Some("HTTP 503 before restore".to_string())
+    );
+    assert_eq!(
+        super::sync_fallback_failure(AuthError::Sync, None).status_message(),
+        "同期に失敗しました",
+        "a restored vault carries the stale-data flag, not the sync cause"
+    );
+}
+
+#[test]
+fn weak_kdf_is_rejected_by_the_real_derive_and_reaches_the_status_bar() {
+    use crate::error::{AppError, BoxedCause};
+
+    // Exercise the production KDF guard through openwarden itself
+    // (auth.rs:1030-1035): a below-minimum PBKDF2 count is refused before any
+    // key derivation, so this is deterministic and cheap.
+    let weak = Kdf::Pbkdf2 { iterations: 5_000 };
+    let password = SecretString::from("correct horse".to_string());
+    let error = MasterKey::derive(&password, "alice@example.com", &weak, &KdfPolicy::default())
+        .expect_err("a downgraded iteration count must be refused");
+    const REASON: &str = "pbkdf2 iterations below the minimum";
+    let detail = error.to_string();
+    assert_eq!(detail, format!("KDF parameters rejected: {REASON}"));
+
+    // The production conversion keeps the typed error as the AppError cause
+    // and renders its text into KdfRejectedDetail for the status bar.
+    let small = AuthError::from(AppError::KdfRejectedCause(BoxedCause::new(error)));
+    assert!(
+        matches!(&small, AuthError::KdfRejectedDetail(text) if text.contains(REASON)),
+        "the real KDF reason must survive: {small:?}"
+    );
+    assert_eq!(small.message(), "KDF 設定がポリシーで拒否されました");
+    assert!(small.status_message().contains(REASON));
+
+    let restored = AppError::from(small);
+    assert!(matches!(&restored, AppError::KdfRejectedCause(_)));
+    assert!(std::error::Error::source(&restored).is_some());
+    assert_eq!(restored, AppError::KdfRejected);
 }

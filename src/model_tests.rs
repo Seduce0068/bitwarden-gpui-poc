@@ -1860,3 +1860,56 @@ fn an_unknown_folder_id_is_never_counted_but_still_filters() {
     assert_eq!(shown.len(), 1);
     assert_eq!(shown[0].id, "2");
 }
+
+#[test]
+fn zeroizing_text_display_prints_the_plain_text_while_debug_masks_it() {
+    let secret = ZeroizingText::new("plain-text-secret");
+    // Display is the rendering path and deliberately exposes the plaintext;
+    // only Debug is masked (model.rs:224-233). The split is pinned so a future
+    // "safety" change cannot silently break status/search text.
+    assert_eq!(secret.as_str(), "plain-text-secret");
+    assert_eq!(secret.to_string(), "plain-text-secret");
+    assert_eq!(format!("{secret}"), "plain-text-secret");
+    assert_eq!(format!("{secret:?}"), "[redacted]");
+    assert_eq!(secret, ZeroizingText::from("plain-text-secret"));
+
+    // A field using the serde adapter keeps the same split: JSON holds the
+    // plain string, Debug prints only the marker.
+    let note = VaultItem::new(
+        "n",
+        "Note",
+        ItemData::SecureNote {
+            text: ZeroizingText::new("NOTE-PLAINTEXT"),
+        },
+    );
+    assert!(!format!("{note:?}").contains("NOTE-PLAINTEXT"));
+    assert!(serde_json::to_string(&note)
+        .unwrap()
+        .contains("NOTE-PLAINTEXT"));
+}
+
+#[test]
+fn item_data_rejects_an_unknown_or_missing_type_tag() {
+    // `ItemData` is internally tagged with `type` (model.rs:555-557), so both
+    // an unknown tag and a missing tag must be rejected instead of falling
+    // back to a variant with default fields.
+    for body in [
+        r#"{"type":"unknown","text":"x"}"#,
+        r#"{"type":"Login","username":"a","password":"p","totp":"","uris":[]}"#,
+        r#"{"text":"x"}"#,
+        r#"{}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ItemData>(body).is_err(),
+            "unexpectedly accepted {body}"
+        );
+    }
+    // A known tag with the right payload still loads, so the rejection above
+    // is about the tag rather than all deserialization.
+    let data: ItemData = serde_json::from_str(r#"{"type":"secure_note","text":"x"}"#)
+        .expect("a known tag must load");
+    assert_eq!(
+        serde_json::to_value(&data).unwrap()["type"],
+        serde_json::json!("secure_note")
+    );
+}
