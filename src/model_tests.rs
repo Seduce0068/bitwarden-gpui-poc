@@ -2030,3 +2030,50 @@ fn item_data_rejects_an_unknown_or_missing_type_tag() {
         serde_json::json!("secure_note")
     );
 }
+
+#[test]
+fn duplicate_names_ignore_surrounding_whitespace_differences() {
+    // `duplicate_names` compares `comparison_key(item.name.trim())`
+    // (model.rs:1063-1080), so padding a name with ASCII or Unicode whitespace
+    // must not split it into a separate group.
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "  GitHub  ", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("2", "GitHub", "u", "p", "https://b.example"));
+    vault.items.push(login(
+        "3",
+        "\u{3000}github\u{3000}",
+        "u",
+        "p",
+        "https://c.example",
+    ));
+
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "github");
+    assert_eq!(
+        groups[0].1,
+        vec!["1".to_string(), "2".to_string(), "3".to_string()]
+    );
+}
+
+#[test]
+fn ssh_key_debug_keeps_the_public_key_and_fingerprint() {
+    // `SshKeyData`'s manual Debug masks only `private_key`; the two public
+    // fields stay visible for diagnostics (model.rs:514-522).
+    let key = SshKeyData {
+        private_key: "PRIVATE-KEY-CANARY".into(),
+        ..ssh_key(REFERENCE_PUBLIC_KEY, REFERENCE_FINGERPRINT)
+    };
+    let debug = format!("{key:?}");
+    assert!(debug.contains("SshKeyData"), "{debug}");
+    assert!(debug.contains("public_key"), "{debug}");
+    assert!(debug.contains(REFERENCE_PUBLIC_KEY), "{debug}");
+    assert!(debug.contains("fingerprint"), "{debug}");
+    assert!(debug.contains(REFERENCE_FINGERPRINT), "{debug}");
+    assert!(debug.contains("private_key: \"[redacted]\""), "{debug}");
+    assert!(!debug.contains("PRIVATE-KEY-CANARY"), "{debug}");
+}

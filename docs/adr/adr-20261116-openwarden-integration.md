@@ -257,6 +257,12 @@ Final decisions recorded in this ADR:
   オフライン復元の実測が無いため現状維持を再確認。
 - 2026-11-21 — 階層別エラー型は `AppError` の alias として維持。
 - 2026-11-21 — 残る既知制約 5 件は現状維持（本文の再評価節を参照）。
+- 2026-11-23 — 認証は absolute deadline の watchdog へ変更し、
+  呼び出し側のタイム予算が同期処理で伸びないようにした。
+- 2026-11-23 — 復号済みのカード番号・コード・notes・SSH 秘密鍵・
+  メモ本文を Zeroizing ラッパーへ移行（wire 形式は従来どおり）。
+- 2026-11-23 — otpauth URI は非 ASCII の label / issuer を許容し、
+  生 base32 secret のみ ASCII を要求するよう TOTP ガードを調整。
 
 ## Links
 

@@ -174,6 +174,28 @@ fn lock_screen_email_client_id_and_master_password_field_keys() {
 }
 
 #[test]
+fn paging_keys_stay_unbound_on_the_lock_screen_outside_editing() {
+    // Complements the in-module `paging_keys_stay_unbound_in_every_editing_mode`:
+    // the lock screen has no vault list, so PageUp/PageDown/Home/End must stay
+    // inert when no credential field is focused instead of leaking the
+    // unlocked list-movement bindings.
+    for key in ["pageup", "pagedown", "home", "end"] {
+        let mut value = ctx(key);
+        value.screen = Screen::Locked;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "locked/{key} must not move a list selection"
+        );
+
+        // A failed login must not bind the paging keys either; only `r` is
+        // gated by `login_failed`.
+        value.login_failed = true;
+        assert_eq!(classify_key(&value), UiAction::None, "locked/retry/{key}");
+    }
+}
+
+#[test]
 fn generator_keys_toggle_options_and_clamp_lengths() {
     use crate::ui::keys::GeneratorOption;
 

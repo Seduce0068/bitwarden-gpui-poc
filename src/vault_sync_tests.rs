@@ -1639,3 +1639,61 @@ fn an_empty_uri_list_imports_as_empty_without_the_undecryptable_marker() {
     assert_eq!(item.uris().len(), 1);
     assert_eq!(item.uris()[0].uri, "https://example.com");
 }
+
+#[test]
+fn uri_wire_matches_zero_two_four_survive_the_sync_to_model_round_trip() {
+    // The sibling test pins wire 1/3/5 and `null`. Wire 0/2/4 are the remaining
+    // accepted values; `login_item` forwards openwarden's `to_wire()` verbatim
+    // (vault_sync.rs:305-312), so each must reach the model unchanged and map
+    // back to its own `UriMatch` through `LoginUri::match_enum()`.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string()
+    };
+    let mut cipher = encrypted_login("uri-wire-024", REAL_PASSWORD, REAL_TOTP);
+    cipher["login"]["uris"] = serde_json::json!([
+        { "uri": enc(b"https://domain.example.com"), "match": 0 },
+        { "uri": enc(b"https://prefix.example.com"), "match": 2 },
+        { "uri": enc(b"https://regex.example.com"), "match": 4 }
+    ]);
+
+    let vault = unlocked_vault(&[cipher]);
+    let model = import_logins(&vault).expect("import should succeed");
+    let uris = model
+        .item("uri-wire-024")
+        .expect("the login must be imported")
+        .uris();
+    assert_eq!(uris.len(), 3, "{uris:?}");
+
+    let cases = [
+        (
+            0u8,
+            "https://domain.example.com",
+            openwarden::UriMatch::Domain,
+        ),
+        (
+            2,
+            "https://prefix.example.com",
+            openwarden::UriMatch::StartsWith,
+        ),
+        (
+            4,
+            "https://regex.example.com",
+            openwarden::UriMatch::RegularExpression,
+        ),
+    ];
+    for (uri, (wire, expected_uri, expected_enum)) in uris.iter().zip(cases.iter()) {
+        assert_eq!(uri.uri, *expected_uri);
+        assert_eq!(uri.match_type, Some(*wire), "wire {wire}");
+        assert_eq!(uri.match_enum(), Some(*expected_enum), "wire {wire}");
+        assert_eq!(expected_enum.to_wire(), *wire);
+        assert!(!is_undecryptable_uri(&uri.uri));
+    }
+
+    // The model's serde round trip keeps the wire number as well.
+    let json = serde_json::to_string(uris).unwrap();
+    let restored: Vec<crate::model::LoginUri> = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.as_slice(), uris);
+}

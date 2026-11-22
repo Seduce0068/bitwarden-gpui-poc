@@ -2275,3 +2275,100 @@ fn load_detailed_ignores_unknown_top_level_keys() {
     assert_eq!(loaded.email, "still@example.com");
     assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION);
 }
+
+#[test]
+fn hand_edited_generator_bounds_are_clamped_to_the_limits_constants() {
+    use crate::limits::{
+        MAX_PASSPHRASE_WORDS, MAX_PASSWORD_LENGTH, MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // Both values are well-typed `usize` in the JSON, so per-field tolerance
+    // keeps them and `sanitized()` (settings.rs:660-667) clamps them on load.
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "password_generator": {"length": 100000},
+            "passphrase_generator": {"words": 100000}
+        }"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.password_generator.length, MAX_PASSWORD_LENGTH);
+    assert_eq!(loaded.passphrase_generator.words, MAX_PASSPHRASE_WORDS);
+
+    // The lower ends use the same constants, again from a hand-edited file
+    // rather than from an in-memory struct.
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "password_generator": {"length": 0},
+            "passphrase_generator": {"words": 0}
+        }"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.password_generator.length, MIN_PASSWORD_LENGTH);
+    assert_eq!(loaded.passphrase_generator.words, MIN_PASSPHRASE_WORDS);
+}
+
+#[test]
+fn every_known_key_maps_to_a_real_settings_field() {
+    // The reverse of `every_serialized_settings_field_is_in_the_known_key_list`:
+    // KNOWN in `load_advisories` (settings.rs:407-418) is private, so mirror it
+    // here and require every entry to be a real serialized Settings field.
+    // Otherwise a hand-written file containing only valid fields would produce
+    // a spurious "unknown key" advisory.
+    let defaults = serde_json::to_value(Settings::default()).unwrap();
+    let defaults = defaults
+        .as_object()
+        .expect("Settings serializes to a JSON object");
+    let known = [
+        "schema_version",
+        "server_url",
+        "email",
+        "device_id",
+        "password_generator",
+        "passphrase_generator",
+        "thresholds",
+        "idle_lock_seconds",
+        "login_timeout_seconds",
+        "clipboard_restore_seconds",
+    ];
+    let mut object = serde_json::Map::new();
+    for key in known {
+        assert!(
+            defaults.contains_key(key),
+            "KNOWN entry is not a Settings field: {key}"
+        );
+        object.insert(
+            key.to_string(),
+            defaults.get(key).expect("checked above").clone(),
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::Value::Object(object)).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        load_advisories(&path).is_empty(),
+        "{:?}",
+        load_advisories(&path)
+    );
+
+    // A key outside the list still gets the advisory, so the clean result
+    // above comes from membership in KNOWN, not from a silent scanner.
+    let mut with_unknown = serde_json::to_value(Settings::default()).unwrap();
+    with_unknown["not_a_settings_field"] = serde_json::json!(1);
+    std::fs::write(&path, serde_json::to_vec(&with_unknown).unwrap()).unwrap();
+    assert!(load_advisories(&path)
+        .iter()
+        .any(|notice| notice.contains("not_a_settings_field")));
+}

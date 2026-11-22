@@ -1699,3 +1699,108 @@ fn undecryptable_totp_marker_reaches_the_totp_uninspectable_finding() {
     assert!(empty_item.findings.contains(&Finding::NoTotp));
     assert!(!empty_item.findings.contains(&Finding::TotpUninspectable));
 }
+
+#[test]
+fn an_empty_uri_from_sync_is_reported_as_no_uri() {
+    // openwarden drops an empty URI field while parsing a cipher
+    // (vault.rs:340-363, 725-737), so the imported model has no URIs. The audit
+    // must then report NoUri rather than UriUninspectable; exercise the real
+    // sync -> import path instead of hand-writing an empty `uris` vector.
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    let body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [],
+        "ciphers": [{
+            "id": "empty-uri",
+            "type": 1,
+            "name": null,
+            "login": { "uris": [{ "uri": "" }] },
+            "revisionDate": "2024-01-01T00:00:00Z"
+        }]
+    })
+    .to_string();
+    let sync = crate::vault_sync::parse_sync(body.as_bytes()).expect("sync JSON should parse");
+    vault.apply_sync(sync).expect("sync should apply");
+    let model = crate::vault_sync::import_logins(&vault).expect("import should succeed");
+    let item = model.item("empty-uri").expect("the login must be imported");
+    assert!(item.uris().is_empty(), "{:?}", item.uris());
+
+    let mut imported = Vault::new();
+    imported.items = vec![item.clone()];
+    let report = audit(&imported, Thresholds::default(), NOW);
+    assert!(
+        report.items[0].findings.contains(&Finding::NoUri),
+        "{:?}",
+        report.items[0].findings
+    );
+    assert!(!report.items[0]
+        .findings
+        .contains(&Finding::UriUninspectable));
+}
+
+#[test]
+fn all_thirty_eight_common_dictionary_entries_are_detected() {
+    // The exact-match table in `is_exact_common_password` (health.rs:498-537)
+    // has 38 entries. An earlier regression test sampled only five; pinning the
+    // whole table catches a deleted or mistyped entry.
+    const COMMON_ENTRIES: &[&str] = &[
+        "password",
+        "password1",
+        "password123",
+        "passw0rd",
+        "p@ssw0rd",
+        "123456",
+        "12345678",
+        "123456789",
+        "1234567890",
+        "qwerty",
+        "qwerty123",
+        "qwertyuiop",
+        "letmein",
+        "welcome",
+        "admin",
+        "administrator",
+        "root",
+        "toor",
+        "iloveyou",
+        "monkey",
+        "dragon",
+        "sunshine",
+        "princess",
+        "football",
+        "baseball",
+        "abc123",
+        "master",
+        "shadow",
+        "superman",
+        "batman",
+        "trustno1",
+        "starwars",
+        "whatever",
+        "zaq12wsx",
+        "1q2w3e4r",
+        "1qaz2wsx",
+        "asdfghjkl",
+        "correcthorsebatterystaple",
+    ];
+    assert_eq!(COMMON_ENTRIES.len(), 38);
+    for word in COMMON_ENTRIES {
+        assert!(
+            super::is_exact_common_password(word),
+            "missing from COMMON: {word}"
+        );
+        assert!(super::is_common_password(word), "{word}");
+        // Matching is exact, not substring-based: a trailing character makes
+        // the value fall back to the prefix/cap rules instead of the table.
+        let near_miss = format!("{word}!");
+        assert!(
+            !super::is_exact_common_password(&near_miss),
+            "exact match must not be a substring test: {near_miss}"
+        );
+    }
+}

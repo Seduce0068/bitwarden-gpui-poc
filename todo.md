@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第77弾で 8 件すべてを完了）。
+なし（第78弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第78弾（16 担当・22 回目）の指摘 7 件を完結（2026-11-23）
+  - ロック画面非編集時のページキー無効、埋め込み link-local の
+    他ラベル、手編集ジェネレータのクランプ、KNOWN キー逆方向、
+    hostname 特殊文字、URI match wire 0/2/4、名前 trim、
+    SSH 公開情報、NoUri、COMMON 38件をテスト。
+  - README のキー一覧と ADR Status を更新。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（730 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第77弾（16 担当・21 回目）の指摘 8 件を完結（2026-11-23）
   - 生成パネルの F1 重複、ロック status の区切り残存、
     ページ移動キーのヒントを修正。

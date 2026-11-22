@@ -1955,3 +1955,31 @@ fn nested_url_userinfo_is_masked_by_the_recursive_pass() {
     assert!(!masked.contains("ENCODED_USER_SECRET"), "{masked}");
     assert!(masked.contains("[redacted]@cb.example.com"), "{masked}");
 }
+
+#[test]
+fn host_with_optional_port_ok_rejects_authority_delimiters_and_empty_hosts() {
+    // `host_with_optional_port_ok` refuses an empty host (cache.rs:180) and any
+    // hostname containing '@', '=', '?' or '#' (cache.rs:204). These checks keep
+    // `host_complete` in `at_is_in_query` from accepting a query tail as the
+    // authority. One case per delimiter so a regression is easy to localize.
+    let cases = [
+        ("", "empty host"),
+        (":8443", "empty host with a port"),
+        ("user@host", "'@' in hostname"),
+        ("host@", "trailing '@' in hostname"),
+        ("user@host:8443", "'@' with a valid port"),
+        ("ho=st", "'=' in hostname"),
+        ("ho?st", "'?' in hostname"),
+        ("ho#st", "'#' in hostname"),
+    ];
+    for (host, reason) in cases {
+        assert!(
+            !super::host_with_optional_port_ok(host),
+            "{host} must be rejected ({reason})"
+        );
+    }
+    // Controls: clean hostnames and numeric ports still pass, so the
+    // rejections above are about the delimiters rather than about ports.
+    assert!(super::host_with_optional_port_ok("vault.example.com"));
+    assert!(super::host_with_optional_port_ok("vault.example.com:8443"));
+}

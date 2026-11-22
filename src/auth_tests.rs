@@ -2266,3 +2266,40 @@ fn weak_kdf_is_rejected_by_the_real_derive_and_reaches_the_status_bar() {
     assert!(std::error::Error::source(&restored).is_some());
     assert_eq!(restored, AppError::KdfRejected);
 }
+
+#[test]
+fn embedded_link_local_literals_are_detected_in_non_leading_and_hyphenated_labels() {
+    // `hostname_embeds_link_local` scans every four-label window and every
+    // hyphenated label (auth.rs:467-490), not only the leading labels. A
+    // wildcard-DNS alias may prefix the literal or put it in the middle of the
+    // name, so those spellings must still be blocked without DNS.
+    for value in [
+        "http://prefix.169.254.169.254.nip.io",
+        "https://a.b.169.254.1.1.sslip.io",
+        "http://sub.169-254-169-254.nip.io",
+        "https://svc.169-254-1-1.example.com",
+    ] {
+        assert!(is_blocked_server_url_without_dns(value), "{value}");
+    }
+    // Pin the classifier directly as well: `url::Url` only lowercases/folds
+    // the host, it does not move the literal into a leading label.
+    assert!(super::hostname_embeds_link_local(
+        "prefix.169.254.169.254.nip.io"
+    ));
+    assert!(super::hostname_embeds_link_local(
+        "sub.169-254-169-254.nip.io"
+    ));
+
+    // A non-link-local literal in the same positions stays allowed.
+    for value in [
+        "https://prefix.1.1.1.1.nip.io",
+        "https://sub.192-168-1-10.nip.io",
+    ] {
+        assert!(!is_blocked_server_url_without_dns(value), "{value}");
+    }
+
+    // The public validation entry point reaches the same non-leading check.
+    let mut blocked = config();
+    blocked.server_url = "http://prefix.169.254.169.254.nip.io".into();
+    assert_eq!(validate_config(&blocked), Err(AuthError::BlockedServerUrl));
+}
