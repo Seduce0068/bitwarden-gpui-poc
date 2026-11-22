@@ -99,10 +99,13 @@ pub type SyncError = crate::error::AppError;
 
 /// Parse a `/api/sync` response body, including folder names.
 ///
-/// PascalCase keys are normalized to camelCase and duplicate cipher ids are
-/// collapsed to their newest revision before the `SyncData` is built, so
-/// `Vault::apply_sync` never sees two rows for one id (see
-/// `dedup_ciphers_by_revision`).
+/// PascalCase keys are normalized to camelCase, duplicate cipher ids are
+/// collapsed to their newest revision and duplicate folder ids are removed
+/// before the `SyncData` is built, so `Vault::apply_sync` never sees two rows
+/// for one id (see `dedup_ciphers_by_revision` and `dedup_folders_by_id`).
+/// A row that openwarden would drop (organization-owned or soft-deleted) can
+/// never win a cipher-id dedup: keeping an eligible personal row is what stops
+/// the whole item from disappearing after parsing.
 ///
 /// # Errors
 ///
@@ -116,6 +119,7 @@ pub fn parse_sync(body: &[u8]) -> Result<openwarden::SyncData, SyncError> {
         SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
     })?;
     dedup_ciphers_by_revision(&mut value);
+    dedup_folders_by_id(&mut value);
     let normalized = serde_json::to_vec(&value).map_err(|error| {
         let detail = format!("sync: {error}");
         SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))
@@ -183,7 +187,10 @@ fn normalize_sync_keys(value: &mut serde_json::Value) -> Result<(), String> {
 ///
 /// The winner is the row with the highest `revisionDate` (missing/unparsable
 /// dates count as [`crate::model::UNKNOWN_REVISION`]); ties keep the first row
-/// so normalization and parsing stay deterministic.
+/// so normalization and parsing stay deterministic. A row that
+/// [`cipher_row_is_excluded`] flags is never allowed to win over an eligible
+/// row: openwarden drops those rows while parsing, so choosing one as the
+/// winner would remove the id from the vault entirely.
 fn dedup_ciphers_by_revision(value: &mut serde_json::Value) {
     let Some(ciphers) = value
         .get_mut("ciphers")
@@ -191,7 +198,8 @@ fn dedup_ciphers_by_revision(value: &mut serde_json::Value) {
     else {
         return;
     };
-    let mut best: HashMap<String, (usize, i64)> = HashMap::new();
+    // (row index, revision, excluded by openwarden)
+    let mut best: HashMap<String, (usize, i64, bool)> = HashMap::new();
     let mut drop: HashSet<usize> = HashSet::new();
     for (index, cipher) in ciphers.iter().enumerate() {
         let Some(id) = cipher.get("id").and_then(|entry| entry.as_str()) else {
@@ -203,18 +211,26 @@ fn dedup_ciphers_by_revision(value: &mut serde_json::Value) {
             .and_then(|entry| entry.as_str())
             .and_then(|value| parse_revision(Some(value)))
             .unwrap_or(crate::model::UNKNOWN_REVISION);
+        let excluded = cipher_row_is_excluded(cipher);
         match best.entry(id.to_string()) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let (best_index, best_revision) = *entry.get();
-                if revision > best_revision {
+                let (best_index, best_revision, best_excluded) = *entry.get();
+                let replace = if best_excluded == excluded {
+                    revision > best_revision
+                } else {
+                    // An eligible personal row always outranks an excluded
+                    // one, regardless of their revision dates.
+                    best_excluded
+                };
+                if replace {
                     drop.insert(best_index);
-                    entry.insert((index, revision));
+                    entry.insert((index, revision, excluded));
                 } else {
                     drop.insert(index);
                 }
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert((index, revision));
+                entry.insert((index, revision, excluded));
             }
         }
     }
@@ -226,6 +242,41 @@ fn dedup_ciphers_by_revision(value: &mut serde_json::Value) {
         let keep = !drop.contains(&index);
         index += 1;
         keep
+    });
+}
+
+/// Whether openwarden's `StoredCipher::parse` discards this raw row.
+///
+/// Organization-owned ciphers (`organizationId`) and soft-deleted ones
+/// (`deletedDate`) are not personal, live logins. A non-null value excludes a
+/// row; `null` and a missing field behave like the absent case. Casing is
+/// normalized before dedup runs, so camelCase keys are the only ones seen here.
+fn cipher_row_is_excluded(cipher: &serde_json::Value) -> bool {
+    ["organizationId", "deletedDate"]
+        .iter()
+        .any(|key| cipher.get(*key).is_some_and(|value| !value.is_null()))
+}
+
+/// Collapse duplicate folder ids to one row before `Vault::apply_sync`.
+///
+/// `openwarden::Vault::folders()` yields one entry per raw folder and
+/// `folder_name(id)` reads the first match, so two folders with the same id
+/// would produce duplicate ids in the model and hide the later name. Keeping
+/// the first row matches the tie rule of [`dedup_ciphers_by_revision`] and
+/// the openwarden reader; rows without a string id are left untouched.
+fn dedup_folders_by_id(value: &mut serde_json::Value) {
+    let Some(folders) = value
+        .get_mut("folders")
+        .and_then(|entry| entry.as_array_mut())
+    else {
+        return;
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    folders.retain(|folder| {
+        folder
+            .get("id")
+            .and_then(|entry| entry.as_str())
+            .is_none_or(|id| seen.insert(id.to_string()))
     });
 }
 

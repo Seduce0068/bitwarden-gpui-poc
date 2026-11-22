@@ -587,6 +587,54 @@ fn duplicate_names_group_case_insensitively() {
 }
 
 #[test]
+fn duplicate_names_ignore_rows_with_the_same_id() {
+    // The ids in a group are deduplicated (model.rs:1063-1081), so two raw
+    // rows with one id cannot masquerade as a name collision. A group of two
+    // *distinct* ids with the same name must still be reported.
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("same", "shared", "a", "pw", "https://a.example"));
+    vault
+        .items
+        .push(login("same", "SHARED", "b", "pw", "https://b.example"));
+    assert!(
+        vault.duplicate_names().is_empty(),
+        "one id is not a duplicate name: {:?}",
+        vault.duplicate_names()
+    );
+
+    vault
+        .items
+        .push(login("other", "Shared", "c", "pw", "https://c.example"));
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].0, "shared");
+    assert_eq!(groups[0].1, vec!["same".to_string(), "other".to_string()]);
+}
+
+#[test]
+fn toggle_favorite_returns_false_when_it_turns_an_item_off() {
+    // The return value is the new flag, so an item that was already a favorite
+    // must yield `Some(false)` (model.rs:1012-1017) - not `None`, which is
+    // reserved for an unknown id.
+    let mut vault = sample();
+    let target = vault
+        .items
+        .iter()
+        .find(|item| item.favorite)
+        .expect("sample() must contain a favorite")
+        .id
+        .clone();
+    assert_eq!(vault.toggle_favorite(&target), Some(false));
+    assert!(!vault.item(&target).unwrap().favorite);
+    assert_eq!(vault.toggle_favorite(&target), Some(true));
+    assert!(vault.item(&target).unwrap().favorite);
+    assert_eq!(vault.toggle_favorite("missing"), None);
+    assert_eq!(vault.toggle_favorite(""), None);
+}
+
+#[test]
 fn nfkd_absorbs_canonical_and_compatibility_differences() {
     // NFC vs NFD (precomposed vs base + combining mark).
     assert_eq!(nfkd("Caf\u{e9}"), nfkd("Cafe\u{301}"));

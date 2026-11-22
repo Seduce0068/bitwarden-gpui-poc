@@ -391,20 +391,32 @@ fn read_settings_json(path: &std::path::Path) -> Option<Value> {
     serde_json::from_str::<Value>(&contents).ok()
 }
 
-/// Warnings for a file that parsed, but whose metadata cannot be fully
-/// trusted: a future schema marker or unknown keys. These are advisory only;
-/// `load_detailed` still applies the documented fallback.
-/// Only top-level keys are inspected; nested fields are validated by
-/// `load_detailed`'s per-field tolerance. Files above `MAX_SETTINGS_BYTES` are
-/// skipped because `load_detailed` already reports them as too large.
-///
-/// Known constraint: the `KNOWN` key list below is managed by hand, separately
+/// Known constraint: the [`KNOWN`] key list is managed by hand, separately
 /// from [`Settings`]'s serde field list — there is no generated single source
-/// of truth. Adding a field to `Settings` without adding its key to `KNOWN`
+/// of truth. Adding a field to `Settings` without adding its key to [`KNOWN`]
 /// makes every file containing that key report a spurious "unknown key"
 /// advisory, so the two lists must be updated together. The regression test
 /// `every_serialized_settings_field_is_in_the_known_key_list` checks the
 /// one-way subset relation (every serialized field is known) on each run.
+///
+/// The list is `pub(crate)` so the reverse-relation test reads the live value
+/// instead of a hand-copied mirror that could silently drift from it.
+pub(crate) const KNOWN: &[&str] = &[
+    "schema_version",
+    "server_url",
+    "email",
+    "device_id",
+    "password_generator",
+    "passphrase_generator",
+    "thresholds",
+    "idle_lock_seconds",
+    "login_timeout_seconds",
+    "clipboard_restore_seconds",
+];
+
+/// Warnings for a file that parsed, but whose metadata cannot be fully
+/// trusted: a future schema marker or unknown keys. See `KNOWN` for the
+/// hand-maintained key list and its drift constraint.
 pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
     // Both advisory and marker reads share `read_settings_json`, so the cap
     // and TOCTOU handling cannot drift between them.
@@ -422,18 +434,6 @@ pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
             ));
         }
     }
-    const KNOWN: &[&str] = &[
-        "schema_version",
-        "server_url",
-        "email",
-        "device_id",
-        "password_generator",
-        "passphrase_generator",
-        "thresholds",
-        "idle_lock_seconds",
-        "login_timeout_seconds",
-        "clipboard_restore_seconds",
-    ];
     let unknown: Vec<String> = object
         .keys()
         .filter(|key| !KNOWN.contains(&key.as_str()))
@@ -739,6 +739,14 @@ impl Settings {
     /// other load failure (unreadable, oversized or malformed) is returned as
     /// an [`std::io::Error`] and the write is aborted, so a broken file is never
     /// overwritten with defaults and its other fields are not silently lost.
+    ///
+    /// Known constraint: this helper writes `id` verbatim and does **not** call
+    /// [`is_valid_device_id`]. Validation lives on the reuse path
+    /// ([`Settings::ensure_device_id`]); a direct caller can therefore persist
+    /// an arbitrary string as the device id. `load_detailed` keeps such an id,
+    /// but [`Settings::sanitized`] clears it and [`Settings::ensure_device_id`]
+    /// generates a fresh one on the next sync, so no invalid id is sent to the
+    /// server. This is a documented limitation rather than a silent contract.
     ///
     /// # Errors
     ///

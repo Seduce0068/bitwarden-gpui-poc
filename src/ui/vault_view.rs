@@ -610,6 +610,88 @@ mod tests {
     }
 
     #[test]
+    fn select_id_returns_the_visible_index_under_sort_and_filter() {
+        // The index handed back by `select_id` is what the caller scrolls to,
+        // so it must address the sorted/filtered list, not insertion order.
+        let mut state = state_with_items(); // a=Alpha, b=Beta
+        state.vault.items.push(VaultItem::new(
+            "c",
+            "Gamma",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+
+        // Ascending baseline: [a, b, c].
+        let ascending: Vec<String> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.id.clone())
+            .collect();
+        assert_eq!(ascending, vec!["a", "b", "c"]);
+        assert_eq!(state.select_id("b"), Some(1));
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+
+        // NameDesc reverses the visible rows to [c, b, a]. "a" and "c" swap
+        // relative to insertion order, which is where a position bug shows up.
+        state.sort = SortKey::NameDesc;
+        let descending: Vec<String> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.id.clone())
+            .collect();
+        assert_eq!(descending, vec!["c", "b", "a"]);
+        assert_eq!(state.select_id("c"), Some(0));
+        assert_eq!(state.select_id("b"), Some(1));
+        assert_eq!(state.select_id("a"), Some(2));
+        assert_eq!(state.selected_id.as_deref(), Some("a"));
+
+        // Cross-check every id against its actual position in the visible list
+        // so the returned index is guaranteed to be a scrollable row.
+        for id in ["c", "b", "a"] {
+            let position = state.visible_items().iter().position(|item| item.id == id);
+            assert_eq!(state.select_id(id), position, "id {id}");
+            assert_eq!(state.selected_id.as_deref(), Some(id));
+        }
+
+        // Selection must not rewind: the caller owns the scroll decision even
+        // when the sort order changed under it.
+        let before = state.rewind_calls;
+        assert_eq!(state.select_id("b"), Some(1));
+        assert_eq!(state.rewind_calls, before);
+
+        // With a filter applied the index names a row in the surviving list.
+        state.vault.items[1].favorite = true; // b
+        state.vault.items[2].favorite = true; // c
+        state.filter = Filter::Favorites;
+        let favorites: Vec<String> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.id.clone())
+            .collect();
+        assert_eq!(favorites, vec!["c", "b"]);
+        assert_eq!(state.select_id("b"), Some(1));
+        assert_eq!(state.select_id("c"), Some(0));
+        // "a" is hidden by the filter: no silent fallback to row 0.
+        assert_eq!(state.select_id("a"), None);
+        assert_eq!(state.selected_id.as_deref(), Some("c"));
+
+        // Flipping the sort again keeps indices relative to the visible list:
+        // Beta now precedes Gamma among the favorites.
+        state.sort = SortKey::NameAsc;
+        let favorites_asc: Vec<String> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.id.clone())
+            .collect();
+        assert_eq!(favorites_asc, vec!["b", "c"]);
+        assert_eq!(state.select_id("b"), Some(0));
+        assert_eq!(state.select_id("c"), Some(1));
+        assert_eq!(state.select_id("a"), None);
+        assert_eq!(state.selected_id.as_deref(), Some("c"));
+    }
+
+    #[test]
     fn revalidate_selection_keeps_a_valid_selection_without_rewinding() {
         let mut state = state_with_items();
         state.selected_id = Some("b".into());

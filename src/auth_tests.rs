@@ -2438,3 +2438,102 @@ fn plain_auth_errors_convert_forward_to_the_matching_app_error_variant() {
         assert!(std::error::Error::source(&converted).is_none(), "{name}");
     }
 }
+
+#[test]
+fn plain_app_error_variants_convert_back_to_plain_auth_errors() {
+    // The reverse direction (AppError -> AuthError) must map a plain variant
+    // to its plain sibling, not to a `Detail` variant or the generic `Other`
+    // fallback (auth.rs:205-246). `AppError` is not Clone, so each case is
+    // consumed once and the expected family message is captured up front.
+    let cases: Vec<(AppError, AuthError, &str)> = vec![
+        (
+            AppError::MissingField("server_url"),
+            AuthError::MissingField("server_url"),
+            "認証情報が未入力です",
+        ),
+        (
+            AppError::InvalidServerUrl,
+            AuthError::InvalidServerUrl,
+            "サーバー URL が不正です（HTTPS または loopback の HTTP）",
+        ),
+        (
+            AppError::BlockedServerUrl,
+            AuthError::BlockedServerUrl,
+            "サーバー URL が link-local アドレスを指しています",
+        ),
+        (
+            AppError::InvalidEmail,
+            AuthError::InvalidEmail,
+            "メールアドレスの形式が不正です",
+        ),
+        (
+            AppError::ClientSetup,
+            AuthError::ClientSetup,
+            "クライアントを初期化できませんでした",
+        ),
+        (
+            AppError::Prelogin,
+            AuthError::Prelogin,
+            "サーバー情報の取得に失敗しました",
+        ),
+        (AppError::Login, AuthError::Login, "ログインに失敗しました"),
+        (AppError::Sync, AuthError::Sync, "同期に失敗しました"),
+        (
+            AppError::KdfRejected,
+            AuthError::KdfRejected,
+            "KDF 設定がポリシーで拒否されました",
+        ),
+        (
+            AppError::Timeout,
+            AuthError::Timeout,
+            "ログインがタイムアウトしました",
+        ),
+    ];
+    assert_eq!(cases.len(), 10);
+
+    for (app, expected, family_message) in cases {
+        let converted = AuthError::from(app);
+        assert_eq!(converted, expected, "{family_message}");
+        assert_eq!(converted.message(), family_message);
+        assert!(
+            !matches!(
+                &converted,
+                AuthError::Other(_)
+                    | AuthError::InvalidServerUrlDetail(_)
+                    | AuthError::ClientSetupDetail(_)
+                    | AuthError::PreloginDetail(_)
+                    | AuthError::LoginDetail(_)
+                    | AuthError::SyncDetail(_)
+                    | AuthError::KdfRejectedDetail(_)
+            ),
+            "a plain failure must not pick up a detail sibling: {converted:?}"
+        );
+        // The forward direction still lands back in the same family.
+        assert_eq!(AppError::from(converted).message(), family_message);
+    }
+}
+
+#[test]
+fn missing_protected_key_round_trips_through_app_error() {
+    // This variant has no detail/cause sibling, so both conversions must keep
+    // the exact discriminant and status text (auth.rs:262-286).
+    let small = UnlockError::MissingProtectedKey;
+    let message = small.message();
+    assert!(!message.is_empty());
+
+    let app = AppError::from(small.clone());
+    assert!(matches!(&app, AppError::MissingProtectedKey));
+    assert_eq!(app.message(), message);
+    assert!(std::error::Error::source(&app).is_none());
+
+    let restored = UnlockError::from(app);
+    assert!(matches!(&restored, UnlockError::MissingProtectedKey));
+    assert_eq!(restored, UnlockError::MissingProtectedKey);
+    assert_eq!(restored.message(), message);
+    assert!(std::error::Error::source(&restored).is_none());
+
+    // Also start from the plain AppError, the reverse direction.
+    let from_app = UnlockError::from(AppError::MissingProtectedKey);
+    assert_eq!(from_app, UnlockError::MissingProtectedKey);
+    assert_eq!(AppError::from(from_app).message(), message);
+}

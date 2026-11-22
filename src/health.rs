@@ -383,8 +383,11 @@ pub fn estimate_entropy(password: &str) -> u32 {
 /// Recognizes only the exact shape [`PassphraseSettings`](crate::generator::PassphraseSettings)
 /// can emit: at least two words from the shared list, joined by one repeated
 /// non-alphanumeric separator **or by no separator at all**, each optionally
-/// capitalized, with an optional single trailing digit. Anything else falls
-/// back to the character-pool estimate in [`estimate_entropy`].
+/// capitalized, with an optional single trailing digit. Both paths use the
+/// same [`word_capitalization`] rule: a word is either all lowercase or has
+/// just its first ASCII letter capitalized. All-caps and mid-word capitals
+/// are rejected even when a separator is present. Anything else falls back to
+/// the character-pool estimate in [`estimate_entropy`].
 ///
 /// The empty separator matters: the word list is prefix-free, so the generator
 /// happily emits `ableabove` for a two-word passphrase. Scoring that as a plain
@@ -411,7 +414,10 @@ fn passphrase_estimate(value: &str) -> Option<u32> {
                 if !WORDS.contains(&lower.as_str()) {
                     return None;
                 }
-                capitalized |= word.chars().next().is_some_and(char::is_uppercase);
+                // Use the same contract as the separator-free path: only an
+                // all-lowercase word or one with just its first ASCII letter
+                // capitalized can be a generator output.
+                capitalized |= word_capitalization(word, &lower)?;
                 parsed.push(word);
             }
             (parsed, capitalized)
@@ -450,19 +456,35 @@ fn words_without_separator(body: &str) -> Option<(Vec<&str>, bool)> {
         let word: &str = WORDS
             .iter()
             .find(|candidate| folded.starts_with(**candidate))?;
-        if !rest.starts_with(word) {
-            // Only an uppercase ASCII first letter is allowed, and the tail
-            // must match the lowercase word verbatim.
-            let first = rest.chars().next()?;
-            if !first.is_ascii_uppercase() || !rest[1..].starts_with(&word[1..]) {
-                return None;
-            }
-            capitalized = true;
-        }
+        // The folded prefix matched, but only the two spellings the generator
+        // emits are accepted; see `word_capitalization`.
+        capitalized |= word_capitalization(rest.get(..word.len())?, word)?;
         rest = rest.get(word.len()..)?;
         words.push(word);
     }
     (words.len() >= 2).then_some((words, capitalized))
+}
+
+/// Validate one word's casing against the generator's two allowed spellings.
+///
+/// `Some(true)` means the word had just its first ASCII letter capitalized;
+/// `Some(false)` means it was entirely lowercase. An all-caps word, a capital
+/// inside the word, a non-ASCII capital or a mismatched tail is rejected with
+/// `None`, so the caller falls back to the character-pool estimate instead of
+/// crediting a generated-passphrase score. Shared by the separator and
+/// separator-free recognizers so both paths enforce the same contract.
+fn word_capitalization(word: &str, lower: &str) -> Option<bool> {
+    if word == lower {
+        return Some(false);
+    }
+    let first = word.chars().next()?;
+    if first.is_ascii_uppercase()
+        && word.get(first.len_utf8()..)? == lower.get(1..)?
+        && !lower.is_empty()
+    {
+        return Some(true);
+    }
+    None
 }
 
 fn strip_trailing_digits(value: &str) -> Option<&str> {

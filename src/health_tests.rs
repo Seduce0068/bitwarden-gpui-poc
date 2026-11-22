@@ -1963,3 +1963,55 @@ fn mixed_uri_lists_are_audited_per_uri_without_leaking_any() {
         }
     }
 }
+
+#[test]
+fn separated_passphrases_reject_invalid_capitalization() {
+    use crate::words::WORDS;
+
+    let first = WORDS[0];
+    let second = WORDS[1];
+    let plain = format!("{first}-{second}");
+    let capitalized = format!("{}-{second}", upper_first(first));
+    assert!(super::passphrase_estimate(&plain).is_some(), "{plain}");
+    assert!(
+        super::passphrase_estimate(&capitalized).is_some(),
+        "{capitalized}"
+    );
+
+    // The separator-free path already rejects these spellings; the separated
+    // path must now honour the same contract (health.rs:394-433).
+    let all_caps = format!("{}-{second}", first.to_ascii_uppercase());
+    let inner_caps = format!("{}-{second}", upper_second(first));
+    let wrong_tail = format!(
+        "{}{}-{second}",
+        &first[..1],
+        first[1..].to_ascii_uppercase()
+    );
+    for bad in [&all_caps, &inner_caps, &wrong_tail] {
+        assert_eq!(super::passphrase_estimate(bad), None, "{bad}");
+        assert_eq!(
+            super::passphrase_estimate(&format!("{bad}7")),
+            None,
+            "a trailing number must not hide invalid capitalization: {bad}"
+        );
+    }
+
+    // Rejection falls back to the character-pool estimate rather than silently
+    // crediting a two-word generator draw.
+    assert!(estimate_entropy(&all_caps) > estimate_entropy(&plain));
+
+    assert_eq!(super::word_capitalization(first, first), Some(false));
+    assert_eq!(
+        super::word_capitalization(&upper_first(first), first),
+        Some(true)
+    );
+    assert_eq!(
+        super::word_capitalization(&first.to_ascii_uppercase(), first),
+        None
+    );
+    assert_eq!(
+        super::word_capitalization(&upper_second(first), first),
+        None
+    );
+    assert_eq!(super::word_capitalization("", first), None);
+}

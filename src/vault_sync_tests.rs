@@ -1814,3 +1814,132 @@ fn one_undecryptable_uri_replaces_the_whole_list_with_the_marker() {
         .findings
         .contains(&crate::health::Finding::NoUri));
 }
+
+#[test]
+fn dedup_never_lets_an_excluded_row_win_over_an_eligible_one() {
+    // openwarden's StoredCipher::parse drops organization-owned and
+    // soft-deleted rows (vault.rs:344-350). If such a row wins the id dedup,
+    // the older eligible row is dropped too and the item vanishes entirely.
+    let mut value = serde_json::json!({
+        "ciphers": [
+            {"id": "org", "revisionDate": "2024-01-01T00:00:00Z", "type": 1},
+            {"id": "org", "revisionDate": "2024-06-01T00:00:00Z",
+             "organizationId": "org-1", "type": 1},
+            {"id": "deleted", "revisionDate": "2024-06-01T00:00:00Z",
+             "deletedDate": "2024-07-01T00:00:00Z", "type": 1},
+            {"id": "deleted", "revisionDate": "2024-01-01T00:00:00Z", "type": 1},
+            {"id": "nulls", "revisionDate": "2024-01-01T00:00:00Z",
+             "organizationId": null, "deletedDate": null, "type": 1},
+            {"id": "nulls", "revisionDate": "2024-06-01T00:00:00Z", "type": 1},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 3, "one row per id");
+    for row in kept {
+        assert!(row.get("organizationId").is_none());
+        assert!(row.get("deletedDate").is_none());
+    }
+    assert_eq!(kept[0]["id"], "org");
+    assert_eq!(kept[0]["revisionDate"], "2024-01-01T00:00:00Z");
+    assert_eq!(kept[1]["id"], "deleted");
+    assert_eq!(kept[1]["revisionDate"], "2024-01-01T00:00:00Z");
+    assert_eq!(kept[2]["id"], "nulls");
+    assert_eq!(
+        kept[2]["revisionDate"], "2024-06-01T00:00:00Z",
+        "null organizationId/deletedDate are not exclusions"
+    );
+
+    // When every duplicate is excluded, the ordinary newest-revision rule
+    // still applies (openwarden drops the single survivor as before).
+    let mut all_excluded = serde_json::json!({
+        "ciphers": [
+            {"id": "x", "revisionDate": "2024-01-01T00:00:00Z", "organizationId": "o"},
+            {"id": "x", "revisionDate": "2024-02-01T00:00:00Z", "organizationId": "o"},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut all_excluded);
+    let kept = all_excluded["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["revisionDate"], "2024-02-01T00:00:00Z");
+}
+
+#[test]
+fn parse_sync_keeps_an_item_when_an_excluded_duplicate_is_newer() {
+    // End-to-end regression: before the fix, the organization-owned row won
+    // the dedup, openwarden dropped it and `vault.logins()` was empty.
+    let body = br#"{
+        "profile": {"id": "user-1"},
+        "folders": [],
+        "ciphers": [
+            {"id": "c1", "type": 1, "name": "Live", "login": {"uris": []},
+             "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "c1", "type": 1, "name": "Org", "organizationId": "org-1",
+             "login": {"uris": []}, "revisionDate": "2024-06-01T00:00:00Z"}
+        ]
+    }"#;
+    let sync = parse_sync(body).expect("the sync body must parse");
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    vault.apply_sync(sync).expect("apply_sync must succeed");
+    let logins = vault.logins();
+    let ids: Vec<&str> = logins.iter().map(|info| info.id.as_str()).collect();
+    assert_eq!(ids, vec!["c1"], "the eligible row must survive");
+}
+
+#[test]
+fn duplicate_folder_ids_are_collapsed_before_apply_sync() {
+    let mut value = serde_json::json!({
+        "folders": [
+            {"id": "f1", "name": "first"},
+            {"id": "f1", "name": "second"},
+            {"name": "no-id"},
+            {"id": 42, "name": "numeric-id"},
+            {"id": "f2", "name": "other"},
+            {"id": "f2", "name": "again"},
+        ]
+    });
+    super::dedup_folders_by_id(&mut value);
+    let kept = value["folders"].as_array().unwrap();
+    let names: Vec<&str> = kept
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["first", "no-id", "numeric-id", "other"]);
+    assert_eq!(
+        super::dedup_folders_by_id(&mut serde_json::json!({"folders": []})),
+        (),
+        "an empty folder list is a no-op"
+    );
+}
+
+#[test]
+fn parse_sync_removes_duplicate_folder_ids_end_to_end() {
+    // `Vault::folder_name(id)` reads the first matching folder, so a duplicate
+    // id would otherwise shadow the later row and yield duplicate model ids.
+    let body = br#"{
+        "profile": {"id": "user-1"},
+        "folders": [
+            {"id": "f1", "name": "first"},
+            {"id": "f1", "name": "second"},
+            {"id": "f2", "name": "other"}
+        ],
+        "ciphers": []
+    }"#;
+    let sync = parse_sync(body).expect("the sync body must parse");
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    vault.apply_sync(sync).expect("apply_sync must succeed");
+    let folders = vault.folders();
+    let mut ids: Vec<&str> = folders.iter().map(|id| id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["f1", "f2"]);
+}

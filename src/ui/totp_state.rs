@@ -296,6 +296,52 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_only_secret_is_owned_and_reports_missing() {
+        let mut state = TotpState::new();
+        let blank = " \t\n\u{3000}";
+
+        // `code_at` trims before deciding the field is empty (totp.rs:97-100),
+        // so a whitespace-only value fails as Missing, not Invalid. `has_secret`
+        // checks the raw stored buffer (totp_state.rs:26-28): the blank field is
+        // non-empty, so it stays "displayed" and the ticker keeps running.
+        assert_eq!(state.display(blank, 40), "コード生成失敗");
+        assert!(
+            state.has_secret(),
+            "a blank-but-non-empty field is still the owned secret"
+        );
+        assert!(state.matches_secret(blank));
+        assert_eq!(state.current_code(), None);
+
+        let reason = state
+            .error_message()
+            .expect("a failed sample caches its reason for the copy path");
+        assert_eq!(
+            reason,
+            crate::totp::TotpError::Missing.message(),
+            "whitespace trims to empty, so the cached reason must be Missing"
+        );
+        assert_ne!(
+            reason,
+            crate::totp::TotpError::Invalid.message(),
+            "a blank field must not be reported as a malformed secret"
+        );
+
+        // A truly empty field reports the same Missing reason but is not owned.
+        let mut empty = TotpState::new();
+        assert_eq!(empty.display("", 40), "コード生成失敗");
+        assert!(!empty.has_secret());
+        assert_eq!(empty.error_message().as_deref(), Some(reason.as_str()));
+
+        // Switching from the blank field to a valid code drops the cached
+        // Missing reason and keeps ownership of the new secret.
+        let restored = state.display(SECRET, 40);
+        assert!(restored.starts_with("287 082"), "{restored}");
+        assert_eq!(state.current_code(), Some("287082"));
+        assert_eq!(state.error_message(), None);
+        assert!(state.has_secret());
+    }
+
+    #[test]
     fn invalid_secret_reports_failure() {
         let mut state = TotpState::new();
         let value = state.display("not base32!", 0);

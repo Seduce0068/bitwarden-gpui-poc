@@ -1133,6 +1133,33 @@ fn save_device_id_only_creates_a_file_when_none_exists() {
 }
 
 #[test]
+fn save_device_id_only_stores_an_invalid_id_verbatim() {
+    // Known constraint pinned by this test: the id-only writer does not call
+    // `is_valid_device_id` (settings.rs:732-754). Only the reuse/sanitize paths
+    // reject a malformed value, so a direct caller can persist one unchanged.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let invalid = "not-a-canonical-v4-uuid";
+
+    assert!(!is_valid_device_id(invalid), "the fixture must be invalid");
+    Settings::save_device_id_only(&path, invalid).unwrap();
+
+    // The writer stores the id verbatim; the *reader* sanitizes it, so the
+    // raw JSON is the place to observe the writer's contract.
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(raw.contains(invalid), "the raw value is persisted: {raw}");
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.device_id, "", "load sanitizes invalid ids");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    // The guard still applies before the id reaches the server.
+    assert!(loaded.sanitized().device_id.is_empty());
+    let mut reused = loaded;
+    let replacement = reused.ensure_device_id(None).unwrap();
+    assert_ne!(replacement, invalid);
+    assert!(is_valid_device_id(replacement));
+}
+
+#[test]
 fn save_device_id_only_aborts_on_a_malformed_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
@@ -2318,28 +2345,17 @@ fn hand_edited_generator_bounds_are_clamped_to_the_limits_constants() {
 #[test]
 fn every_known_key_maps_to_a_real_settings_field() {
     // The reverse of `every_serialized_settings_field_is_in_the_known_key_list`:
-    // KNOWN in `load_advisories` (settings.rs:407-418) is private, so mirror it
-    // here and require every entry to be a real serialized Settings field.
+    // KNOWN is pub(crate) (settings.rs:394-415), so read the live list instead
+    // of a hand-copied mirror that could drift from the production constant.
     // Otherwise a hand-written file containing only valid fields would produce
     // a spurious "unknown key" advisory.
     let defaults = serde_json::to_value(Settings::default()).unwrap();
     let defaults = defaults
         .as_object()
         .expect("Settings serializes to a JSON object");
-    let known = [
-        "schema_version",
-        "server_url",
-        "email",
-        "device_id",
-        "password_generator",
-        "passphrase_generator",
-        "thresholds",
-        "idle_lock_seconds",
-        "login_timeout_seconds",
-        "clipboard_restore_seconds",
-    ];
     let mut object = serde_json::Map::new();
-    for key in known {
+    for key in KNOWN {
+        let key = *key;
         assert!(
             defaults.contains_key(key),
             "KNOWN entry is not a Settings field: {key}"

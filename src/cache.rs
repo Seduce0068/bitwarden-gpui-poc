@@ -78,6 +78,41 @@ pub struct SyncCache {
     pub created_at: Option<i64>,
 }
 
+/// Byte index where the authority of `url` starts.
+///
+/// `://` is a scheme delimiter only when it follows a valid scheme at the very
+/// front of the text ([`is_scheme`]). A plain `find("://")` also matched a
+/// nested URL inside a query (`//host/p?next=https://cb.example.com`) and
+/// started the authority scan there, leaving real userinfo unmasked. Skipping
+/// non-scheme candidates keeps the scan in the outer authority. The scheme
+/// check is ASCII-case-insensitive, so `HTTPS://` is recognized as well.
+/// A protocol-relative URL (`//user:pass@host`) starts at its two leading
+/// bytes; without either form the whole text is the authority.
+fn authority_start(url: &str) -> usize {
+    let mut from = 0usize;
+    while let Some(relative) = url[from..].find("://") {
+        let delimiter = from + relative;
+        if is_scheme(&url[..delimiter]) {
+            return delimiter + 3;
+        }
+        from = delimiter + 3;
+    }
+    if url.starts_with("//") {
+        2
+    } else {
+        0
+    }
+}
+
+/// Whether `text` is an RFC 3986 scheme: an ASCII letter followed by ASCII
+/// letters, digits, `+`, `-` or `.`. Matching is case-insensitive so an
+/// upper-case spelling such as `HTTPS` still delimits the authority.
+fn is_scheme(text: &str) -> bool {
+    let mut bytes = text.bytes();
+    matches!(bytes.next(), Some(b'A'..=b'Z' | b'a'..=b'z'))
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+}
+
 /// Render a server URL for `Debug`, dropping any URL-embedded userinfo.
 ///
 /// A URL such as `https://user:pass@vault.example.com` must not leak the
@@ -90,12 +125,11 @@ pub struct SyncCache {
 /// whole pre-path text: a password may contain `@`, but an `@` in a query or
 /// fragment (`https://host?email=a@b`) is not userinfo. A `?`/`#` before the
 /// delimiter can be an unescaped character in the password, so it does not by
-/// itself terminate the authority ([`at_is_in_query`] decides).
+/// itself terminate the authority ([`at_is_in_query`] decides). [`authority_start`]
+/// keeps `://` confined to a leading scheme, so a nested URL in a query cannot
+/// move the scan into the query.
 fn mask_url_userinfo(url: &str) -> String {
-    let scheme_end = url
-        .find("://")
-        .map(|i| i + 3)
-        .unwrap_or(url.starts_with("//") as usize * 2);
+    let scheme_end = authority_start(url);
     // A path separator always closes the authority. '?'/'#' are *not* used as
     // the boundary here: an unescaped one inside a password would hide the real
     // delimiter and leave the credential in the diagnostic URL.
@@ -243,6 +277,14 @@ fn nested_authority_with_userinfo(value: &str) -> bool {
 /// `sig`, `session` and `code`, the list includes the short spellings `pass`,
 /// `pwd`, `pw` and `credential` (plus the pre-existing `token` and `key`):
 /// a bare `?pass=…` or `?credential=…` is just as secret as `?password=…`.
+/// Known constraint: the match is on ASCII text only. A key whose name is
+/// hidden behind a non-ASCII percent escape is not folded into a sensitive
+/// name: `percent_decode` deliberately keeps escapes that decode outside
+/// printable ASCII as literal `%XX`, and a multi-byte UTF-8 sequence cannot
+/// spell an ASCII key at all. Such a key's value therefore survives in the
+/// diagnostic URL. This masker's contract covers ASCII (including twice
+/// percent-encoded ASCII) key names only; do not rely on `Debug` redaction for
+/// URLs whose keys use non-ASCII escapes.
 fn is_sensitive_param_key(key: &str) -> bool {
     let folded = key.to_ascii_lowercase();
     [
@@ -314,6 +356,59 @@ fn percent_decode(value: &str) -> String {
 /// The legitimate one- and two-level cases stay fully masked.
 pub(crate) const MAX_MASK_DEPTH: usize = 8;
 
+/// Mask userinfo in nested URLs before `&`/`;` pair separators are applied.
+///
+/// `mask_param_pairs` treats `;` as a query separator, but `;` is also a legal
+/// character inside a password. A nested value such as
+/// `next=https://user:p;a=s@host/p` would be cut into two pairs, so the
+/// recursive masker would never see the whole authority and the password would
+/// reach a log line. Rewrite only userinfo that actually contains a `;` and
+/// looks like `user:secret@plausible-host`: harmless `state=a@b` values and
+/// values without `;` stay verbatim, and the surrounding key/scheme is kept so
+/// the diagnostic URL remains traceable.
+fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
+    let mut out = String::with_capacity(pairs.len());
+    let mut rest = pairs;
+    while let Some(relative_at) = rest.find('@') {
+        let before = &rest[..relative_at];
+        // Pair/query/path boundaries cannot be part of userinfo. `;` and every
+        // '=' after the first are deliberately *not* boundaries: both may be
+        // part of a password.
+        let pair_start = before
+            .rfind(&['&', '?', '#', '/'][..])
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        // Everything after the last path/query delimiter is the authority
+        // candidate. Do not look for '=' here: a password may itself contain
+        // `a=s`, and treating that as the key/value boundary hid the real
+        // userinfo from this helper.
+        let (prefix_end, candidate) = if pair_start == 0 {
+            // Scheme-less authority: keep the `key=` prefix in the diagnostic
+            // output. The first '=' is the pair separator here; later '=' are
+            // part of the password and must not be treated as boundaries.
+            let head = before.find('=').map(|index| index + 1).unwrap_or(0);
+            (head, &before[head..])
+        } else {
+            (pair_start, &before[pair_start..])
+        };
+        let after = &rest[relative_at + 1..];
+        let host = after.split(&['/', '?', '#'][..]).next().unwrap_or("");
+        let has_secret = candidate.split_once(':').is_some_and(|(_, secret)| {
+            !secret.is_empty() && !secret.bytes().all(|byte| byte.is_ascii_digit())
+        });
+        if candidate.contains(';') && has_secret && host_with_optional_port_ok(host) {
+            out.push_str(&before[..prefix_end]);
+            out.push_str("[redacted]");
+            out.push('@');
+        } else {
+            out.push_str(&rest[..relative_at + 1]);
+        }
+        rest = &rest[relative_at + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Redact secret-bearing `key=value` pairs in a query or a fragment.
 ///
 /// A harmless key whose *value* is itself a URL is masked recursively: a
@@ -327,6 +422,11 @@ pub(crate) const MAX_MASK_DEPTH: usize = 8;
 /// Recursion is capped by [`MAX_MASK_DEPTH`]; `depth` counts already-entered
 /// nested URLs.
 fn mask_param_pairs(pairs: &str, depth: usize) -> String {
+    // A ';' may be part of a nested URL's userinfo (`next=https://u:p;a=s@host`).
+    // Mask that authority *before* splitting, otherwise the cut would leave the
+    // password in the diagnostic URL (see `mask_nested_userinfo_in_pairs`).
+    let pairs = mask_nested_userinfo_in_pairs(pairs);
+    let pairs = pairs.as_str();
     let mut out = String::with_capacity(pairs.len());
     // Split on either separator but keep the original delimiter in the
     // diagnostic output; a trailing separator leaves an empty final pair.

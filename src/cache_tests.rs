@@ -2355,3 +2355,119 @@ fn percent_decode_keeps_control_character_escapes_literal() {
     assert!(!masked.contains("SECRET_VALUE"), "{masked}");
     assert!(!masked.contains('\n'), "{masked}");
 }
+
+#[test]
+fn authority_start_accepts_uppercase_schemes_and_ignores_query_schemes() {
+    // A leading `://` is a scheme delimiter regardless of the scheme's case;
+    // a `://` inside a query is just text and must not move the authority scan
+    // (cache.rs:94-98).
+    assert!(super::is_scheme("HTTPS"));
+    assert!(super::is_scheme("hTtP+1.0-x"));
+    assert!(!super::is_scheme("1https"));
+    assert!(!super::is_scheme("https:"));
+    assert!(!super::is_scheme(""));
+
+    assert_eq!(super::authority_start("HTTPS://user:p@host/p"), 8);
+    assert_eq!(super::authority_start("//user:p@host/p"), 2);
+    assert_eq!(super::authority_start("user:p@host/p"), 0);
+    assert_eq!(
+        super::authority_start("//user:SECRET@host/p?next=https://cb.example.com/done"),
+        2,
+        "the nested query scheme must not become the outer scheme"
+    );
+    assert_eq!(
+        super::authority_start("user:SECRET@host/p?next=https://cb.example.com/done"),
+        0
+    );
+    assert_eq!(
+        super::authority_start("HTTPS://host?next=https://cb.example.com"),
+        8
+    );
+}
+
+#[test]
+fn uppercase_scheme_and_query_scheme_userinfo_are_masked() {
+    for (url, expected) in [
+        (
+            "HTTPS://user:UPPER_SCHEME_SECRET@host.example.com/p",
+            "HTTPS://[redacted]@host.example.com/p",
+        ),
+        (
+            "//user:REL_SECRET@host.example.com/p?next=https://cb.example.com/done",
+            "//[redacted]@host.example.com/p?next=https://cb.example.com/done",
+        ),
+        (
+            "user:NO_SCHEME_SECRET@host.example.com/p?next=https://cb.example.com/done",
+            "[redacted]@host.example.com/p?next=https://cb.example.com/done",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+    }
+
+    // The Debug masker reaches the same helper for the stored server URL.
+    let url = "HTTPS://user:DEBUG_UPPER_SECRET@host.example.com/p?next=https://cb.example.com/done";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("DEBUG_UPPER_SECRET"), "{rendered}");
+    assert!(
+        rendered.contains("HTTPS://[redacted]@host.example.com"),
+        "{rendered}"
+    );
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn semicolon_in_nested_userinfo_is_masked_before_pair_splitting() {
+    // A ';' is a pair separator, but it is also legal inside a password. A
+    // nested URL in a value must have its userinfo masked *before* the pair is
+    // split, otherwise the credential survives in the diagnostic URL.
+    let with_scheme = "https://vault.example.com/login?next=https://user:SEMI_USER_SECRET;a=s@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(with_scheme);
+    assert!(!masked.contains("SEMI_USER_SECRET"), "{masked}");
+    assert!(
+        masked.contains("next=https://[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    let without_scheme =
+        "https://vault.example.com/login?next=user:NO_SCHEME_SEMI;a=s@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(without_scheme);
+    assert!(!masked.contains("NO_SCHEME_SEMI"), "{masked}");
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // A real ';' separator after a harmless '@' is still applied.
+    let harmless_at = "https://vault.example.com/p?state=a@b;token=SEMI_AFTER_AT";
+    let masked = super::mask_url_secrets(harmless_at);
+    assert!(!masked.contains("SEMI_AFTER_AT"), "{masked}");
+    assert!(masked.contains("state=a@b;token=[redacted]"), "{masked}");
+
+    // Debug goes through the same path for the stored server URL.
+    let cache = SyncCache::from_body(body(), with_scheme).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("SEMI_USER_SECRET"), "{rendered}");
+    assert_eq!(cache.server_url, with_scheme);
+}
+
+#[test]
+fn non_ascii_percent_escaped_keys_are_a_documented_masking_limit() {
+    // `percent_decode` keeps non-ASCII escapes as `%XX`, so an ASCII key name
+    // split by such an escape never matches the sensitive-name list. This is a
+    // known constraint of the Debug redactor, not a failure of the ASCII path.
+    let url = "https://vault.example.com/sync?%74%E3%81%82oken=NON_ASCII_KEY_SECRET&state=ok";
+    let masked = super::mask_url_secrets(url);
+    assert!(
+        masked.contains("NON_ASCII_KEY_SECRET"),
+        "documented limit: {masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    let ascii = "https://vault.example.com/sync?token=NON_ASCII_KEY_SECRET&state=ok";
+    let masked = super::mask_url_secrets(ascii);
+    assert!(!masked.contains("NON_ASCII_KEY_SECRET"), "{masked}");
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+}
