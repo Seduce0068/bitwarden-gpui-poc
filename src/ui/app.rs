@@ -106,32 +106,57 @@ pub(super) fn unsaved_panel_exit_status_for(
     }
 }
 
+/// Which text-edit mode, if any, a panel transition just left.
+///
+/// `set_panel` clears all three modes before switching panels. Passing the
+/// actual mode (instead of a single `was_editing` flag) lets the status bar
+/// restore the guidance belonging to the mode the user just finished: leaving
+/// a settings field must not be reported as a finished search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ExitedEditMode {
+    /// No mode was active; the caller keeps its current status.
+    None,
+    /// A lock-screen auth field was being edited.
+    AuthField,
+    /// A settings field was being edited.
+    SettingsField,
+    /// A vault search was active.
+    Search,
+}
+
 /// Status installed by `set_panel` when it drops an active text-edit mode.
 ///
-/// `set_panel` clears `editing`, the auth field and search mode so no key is
-/// swallowed by the destination panel. Each of those modes installs the
-/// "入力中:" guidance via [`crate::ui::input::text_edit_start_status`], so
-/// leaving one without replacing that text leaves stale guidance on screen.
-/// `None` means no mode was active and the caller must keep its current status
-/// (a login notice, an audit-focus message, ...). Kept pure so the contract can
+/// Each cleared mode installs the "入力中:" guidance via
+/// [`crate::ui::input::text_edit_start_status`], so leaving one without
+/// replacing that text leaves stale guidance on screen. The status is chosen
+/// from the mode that was actually exited: leaving a settings/auth field keeps
+/// *its* confirmation guidance even when the destination is the vault panel.
+/// The destination panel only refines the search case (audit row state on the
+/// audit panel, settings feedback on a settings-owning panel).
+/// [`ExitedEditMode::None`] means the caller must keep its current status (a
+/// login notice, an audit-focus message, ...). Kept pure so the contract can
 /// be tested without a GPUI window (this crate does not enable gpui's
 /// `test-support` feature).
 pub(super) fn panel_transition_status_after_edit(
     panel: Panel,
-    was_editing: bool,
+    exited: ExitedEditMode,
     visible_count: usize,
     dirty: bool,
 ) -> Option<String> {
-    if !was_editing {
-        return None;
-    }
-    Some(match panel {
-        Panel::Audit => audit_no_selection_status(dirty),
-        Panel::Settings | Panel::Generator => {
-            crate::ui::input::settings_edit_finished_status(dirty)
+    match exited {
+        ExitedEditMode::None => None,
+        ExitedEditMode::AuthField => Some(crate::ui::input::auth_edit_finished_status(dirty)),
+        ExitedEditMode::SettingsField => {
+            Some(crate::ui::input::settings_edit_finished_status(dirty))
         }
-        Panel::Vault => crate::ui::input::search_finished_status(visible_count, dirty),
-    })
+        ExitedEditMode::Search => Some(match panel {
+            Panel::Audit => audit_no_selection_status(dirty),
+            Panel::Settings | Panel::Generator => {
+                crate::ui::input::settings_edit_finished_status(dirty)
+            }
+            Panel::Vault => crate::ui::input::search_finished_status(visible_count, dirty),
+        }),
+    }
 }
 
 /// Finish search on a panel transition, but only when a search is active.
@@ -258,6 +283,27 @@ pub(super) fn favorite_toggle_status(favorite: bool, dirty: bool) -> String {
         "お気に入りを解除にしました"
     };
     status_with_unsaved(base, dirty)
+}
+
+/// Status after cycling the sidebar filter, keeping the unsaved marker.
+///
+/// `CycleFilter` used to leave the previous status on screen. Building the
+/// text from the filter that is now active (and its folder names) makes the
+/// change observable and keeps the contract testable without a GPUI window.
+pub(super) fn filter_cycle_status(
+    filter: &Filter,
+    folders: &[crate::model::Folder],
+    dirty: bool,
+) -> String {
+    status_with_unsaved(
+        &format!("フィルターを切り替えました: {}", filter.label(folders)),
+        dirty,
+    )
+}
+
+/// Status after cycling the sort key, keeping the unsaved marker.
+pub(super) fn sort_cycle_status(sort: SortKey, dirty: bool) -> String {
+    status_with_unsaved(&format!("並び順を切り替えました: {}", sort.label()), dirty)
 }
 
 /// Warning shown when Esc is pressed while settings are still unsaved.
@@ -612,10 +658,20 @@ impl BitwardenApp {
     /// every key in the destination panel ("dead keys").
     pub(super) fn set_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
         let exit_warning = unsaved_panel_exit_status_for(self.panel, panel, self.settings_dirty);
-        // Capture the modes *before* clearing them: each one installed the
-        // "入力中:" status, so leaving one must restore a normal status.
-        let was_editing =
-            self.editing.is_some() || self.auth.field().is_some() || self.view.searching;
+        // Capture the mode *before* clearing it: each one installed the
+        // "入力中:" status, so leaving one must restore that mode's status,
+        // not a status guessed from the destination panel alone.
+        // (The modes are mutually exclusive in practice; the order below just
+        // makes the capture deterministic if a stale state holds more than one.)
+        let exited_edit_mode = if self.editing.is_some() {
+            ExitedEditMode::SettingsField
+        } else if self.auth.field().is_some() {
+            ExitedEditMode::AuthField
+        } else if self.view.searching {
+            ExitedEditMode::Search
+        } else {
+            ExitedEditMode::None
+        };
         self.editing = None;
         self.auth.take_field();
         finish_search_on_panel_transition(&mut self.view);
@@ -627,7 +683,7 @@ impl BitwardenApp {
             self.status = status.to_string();
         } else if let Some(status) = panel_transition_status_after_edit(
             self.panel,
-            was_editing,
+            exited_edit_mode,
             self.view.visible_items().len(),
             self.settings_dirty,
         ) {
@@ -791,6 +847,13 @@ impl BitwardenApp {
     pub(super) fn cycle_filter(&mut self, cx: &mut Context<Self>) {
         self.view.cycle_filter();
         self.sync_totp_to_selection();
+        // Report the filter that is now active, not whatever the previous
+        // action happened to write into the status bar.
+        self.status = filter_cycle_status(
+            &self.view.filter,
+            &self.view.vault.folders,
+            self.settings_dirty,
+        );
         cx.notify();
     }
 
@@ -1031,6 +1094,65 @@ mod tests {
             status_with_unsaved(crate::ui::logic::no_selection_status(), true)
                 .contains("[未保存の設定変更があります]")
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn cycle_statuses_report_the_current_filter_and_sort() {
+        use crate::model::{Folder, ItemKind};
+
+        let folders = [Folder {
+            id: "f1".into(),
+            name: "仕事".into(),
+        }];
+        let all = filter_cycle_status(&Filter::All, &folders, false);
+        assert_eq!(all, "フィルターを切り替えました: すべてのアイテム");
+        let favorites = filter_cycle_status(&Filter::Favorites, &folders, false);
+        assert_eq!(favorites, "フィルターを切り替えました: お気に入り");
+        assert_ne!(all, favorites);
+        assert_eq!(
+            filter_cycle_status(&Filter::Kind(ItemKind::Login), &folders, false),
+            "フィルターを切り替えました: ログイン"
+        );
+        assert_eq!(
+            filter_cycle_status(&Filter::Folder("f1".into()), &folders, false),
+            "フィルターを切り替えました: 仕事"
+        );
+        assert!(
+            filter_cycle_status(&Filter::Folder("missing".into()), &folders, false)
+                .contains("不明なフォルダ")
+        );
+
+        // After a real cycle the status follows the filter now in effect.
+        let mut view = VaultViewState::new();
+        let before = filter_cycle_status(&view.filter, &folders, false);
+        view.cycle_filter();
+        let after = filter_cycle_status(&view.filter, &folders, false);
+        assert_ne!(before, after);
+        assert_eq!(after, favorites);
+
+        let dirty = filter_cycle_status(&Filter::Favorites, &folders, true);
+        assert_eq!(dirty, status_with_unsaved(&favorites, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
+
+        let asc = sort_cycle_status(SortKey::NameAsc, false);
+        assert_eq!(asc, "並び順を切り替えました: 名前 ↑");
+        assert_eq!(
+            sort_cycle_status(SortKey::NameDesc, false),
+            "並び順を切り替えました: 名前 ↓"
+        );
+        assert_eq!(
+            sort_cycle_status(SortKey::RecentlyModified, false),
+            "並び順を切り替えました: 更新が新しい順"
+        );
+        assert_eq!(
+            sort_cycle_status(SortKey::Kind, false),
+            "並び順を切り替えました: 種類"
+        );
+        assert_eq!(
+            sort_cycle_status(SortKey::NameAsc, true),
+            status_with_unsaved(&asc, true)
+        );
+        assert!(sort_cycle_status(SortKey::NameAsc, true).contains("[未保存の設定変更があります]"));
     }
 
     #[::core::prelude::v1::test]
@@ -1478,23 +1600,63 @@ mod tests {
             Panel::Settings,
         ] {
             assert_eq!(
-                panel_transition_status_after_edit(panel, false, 3, false),
+                panel_transition_status_after_edit(panel, ExitedEditMode::None, 3, false),
                 None,
                 "{panel:?} without an edit mode must not overwrite the status"
             );
         }
 
         for dirty in [false, true] {
-            let vault = panel_transition_status_after_edit(Panel::Vault, true, 3, dirty).unwrap();
+            // Leaving a search keeps the count-aware vault message (or the
+            // audit message when the audit panel is the destination).
+            let vault =
+                panel_transition_status_after_edit(Panel::Vault, ExitedEditMode::Search, 3, dirty)
+                    .unwrap();
             assert_eq!(vault, crate::ui::input::search_finished_status(3, dirty));
             assert!(!vault.contains("入力中"), "{vault}");
 
-            let audit = panel_transition_status_after_edit(Panel::Audit, true, 3, dirty).unwrap();
+            let audit =
+                panel_transition_status_after_edit(Panel::Audit, ExitedEditMode::Search, 3, dirty)
+                    .unwrap();
             assert_eq!(audit, audit_no_selection_status(dirty));
             assert!(!audit.contains("入力中"), "{audit}");
 
+            // A confirmed search with no visible row gets the dedicated
+            // message, not a prompt to select a non-existent row.
+            let empty =
+                panel_transition_status_after_edit(Panel::Vault, ExitedEditMode::Search, 0, dirty)
+                    .unwrap();
+            assert_eq!(empty, crate::ui::input::search_finished_status(0, dirty));
+            assert!(empty.contains("0件"), "{empty}");
+
+            // A search left for a settings-owning panel keeps the settings
+            // feedback (the destination still owns `w`/`d`).
             for panel in [Panel::Settings, Panel::Generator] {
-                let status = panel_transition_status_after_edit(panel, true, 3, dirty).unwrap();
+                let status =
+                    panel_transition_status_after_edit(panel, ExitedEditMode::Search, 3, dirty)
+                        .unwrap();
+                assert_eq!(
+                    status,
+                    crate::ui::input::settings_edit_finished_status(dirty),
+                    "{panel:?}"
+                );
+            }
+
+            // Leaving a settings field keeps its save/discard guidance,
+            // whichever panel is the destination.
+            for panel in [
+                Panel::Vault,
+                Panel::Audit,
+                Panel::Settings,
+                Panel::Generator,
+            ] {
+                let status = panel_transition_status_after_edit(
+                    panel,
+                    ExitedEditMode::SettingsField,
+                    3,
+                    dirty,
+                )
+                .unwrap();
                 assert_eq!(
                     status,
                     crate::ui::input::settings_edit_finished_status(dirty),
@@ -1503,11 +1665,60 @@ mod tests {
                 assert!(!status.contains("入力中"), "{status}");
             }
 
-            // A confirmed search with no visible row gets the dedicated
-            // message, not a prompt to select a non-existent row.
-            let empty = panel_transition_status_after_edit(Panel::Vault, true, 0, dirty).unwrap();
-            assert_eq!(empty, crate::ui::input::search_finished_status(0, dirty));
-            assert!(empty.contains("0件"), "{empty}");
+            // Leaving an auth field restores the lock-screen hint.
+            let auth = panel_transition_status_after_edit(
+                Panel::Vault,
+                ExitedEditMode::AuthField,
+                3,
+                dirty,
+            )
+            .unwrap();
+            assert_eq!(auth, crate::ui::input::auth_edit_finished_status(dirty));
+            assert!(!auth.contains("入力中"), "{auth}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_transition_status_distinguishes_the_exited_edit_mode() {
+        // The old `was_editing: bool` made every edit mode landing on the
+        // vault panel report a finished search, hiding the settings save
+        // hint. The three modes must now produce three different statuses.
+        let search =
+            panel_transition_status_after_edit(Panel::Vault, ExitedEditMode::Search, 3, false)
+                .unwrap();
+        let settings = panel_transition_status_after_edit(
+            Panel::Vault,
+            ExitedEditMode::SettingsField,
+            3,
+            false,
+        )
+        .unwrap();
+        let auth =
+            panel_transition_status_after_edit(Panel::Vault, ExitedEditMode::AuthField, 3, false)
+                .unwrap();
+        assert_ne!(search, settings);
+        assert_ne!(search, auth);
+        assert_ne!(settings, auth);
+        assert_eq!(search, crate::ui::input::search_finished_status(3, false));
+        assert_eq!(
+            settings,
+            crate::ui::input::settings_edit_finished_status(false)
+        );
+        assert_eq!(auth, crate::ui::input::auth_edit_finished_status(false));
+        assert!(settings.contains("w: 保存 / d: 破棄"), "{settings}");
+        assert!(!settings.contains("項目を選択してください"), "{settings}");
+        assert!(auth.contains("F1: フォーカス復帰"), "{auth}");
+
+        // The unsaved marker survives every mode's restored status.
+        for mode in [
+            ExitedEditMode::Search,
+            ExitedEditMode::SettingsField,
+            ExitedEditMode::AuthField,
+        ] {
+            let clean = panel_transition_status_after_edit(Panel::Vault, mode, 3, false).unwrap();
+            let dirty = panel_transition_status_after_edit(Panel::Vault, mode, 3, true).unwrap();
+            assert_eq!(dirty, status_with_unsaved(&clean, true), "{mode:?}");
+            assert!(dirty.contains("[未保存の設定変更があります]"), "{mode:?}");
         }
     }
 

@@ -145,6 +145,17 @@ pub(super) fn seconds_adjust_status(dirty: bool) -> String {
     time_adjust_status("秒数", dirty)
 }
 
+/// Status after trying to copy a value the generator has not produced yet.
+///
+/// [`crate::ui::logic::no_generated_status`] names the missing value but does
+/// not compose the persistent unsaved-settings marker. Writing it straight
+/// into `self.status` made the marker disappear on this copy attempt, unlike
+/// every other transient status. Kept pure so the contract can be tested
+/// without a GPUI window.
+pub(super) fn no_generated_copy_status(kind: &str, dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved(&crate::ui::logic::no_generated_status(kind), dirty)
+}
+
 /// Status after `+`/`-` adjusts the audit thresholds.
 ///
 /// `refresh_audit` intentionally keeps the settings panel's own status (see
@@ -290,7 +301,7 @@ impl BitwardenApp {
                 if let Some(value) = self.generator.last_password.clone() {
                     self.copy_to_clipboard(&value, cx);
                 } else {
-                    self.status = crate::ui::logic::no_generated_status("パスワード");
+                    self.status = no_generated_copy_status("パスワード", self.settings_dirty);
                     cx.notify();
                 }
             }
@@ -298,7 +309,7 @@ impl BitwardenApp {
                 if let Some(value) = self.generator.last_passphrase.clone() {
                     self.copy_to_clipboard(&value, cx);
                 } else {
-                    self.status = crate::ui::logic::no_generated_status("パスフレーズ");
+                    self.status = no_generated_copy_status("パスフレーズ", self.settings_dirty);
                     cx.notify();
                 }
             }
@@ -309,6 +320,10 @@ impl BitwardenApp {
             UiAction::CycleSort => {
                 cycle_sort(&mut self.view);
                 self.sync_totp_to_selection();
+                // The sort changed but no status was written, leaving the
+                // previous action's text on screen. Report the active sort.
+                self.status =
+                    crate::ui::app::sort_cycle_status(self.view.sort, self.settings_dirty);
                 cx.notify();
             }
             UiAction::StartSearch => {
@@ -438,6 +453,53 @@ mod tests {
             before_rewind + 1,
             "a sort change rewinds like filter and search changes"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn cycle_sort_status_follows_the_new_sort_key() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        let before_sort = view.sort;
+        let before = crate::ui::app::sort_cycle_status(before_sort, false);
+        cycle_sort(&mut view);
+        let after = crate::ui::app::sort_cycle_status(view.sort, false);
+
+        assert_ne!(before, after, "a sort change must produce a new status");
+        assert_eq!(
+            after,
+            crate::ui::app::sort_cycle_status(before_sort.next(), false),
+            "the status must describe the sort now in effect"
+        );
+        assert_eq!(view.sort, before_sort.next());
+        assert!(after.contains("並び順を切り替えました"), "{after}");
+        assert!(after.contains(view.sort.label()), "{after}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn no_generated_copy_status_keeps_the_unsaved_marker() {
+        for kind in ["パスワード", "パスフレーズ"] {
+            let clean = no_generated_copy_status(kind, false);
+            assert_eq!(clean, crate::ui::logic::no_generated_status(kind));
+            assert!(!clean.contains("[未保存"), "{clean}");
+
+            let dirty = no_generated_copy_status(kind, true);
+            assert_eq!(
+                dirty,
+                crate::ui::app::status_with_unsaved(&clean, true),
+                "{kind}"
+            );
+            assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+            assert!(dirty.contains("生成パネルで生成してください"), "{dirty}");
+        }
     }
 
     #[::core::prelude::v1::test]

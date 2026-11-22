@@ -389,3 +389,32 @@ fn otpauth_digits_and_period_boundaries_are_enforced() {
         assert!(tick.code.is_none(), "{bad}");
     }
 }
+
+#[test]
+fn steam_code_that_is_all_digits_is_grouped_as_a_number() {
+    const STEAM: &str = "steam://GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    // Steam's alphabet contains digits as well as letters, so a five-character
+    // code can be all digits. Search distinct 30-second windows
+    // deterministically instead of relying on a lucky fixed timestamp.
+    let found = (0..20_000u64)
+        .map(|window| window * 30)
+        .find_map(|time| {
+            let code = code_at(STEAM, time).unwrap();
+            code.code()
+                .chars()
+                .all(|ch| ch.is_ascii_digit())
+                .then_some((time, code.code().to_string()))
+        })
+        .expect("an all-digit Steam code must occur within 20_000 windows");
+
+    let (time, raw) = found;
+    assert_eq!(raw.len(), 5, "{time}: {raw}");
+    let code = code_at(STEAM, time).unwrap();
+    // `Code::grouped` (totp.rs:71-82) splits *any* all-digit code longer than
+    // three characters in half, so a five-digit Steam code becomes 2 + 3.
+    // This is the current presentation contract; the usual letter-bearing
+    // Steam code is deliberately left ungrouped by the sibling test.
+    assert_eq!(code.grouped(), format!("{} {}", &raw[..2], &raw[2..]));
+    assert_ne!(code.grouped(), raw);
+    assert_eq!(code.grouped().matches(' ').count(), 1);
+}

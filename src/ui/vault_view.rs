@@ -158,7 +158,14 @@ impl VaultViewState {
             // last one, matching the audit panel's keyboard behaviour.
             return Some(if delta >= 0 { 0 } else { visible.len() - 1 });
         };
-        Some((current as isize + delta).clamp(0, visible.len() as isize - 1) as usize)
+        // `delta` is caller-controlled (a key repeat can carry an extreme
+        // value), so add saturatingly: `isize::MAX`/`MIN` must clamp to the
+        // list edge instead of overflowing in a debug build.
+        Some(
+            (current as isize)
+                .saturating_add(delta)
+                .clamp(0, visible.len() as isize - 1) as usize,
+        )
     }
 
     /// Cycle to the next filter, clearing the selection and rewinding the list.
@@ -281,6 +288,40 @@ mod tests {
         assert_eq!(single.next_index(-1), Some(0));
         assert_eq!(VaultViewState::new().next_index(1), None);
         assert_eq!(VaultViewState::new().next_index(-1), None);
+    }
+
+    #[test]
+    fn next_index_saturates_at_the_isize_bounds() {
+        // A delta of isize::MAX/MIN must clamp to the last/first visible row;
+        // a plain `current as isize + delta` overflows here in debug builds.
+        let mut state = state_with_items();
+        state.selected_id = Some("b".into()); // visible index 1 of [a, b]
+        assert_eq!(state.next_index(isize::MAX), Some(1));
+        assert_eq!(state.next_index(isize::MIN), Some(0));
+
+        state.selected_id = Some("a".into()); // visible index 0
+        assert_eq!(state.next_index(isize::MAX), Some(1));
+        assert_eq!(state.next_index(isize::MIN), Some(0));
+
+        // Without a selection the sign alone picks the starting edge; these
+        // extremes must take the same branch as any other large delta.
+        let mut no_selection = state_with_items();
+        no_selection.selected_id = None;
+        assert_eq!(no_selection.next_index(isize::MAX), Some(0));
+        assert_eq!(no_selection.next_index(isize::MIN), Some(1));
+
+        // A single-row view saturates to that row in both directions.
+        let mut single = VaultViewState::new();
+        single.vault.items.push(VaultItem::new(
+            "s",
+            "Solo",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        single.selected_id = Some("s".into());
+        assert_eq!(single.next_index(isize::MAX), Some(0));
+        assert_eq!(single.next_index(isize::MIN), Some(0));
     }
 
     #[test]

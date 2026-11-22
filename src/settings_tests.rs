@@ -2031,3 +2031,73 @@ fn load_advisories_messages_match_exactly() {
     std::fs::write(&path, br#"{"schema_version":1,"email":"e@example.com"}"#).unwrap();
     assert_eq!(load_advisories(&path), Vec::<String>::new());
 }
+
+#[test]
+fn multibyte_utf8_at_the_read_limit_is_classified_by_char_boundaries() {
+    // `read_bounded_settings_text` takes MAX_SETTINGS_BYTES + 1 bytes and then
+    // compares the decoded string's length (settings.rs:327-334). A multibyte
+    // character straddling that *take* boundary leaves an incomplete UTF-8
+    // sequence, so `read_to_string` fails and the file is ReadFailed. When the
+    // boundary falls between characters, MAX+1 decodable bytes are read and
+    // the file is TooLarge. Every file below is valid UTF-8 in full; only the
+    // truncation distinguishes the two classifications.
+    const MAX: usize = MAX_SETTINGS_BYTES as usize;
+
+    fn content(char_start: usize, total: usize) -> Vec<u8> {
+        let prefix = br#"{"email":""#;
+        let suffix = br#""}"#;
+        assert!(char_start >= prefix.len());
+        // Leading/trailing spaces stay outside the JSON string, so the field
+        // itself is exactly one multibyte character in every variant.
+        let mut bytes = vec![b' '; char_start - prefix.len()];
+        bytes.extend_from_slice(prefix);
+        bytes.extend_from_slice("あ".as_bytes()); // 3 bytes: E3 81 82
+        bytes.extend_from_slice(suffix);
+        bytes.resize(total, b' ');
+        bytes
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+
+    // (1) The character is fully inside the cap: the whole file is read and
+    //     parsed, even though the final character is multibyte.
+    let at_limit = content(MAX - 5, MAX);
+    assert_eq!(at_limit.len(), MAX);
+    assert!(std::str::from_utf8(&at_limit).is_ok());
+    std::fs::write(&path, &at_limit).unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "あ");
+    assert_eq!(loaded.email.encode_utf16().count(), 1);
+
+    // (2) One byte over the cap, with the whole character still inside the
+    //     take window: MAX+1 decodable bytes -> TooLarge, not ReadFailed.
+    let one_over = content(MAX - 4, MAX + 1);
+    assert_eq!(one_over.len(), MAX + 1);
+    assert!(std::str::from_utf8(&one_over).is_ok());
+    std::fs::write(&path, &one_over).unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path).err(),
+        Some(SettingsLoadError::TooLarge)
+    );
+
+    // (3) Same content, but the character starts one byte later, so the
+    //     take boundary cuts through its 3-byte sequence. The file itself is
+    //     valid UTF-8; only its first MAX+1 bytes are not.
+    let split = content(MAX - 1, MAX + 4);
+    assert_eq!(split.len(), MAX + 4);
+    assert!(
+        std::str::from_utf8(&split).is_ok(),
+        "file must be valid UTF-8"
+    );
+    assert!(
+        std::str::from_utf8(&split[..MAX + 1]).is_err(),
+        "take(MAX+1) must end mid-character"
+    );
+    std::fs::write(&path, &split).unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path).err(),
+        Some(SettingsLoadError::ReadFailed)
+    );
+    assert_eq!(Settings::load(&path), Settings::default());
+}

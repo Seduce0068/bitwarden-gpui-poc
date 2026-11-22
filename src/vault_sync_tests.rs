@@ -799,6 +799,9 @@ fn undecryptable_uri_becomes_a_marker_and_is_audited_as_uninspectable() {
     let uris = model.items[0].uris();
     assert_eq!(uris.len(), 1);
     assert_eq!(uris[0].uri, UNDECRYPTABLE_URI);
+    // A failed URI decryption has no wire `match` value to carry, so the
+    // marker is emitted with `match_type: None` (vault_sync.rs:313-318).
+    assert_eq!(uris[0].match_type, None);
 
     let report = crate::health::audit(
         &model,

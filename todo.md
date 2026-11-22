@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第73弾で 11 件すべてを完了）。
+なし（第74弾で 10 件すべてを完了）。
 
 ## 完了
 
+- [x] 第74弾（16 担当・18 回目）の指摘 10 件を完結（2026-11-23）
+  - `next_index_in` のオーバーフロー、編集モード別の遷移 status、
+    フィルタ/ソートの status、未生成コピーの未保存マーカーを修正。
+  - マルチバイト UTF-8 の上限境界、SyncDetail 往復、hostname 正規化、
+    read_bounded の消費量、URI マーカーの match_type、folder_id と
+    match_enum、エントロピー丸め、Steam 数字コードをテスト。
+  - I/O と RNG の注入シーム不在を既知制約として doc 化。
+  - ADR のアカウント照合記述を更新。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（679 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第73弾（16 担当・17 回目）の指摘 11 件を完結（2026-11-23）
   - キャッシュ復元へ client_id 由来のアカウント照合を追加。
   - IPv6 host の URL マスク、set_panel の検索解除、閾値変更 status、

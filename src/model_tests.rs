@@ -1567,24 +1567,36 @@ fn every_item_data_variant_round_trips_through_serde() {
 }
 
 #[test]
-fn login_uri_match_enum_maps_wire_zero_one_and_two() {
-    // The two low wire values are the ones the enum mapping is most likely to
-    // silently collapse into the default; pin each one and its serde form
-    // (model.rs:149-168).
+fn login_uri_match_enum_maps_every_wire_value() {
+    // Every wire number must reach its own enum variant, not collapse into
+    // the low-value defaults; pin each one and its serde form
+    // (model.rs:149-168). Wire 3 and 5 are the upper-bound regressions: they
+    // are the last two values `from_wire` accepts.
     for (wire, expected) in [
         (0, openwarden::UriMatch::Domain),
         (1, openwarden::UriMatch::Host),
         (2, openwarden::UriMatch::StartsWith),
+        (3, openwarden::UriMatch::Exact),
+        (4, openwarden::UriMatch::RegularExpression),
+        (5, openwarden::UriMatch::Never),
     ] {
         let uri = LoginUri {
             uri: "https://example.com".into(),
             match_type: Some(wire),
         };
         assert_eq!(uri.match_enum(), Some(expected), "wire {wire}");
+        assert_eq!(expected.to_wire(), wire);
         let json = serde_json::to_string(&uri).unwrap();
         let restored: LoginUri = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, uri, "{json}");
         assert_eq!(restored.match_enum(), Some(expected));
+    }
+    for unknown in [6u8, 255] {
+        let uri = LoginUri {
+            uri: "https://example.com".into(),
+            match_type: Some(unknown),
+        };
+        assert_eq!(uri.match_enum(), None, "wire {unknown}");
     }
     assert_eq!(LoginUri::new("https://example.com").match_enum(), None);
 }
@@ -1803,4 +1815,48 @@ fn debug_distinguishes_an_empty_totp_from_a_populated_one() {
     assert!(populated.contains("totp: \"[redacted]\""), "{populated}");
     assert!(!populated.contains("JBSWY3DPEHPK3PXP"), "{populated}");
     assert!(!populated.contains("totp: \"\""), "{populated}");
+}
+
+#[test]
+fn an_unknown_folder_id_is_never_counted_but_still_filters() {
+    // `folder_counts` walks the declared folders (model.rs:913-926), so a
+    // dangling `folder_id` is never materialised as a bucket and its item is
+    // counted nowhere. `Filter::Folder`, however, compares the raw id, so the
+    // item stays reachable through that filter and the label degrades
+    // gracefully (model.rs:818-841).
+    let mut vault = Vault::new();
+    vault.folders = vec![
+        Folder {
+            id: "f1".into(),
+            name: "仕事".into(),
+        },
+        Folder {
+            id: "f2".into(),
+            name: "私用".into(),
+        },
+    ];
+    let mut in_f1 = login("1", "In f1", "a", "pw", "https://one.example.com");
+    in_f1.folder_id = Some("f1".into());
+    let mut orphan = login("2", "Orphan", "b", "pw", "https://two.example.com");
+    orphan.folder_id = Some("ghost".into());
+    let loose = login("3", "Loose", "c", "pw", "https://three.example.com");
+    vault.items = vec![in_f1, orphan, loose];
+
+    assert_eq!(
+        vault.folder_counts(),
+        vec![("f1".to_string(), 1), ("f2".to_string(), 0)]
+    );
+    assert_eq!(vault.folder_name("ghost"), None);
+    assert_eq!(vault.len(), 3, "a dangling id must not drop the item");
+
+    let ghost = Filter::Folder("ghost".into());
+    assert!(ghost.accepts(vault.item("2").unwrap()));
+    assert!(!ghost.accepts(vault.item("3").unwrap()));
+    assert!(!Filter::NoFolder.accepts(vault.item("2").unwrap()));
+    assert!(Filter::NoFolder.accepts(vault.item("3").unwrap()));
+    assert_eq!(ghost.label(&vault.folders), "(不明なフォルダ)");
+
+    let shown = vault.view(&ghost, "", SortKey::NameAsc);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].id, "2");
 }

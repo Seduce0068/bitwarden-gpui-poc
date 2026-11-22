@@ -129,7 +129,8 @@ API key はテスト専用アカウントで使用すること（権限範囲の
 接続した。`authenticate_inner` は `sync_body()` の失敗、または取得した body の
 パース失敗時に `cache::cached_sync_for_detailed` でプラットフォームのキャッシュ
 ディレクトリ（旧設定ディレクトリは読み取り専用フォールバック）から暗号化済み
-body を読み出し、サーバー URL を照合して `SyncData` に戻す。復号には
+body を読み出し、サーバー URL と client_id 由来のアカウント id を照合して
+`SyncData` に戻す。復号には
 生セッションの protected key を使うため、キャッシュは鍵素材を一切提供しない
 （保存前に `profile.key` / `privateKey` を除去済み）。復元したかどうかは
 `AuthenticatedVault::from_cache` に記録する。
@@ -148,9 +149,11 @@ body を読み出し、サーバー URL を照合して `SyncData` に戻す。�
 `from_cache` はログイン成功ステータスへ反映され、復元データが最新でない
 可能性を利用者に通知する。
 
-オフライン復元の未解決点: 同期失敗時には新しい user id が得られないため
-キャッシュのアカウント照合ができず、同一サーバーの別アカウントのキャッシュを
-読んでも検出できない（鍵が一致しないため復号側で失敗する）。
+オフライン復元のアカウント照合: 同期失敗時に fresh な profile id は得られない
+ため、personal API key の `client_id`（`user.<uuid>`）からアカウント id を
+抽出してキャッシュと照合する。prefix がない場合や id が空の場合は
+fail-closed で復元しない。同一サーバーの別アカウントのキャッシュは
+`UserMismatch` として拒否される。
 キャッシュには取得時刻（Unix 秒）と 7 日間の有効期限を設けた。期限切れは
 復元に使わず理由を表示する。旧ビルドの無印キャッシュは best-effort で
 許可する（writer が未接続のため全既存ファイルが該当する）。

@@ -296,8 +296,28 @@ impl Strength {
 }
 
 /// The entropy of a drawn password, for the strength meter.
+///
+/// For a digits-only alphabet this mirrors the health audit's numeric-PIN
+/// model, which rounds the same `entropy_bits(10, len)` value to whole bits
+/// (`crate::health::estimate_entropy`). Without that mirror a 12-digit decimal
+/// password is 39.86… bits here, so `Strength::from_bits` calls it `Weak`
+/// while the UI prints "40 bit" and the audit's rounded 40 bits are no longer
+/// below its weak threshold. Rounding only this category keeps all three
+/// surfaces on the same side of the 40-bit boundary; mixed-class alphabets
+/// keep the unrounded estimate used by the rest of the generator contract.
+///
+/// Known constraint: the audit always models an all-digit vault password with
+/// the full 10-symbol pool, even when `avoid_ambiguous` removed `0`/`1` from
+/// the drawn alphabet. The rounded value therefore follows the audit's
+/// classification rather than the narrowed pool; this is intentional so the
+/// strength label cannot disagree with the report.
 pub fn password_entropy(settings: &PasswordSettings) -> f64 {
-    entropy_bits(settings.alphabet().chars().count(), settings.length)
+    let bits = entropy_bits(settings.alphabet().chars().count(), settings.length);
+    if !settings.lowercase && !settings.uppercase && settings.digits && !settings.symbols {
+        bits.round()
+    } else {
+        bits
+    }
 }
 
 /// The entropy of a drawn passphrase.
@@ -322,3 +342,49 @@ pub fn passphrase_entropy(settings: &PassphraseSettings) -> f64 {
 #[cfg(test)]
 #[path = "generator_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod strength_alignment_tests {
+    use super::*;
+
+    #[test]
+    fn twelve_decimal_digits_agree_between_meter_and_audit() {
+        let digits = PasswordSettings {
+            length: 12,
+            lowercase: false,
+            uppercase: false,
+            digits: true,
+            symbols: false,
+            ..PasswordSettings::default()
+        };
+        let bits = password_entropy(&digits);
+        // 12 * log2(10) = 39.86… -> 40, the exact boundary that used to make
+        // the UI show "40 bit / 弱い" while the audit treated it as acceptable.
+        assert!(entropy_bits(10, 12) < f64::from(WEAK_BITS));
+        assert_eq!(bits, 40.0);
+        assert_eq!(Strength::from_bits(bits), Strength::Fair);
+        assert_eq!(crate::health::estimate_entropy("123456789012"), 40);
+    }
+
+    #[test]
+    fn mixed_alphabets_keep_the_unrounded_estimate() {
+        // The existing `generator_tests.rs` contract for non-digit settings is
+        // exact equality with `entropy_bits`; pin it here too so a future
+        // broadening of the rounding cannot silently change those values.
+        let settings = PasswordSettings {
+            length: 16,
+            ..PasswordSettings::default()
+        };
+        let expected = entropy_bits(
+            LOWERCASE.len() + UPPERCASE.len() + DIGITS.len() + SYMBOLS.len(),
+            settings.length,
+        );
+        assert!((password_entropy(&settings) - expected).abs() < 1e-9);
+        let avoid = PasswordSettings {
+            avoid_ambiguous: true,
+            ..settings
+        };
+        let expected = entropy_bits(avoid.alphabet().chars().count(), avoid.length);
+        assert!((password_entropy(&avoid) - expected).abs() < 1e-9);
+    }
+}

@@ -2003,3 +2003,75 @@ fn auth_length_caps_are_reexported_from_limits() {
     assert_eq!(MAX_SERVER_URL_LEN, crate::limits::MAX_SERVER_URL_LEN);
     assert_eq!(DEFAULT_LOGIN_TIMEOUT, crate::limits::DEFAULT_LOGIN_TIMEOUT);
 }
+
+#[test]
+fn sync_detail_round_trips_through_app_error_with_its_cause() {
+    use crate::error::AppError;
+
+    const DETAIL: &str = "sync: unexpected key casing";
+    let small = AuthError::SyncDetail(DETAIL.to_string());
+    assert_eq!(small.message(), AuthError::Sync.message());
+    assert_eq!(
+        small,
+        AuthError::Sync,
+        "the cause is diagnostic, not identity"
+    );
+
+    // AuthError -> AppError keeps the typed cause reachable via source().
+    let app = AppError::from(small);
+    assert!(
+        matches!(&app, AppError::SyncCause(cause) if cause.to_string() == DETAIL),
+        "the detail must become the AppError cause: {app:?}"
+    );
+    assert!(std::error::Error::source(&app).is_some());
+    assert_eq!(app.message(), AuthError::Sync.message());
+    assert_eq!(app, AppError::Sync);
+
+    // ...and back again without losing the text the status bar shows.
+    let restored = AuthError::from(app);
+    assert!(
+        matches!(&restored, AuthError::SyncDetail(detail) if detail == DETAIL),
+        "the detail must survive both conversions: {restored:?}"
+    );
+    assert_eq!(
+        restored.status_message(),
+        format!("同期に失敗しました（{DETAIL}）")
+    );
+
+    let empty = AppError::from(AuthError::SyncDetail(String::new()));
+    assert!(matches!(empty, AppError::SyncCause(_)));
+    assert!(std::error::Error::source(&empty).is_some());
+}
+
+#[test]
+fn embedded_literal_and_metadata_hosts_normalize_case_and_trailing_dot() {
+    // Both literal rules (auth.rs:458-490) fold the host before matching, so
+    // uppercase spellings and a trailing DNS dot cannot slip past the guard.
+    for value in [
+        "http://169.254.169.254.NIP.IO",
+        "http://169.254.169.254.nip.io.",
+        "http://169.254.169.254.NIP.IO.",
+        "http://169-254-169-254.NIP.IO.",
+        "https://169.254.1.1.SSLIP.IO.",
+        "http://METADATA.GOOGLE.INTERNAL.",
+        "http://INSTANCE-DATA.EC2.INTERNAL.",
+    ] {
+        assert!(is_blocked_server_url_without_dns(value), "{value}");
+    }
+    // Call the two classifiers directly as well: `url::Url` already folds
+    // ASCII host case, so only this path proves the helper's own fold.
+    assert!(super::hostname_embeds_link_local("169.254.169.254.NIP.IO."));
+    assert!(super::hostname_embeds_link_local("169-254-169-254.NIP.IO."));
+    assert!(super::is_blocked_metadata_host("METADATA.GOOGLE.INTERNAL."));
+
+    // The same fold must not turn public hosts into blocked ones.
+    for value in ["https://1.1.1.1.NIP.IO.", "https://vault.example.com."] {
+        assert!(!is_blocked_server_url_without_dns(value), "{value}");
+    }
+    assert!(!super::hostname_embeds_link_local("1.1.1.1.NIP.IO."));
+
+    // validate_config reaches the same classifier on the login path.
+    let mut blocked = config();
+    blocked.server_url = "http://169.254.169.254.NIP.IO.".into();
+    assert_eq!(validate_config(&blocked), Err(AuthError::BlockedServerUrl));
+}

@@ -1819,3 +1819,80 @@ fn cached_sync_for_detailed_rejects_a_cache_for_another_account() {
         Err(SyncCacheError::ServerMismatch)
     ));
 }
+
+#[test]
+fn bounded_read_consumes_no_more_than_limit_plus_one_byte() {
+    use std::io::{self, Read};
+
+    // Records how much of the source was actually pulled through the reader.
+    struct CountingReader {
+        data: Vec<u8>,
+        pos: usize,
+    }
+    impl Read for CountingReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let remaining = &self.data[self.pos..];
+            let count = remaining.len().min(buf.len());
+            buf[..count].copy_from_slice(&remaining[..count]);
+            self.pos += count;
+            Ok(count)
+        }
+    }
+
+    // `read_bounded` caps the reader at limit+1 bytes (cache.rs:598-613). The
+    // oversized body must be rejected without draining the remaining bytes.
+    let mut over = CountingReader {
+        data: vec![b'x'; 1_000],
+        pos: 0,
+    };
+    let error = super::read_bounded(&mut over, 8).unwrap_err();
+    assert!(matches!(error, CacheLoadError::CacheTooLarge), "{error:?}");
+    assert_eq!(over.pos, 9, "only limit+1 bytes may be consumed");
+    assert_eq!(over.data.len() - over.pos, 991, "the rest stays unread");
+
+    // A file exactly at the limit consumes exactly the limit, not one more.
+    let mut exact = CountingReader {
+        data: vec![b'x'; 8],
+        pos: 0,
+    };
+    assert_eq!(super::read_bounded(&mut exact, 8).unwrap().len(), 8);
+    assert_eq!(exact.pos, 8);
+}
+
+#[test]
+fn undecryptable_uri_from_a_cached_body_has_no_match_type() {
+    // A cached sync body whose URI ciphertext cannot be opened becomes the
+    // UNDECRYPTABLE_URI marker. A decryption failure carries no wire `match`
+    // value, so the marker's `match_type` must be None (vault_sync.rs:313-318).
+    let raw = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [],
+        "ciphers": [{
+            "id": "c1",
+            "type": 1,
+            "name": null,
+            "login": { "uris": [{ "uri": "NOT_AN_ENC_STRING" }] },
+            "revisionDate": "2024-01-01T00:00:00Z",
+        }],
+    });
+    let cache =
+        SyncCache::from_body(raw.to_string().into_bytes(), "https://vault.example.com").unwrap();
+    let sync = cache.sync().unwrap();
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).unwrap();
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    vault.apply_sync(sync).unwrap();
+    let model = crate::vault_sync::import_logins(&vault).unwrap();
+
+    let uris = model.item("c1").unwrap().uris();
+    assert_eq!(uris.len(), 1);
+    assert_eq!(uris[0].uri, crate::vault_sync::UNDECRYPTABLE_URI);
+    assert!(
+        crate::vault_sync::is_undecryptable_uri(&uris[0].uri),
+        "the marker must stay recognizable"
+    );
+    assert_eq!(uris[0].match_type, None);
+}

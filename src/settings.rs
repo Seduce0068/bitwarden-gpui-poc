@@ -14,6 +14,20 @@
 //! favour of defaults because its field meanings may differ. The only field
 //! rescued from such a file is a valid `device_id`, which is an opaque local
 //! identifier whose meaning cannot change with the schema.
+//!
+//! # Known constraints (test seams)
+//!
+//! Neither the file I/O nor the OS random source has an injected seam on any
+//! public path here. `read_bounded_settings_text` opens the path through
+//! `std::fs` directly, and [`generate_device_id`] calls `getrandom`
+//! directly. Tests therefore exercise the classification through real
+//! temporary files and assert the structural shape of generated identifiers;
+//! they cannot inject a failing reader or a failing RNG. Adding either seam
+//! would change the signatures of `load_detailed`, `load_advisories`,
+//! `file_schema_version` and `ensure_device_id` (or add a test-only feature in
+//! `Cargo.toml`), which is outside this module's change scope. The two limits
+//! are recorded here so a reader does not mistake the test coverage for a
+//! proof of those failure branches.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -315,6 +329,13 @@ impl core::fmt::Debug for Settings {
 /// between (or whose metadata lies) could be loaded in full just to inspect one
 /// marker. Reading at most one byte past the cap and rejecting that case makes
 /// the cap itself the only boundary; there is no pre-check to race with.
+///
+/// Known constraint: there is no injected reader seam. The path is opened with
+/// `std::fs::File::open` and the byte limit is applied through `Read::take`, so
+/// a test cannot supply a failing/counting reader here; it must create a real
+/// file (see `settings_tests.rs`). The full load, the advisory scan and the
+/// write-path marker guard all go through this one function so their
+/// classifications cannot drift apart despite the missing seam.
 fn read_bounded_settings_text(path: &std::path::Path) -> Result<String, SettingsLoadError> {
     let file = std::fs::File::open(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -530,13 +551,14 @@ const UUID_TEXT_LEN: usize = 36;
 ///
 /// Returns [`getrandom::Error`] when the OS random source is unavailable.
 ///
-/// Testing note: there is deliberately no injected RNG parameter here. Adding
-/// a mock/failing source would mean changing the function signature across its
-/// callers and adding a test-only dependency or feature in `Cargo.toml`, which
-/// is outside this module's change scope. Tests therefore cover the structural
-/// contract (canonical v4 UUID shape and non-collision between draws) and the
-/// persisted/reused-value paths, but cannot force the `getrandom::fill`
-/// failure branch.
+/// Known constraint (test seam): there is deliberately no injected RNG
+/// parameter here. Adding a mock/failing source would mean changing the
+/// function signature across its callers and adding a test-only dependency or
+/// feature in `Cargo.toml`, which is outside this module's change scope. Tests
+/// therefore cover the structural contract (canonical v4 UUID shape and
+/// non-collision between draws) and the persisted/reused-value paths, but
+/// cannot force the `getrandom::fill` failure branch. The same constraint is
+/// recorded for the file-I/O path in the module docs above.
 pub fn generate_device_id() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes)?;
