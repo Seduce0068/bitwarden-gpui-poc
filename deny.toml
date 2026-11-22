@@ -7,6 +7,7 @@
 # こちらでは解消できないため失敗させない（共通ワークフローの
 # cargo audit と同じ方針）。直接依存が unmaintained になった場合は失敗。
 unmaintained = "workspace"
+yanked = "deny"
 ignore = []
 
 [licenses]

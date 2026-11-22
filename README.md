@@ -82,8 +82,9 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
    Vaultwarden の場合、API key 機能が有効である必要がある（有効化手順は
    使用するバージョンに依存するため、ここでは未確認として扱う）。
 2. ロック画面で `1`〜`5` からサーバーURL / メール / Client ID / Client Secret /
-   マスターパスワードを入力する。入力値はメモリ上の認証状態に保持され、
-   `settings.json` には保存されない。
+   マスターパスワードを入力する。`3`〜`5` はメモリ上の認証状態に保持され
+   `settings.json` には保存されない。`1` / `2` は設定の共有項目を直接編集するため、
+   保存する場合は設定パネルで `w` を押す（`d` で破棄可能）。
 3. `Enter` で実認証を試行する。失敗時は `r` で再試行できる。
 
 注意事項:
@@ -319,12 +320,14 @@ CI（`.github/workflows/ci.yml`）と pre-commit で共通して使うツール�
 
 | ツール | CI | pre-commit |
 | --- | --- | --- |
-| gitleaks | `GITLEAKS_VERSION` | `rev`（`.pre-commit-config.yaml`） |
-| cargo-deny | `cargo install --version` | — |
-| markdownlint-cli | `npm install --global` | — |
+| gitleaks | `GITLEAKS_VERSION` = 8.28.0 | `rev`（`.pre-commit-config.yaml`） |
+| cargo-deny | `cargo install --version 0.21.0` | — |
+| markdownlint-cli | `npm install --global markdownlint-cli@0.50.0` | — |
 
 gitleaks は CI 起動時に pre-commit の `rev` と一致するか検査し、ずれがあれば
-ゲートを失敗させます。更新時は両方を同じ版へ変更してください。
+ゲートを失敗させます。他の固定ツールも CI が README の記載と突き合わせ、
+片方だけの更新を検出します。最新版の確認は週次の依存監査時に行い、
+更新する場合は CI と README の両方を同じ版へ変更してください。
 
 ## ドキュメント
 
@@ -350,7 +353,8 @@ gitleaks は CI 起動時に pre-commit の `rev` と一致するか検査し、
   アプリ強制終了時は復元できない。コピー元の内容が読めなかった場合
   （空／文字列以外）も復元せず、コピーした内容が残る
 - 無操作で自動ロックする（既定5分、設定パネルの `i`/`u` で1〜60分に調整可能）
-- 実ログイン時はログイン項目のみを変換し、他 kind はモックデータのまま
+- 実ログイン時はログイン項目のみを変換し、他 kind は一覧に表示されない
+  （PoC の既知制約。モックデータは `m` で開いた場合のみ表示）
 - パスワードと TOTP シークレットは機密のため検索対象外（監査での有無判定には使用）
 - ログインのタイムアウトは設定ファイルの `login_timeout_seconds` で変更可能（既定30秒）
 - 実ログイン時は link-local アドレス / クラウドメタデータホスト / DNS 解決先の

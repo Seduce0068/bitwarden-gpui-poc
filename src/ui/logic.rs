@@ -134,23 +134,93 @@ pub(super) fn unsaved_marker(dirty: bool) -> &'static str {
     }
 }
 
+/// Guidance for the dedicated focus-recovery key.
+///
+/// `F1` is watched by the global keystroke observer installed in `app.rs`.
+/// Listing it in the UI hints makes the way back from a lost focus discoverable
+/// instead of leaving it documented only in the source.
+pub(super) const FOCUS_RECOVERY_HINT: &str = "F1: フォーカス復帰";
+
 /// Hint for the lock screen. While a field is active `1`-`5` insert text and
 /// `Enter` only confirms that field; it never starts authentication.
 pub(super) fn auth_hint(editing: bool) -> &'static str {
     if editing {
-        "入力中: 1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 確定"
+        "入力中: 1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 確定 / F1: フォーカス復帰"
     } else {
-        "1-5: 欄を選択 / Enter: 検証して開く / Esc: 終了"
+        "1-5: 欄を選択 / Enter: 検証して開く / Esc: 終了 / F1: フォーカス復帰"
     }
 }
 
 /// Hint for the settings panel, switched while a field is being edited.
 pub(super) fn settings_hint(editing: bool) -> &'static str {
     if editing {
-        "入力中: w/c/l/d も文字として入力（保存はしません） / Backspace: 削除 / Enter: 確定（保存はしません） / Esc: 確定"
+        "入力中: w/c/l/d も文字として入力（保存はしません） / Backspace: 削除 / Enter: 確定（保存はしません） / Esc: 確定 / F1: フォーカス復帰"
     } else {
-        "1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログイン制限 / 5,6: 復元 / w: 保存 / d: 破棄 / c: 戻る / l: ロック / Esc: 終了"
+        "1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログイン制限 / 5,6: 復元 / w: 保存 / d: 破棄 / c: 戻る / l: ロック / Esc: 終了 / F1: フォーカス復帰"
     }
+}
+
+/// Convert a day count since 1970-01-01 to a proleptic-Gregorian calendar date.
+///
+/// This is the inverse of the standard `days_from_civil` calculation (Howard
+/// Hinnant's public-domain algorithm). It is integer-only, so it needs no date
+/// crate, no system clock and no `unsafe`, and is fully deterministic in tests.
+fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146_096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let mut year = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
+    if month <= 2 {
+        year += 1;
+    }
+    (year, month, day)
+}
+
+/// Format a revision timestamp as a wall-clock date-time with an explicit
+/// UTC offset.
+///
+/// `UNKNOWN_REVISION` (0) means "never recorded" and is rendered as `不明`
+/// instead of the misleading 1970-01-01. `offset_secs` shifts the instant into
+/// the caller's local zone; pass 0 for UTC. The zone is always named in the
+/// output so a UTC-rendered value can never be mistaken for local time.
+///
+/// `std` has no local-timezone API and adding a date crate would require a
+/// `Cargo.toml` change outside this task's scope, so the production caller uses
+/// the UTC form. The offset parameter keeps the conversion pure and testable.
+pub(super) fn format_revision_date_at(revision: i64, offset_secs: i64) -> String {
+    if revision == crate::model::UNKNOWN_REVISION {
+        return "不明".to_string();
+    }
+    let local = revision.saturating_add(offset_secs);
+    let days = local.div_euclid(86_400);
+    let seconds_in_day = local.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_in_day / 3600;
+    let minute = (seconds_in_day % 3600) / 60;
+    let second = seconds_in_day % 60;
+    let zone = if offset_secs == 0 {
+        "UTC".to_string()
+    } else {
+        let sign = if offset_secs > 0 { '+' } else { '-' };
+        let magnitude = offset_secs.unsigned_abs();
+        format!(
+            "UTC{sign}{:02}:{:02}",
+            magnitude / 3600,
+            (magnitude % 3600) / 60
+        )
+    };
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} {zone}")
+}
+
+/// Revision formatter used by the detail line (UTC until a timezone source is
+/// wired in; see [`format_revision_date_at`]).
+pub(super) fn format_revision_date(revision: i64) -> String {
+    format_revision_date_at(revision, 0)
 }
 
 /// Status text after a successful login.
@@ -289,6 +359,41 @@ mod tests {
         assert!(settings.contains("保存はしません"));
         assert!(settings.contains("w/c/l/d も文字として入力"));
         assert!(settings_hint(false).contains("w: 保存 / d: 破棄"));
+    }
+
+    #[test]
+    fn every_hint_advertises_the_focus_recovery_key() {
+        assert!(auth_hint(true).contains(FOCUS_RECOVERY_HINT));
+        assert!(auth_hint(false).contains(FOCUS_RECOVERY_HINT));
+        assert!(settings_hint(true).contains(FOCUS_RECOVERY_HINT));
+        assert!(settings_hint(false).contains(FOCUS_RECOVERY_HINT));
+    }
+
+    #[test]
+    fn revision_dates_format_to_a_calendar_date_and_name_unknown() {
+        assert_eq!(
+            format_revision_date(crate::model::UNKNOWN_REVISION),
+            "不明",
+            "0 must never be shown as a 1970 timestamp"
+        );
+        assert_eq!(
+            format_revision_date(1_700_000_000),
+            "2023-11-14 22:13:20 UTC"
+        );
+        // Same instant, different wall clock and an explicit zone label.
+        assert_eq!(
+            format_revision_date_at(1_700_000_000, 9 * 3600),
+            "2023-11-15 07:13:20 UTC+09:00"
+        );
+        assert_eq!(
+            format_revision_date_at(1_700_000_000, -5 * 3600),
+            "2023-11-14 17:13:20 UTC-05:00"
+        );
+        // Deterministic: no system clock or timezone lookup is involved.
+        assert_eq!(
+            format_revision_date(1_700_000_000),
+            format_revision_date(1_700_000_000)
+        );
     }
 
     #[test]

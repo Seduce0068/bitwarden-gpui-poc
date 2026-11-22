@@ -4,6 +4,7 @@ use crate::model::{Filter, ItemData, SortKey, Vault};
 use crate::settings::Settings;
 use crate::totp;
 use crate::ui::auth_state::AuthState;
+use crate::ui::logic::FOCUS_RECOVERY_HINT;
 use crate::ui::state::{GeneratorState, Panel, Screen, SettingsField};
 use crate::ui::totp_state::TotpState;
 use crate::ui::vault_view::VaultViewState;
@@ -159,8 +160,12 @@ impl BitwardenApp {
         let mut this = Self {
             screen: Screen::Locked,
             status: load_notice
-                .map(|notice| format!("{notice} / Enter: ログイン / m: モック / Esc: 終了"))
-                .unwrap_or_else(|| "ロック中: Enter: ログイン / m: モック / Esc: 終了".to_string()),
+                .map(|notice| {
+                    format!("{notice} / Enter: ログイン / m: モック / Esc: 終了 / {FOCUS_RECOVERY_HINT}")
+                })
+                .unwrap_or_else(|| {
+                    format!("ロック中: Enter: ログイン / m: モック / Esc: 終了 / {FOCUS_RECOVERY_HINT}")
+                }),
             view: crate::ui::vault_view::VaultViewState::new(),
             totp: crate::ui::totp_state::TotpState::new(),
             panel: Panel::Vault,
@@ -317,7 +322,9 @@ impl BitwardenApp {
         } else {
             ""
         };
-        self.status = format!("ロックしました{unsaved}（Enter: ログイン / m: モック）");
+        self.status = format!(
+            "ロックしました{unsaved}（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}）"
+        );
         cx.notify();
     }
 
@@ -467,7 +474,7 @@ impl BitwardenApp {
             .and_then(|report| report.items.get(index))
         {
             let base = format!(
-                "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了）",
+                "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）",
                 index + 1,
                 len,
                 item.name
@@ -525,7 +532,7 @@ impl BitwardenApp {
                             "{} | {} | 更新: {}",
                             item.kind().label(),
                             item.name,
-                            item.revision_date
+                            crate::ui::logic::format_revision_date(item.revision_date)
                         ),
                         item.data.clone(),
                     )
@@ -813,5 +820,41 @@ mod tests {
         assert_eq!(next_audit_row(Some(1), -100, 3), Some(0));
         // A stale index is clamped before the delta is applied.
         assert_eq!(next_audit_row(Some(99), 1, 3), Some(2));
+    }
+
+    #[::core::prelude::v1::test]
+    fn selected_detail_uses_the_formatted_revision_date() {
+        use crate::ui::logic::format_revision_date;
+
+        assert_eq!(format_revision_date(crate::model::UNKNOWN_REVISION), "不明");
+        assert_eq!(
+            format_revision_date(1_700_000_000),
+            "2023-11-14 22:13:20 UTC"
+        );
+        // The detail line now carries a readable label instead of raw seconds.
+        let label = format!("更新: {}", format_revision_date(1_700_000_000));
+        assert!(label.contains("更新: "));
+        assert!(!label.contains("更新: 1700000000"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn lock_and_audit_statuses_advertise_focus_recovery() {
+        use crate::ui::logic::{auth_hint, settings_hint};
+
+        // The lock screen's own hint and the settings hint carry the key...
+        assert!(auth_hint(false).contains(FOCUS_RECOVERY_HINT));
+        assert!(auth_hint(true).contains(FOCUS_RECOVERY_HINT));
+        assert!(settings_hint(false).contains(FOCUS_RECOVERY_HINT));
+        assert!(settings_hint(true).contains(FOCUS_RECOVERY_HINT));
+
+        // ...and the statuses owned by this module do too, so the lock and
+        // audit screens advertise the key even before a panel hint is shown.
+        let lock_status =
+            format!("ロック中: Enter: ログイン / m: モック / Esc: 終了 / {FOCUS_RECOVERY_HINT}");
+        assert!(lock_status.ends_with(FOCUS_RECOVERY_HINT));
+        let audit_status = format!(
+            "監査行 1/2: example（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）"
+        );
+        assert!(audit_status.contains(FOCUS_RECOVERY_HINT));
     }
 }

@@ -24,10 +24,24 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第52弾で 7 件すべてを完了）。
+なし（第54弾で 9 件すべてを完了）。
 
 ## 完了
 
+- [x] 第54弾（13 観点）の指摘 9 件を完結（2026-11-22）
+  - 13 観点（ST/FG/TQ/DP/VU + EX/DF/AX/I18/CI/SEC/OPS/DX）で 35 件を
+    検出。3 観点の絞り込みでは見つからなかった実害を多数確認。
+  - README の他 kind と保存否の記述、`deny.toml` の yanked deny、
+    固定ツール版の README 突き合わせ、選択行の WCAG コントラスト、
+    ☆ の可視性、F1 案内、更新日時の可読化、gitleaks checksum の
+    空検証防止、将来 schema の上書き防止を実装。
+  - 起動エージェント: 14 体（補充探索 13 + UI 実装 1）。深度 1、
+    無制限プロファイル。観点を減らさず基本 5 + 追加 8 を投入。
+  - 検証: fmt / check / test（371 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks / YAML と
+    gate スクリプトの bash -n すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
+    GUI の目視確認も未実施。
 - [x] 第53弾のレビュー指摘 3 件を完結（2026-11-22）
   - `has_format_character` を limits へ移動し、health の認証層依存を解消。
     UI 入力の UTF-8 境界計算も `char_boundary_at` へ集約。

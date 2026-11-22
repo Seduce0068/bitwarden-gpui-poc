@@ -304,6 +304,17 @@ fn schema_version_of(value: Option<&Value>) -> Option<u64> {
     }
 }
 
+/// Read the schema marker directly from a file without applying fallbacks.
+///
+/// `load_detailed` intentionally falls back to defaults for a future version,
+/// but write paths must not replace such a file: doing so would destroy keys
+/// whose meaning this build does not understand.
+fn file_schema_version(path: &std::path::Path) -> Option<u64> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&contents).ok()?;
+    schema_version_of(value.get("schema_version"))
+}
+
 /// Whether two JSON values share a type tag. Numbers of different widths or
 /// ranges share a tag; the per-field trial parse below rejects those.
 fn same_json_type(left: &Value, right: &Value) -> bool {
@@ -495,6 +506,13 @@ impl Settings {
     /// Returns `std::io::Error` when the existing file cannot be read/parsed,
     /// when serialization fails, or when the write itself fails.
     pub fn save_device_id_only(path: &std::path::Path, id: &str) -> std::io::Result<()> {
+        if let Some(version) = file_schema_version(path) {
+            if version > u64::from(CURRENT_SCHEMA_VERSION) {
+                return Err(std::io::Error::other(format!(
+                    "設定ファイルのバージョン {version} は未対応のため上書きを中止しました"
+                )));
+            }
+        }
         let mut current = match Self::load_detailed(path) {
             Ok(settings) => settings,
             Err(SettingsLoadError::NotFound) => Self::default(),

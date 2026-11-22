@@ -32,7 +32,9 @@ jobs:
         cargo install cargo-deny --version 0.21.0 --exact --locked
         cargo deny check
         # ドキュメント書式ゲート（共通ワークフローにまだ無いためここで導入）。
+        grep -Fq "cargo install --version 0.21.0" README.md
         npm install --global markdownlint-cli@0.50.0
+        grep -Fq "markdownlint-cli@0.50.0" README.md
         markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
         # シークレットスキャンは pre-commit を主軸とし、CI を最終ゲートとする。
         GITLEAKS_VERSION=8.28.0
@@ -45,7 +47,10 @@ jobs:
         curl -sSfL \
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" \
           -o /tmp/gitleaks-checksums.txt
-        (cd /tmp && sha256sum -c gitleaks-checksums.txt --ignore-missing)
+        # --ignore-missing だけだと対象行が欠けても0件で成功するため、
+        # アーカイブの行を明示的に確認してからその1行だけを検証する。
+        (cd /tmp && grep -Fq "${GITLEAKS_ARCHIVE}" gitleaks-checksums.txt)
+        (cd /tmp && grep -F "${GITLEAKS_ARCHIVE}" gitleaks-checksums.txt | sha256sum -c -)
         tar -xzf "/tmp/${GITLEAKS_ARCHIVE}" -C /tmp gitleaks
         /tmp/gitleaks dir --redact --config .gitleaks.toml
         # pre-commit を回避して投入された秘密を履歴からも検出する。

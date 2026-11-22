@@ -1,7 +1,7 @@
 //! GPUI render implementations for the app.
 
 use crate::ui::app::BitwardenApp;
-use crate::ui::logic::auth_hint;
+use crate::ui::logic::{auth_hint, FOCUS_RECOVERY_HINT};
 use crate::ui::panels::{
     audit_panel, auth_row, generator_panel, panel_button, settings_panel, totp_badge,
 };
@@ -91,6 +91,30 @@ impl BitwardenApp {
                         } else {
                             rgb(0x1e1e2e)
                         };
+                        // The selected row lightens its background to 0x45475a,
+                        // where the muted foregrounds used on the default row
+                        // fall below WCAG 1.4.3 (the username is ~4.1:1 there).
+                        // Brighter variants keep every label above 4.5:1.
+                        let username_color = if selected {
+                            rgb(0xcdd6f4)
+                        } else {
+                            rgb(0xa6adc8)
+                        };
+                        let kind_color = if selected {
+                            rgb(0xa6c8ff)
+                        } else {
+                            rgb(0x89b4fa)
+                        };
+                        // The default non-favorite star colour (0x45475a) is
+                        // exactly the selected row background; give the empty
+                        // star a visible muted grey on that background.
+                        let star_color = if item.favorite {
+                            rgb(0xf9e2af)
+                        } else if selected {
+                            rgb(0x9399b2)
+                        } else {
+                            rgb(0x45475a)
+                        };
                         let username = item
                             .login()
                             .map_or("-".to_string(), |(user, _, _, _)| user.to_string());
@@ -131,11 +155,7 @@ impl BitwardenApp {
                                         .id(SharedString::from(format!("favorite-{index}")))
                                         .w(px(18.0))
                                         .text_xs()
-                                        .text_color(if item.favorite {
-                                            rgb(0xf9e2af)
-                                        } else {
-                                            rgb(0x45475a)
-                                        })
+                                        .text_color(star_color)
                                         .on_click(cx.listener(move |this, _event, _window, cx| {
                                             // The parent row also has a click
                                             // handler; stop the bubble so it
@@ -160,7 +180,7 @@ impl BitwardenApp {
                                     div()
                                         .w(px(70.0))
                                         .text_xs()
-                                        .text_color(rgb(0x89b4fa))
+                                        .text_color(kind_color)
                                         .child(item.kind().label().to_string()),
                                 )
                                 .child(
@@ -174,7 +194,7 @@ impl BitwardenApp {
                                     div()
                                         .w(px(200.0))
                                         .overflow_hidden()
-                                        .text_color(rgb(0xa6adc8))
+                                        .text_color(username_color)
                                         .child(username),
                                 )
                                 .child(
@@ -383,7 +403,15 @@ impl Render for BitwardenApp {
             .border_color(rgb(0x313244))
             .text_xs()
             .text_color(rgb(0xa6adc8))
-            .child(self.status.clone());
+            // Panel hints are local to each panel, while the status bar is the
+            // one element drawn on every screen. Advertise focus recovery here
+            // so it is discoverable even on panels without an inline hint, and
+            // avoid saying it twice when a status already mentions it.
+            .child(if self.status.contains(FOCUS_RECOVERY_HINT) {
+                self.status.clone()
+            } else {
+                format!("{}  |  {}", self.status, FOCUS_RECOVERY_HINT)
+            });
 
         div()
             .id("bitwarden-poc-root")
