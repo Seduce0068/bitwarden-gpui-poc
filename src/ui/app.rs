@@ -125,6 +125,20 @@ pub(super) fn auto_lock_status(idle_lock_seconds: u64, dirty: bool) -> String {
     )
 }
 
+/// Status after toggling a favorite, keeping the unsaved marker visible.
+///
+/// Both branches of `toggle_favorite` (success and no selection) compose
+/// their status through `status_with_unsaved`. The pure form lets that
+/// contract be tested without a GPUI window.
+pub(super) fn favorite_toggle_status(favorite: bool, dirty: bool) -> String {
+    let base = if favorite {
+        "お気に入りを設定にしました"
+    } else {
+        "お気に入りを解除にしました"
+    };
+    status_with_unsaved(base, dirty)
+}
+
 /// Warning shown when Esc is pressed while settings are still unsaved.
 pub(super) fn unsaved_quit_warning_status() -> &'static str {
     "警告: 未保存の設定変更があります（設定/生成パネルに戻り w: 保存 / d: 破棄）"
@@ -157,6 +171,46 @@ pub(super) fn next_audit_row(current: Option<usize>, delta: isize, len: usize) -
     } else {
         // `next` is now within 0..=last, which is at most `usize::MAX`.
         Some(next as usize)
+    }
+}
+
+/// Clamp an audit-row highlight after the report length changes.
+///
+/// A shorter report cannot keep a row past its end; an empty report has no
+/// valid row at all. Kept separate from the refresh method so the rule can
+/// be exercised without a GPUI window.
+pub(super) fn clamp_audit_row(selection: Option<usize>, len: usize) -> Option<usize> {
+    if len == 0 {
+        None
+    } else {
+        selection.map(|index| index.min(len - 1))
+    }
+}
+
+/// Status describing the audit row left highlighted after a refresh.
+///
+/// Uses the same wording as the keyboard move status, so a threshold edit
+/// cannot leave the status bar naming a row that is no longer highlighted.
+pub(super) fn audit_refresh_status(
+    index: Option<usize>,
+    len: usize,
+    name: Option<&str>,
+    dirty: bool,
+) -> String {
+    match (index, name) {
+        (Some(index), Some(name)) => status_with_unsaved(
+            &format!(
+                "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）",
+                index + 1,
+                len,
+                name
+            ),
+            dirty,
+        ),
+        _ => status_with_unsaved(
+            "監査する問題がありません（↑↓で行を選択できません）",
+            dirty,
+        ),
     }
 }
 
@@ -544,15 +598,13 @@ impl BitwardenApp {
                 .map(|index| visible[index].id.clone())
         };
         let Some(id) = id else {
-            self.status = crate::ui::logic::no_selection_status().to_string();
+            self.status =
+                status_with_unsaved(crate::ui::logic::no_selection_status(), self.settings_dirty);
             cx.notify();
             return;
         };
         if let Some(favorite) = self.view.vault.toggle_favorite(&id) {
-            self.status = format!(
-                "お気に入りを{}にしました",
-                if favorite { "設定" } else { "解除" }
-            );
+            self.status = favorite_toggle_status(favorite, self.settings_dirty);
             // Under the Favorites filter the item may have just left the view.
             self.view.revalidate_selection();
             self.sync_totp_to_selection();
@@ -643,10 +695,21 @@ impl BitwardenApp {
             .audit_report
             .as_ref()
             .map_or(0, |report| report.items.len());
-        let last = len.saturating_sub(1);
-        self.audit_row_selection = self.audit_row_selection.map(|index| index.min(last));
-        if len == 0 {
-            self.audit_row_selection = None;
+        let clamped = clamp_audit_row(self.audit_row_selection, len);
+        if clamped != self.audit_row_selection {
+            self.audit_row_selection = clamped;
+            // The highlighted finding changed under the user (for example a
+            // threshold edit removed rows). Describe the new position instead
+            // of leaving a status that names a row that is no longer selected.
+            let name = clamped
+                .and_then(|index| {
+                    self.view
+                        .audit_report
+                        .as_ref()
+                        .and_then(|report| report.items.get(index))
+                })
+                .map(|item| item.name.clone());
+            self.status = audit_refresh_status(clamped, len, name.as_deref(), self.settings_dirty);
         }
     }
 }
@@ -695,6 +758,51 @@ mod tests {
         assert_eq!(missing_dirty, status_with_unsaved(&missing_clean, true));
         assert!(missing_dirty.starts_with(&missing_clean));
         assert!(missing_dirty.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn favorite_toggle_status_keeps_the_unsaved_marker() {
+        let set = favorite_toggle_status(true, false);
+        assert_eq!(set, "お気に入りを設定にしました");
+        assert!(!set.contains("[未保存"));
+        let set_dirty = favorite_toggle_status(true, true);
+        assert_eq!(set_dirty, status_with_unsaved(&set, true));
+        assert!(set_dirty.contains("[未保存の設定変更があります]"));
+
+        let unset = favorite_toggle_status(false, false);
+        assert_eq!(unset, "お気に入りを解除にしました");
+        let unset_dirty = favorite_toggle_status(false, true);
+        assert_eq!(unset_dirty, status_with_unsaved(&unset, true));
+        assert!(unset_dirty.contains("[未保存の設定変更があります]"));
+
+        // The no-selection branch uses the same composition.
+        assert!(
+            status_with_unsaved(crate::ui::logic::no_selection_status(), true)
+                .contains("[未保存の設定変更があります]")
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_refresh_clamps_the_row_and_reports_the_new_selection() {
+        assert_eq!(clamp_audit_row(Some(5), 3), Some(2));
+        assert_eq!(clamp_audit_row(Some(1), 3), Some(1));
+        assert_eq!(clamp_audit_row(Some(1), 0), None);
+        assert_eq!(clamp_audit_row(None, 3), None);
+
+        let moved = audit_refresh_status(Some(2), 3, Some("Example"), false);
+        assert_eq!(
+            moved,
+            format!(
+                "監査行 3/3: Example（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）"
+            )
+        );
+        let moved_dirty = audit_refresh_status(Some(2), 3, Some("Example"), true);
+        assert_eq!(moved_dirty, status_with_unsaved(&moved, true));
+        assert!(moved_dirty.contains("[未保存の設定変更があります]"));
+
+        let empty = audit_refresh_status(None, 0, None, true);
+        assert!(empty.contains("監査する問題がありません"));
+        assert!(empty.contains("[未保存の設定変更があります]"));
     }
 
     #[::core::prelude::v1::test]

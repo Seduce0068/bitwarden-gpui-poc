@@ -442,6 +442,43 @@ fn truncation_never_splits_a_utf8_character() {
 }
 
 #[test]
+fn secret_clamp_never_splits_a_utf8_character() {
+    let long = "あ".repeat(MAX_CLIENT_SECRET_LEN + 2);
+    let mut secret = SecretString::from(long.clone());
+    super::truncate_secret_to_limit(&mut secret, MAX_CLIENT_SECRET_LEN);
+
+    let clamped = secret.expose_secret();
+    assert_eq!(clamped.chars().count(), MAX_CLIENT_SECRET_LEN);
+    assert_eq!(clamped, "あ".repeat(MAX_CLIENT_SECRET_LEN));
+    assert!(clamped.is_char_boundary(clamped.len()));
+    // The caller's original string is untouched by the SecretString clamp.
+    assert_eq!(long.chars().count(), MAX_CLIENT_SECRET_LEN + 2);
+
+    let mut two = SecretString::from("あい".to_string());
+    super::truncate_secret_to_limit(&mut two, 1);
+    assert_eq!(two.expose_secret(), "あ");
+    super::truncate_secret_to_limit(&mut two, 0);
+    assert!(two.expose_secret().is_empty());
+}
+
+#[test]
+fn api_key_trims_surrounding_whitespace_from_both_credentials() {
+    let mut value = config();
+    value.client_id = "  user.1234\t".to_string();
+    value.client_secret = SecretString::from(" \tsecret-value\n".to_string());
+
+    let api_key = super::api_key_from(&value);
+
+    assert_eq!(api_key.client_id, "user.1234");
+    assert_eq!(api_key.client_secret.expose_secret(), "secret-value");
+    // The helper builds a fresh key; the caller's config is unchanged.
+    assert_eq!(value.client_id, "  user.1234\t");
+    assert_eq!(value.client_secret.expose_secret(), " \tsecret-value\n");
+    // Validation trims too, so a padded-but-present secret stays acceptable.
+    assert_eq!(validate_config(&value), Ok(()));
+}
+
+#[test]
 fn cache_restore_failures_are_reported_by_cause() {
     use crate::error::{AppError, BoxedCause};
 

@@ -487,6 +487,77 @@ fn oversized_cache_is_rejected_before_parsing() {
 }
 
 #[test]
+fn load_default_resolves_all_four_location_combinations() {
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-load-default-branches");
+    let _ = std::fs::remove_dir_all(&root);
+    let primary = root.join("primary.json");
+    let fallback = root.join("fallback.json");
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+
+    // (None, None): no platform directory at all.
+    assert_eq!(
+        super::load_from_paths(None, None).err(),
+        Some(CacheLoadError::NotFound)
+    );
+
+    // (Some, None): primary only; missing and then present.
+    assert_eq!(
+        super::load_from_paths(Some(primary.clone()), None).err(),
+        Some(CacheLoadError::NotFound)
+    );
+    save(&primary, &cache).unwrap();
+    assert_eq!(
+        super::load_from_paths(Some(primary.clone()), None),
+        Ok(cache.clone())
+    );
+
+    // (None, Some): read-only legacy path only; missing and then present.
+    assert_eq!(
+        super::load_from_paths(None, Some(fallback.clone())).err(),
+        Some(CacheLoadError::NotFound)
+    );
+    save(&fallback, &cache).unwrap();
+    assert_eq!(
+        super::load_from_paths(None, Some(fallback.clone())),
+        Ok(cache.clone())
+    );
+
+    // (Some, Some): primary wins when both exist.
+    let mut different = cache.clone();
+    different.server_url = "https://other.example.com".to_string();
+    save(&fallback, &different).unwrap();
+    assert_eq!(
+        super::load_from_paths(Some(primary.clone()), Some(fallback.clone())),
+        Ok(cache.clone())
+    );
+
+    // (Some, Some): the fallback is used only when the primary is absent.
+    let missing = root.join("missing.json");
+    assert_eq!(
+        super::load_from_paths(Some(missing), Some(fallback)),
+        Ok(different)
+    );
+}
+
+#[test]
+fn from_body_stamps_a_finite_capture_time() {
+    let before = i64::try_from(crate::totp::now_unix()).unwrap();
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    let after = i64::try_from(crate::totp::now_unix()).unwrap();
+
+    let created = cache
+        .created_at
+        .expect("from_body must stamp a capture time");
+    assert!(created >= before && created <= after, "{created}");
+    assert_ne!(
+        created,
+        i64::MAX,
+        "a working clock must not hit the sentinel"
+    );
+    assert!(!is_cache_expired(cache.created_at, after));
+}
+
+#[test]
 fn from_body_rejects_an_oversized_raw_body() {
     let oversized = vec![b'x'; MAX_CACHE_BODY_BYTES + 1];
     assert_eq!(

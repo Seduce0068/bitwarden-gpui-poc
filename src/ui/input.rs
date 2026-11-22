@@ -25,6 +25,16 @@ pub(super) fn is_focus_recovery_key(key: &str) -> bool {
     key == FOCUS_RECOVERY_KEY
 }
 
+/// View-level effect of the `CycleSort` action.
+///
+/// Factored out of `apply_action` so the selection-drop and scroll-rewind
+/// contract can be exercised with a plain `VaultViewState` (this crate does
+/// not enable gpui's `test-support` feature).
+pub(super) fn cycle_sort(view: &mut crate::ui::vault_view::VaultViewState) {
+    view.sort = view.sort.next();
+    view.deselect_and_rewind();
+}
+
 impl BitwardenApp {
     pub(super) fn key_down(
         &mut self,
@@ -162,8 +172,7 @@ impl BitwardenApp {
             UiAction::CopySelectedUsername => self.copy_selected_field(false, cx),
             UiAction::CycleFilter => self.cycle_filter(cx),
             UiAction::CycleSort => {
-                self.view.sort = self.view.sort.next();
-                self.view.deselect_and_rewind();
+                cycle_sort(&mut self.view);
                 self.sync_totp_to_selection();
                 cx.notify();
             }
@@ -248,6 +257,40 @@ mod tests {
             has_audit_report: false,
             query_nonempty: false,
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn cycle_sort_deselects_and_rewinds() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::SecureNote {
+                text: String::new(),
+            },
+        ));
+        view.selected_id = Some("a".into());
+        let before_sort = view.sort;
+        let before_rewind = view.rewind_calls;
+
+        cycle_sort(&mut view);
+
+        assert_ne!(
+            view.sort, before_sort,
+            "CycleSort must advance the sort key"
+        );
+        assert_eq!(
+            view.selected_id, None,
+            "the stale selection must be dropped"
+        );
+        assert_eq!(
+            view.rewind_calls,
+            before_rewind + 1,
+            "a sort change rewinds like filter and search changes"
+        );
     }
 
     #[::core::prelude::v1::test]

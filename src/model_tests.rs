@@ -70,6 +70,25 @@ fn mask_uri_handles_ipv6_and_credentials() {
     assert_eq!(mask_uri("ftp://example.com/x"), "ftp://example.com");
 }
 
+#[test]
+fn mask_uri_nul_sentinel_is_not_read_as_a_scheme() {
+    use crate::vault_sync::UNDECRYPTABLE_URI;
+
+    assert!(UNDECRYPTABLE_URI.starts_with('\0'));
+    assert_eq!(mask_uri(UNDECRYPTABLE_URI), "（復号できませんでした）");
+    assert_eq!(
+        mask_uri("\0https://example.com/path"),
+        "（復号できませんでした）"
+    );
+    // Already-rendered statuses survive a second pass unchanged: findings may
+    // be built from either a raw URI or a previously masked one.
+    assert_eq!(
+        mask_uri("（復号できませんでした）"),
+        "（復号できませんでした）"
+    );
+    assert_eq!(mask_uri("(不正な URI)"), "(不正な URI)");
+}
+
 fn login(id: &str, name: &str, username: &str, password: &str, uri: &str) -> VaultItem {
     VaultItem::new(
         id,
@@ -183,6 +202,32 @@ fn sorting_is_stable_and_deterministic() {
         .map(|item| item.id.as_str())
         .collect();
     assert_eq!(recent, vec!["2", "1", "3"]);
+}
+
+#[test]
+fn name_sort_id_tiebreak_is_reversed_only_for_name_desc() {
+    let vault = Vault {
+        items: vec![
+            login("a", "Same", "u", "p", "https://a.example"),
+            login("b", "Same", "u", "p", "https://b.example"),
+        ],
+        folders: Vec::new(),
+    };
+    let ids = |sort| -> Vec<&str> {
+        vault
+            .view(&Filter::All, "", sort)
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect()
+    };
+
+    // `compare` builds `name.cmp().then(id.cmp())` and reverses the whole
+    // ordering for NameDesc, so the id tiebreak flips with the name direction.
+    assert_eq!(ids(SortKey::NameAsc), vec!["a", "b"]);
+    assert_eq!(ids(SortKey::NameDesc), vec!["b", "a"]);
+    // Other keys reuse the un-reversed name+id ordering as their tiebreak.
+    assert_eq!(ids(SortKey::RecentlyModified), vec!["a", "b"]);
+    assert_eq!(ids(SortKey::Kind), vec!["a", "b"]);
 }
 
 #[test]

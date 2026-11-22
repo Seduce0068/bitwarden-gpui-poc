@@ -13,6 +13,39 @@ pub const MAX_SERVER_URL_LEN: usize = 2048;
 /// Default time budget for the whole login sequence.
 pub const DEFAULT_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+// Bounds applied by `Settings::sanitized` before a settings value is persisted
+// or used. They live here, next to the text caps, so the stored value and the
+// effective runtime value cannot drift apart between modules. Types follow the
+// fields they clamp (seconds/generator lengths/thresholds respectively).
+/// Minimum inactivity before auto-lock, in seconds.
+pub const MIN_IDLE_LOCK_SECONDS: u64 = 60;
+/// Maximum inactivity before auto-lock, in seconds.
+pub const MAX_IDLE_LOCK_SECONDS: u64 = 3600;
+/// Minimum login time budget, in seconds.
+pub const MIN_LOGIN_TIMEOUT_SECONDS: u64 = 1;
+/// Maximum login time budget, in seconds.
+pub const MAX_LOGIN_TIMEOUT_SECONDS: u64 = 3600;
+/// Minimum clipboard restore delay, in seconds.
+pub const MIN_CLIPBOARD_RESTORE_SECONDS: u64 = 1;
+/// Maximum clipboard restore delay, in seconds.
+pub const MAX_CLIPBOARD_RESTORE_SECONDS: u64 = 3600;
+/// Minimum generated password length, in characters.
+pub const MIN_PASSWORD_LENGTH: usize = 4;
+/// Maximum generated password length, in characters.
+pub const MAX_PASSWORD_LENGTH: usize = 128;
+/// Minimum passphrase word count.
+pub const MIN_PASSPHRASE_WORDS: usize = 2;
+/// Maximum passphrase word count.
+pub const MAX_PASSPHRASE_WORDS: usize = 20;
+/// Minimum weak-password entropy threshold, in bits.
+pub const MIN_WEAK_BITS: u32 = 1;
+/// Maximum weak-password entropy threshold, in bits.
+pub const MAX_WEAK_BITS: u32 = 200;
+/// Minimum stale-item threshold, in days.
+pub const MIN_STALE_DAYS: i64 = 1;
+/// Maximum stale-item threshold, in days.
+pub const MAX_STALE_DAYS: i64 = 3650;
+
 /// Whether `value` contains a Unicode `Cf` (format) character.
 ///
 /// Zero-width spaces, bidi overrides and similar invisible controls can hide

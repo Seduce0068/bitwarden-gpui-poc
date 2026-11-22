@@ -244,7 +244,21 @@ pub fn load_with_fallback(
 /// [`CacheLoadError`] when no usable cache exists, or when no platform
 /// cache/config directory is available at all.
 pub fn load_default() -> Result<SyncCache, CacheLoadError> {
-    match (default_path(), legacy_path()) {
+    load_from_paths(default_path(), legacy_path())
+}
+
+/// Resolve the four location combinations of [`load_default`] without touching
+/// the process-global XDG/HOME environment.
+///
+/// `dirs` falls back to the passwd database when `HOME` is unset, so a test
+/// cannot reliably force `default_path()` / `legacy_path()` to return `None`
+/// by editing environment variables. Keeping the branch on plain `Option`s
+/// makes every combination directly testable.
+fn load_from_paths(
+    primary: Option<PathBuf>,
+    fallback: Option<PathBuf>,
+) -> Result<SyncCache, CacheLoadError> {
+    match (primary, fallback) {
         (Some(primary), Some(fallback)) => load_with_fallback(primary, fallback),
         (Some(primary), None) => load_detailed(primary),
         (None, Some(fallback)) => load_detailed(fallback),

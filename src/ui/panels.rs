@@ -238,6 +238,20 @@ pub(super) fn result_row<'a>(label: &'a str, value: Option<&'a str>) -> impl Int
         )
 }
 
+/// Human-readable label for the passphrase separator.
+///
+/// `{:?}` on the `String` adds quotes (`"-"`), which reads like a literal
+/// token instead of the character actually placed between words. The empty
+/// separator is named explicitly so a concatenated passphrase is not mistaken
+/// for a missing value.
+pub(super) fn separator_label(separator: &str) -> &str {
+    if separator.is_empty() {
+        "(なし)"
+    } else {
+        separator
+    }
+}
+
 pub(super) fn generator_panel<'a>(
     settings: &'a Settings,
     state: &'a GeneratorState,
@@ -287,9 +301,9 @@ pub(super) fn generator_panel<'a>(
         .child(setting_row("6  先頭を大文字に", passphrase.capitalize))
         .child(setting_row("7  数字を追加", passphrase.include_number))
         .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "+/-  単語数: {}  |  ,  区切り: {:?}  |  強度: {} ({:.0} bit)",
+            "+/-  単語数: {}  |  ,  区切り: {}  |  強度: {} ({:.0} bit)",
             passphrase.words,
-            passphrase.separator,
+            separator_label(&passphrase.separator),
             Strength::from_bits(pp_bits).label(),
             pp_bits
         )))
@@ -674,6 +688,15 @@ mod tests {
         );
         let absent = totp_badge(&note);
         assert_eq!(absent.color_for_row(true), absent.color);
+    }
+
+    #[::core::prelude::v1::test]
+    fn separator_label_is_readable_without_debug_quotes() {
+        assert_eq!(separator_label("-"), "-");
+        assert_eq!(separator_label("."), ".");
+        assert_eq!(separator_label("_"), "_");
+        assert_eq!(separator_label(""), "(なし)");
+        assert_ne!(separator_label("-"), "\"-\"");
     }
 
     #[::core::prelude::v1::test]

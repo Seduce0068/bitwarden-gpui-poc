@@ -127,7 +127,7 @@ API key はテスト専用アカウントで使用すること（権限範囲の
 
 オフラインキャッシュについて: `src/cache.rs` の読み込み・検証を認証フローへ
 接続した。`authenticate_inner` は `sync_body()` の失敗、または取得した body の
-パース失敗時に `cache::cached_sync_for` でプラットフォームのキャッシュ
+パース失敗時に `cache::cached_sync_for_detailed` でプラットフォームのキャッシュ
 ディレクトリ（旧設定ディレクトリは読み取り専用フォールバック）から暗号化済み
 body を読み出し、サーバー URL を照合して `SyncData` に戻す。復号には
 生セッションの protected key を使うため、キャッシュは鍵素材を一切提供しない

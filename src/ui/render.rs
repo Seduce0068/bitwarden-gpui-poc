@@ -10,6 +10,27 @@ use gpui_kit::prelude::*;
 use gpui_kit::StatefulInteractiveElement;
 use gpui_kit::*;
 
+/// Text drawn in the status bar on the current screen.
+///
+/// The lock screen's `auth_hint` and the settings panel's `settings_hint`
+/// already carry the F1 recovery guidance. The status bar is the fallback
+/// advertiser for panels without an inline hint: when a hint is present, drop
+/// F1 from the status text instead of appending it a second time.
+fn status_bar_text(status: &str, screen: Screen, panel: Panel) -> String {
+    let has_inline_hint = match screen {
+        Screen::Locked => true,
+        Screen::Unlocked => panel == Panel::Settings,
+    };
+    if has_inline_hint {
+        let marker = format!(" / {FOCUS_RECOVERY_HINT}");
+        status.replace(marker.as_str(), "")
+    } else if status.contains(FOCUS_RECOVERY_HINT) {
+        status.to_string()
+    } else {
+        format!("{status}  |  {FOCUS_RECOVERY_HINT}")
+    }
+}
+
 impl BitwardenApp {
     fn render_locked(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -404,14 +425,10 @@ impl Render for BitwardenApp {
             .text_xs()
             .text_color(rgb(0xa6adc8))
             // Panel hints are local to each panel, while the status bar is the
-            // one element drawn on every screen. Advertise focus recovery here
-            // so it is discoverable even on panels without an inline hint, and
-            // avoid saying it twice when a status already mentions it.
-            .child(if self.status.contains(FOCUS_RECOVERY_HINT) {
-                self.status.clone()
-            } else {
-                format!("{}  |  {}", self.status, FOCUS_RECOVERY_HINT)
-            });
+            // one element drawn on every screen. `status_bar_text` keeps F1
+            // out of the status when an inline hint already shows it, and adds
+            // it as the fallback on panels without such a hint.
+            .child(status_bar_text(&self.status, self.screen, panel));
 
         div()
             .id("bitwarden-poc-root")
@@ -426,5 +443,42 @@ impl Render for BitwardenApp {
             .child(header)
             .child(body)
             .child(status)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn status_bar_shows_the_focus_hint_only_once() {
+        // The lock screen's inline `auth_hint` already ends with F1, so the
+        // status text must not repeat it.
+        let lock = "ロック中: Enter: ログイン / m: モック / Esc: 終了 / F1: フォーカス復帰";
+        assert_eq!(
+            status_bar_text(lock, Screen::Locked, Panel::Vault),
+            "ロック中: Enter: ログイン / m: モック / Esc: 終了"
+        );
+
+        // The settings panel's inline `settings_hint` does the same; a plain
+        // status stays plain instead of gaining a second F1.
+        let plain = "入力を確定しました（w: 保存 / d: 破棄）";
+        assert_eq!(
+            status_bar_text(plain, Screen::Unlocked, Panel::Settings),
+            plain
+        );
+
+        // Panels without an inline hint still get the fallback guidance...
+        assert_eq!(
+            status_bar_text(plain, Screen::Unlocked, Panel::Vault),
+            format!("{plain}  |  {FOCUS_RECOVERY_HINT}")
+        );
+        // ...and never append it twice when the status already mentions it.
+        let with_hint = format!("監査行 1/2: example / {FOCUS_RECOVERY_HINT}");
+        assert_eq!(
+            status_bar_text(&with_hint, Screen::Unlocked, Panel::Audit),
+            with_hint
+        );
     }
 }

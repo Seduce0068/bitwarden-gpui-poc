@@ -164,6 +164,32 @@ mod tests {
     }
 
     #[test]
+    fn display_resamples_when_the_period_boundary_is_crossed() {
+        let mut state = TotpState::new();
+        let before = state.display(SECRET, 29);
+        assert!(before.contains("あと1秒"), "{before}");
+        assert!(before.contains("まもなく期限切れ"));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(29));
+
+        // Same secret, but t=30 starts a new 30-second period. The cache must
+        // be replaced even though the secret did not change: without the
+        // re-sample branch the stale code and its expired countdown linger.
+        let after = state.display(SECRET, 30);
+        assert!(after.contains("あと30秒"), "{after}");
+        assert!(!after.contains("まもなく期限切れ"));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(30));
+        assert_eq!(
+            state
+                .tick
+                .as_ref()
+                .and_then(|tick| tick.code.as_ref())
+                .map(|code| code.remaining()),
+            Some(30)
+        );
+        assert!(state.current_code().is_some());
+    }
+
+    #[test]
     fn current_code_and_secret_identity_track_the_displayed_snapshot() {
         let mut state = TotpState::new();
         assert_eq!(state.current_code(), None);

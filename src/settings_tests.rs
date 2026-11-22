@@ -1024,3 +1024,96 @@ fn load_advisories_skips_an_oversized_file_even_with_a_future_marker() {
 
     assert!(load_advisories(&path).is_empty());
 }
+
+#[test]
+fn negative_fractional_and_non_numeric_schema_versions_are_legacy() {
+    // `version_from_float` must classify these as "not a version marker", so
+    // `parse_settings` reports LEGACY instead of treating them as future (which
+    // would discard every field) or silently promoting them to current.
+    for body in [
+        r#"{"schema_version":-1,"email":"neg@example.com","idle_lock_seconds":123}"#,
+        r#"{"schema_version":-2.5,"email":"frac@example.com","idle_lock_seconds":123}"#,
+        r#"{"schema_version":1.5,"email":"frac@example.com","idle_lock_seconds":123}"#,
+        r#"{"schema_version":" -1 ","email":"neg@example.com","idle_lock_seconds":123}"#,
+        r#"{"schema_version":"1.5","email":"frac@example.com","idle_lock_seconds":123}"#,
+        r#"{"schema_version":"NaN","email":"nan@example.com","idle_lock_seconds":123}"#,
+    ] {
+        let loaded = Settings::parse_settings(body).unwrap();
+        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION, "{body}");
+        assert_eq!(loaded.idle_lock_seconds, 123, "{body}");
+        // A legacy marker stays compatible: known fields are still honoured.
+        assert_eq!(loaded.server_url, Settings::default().server_url, "{body}");
+    }
+
+    for raw in [
+        serde_json::json!(-1),
+        serde_json::json!(-0.5),
+        serde_json::json!(1.5),
+        serde_json::json!("NaN"),
+        serde_json::json!(" -1 "),
+    ] {
+        assert_eq!(super::schema_version_of(Some(&raw)), None, "{raw}");
+    }
+    // Integral floats stay on the future side of the guard (regression guard
+    // for the adjacent branch).
+    assert_eq!(
+        super::schema_version_of(Some(&serde_json::json!(2.0))),
+        Some(2)
+    );
+}
+
+#[test]
+fn settings_load_error_to_app_error_matrix() {
+    let cases = [
+        (SettingsLoadError::NotFound, AppError::NotFound),
+        (SettingsLoadError::ReadFailed, AppError::ReadFailed),
+        (SettingsLoadError::ParseFailed, AppError::ParseFailed),
+        (SettingsLoadError::TooLarge, AppError::TooLarge),
+        (
+            SettingsLoadError::Other("固有の失敗"),
+            AppError::Other("固有の失敗".to_string()),
+        ),
+    ];
+    for (source, expected) in cases {
+        let converted = AppError::from(source);
+        assert_eq!(converted.message(), expected.message());
+        assert_eq!(converted.to_string(), expected.to_string());
+    }
+}
+
+#[test]
+fn app_error_to_settings_load_error_matrix() {
+    use crate::error::{BoxedCause, OTHER_ERROR_MESSAGE};
+
+    let plain = [
+        (AppError::NotFound, SettingsLoadError::NotFound),
+        (AppError::ReadFailed, SettingsLoadError::ReadFailed),
+        (AppError::ParseFailed, SettingsLoadError::ParseFailed),
+        (AppError::TooLarge, SettingsLoadError::TooLarge),
+    ];
+    for (source, expected) in plain {
+        assert_eq!(SettingsLoadError::from(source), expected);
+    }
+    // Cause-carrying variants collapse to their plain sibling.
+    assert_eq!(
+        SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::text("io"))),
+        SettingsLoadError::ReadFailed
+    );
+    assert_eq!(
+        SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::text("json"))),
+        SettingsLoadError::ParseFailed
+    );
+    // Every other AppError variant lands in the catch-all; the text is
+    // intentionally not preserved by this direction of the conversion.
+    for source in [
+        AppError::Other("custom".to_string()),
+        AppError::Timeout,
+        AppError::RandomUnavailable,
+        AppError::InvalidLogin("bad".to_string()),
+    ] {
+        assert_eq!(
+            SettingsLoadError::from(source),
+            SettingsLoadError::Other(OTHER_ERROR_MESSAGE)
+        );
+    }
+}

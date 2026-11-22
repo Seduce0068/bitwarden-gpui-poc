@@ -540,6 +540,22 @@ fn is_blocked_server_url_without_dns(value: &str) -> bool {
     is_blocked_server_url_with(value, |_| Vec::new())
 }
 
+/// Build the API key sent to the server from a validated config.
+///
+/// Both credential strings are stripped of surrounding whitespace. `client_id`
+/// was already trimmed on this path; keeping `client_secret` asymmetric meant a
+/// secret copied with a trailing newline (a common artifact of files and QR
+/// codes) reached the server untrimmed and failed login even though
+/// [`validate_config`] accepts it. That validator already rejects a
+/// whitespace-only secret, so trimming here cannot turn a missing value into a
+/// present one.
+fn api_key_from(config: &AuthConfig) -> ApiKey {
+    ApiKey {
+        client_id: config.client_id.trim().to_string(),
+        client_secret: SecretString::from(config.client_secret.expose_secret().trim().to_string()),
+    }
+}
+
 /// Validate everything that does not require a network round trip.
 ///
 /// # Errors
@@ -598,6 +614,17 @@ pub struct AuthenticatedVault {
     ///
     /// The login flow copies this flag before the vault is consumed and
     /// surfaces it in the success status, warning that the data may be stale.
+    ///
+    /// Known constraint: the restore path has no trusted account id to compare
+    /// against. The fallback runs only after `/api/sync` failed, so unlike a
+    /// fresh response it yields no `profile.id`; the public `openwarden::Session`
+    /// does not expose one either. [`crate::cache::cached_sync_for_detailed`]
+    /// therefore matches the cache by server URL only, and a cache left by a
+    /// *different account on the same server* can be restored here even though
+    /// the caller authenticated as someone else. Callers that do have a trusted
+    /// id can use [`crate::cache::SyncCache`]'s stored `user_id` themselves; the
+    /// login flow cannot, so this is recorded as a known limitation instead of
+    /// implying an account check that is not performed.
     pub from_cache: bool,
 }
 
@@ -850,10 +877,7 @@ async fn authenticate_inner(
         .prelogin(config.email.trim())
         .await
         .map_err(|error| AuthError::from(AppError::PreloginCause(BoxedCause::new(error))))?;
-    let api_key = ApiKey {
-        client_id: config.client_id.trim().to_string(),
-        client_secret: config.client_secret.clone(),
-    };
+    let api_key = api_key_from(config);
     let session = client
         .login_api_key(&api_key)
         .await
@@ -881,7 +905,9 @@ async fn authenticate_inner(
         Some(sync) => (sync, false),
         // A transport failure or an unparsable (e.g. PascalCase) body both
         // leave us without a fresh vault; try the encrypted cache in either
-        // case, as the pre-0.1.1 path did.
+        // case, as the pre-0.1.1 path did. No fresh `profile.id` exists on this
+        // path, so the cache can only be matched by server URL (see the
+        // `from_cache` field docs for the cross-account limitation).
         None => match crate::cache::cached_sync_for_detailed(config.server_url.trim()) {
             Ok(sync) => (sync, true),
             Err(cache_error) => {

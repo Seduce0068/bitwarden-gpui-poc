@@ -548,6 +548,15 @@ pub fn import_logins_with_audit(vault: &OpenVault) -> Result<(Vault, Vec<ImportA
                 audit.push(ImportAudit::Ignored { id, revision });
                 continue;
             }
+            // The audit entry records only revision metadata. Field values are
+            // re-read from the concrete `openwarden::Vault` by id, and
+            // `Vault::cipher(id)` returns its *first* matching row. When raw
+            // duplicates reach this branch (only tests bypass `parse_sync`'s
+            // pre-dedup), the replacement therefore keeps the first row's
+            // decrypted content even though `info` is the newer revision.
+            // Production is safe because `parse_sync` collapses duplicates
+            // before `apply_sync`, so a newer `LoginInfo` always refers to the
+            // same row the field readers see (see `dedup_ciphers_by_revision`).
             if let Some(existing) = model.items.iter_mut().find(|item| item.id == id) {
                 *existing = login_item(vault, &info);
             }

@@ -23,7 +23,13 @@ use std::sync::OnceLock;
 use crate::error::{AppError, BoxedCause};
 use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::health::Thresholds;
-use crate::limits::{truncate_to_limit, MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+use crate::limits::{
+    truncate_to_limit, MAX_CLIPBOARD_RESTORE_SECONDS, MAX_EMAIL_LEN, MAX_IDLE_LOCK_SECONDS,
+    MAX_LOGIN_TIMEOUT_SECONDS, MAX_PASSPHRASE_WORDS, MAX_PASSWORD_LENGTH, MAX_SERVER_URL_LEN,
+    MAX_STALE_DAYS, MAX_WEAK_BITS, MIN_CLIPBOARD_RESTORE_SECONDS, MIN_IDLE_LOCK_SECONDS,
+    MIN_LOGIN_TIMEOUT_SECONDS, MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH, MIN_STALE_DAYS,
+    MIN_WEAK_BITS,
+};
 
 /// Maximum accepted size of `settings.json` (1 MiB). Anything larger is
 /// rejected before parsing so a truncated/garbled file cannot consume memory
@@ -438,6 +444,14 @@ const UUID_TEXT_LEN: usize = 36;
 /// # Errors
 ///
 /// Returns [`getrandom::Error`] when the OS random source is unavailable.
+///
+/// Testing note: there is deliberately no injected RNG parameter here. Adding
+/// a mock/failing source would mean changing the function signature across its
+/// callers and adding a test-only dependency or feature in `Cargo.toml`, which
+/// is outside this module's change scope. Tests therefore cover the structural
+/// contract (canonical v4 UUID shape and non-collision between draws) and the
+/// persisted/reused-value paths, but cannot force the `getrandom::fill`
+/// failure branch.
 pub fn generate_device_id() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes)?;
@@ -497,13 +511,31 @@ impl Settings {
         }
         truncate_to_limit(&mut result.server_url, MAX_SERVER_URL_LEN);
         truncate_to_limit(&mut result.email, MAX_EMAIL_LEN);
-        result.idle_lock_seconds = result.idle_lock_seconds.clamp(60, 3600);
-        result.login_timeout_seconds = result.login_timeout_seconds.clamp(1, 3600);
-        result.clipboard_restore_seconds = result.clipboard_restore_seconds.clamp(1, 3600);
-        result.password_generator.length = result.password_generator.length.clamp(4, 128);
-        result.passphrase_generator.words = result.passphrase_generator.words.clamp(2, 20);
-        result.thresholds.weak_bits = result.thresholds.weak_bits.clamp(1, 200);
-        result.thresholds.stale_days = result.thresholds.stale_days.clamp(1, 3650);
+        result.idle_lock_seconds = result
+            .idle_lock_seconds
+            .clamp(MIN_IDLE_LOCK_SECONDS, MAX_IDLE_LOCK_SECONDS);
+        result.login_timeout_seconds = result
+            .login_timeout_seconds
+            .clamp(MIN_LOGIN_TIMEOUT_SECONDS, MAX_LOGIN_TIMEOUT_SECONDS);
+        result.clipboard_restore_seconds = result
+            .clipboard_restore_seconds
+            .clamp(MIN_CLIPBOARD_RESTORE_SECONDS, MAX_CLIPBOARD_RESTORE_SECONDS);
+        result.password_generator.length = result
+            .password_generator
+            .length
+            .clamp(MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH);
+        result.passphrase_generator.words = result
+            .passphrase_generator
+            .words
+            .clamp(MIN_PASSPHRASE_WORDS, MAX_PASSPHRASE_WORDS);
+        result.thresholds.weak_bits = result
+            .thresholds
+            .weak_bits
+            .clamp(MIN_WEAK_BITS, MAX_WEAK_BITS);
+        result.thresholds.stale_days = result
+            .thresholds
+            .stale_days
+            .clamp(MIN_STALE_DAYS, MAX_STALE_DAYS);
         result
     }
 

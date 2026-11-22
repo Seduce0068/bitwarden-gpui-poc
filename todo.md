@@ -24,10 +24,26 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第58弾で 10 件すべてを完了）。
+なし（第59弾で 13 件すべてを完了）。
 
 ## 完了
 
+- [x] 第59弾（16 担当・3 回目）の指摘 13 件を完結（2026-11-22）
+  - お気に入り status の未保存マーカー、監査再計算時の status、
+    F1 二重表示、区切り表示、TOTP 期間境界と CycleSort のテストを修正。
+  - client_secret trim、SecretString の UTF-8 境界クランプ、設定
+    クランプ定数の limits 集約、cache `load_default` の4分岐、
+    vault_sync Updated 分岐、model の並び順と mask_uri、
+    health/generator/totp の境界テストを追加。
+  - CHANGELOG 第58弾と ADR の cached_sync_for_detailed 表記を修正。
+  - 依存監査で検出された RUSTSEC-2026-0592（url 2.5.8 の
+    `Url::origin()` スタックオーバーフロー）を、url 2.5.9 と
+    form_urlencoded 1.2.3 への更新で解消。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（437 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第58弾（16 担当・2 回目）の指摘 10 件を完結（2026-11-22）
   - キャッシュのフォールバック契約、空区切りパスフレーズの監査過大評価、
     監査選択行の severity コントラストと非色マーカーを修正。

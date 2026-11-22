@@ -758,3 +758,82 @@ fn plain_import_discards_the_audit_the_with_audit_variant_exposes() {
         "the change log exists but `import_logins` discards it: {audit:?}"
     );
 }
+
+#[test]
+fn updated_branch_keeps_first_rows_decrypted_content_for_raw_duplicates() {
+    // `import_logins_with_audit` reads fields from a concrete
+    // `openwarden::Vault` by id. With duplicates that bypass `parse_sync`, the
+    // field readers see the first row, so the `Updated` replacement can refresh
+    // revision metadata but not the decrypted password. Production avoids this
+    // by deduplicating before `apply_sync` (covered by the sibling test using
+    // `unlocked_vault`).
+    let id = "updated-content";
+    let mut old = encrypted_login(id, "OLD_UPDATED_PASSWORD", REAL_TOTP);
+    old["revisionDate"] = serde_json::json!("2024-01-01T00:00:00Z");
+    let mut newest = encrypted_login(id, "NEW_UPDATED_PASSWORD", REAL_TOTP);
+    newest["revisionDate"] = serde_json::json!("2024-03-01T00:00:00Z");
+    let vault = unlocked_vault_raw(&[old.clone(), newest.clone()]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].id, id);
+    assert_eq!(
+        model.items[0].revision_date,
+        parse_revision(Some("2024-03-01T00:00:00Z")).unwrap(),
+        "the newer LoginInfo's revision must win"
+    );
+    assert_eq!(
+        model.items[0].password(),
+        Some("OLD_UPDATED_PASSWORD"),
+        "field decryption resolves by id to the first raw duplicate"
+    );
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: parse_revision(Some("2024-01-01T00:00:00Z")).unwrap(),
+            },
+            ImportAudit::Updated {
+                id: id.to_string(),
+                old_revision: parse_revision(Some("2024-01-01T00:00:00Z")).unwrap(),
+                new_revision: parse_revision(Some("2024-03-01T00:00:00Z")).unwrap(),
+            },
+        ]
+    );
+
+    // The production path (parse_sync pre-dedup) pairs the newer revision with
+    // its own ciphertext, so the newest password really is imported there.
+    let deduped = unlocked_vault(&[old, newest]);
+    let (model, _) = import_logins_with_audit(&deduped).expect("import should succeed");
+    assert_eq!(model.items[0].password(), Some("NEW_UPDATED_PASSWORD"));
+}
+
+#[test]
+fn parse_sync_retains_the_original_failure_as_a_source() {
+    use std::error::Error as _;
+
+    for body in [
+        &b"not json"[..],
+        &br#"{"profile":{"id":"u"},"Key":1,"key":2}"#[..],
+        &br#"{"folders":[],"ciphers":[]}"#[..],
+    ] {
+        let error = parse_sync(body).unwrap_err();
+        assert!(
+            matches!(error, SyncError::InvalidLoginCause(_, _)),
+            "{error:?}"
+        );
+        let source = error
+            .source()
+            .expect("every parse_sync failure must carry a typed cause");
+        assert!(!source.to_string().is_empty(), "{error:?}");
+        // AppError::InvalidLoginCause keeps the family message in `message()`
+        // and the original serde/openwarden text in `source()`; the latter is
+        // only available before conversion to the small UI error enum.
+        assert_eq!(error.message(), "ログイン項目を読み取れませんでした");
+        assert!(!source
+            .to_string()
+            .contains("ログイン項目を読み取れませんでした"));
+    }
+}
