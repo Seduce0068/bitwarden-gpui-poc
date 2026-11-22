@@ -445,7 +445,11 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
         .iter()
         .find(|folder| folder.id == "f-bad")
         .unwrap();
-    assert_eq!(bad.name, "フォルダ (f-bad)");
+    // The placeholder must not expose the internal folder id (vault_sync.rs:237).
+    assert_eq!(bad.name, "(復号できませんでした)");
+    assert!(!bad.name.contains("f-bad"), "{:?}", bad.name);
+    // The id is still available for filtering and lookup.
+    assert_eq!(bad.id, "f-bad");
 }
 
 /// A personal login whose fields are real `EncString` ciphertexts, matching
@@ -815,6 +819,10 @@ fn key_conflicts_inside_array_objects_are_rejected() {
     let error = super::normalize_sync_keys(&mut value).unwrap_err();
     assert!(error.contains("conflicting keys"), "{error}");
     assert!(error.contains("key"), "{error}");
+    // The server controls the raw key names; they must not be echoed into a
+    // detail string that may reach diagnostics (vault_sync.rs:139-143).
+    assert!(!error.contains("`Key`"), "{error}");
+    assert!(!error.contains("`key`"), "{error}");
 
     // A single spelling per object remains valid.
     let mut clean = serde_json::json!({
@@ -922,5 +930,44 @@ fn parse_sync_retains_the_original_failure_as_a_source() {
         assert!(!source
             .to_string()
             .contains("ログイン項目を読み取れませんでした"));
+    }
+}
+
+#[test]
+fn absent_password_is_empty_and_markers_are_exact() {
+    // `vault.password()` returns `Ok(None)` when the field is absent. The
+    // importer must map that to a genuinely empty password (vault_sync.rs:
+    // 295-303), not to the undecryptable marker or a pseudo-marker.
+    let vault = unlocked_vault(&[cipher("no-password", "2024-01-01T00:00:00Z")]);
+    let (model, _audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    let item = model
+        .items
+        .iter()
+        .find(|item| item.id == "no-password")
+        .unwrap();
+    assert_eq!(item.password(), Some(""));
+    assert!(!is_undecryptable_password(item.password().unwrap()));
+    assert!(!is_undecryptable_totp(item.totp_secret().unwrap_or("")));
+
+    // The marker helpers use exact equality (vault_sync.rs:39-52): a lookalike
+    // must never be mistaken for "ciphertext could not be decrypted".
+    assert!(is_undecryptable_password(UNDECRYPTABLE_PASSWORD));
+    assert!(is_undecryptable_totp(UNDECRYPTABLE_TOTP));
+    for impostor in [
+        "",
+        "openwarden:password-undecryptable",
+        "\u{0}openwarden:password-undecryptable ",
+        "\u{0}openwarden:totp-undecryptable ",
+        "\u{0}OPENWARDEN:PASSWORD-UNDECRYPTABLE",
+        "\u{0}openwarden:password-undecryptable\u{0}",
+    ] {
+        assert!(
+            !is_undecryptable_password(impostor),
+            "pseudo-marker accepted as a password marker: {impostor:?}"
+        );
+        assert!(
+            !is_undecryptable_totp(impostor),
+            "pseudo-marker accepted as a TOTP marker: {impostor:?}"
+        );
     }
 }

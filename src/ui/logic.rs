@@ -152,9 +152,16 @@ pub(super) fn auth_hint(editing: bool) -> &'static str {
 }
 
 /// Hint for the settings panel, switched while a field is being edited.
+///
+/// The status bar already announces the editing state through
+/// `ui::input::text_edit_start_status` (which starts with the shared
+/// "入力中:" prefix from `TEXT_EDIT_ARROW_KEYS_HINT`), and the panel no
+/// longer draws that shared constant itself. Mirroring the status bar's F1
+/// de-duplication policy, the inline hint drops the prefix too so the two
+/// lines do not both open with "入力中:" while a field is active.
 pub(super) fn settings_hint(editing: bool) -> &'static str {
     if editing {
-        "入力中: w/c/l/d も文字として入力（保存はしません） / Backspace: 削除 / Enter: 確定（保存はしません） / Esc: 確定 / F1: フォーカス復帰"
+        "w/c/l/d も文字として入力（保存はしません） / Backspace: 削除 / Enter: 確定（保存はしません） / Esc: 確定 / F1: フォーカス復帰"
     } else {
         "1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログイン制限 / 5,6: 復元 / w: 保存 / d: 破棄 / c: 戻る / l: ロック / Esc: 終了 / F1: フォーカス復帰"
     }
@@ -359,6 +366,22 @@ mod tests {
         assert!(settings.contains("保存はしません"));
         assert!(settings.contains("w/c/l/d も文字として入力"));
         assert!(settings_hint(false).contains("w: 保存 / d: 破棄"));
+    }
+
+    #[test]
+    fn settings_inline_hint_does_not_repeat_the_status_bar_editing_prefix() {
+        // The status bar's editing status starts with the shared arrow-key
+        // hint, which itself begins with "入力中:". The inline settings hint
+        // must therefore carry only settings-specific keys, mirroring the
+        // status bar's F1 de-duplication policy.
+        assert!(crate::ui::keys::TEXT_EDIT_ARROW_KEYS_HINT.starts_with("入力中:"));
+        let editing = settings_hint(true);
+        assert!(
+            !editing.starts_with("入力中:"),
+            "the inline hint must not repeat the status-bar prefix: {editing}"
+        );
+        assert!(!editing.contains("矢印キー"), "{editing}");
+        assert!(!settings_hint(false).starts_with("入力中:"));
     }
 
     #[test]

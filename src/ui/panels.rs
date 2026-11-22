@@ -7,7 +7,6 @@ use gpui_kit::*;
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
 use crate::health::{has_totp_field, has_usable_totp, Report, Severity};
 use crate::settings::Settings;
-use crate::ui::keys::TEXT_EDIT_ARROW_KEYS_HINT;
 use crate::ui::logic::{settings_hint, unsaved_marker};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
 use crate::vault_sync::is_undecryptable_totp;
@@ -476,13 +475,12 @@ pub(super) fn settings_panel<'a>(
                 .mt_4()
                 .text_xs()
                 .text_color(rgb(0xa6adc8))
+                // The editing state and arrow-key ownership are announced
+                // once by the status bar (`text_edit_start_status`). Drawing
+                // `TEXT_EDIT_ARROW_KEYS_HINT` here as well produced two
+                // "入力中:" lines in a row, so the panel keeps only its own
+                // settings-specific hint.
                 .child(settings_hint(editing.is_some())),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(0xa6adc8))
-                .child(TEXT_EDIT_ARROW_KEYS_HINT),
         )
 }
 

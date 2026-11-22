@@ -639,6 +639,68 @@ fn filter_labels_resolve_folder_names() {
 }
 
 #[test]
+fn filter_labels_cover_favorites_and_no_folder() {
+    let vault = sample();
+    // Both sidebar-only filters must have a stable label (model.rs:697-707).
+    assert_eq!(Filter::Favorites.label(&vault.folders), "お気に入り");
+    assert_eq!(Filter::NoFolder.label(&vault.folders), "フォルダなし");
+    // Labels do not depend on folder contents when the filter is not a folder.
+    assert_eq!(Filter::Favorites.label(&[]), "お気に入り");
+    assert_eq!(Filter::NoFolder.label(&[]), "フォルダなし");
+}
+
+#[test]
+fn sort_key_next_cycles_through_all_four_variants() {
+    // All four branches of `SortKey::next` (model.rs:727-734) must form one
+    // closed cycle; a missing branch would leave the UI sort button stuck.
+    assert_eq!(SortKey::NameAsc.next(), SortKey::NameDesc);
+    assert_eq!(SortKey::NameDesc.next(), SortKey::RecentlyModified);
+    assert_eq!(SortKey::RecentlyModified.next(), SortKey::Kind);
+    assert_eq!(SortKey::Kind.next(), SortKey::NameAsc);
+
+    let mut key = SortKey::NameAsc;
+    for _ in 0..4 {
+        key = key.next();
+    }
+    assert_eq!(key, SortKey::NameAsc);
+}
+
+#[test]
+fn view_sorting_uses_comparison_keys_for_names() {
+    // `compare()` normalizes both names with `comparison_key` before ordering
+    // (model.rs:923-926), and `Vault::view` normalizes the query the same way
+    // (model.rs:819-826). NFD/uppercase spellings must therefore sort and
+    // search identically to their precomposed/lowercase counterparts.
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "cafe\u{301}", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("2", "Café", "u", "p", "https://b.example"));
+    assert_eq!(
+        vault
+            .view(&Filter::All, "CAFE\u{301}", SortKey::NameAsc)
+            .len(),
+        2
+    );
+    let ids: Vec<&str> = vault
+        .view(&Filter::All, "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["1", "2"]);
+    let desc: Vec<&str> = vault
+        .view(&Filter::All, "", SortKey::NameDesc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(desc, vec!["2", "1"]);
+    // The comparison keys themselves remain equal across the two spellings.
+    assert_eq!(comparison_key("cafe\u{301}"), comparison_key("Caf\u{e9}"));
+}
+
+#[test]
 fn sort_key_kind_orders_by_wire_number_then_name_and_has_a_label() {
     let mut vault = Vault::new();
     // Inserted out of kind order; names alone would sort differently.

@@ -390,6 +390,29 @@ mod tests {
     }
 
     #[test]
+    fn revalidate_selection_treats_no_selection_as_valid_without_side_effects() {
+        // `selection_in_view(None, ..)` is deliberately true: actions that
+        // need a row use `required_item_index` instead, so revalidation must
+        // not select the first row or rewind on behalf of an absent selection.
+        let mut state = state_with_items();
+        state.selected_id = None;
+        let before = state.rewind_calls;
+
+        assert!(state.revalidate_selection());
+        assert_eq!(state.selected_id, None);
+        assert_eq!(
+            state.rewind_calls, before,
+            "an absent selection must not rewind the list"
+        );
+
+        // An empty view obeys the same contract.
+        let mut empty = VaultViewState::new();
+        assert!(empty.revalidate_selection());
+        assert_eq!(empty.selected_id, None);
+        assert_eq!(empty.rewind_calls, 0);
+    }
+
+    #[test]
     fn cycling_from_a_folder_or_nofolder_returns_to_all() {
         let mut state = state_with_items();
         state.filter = Filter::Folder("f1".into());

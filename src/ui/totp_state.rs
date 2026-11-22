@@ -284,6 +284,29 @@ mod tests {
     }
 
     #[test]
+    fn display_resamples_when_the_clock_moves_backwards() {
+        let mut state = TotpState::new();
+        let later = state.display(SECRET, 40);
+        assert!(later.contains("あと20秒"), "{later}");
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40));
+
+        // `Tick::is_fresh` treats any earlier timestamp as stale (see
+        // totp.rs): a clock correction must replace the cached snapshot,
+        // otherwise a code sampled in a future period would keep being shown.
+        let earlier = state.display(SECRET, 26);
+        assert!(earlier.contains("あと4秒"), "{earlier}");
+        assert!(earlier.contains("まもなく期限切れ"));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(26));
+        assert_ne!(later, earlier);
+
+        // Back in the original period: the newer (smaller) timestamp is no
+        // longer fresh, so the cache is refreshed once more.
+        let again = state.display(SECRET, 40);
+        assert_eq!(again, later);
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40));
+    }
+
+    #[test]
     fn current_code_and_secret_identity_track_the_displayed_snapshot() {
         let mut state = TotpState::new();
         assert_eq!(state.current_code(), None);

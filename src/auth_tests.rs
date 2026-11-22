@@ -225,6 +225,22 @@ fn wildcard_dns_aliases_with_embedded_link_local_literals_are_blocked() {
     assert!(!is_blocked_server_url_without_dns(
         "https://192.168.1.10.nip.io"
     ));
+
+    // The public validation entry point must reach the same check, so a
+    // credential-carrying config cannot bypass it by using an alias.
+    for value in [
+        "http://169.254.169.254.nip.io",
+        "https://169.254.1.1.sslip.io",
+        "http://169-254-169-254.nip.io",
+    ] {
+        let mut config = config();
+        config.server_url = value.into();
+        assert_eq!(
+            validate_config(&config),
+            Err(AuthError::BlockedServerUrl),
+            "{value}"
+        );
+    }
 }
 
 #[test]
@@ -466,6 +482,23 @@ fn secret_clamp_never_splits_a_utf8_character() {
     assert_eq!(two.expose_secret(), "あ");
     super::truncate_secret_to_limit(&mut two, 0);
     assert!(two.expose_secret().is_empty());
+}
+
+#[test]
+fn secret_clamp_is_a_no_op_when_the_value_fits() {
+    // `char_boundary_at` returns None for a value at or under the limit, so
+    // truncate_secret_to_limit returns before replacing the buffer
+    // (auth.rs:349-355). The same SecretString instance and its contents must
+    // survive unchanged — in particular, no zeroizing of an in-bounds secret.
+    let mut secret = SecretString::from("short-secret".to_string());
+    super::truncate_secret_to_limit(&mut secret, 100);
+    assert_eq!(secret.expose_secret(), "short-secret");
+
+    // Exactly at the limit is still a no-op (the boundary is just past the end).
+    let at_limit = "あ".repeat(10);
+    let mut secret = SecretString::from(at_limit.clone());
+    super::truncate_secret_to_limit(&mut secret, 10);
+    assert_eq!(secret.expose_secret(), at_limit);
 }
 
 #[test]

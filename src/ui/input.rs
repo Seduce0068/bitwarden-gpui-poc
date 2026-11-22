@@ -39,12 +39,22 @@ pub(super) fn cycle_sort(view: &mut crate::ui::vault_view::VaultViewState) {
 
 /// Status shown when a text-editing mode begins.
 ///
-/// The inline help in `ui::logic` cannot be changed from this module, so the
-/// arrow-key ownership is also announced here for all three editing modes
-/// (auth, search, settings). Keeping it in one pure helper makes the wording
-/// testable without a GPUI window.
+/// This status owns the shared "入力中:" arrow-key guidance for all three
+/// editing modes (auth, search, settings); the settings panel deliberately
+/// draws only its settings-specific inline hint so the prefix appears once.
+/// Keeping it in one pure helper makes the wording testable without a GPUI
+/// window.
 pub(super) fn text_edit_start_status() -> String {
     format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
+}
+
+/// Status after confirming a settings field with Enter/Escape.
+///
+/// Confirming a field is not a save, so any unsaved marker must survive just
+/// like it does on every other transient status. Kept as a pure helper so the
+/// contract can be exercised without a GPUI window.
+pub(super) fn settings_edit_finished_status(dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved("入力を確定しました（w: 保存 / d: 破棄）", dirty)
 }
 
 impl BitwardenApp {
@@ -124,8 +134,8 @@ impl BitwardenApp {
             UiAction::FinishSettingsEdit => {
                 self.editing = None;
                 // Enter/Escape only confirm the field; point at the explicit
-                // save/discard keys so the edit is not mistaken for a save.
-                self.status = "入力を確定しました（w: 保存 / d: 破棄）".to_string();
+                // save/discard keys and keep the unsaved marker visible.
+                self.status = settings_edit_finished_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::InsertAuthText(text) => {
@@ -316,6 +326,21 @@ mod tests {
         assert_eq!(
             status,
             format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_edit_finished_status_keeps_the_unsaved_marker() {
+        let clean = settings_edit_finished_status(false);
+        assert_eq!(clean, "入力を確定しました（w: 保存 / d: 破棄）");
+        let dirty = settings_edit_finished_status(true);
+        assert_eq!(
+            dirty,
+            crate::ui::app::status_with_unsaved(clean.as_str(), true)
+        );
+        assert!(
+            dirty.contains("[未保存の設定変更があります]"),
+            "confirming a field is not a save: {dirty}"
         );
     }
 

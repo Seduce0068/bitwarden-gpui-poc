@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第61弾で 10 件すべてを完了）。
+なし（第62弾は 9 件を完了、1 件を却下）。
 
 ## 完了
 
+- [x] 第62弾（16 担当・6 回目）の指摘 9 件を完結（2026-11-22）
+  - `sanitized()` の email Cf 正規化を UI 入力経路と統一。
+    cache Debug の URL クエリ秘密マスク、TOCTOU 境界ヘルパー、
+    Vault 同期の内部 id 開示排除、UI の未保存マーカーと監査スクロール、
+    各种残りテストを追加・修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（480 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第61弾（16 担当・5 回目）の指摘 10 件を完結（2026-11-22）
   - email 共有欄の Cf 入力フィルタ、キャッシュ redact の再帰化、
     `valid_email` の local part ドット規則を修正。
@@ -797,3 +807,13 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
   生成経路を持たないため本番では到達不能。現状は「フォルダ別絞り込みは
   未実装」として扱い、UI に新しいキー／操作を追加する設計判断が必要になる
   ため、今回は TODO 化せず記録のみとした。
+
+### 2026-11-22 複数文字セパレータ対応の却下
+
+- 生成パスフレーズの複数文字セパレータ（`::` / ` - ` / `_x_` 等）を
+  `passphrase_estimate` で認識する試みは、未知語の辞書語尾部（例
+  `zzznotaword` の `word`）を誤認する回帰を引き起こし、複数回の修正でも
+  収束しなかった。スキルの「自動修正と再レビューは最大2回」方針に従い
+  実装を取り下げ、`health.rs` / `health_tests.rs` は HEAD へ復元した。
+  現行の単一文字または空区切りのみを想定する挙動を維持し、
+  複数文字セパレータは未対応の既知制約として記録する。

@@ -196,6 +196,17 @@ pub(super) fn clamp_audit_row(selection: Option<usize>, len: usize) -> Option<us
     }
 }
 
+/// Scroll-handle index for a highlighted audit row.
+///
+/// The audit panel draws [`crate::ui::panels::AUDIT_HEADER_ROWS`] rows before
+/// the first finding, so a report index must be offset before it is handed to
+/// `ScrollHandle::scroll_to_item`. Kept as a pure helper so the offset rule can
+/// be exercised without a GPUI window (this crate does not enable gpui's
+/// `test-support` feature).
+pub(super) fn audit_row_scroll_index(selection: Option<usize>) -> Option<usize> {
+    selection.map(|index| index + crate::ui::panels::AUDIT_HEADER_ROWS)
+}
+
 /// Status describing the audit row left highlighted after a refresh.
 ///
 /// Uses the same wording as the keyboard move status, so a threshold edit
@@ -590,10 +601,8 @@ impl BitwardenApp {
             .map_or(0, |report| report.items.len());
         let next = next_audit_row(self.audit_row_selection, delta, len);
         self.audit_row_selection = next;
-        if let Some(index) = next {
-            // The panel renders three header rows before the first item.
-            self.audit_scroll_handle
-                .scroll_to_item(index + crate::ui::panels::AUDIT_HEADER_ROWS);
+        if let Some(scroll_index) = audit_row_scroll_index(next) {
+            self.audit_scroll_handle.scroll_to_item(scroll_index);
         }
         let Some(index) = next else {
             self.status = status_with_unsaved(
@@ -731,6 +740,12 @@ impl BitwardenApp {
             .as_ref()
             .map_or(0, |report| report.items.len());
         self.audit_row_selection = clamp_audit_row(self.audit_row_selection, len);
+        // A threshold change can shorten the report and clamp the highlight
+        // to a different row. Mirror the keyboard path (`move_audit_selection`)
+        // so the scroll position follows the row actually left highlighted.
+        if let Some(scroll_index) = audit_row_scroll_index(self.audit_row_selection) {
+            self.audit_scroll_handle.scroll_to_item(scroll_index);
+        }
         // Always re-read the row name from the freshly computed report: the
         // index can stay the same while a different finding occupies it.
         if let Some(status) = audit_refresh_status_for(
@@ -817,6 +832,15 @@ mod tests {
         assert_eq!(clamp_audit_row(Some(1), 3), Some(1));
         assert_eq!(clamp_audit_row(Some(1), 0), None);
         assert_eq!(clamp_audit_row(None, 3), None);
+
+        // The clamped row is the one that must be scrolled into view: the
+        // panel renders three header rows ahead of the first finding.
+        assert_eq!(audit_row_scroll_index(None), None);
+        assert_eq!(audit_row_scroll_index(Some(0)), Some(3));
+        assert_eq!(
+            audit_row_scroll_index(clamp_audit_row(Some(5), 3)),
+            Some(2 + crate::ui::panels::AUDIT_HEADER_ROWS)
+        );
 
         let moved = audit_refresh_status(Some(2), 3, Some("Example"), false);
         assert_eq!(

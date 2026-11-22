@@ -95,13 +95,60 @@ fn mask_url_userinfo(url: &str) -> String {
     }
 }
 
+/// Redact secret-bearing query values while keeping the URL's structure.
+///
+/// A diagnostic URL may carry a token, API key or password in its query. Those
+/// values are credentials just like userinfo and must never reach a log line.
+/// Only values whose key looks sensitive are replaced; harmless parameters
+/// (and the fragment) are preserved so the diagnostic remains useful.
+fn mask_url_secrets(url: &str) -> String {
+    let masked = mask_url_userinfo(url);
+    let Some(query_start) = masked.find('?') else {
+        return masked;
+    };
+    let query_end = masked[query_start..]
+        .find('#')
+        .map(|offset| query_start + offset)
+        .unwrap_or(masked.len());
+    let fragment = &masked[query_end..];
+    let mut out = String::with_capacity(masked.len());
+    out.push_str(&masked[..query_start + 1]);
+    let mut first = true;
+    for pair in masked[query_start + 1..query_end].split('&') {
+        if !first {
+            out.push('&');
+        }
+        first = false;
+        if let Some((key, _value)) = pair.split_once('=') {
+            let folded = key.to_ascii_lowercase();
+            let sensitive = [
+                "token", "key", "secret", "password", "passwd", "auth", "sig", "session", "code",
+            ]
+            .iter()
+            .any(|needle| folded.contains(needle));
+            if sensitive {
+                out.push_str(key);
+                out.push('=');
+                out.push_str("[redacted]");
+            } else {
+                out.push_str(pair);
+            }
+        } else {
+            out.push_str(pair);
+        }
+    }
+    out.push_str(fragment);
+    out
+}
+
 impl core::fmt::Debug for SyncCache {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncCache")
             .field("version", &self.version)
             .field("user_id", &self.user_id)
-            // The URL may carry userinfo credentials; never render it verbatim.
-            .field("server_url", &mask_url_userinfo(&self.server_url))
+            // The URL may carry userinfo or query credentials; never render it
+            // verbatim.
+            .field("server_url", &mask_url_secrets(&self.server_url))
             .field("body", &format!("<{} bytes redacted>", self.body.len()))
             .finish()
     }
@@ -316,6 +363,23 @@ fn load_from_paths(
 /// the original `std::io::Error` / `serde_json::Error` in `Error::source()`.
 pub type CacheLoadError = crate::error::AppError;
 
+/// Read at most `limit + 1` bytes, rejecting anything larger.
+///
+/// The extra byte is what makes the post-`metadata` check effective against a
+/// file that grows between the two reads (TOCTOU): the caller's earlier
+/// `metadata.len()` check is only an optimization, not the security boundary.
+fn read_bounded<R: Read>(reader: &mut R, limit: u64) -> Result<Vec<u8>, CacheLoadError> {
+    let mut contents = Vec::new();
+    reader
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut contents)
+        .map_err(|error| CacheLoadError::ReadFailedCause(crate::error::BoxedCause::new(error)))?;
+    if contents.len() as u64 > limit {
+        return Err(CacheLoadError::CacheTooLarge);
+    }
+    Ok(contents)
+}
+
 /// Read a cache entry, distinguishing missing, unreadable, malformed and
 /// outdated files.
 ///
@@ -328,7 +392,7 @@ pub type CacheLoadError = crate::error::AppError;
 ///
 /// [`CacheLoadError`] when the file cannot be used as a cache.
 pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<SyncCache, CacheLoadError> {
-    let file = std::fs::File::open(path).map_err(|error| {
+    let mut file = std::fs::File::open(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             CacheLoadError::NotFound
         } else {
@@ -359,13 +423,7 @@ pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<SyncCache, Cac
     }
     // Read one byte past the limit so a file that grew after `metadata` is
     // still rejected without loading an unbounded body.
-    let mut contents = Vec::new();
-    file.take(MAX_CACHE_BYTES.saturating_add(1))
-        .read_to_end(&mut contents)
-        .map_err(|error| CacheLoadError::ReadFailedCause(crate::error::BoxedCause::new(error)))?;
-    if contents.len() as u64 > MAX_CACHE_BYTES {
-        return Err(CacheLoadError::CacheTooLarge);
-    }
+    let contents = read_bounded(&mut file, MAX_CACHE_BYTES)?;
     let cache: SyncCache = serde_json::from_slice(&contents)
         .map_err(|error| CacheLoadError::ParseFailedCause(crate::error::BoxedCause::new(error)))?;
     if cache.body.len() > MAX_CACHE_BODY_BYTES {

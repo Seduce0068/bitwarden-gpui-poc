@@ -1234,3 +1234,73 @@ fn app_error_to_settings_load_error_matrix() {
         );
     }
 }
+
+#[test]
+fn sanitized_uses_the_ui_email_format_policy() {
+    use crate::limits::has_format_character;
+
+    // The UI path (push_shared_text) strips a leading ZWSP run and rejects any
+    // other `Cf` wholesale. sanitized() must agree, otherwise load() can store
+    // an address the login form rejects forever (settings.rs:537,143-158).
+    let leading = Settings {
+        email: "\u{200b}\u{200c}alice@example.com".into(),
+        ..Default::default()
+    };
+    let safe = leading.sanitized();
+    assert_eq!(safe.email, "alice@example.com");
+    assert!(!has_format_character(&safe.email));
+    assert!(crate::auth::valid_email(&safe.email));
+
+    // Bidi override and an interior zero-width character are rejected whole.
+    for raw in [
+        "alice\u{202e}@example.com",
+        "al\u{200b}ice@example.com",
+        "\u{ad}alice@example.com",
+    ] {
+        let settings = Settings {
+            email: raw.into(),
+            ..Default::default()
+        };
+        let safe = settings.sanitized();
+        assert!(
+            safe.email.is_empty(),
+            "a hand-edited address with an unexpected Cf must be cleared: {raw:?}"
+        );
+        // sanitized() stays a pure clone-based operation.
+        assert_eq!(settings.email, raw);
+    }
+
+    // The URL field is not subject to the email structural policy.
+    let urls = Settings {
+        server_url: "https://ex\u{200b}ample.com".into(),
+        ..Default::default()
+    };
+    assert_eq!(urls.sanitized().server_url, urls.server_url);
+}
+
+#[test]
+fn sanitized_clips_clipboard_delay_to_the_lower_bound() {
+    use crate::limits::{MAX_CLIPBOARD_RESTORE_SECONDS, MIN_CLIPBOARD_RESTORE_SECONDS};
+
+    for (input, expected) in [
+        (0, MIN_CLIPBOARD_RESTORE_SECONDS),
+        (10_000, MAX_CLIPBOARD_RESTORE_SECONDS),
+    ] {
+        let settings = Settings {
+            clipboard_restore_seconds: input,
+            ..Default::default()
+        };
+        assert_eq!(settings.sanitized().clipboard_restore_seconds, expected);
+    }
+}
+
+#[test]
+fn ensure_device_id_without_a_path_only_uses_memory() {
+    let mut settings = Settings::default();
+    let generated = settings.ensure_device_id(None).unwrap().to_string();
+    assert!(is_valid_device_id(&generated));
+    assert_eq!(settings.device_id, generated);
+
+    // A second call must reuse the in-memory value; no file is involved.
+    assert_eq!(settings.ensure_device_id(None).unwrap(), generated);
+}

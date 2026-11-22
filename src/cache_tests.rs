@@ -321,6 +321,25 @@ fn mask_url_userinfo_handles_missing_userinfo_scheme_and_query_at_signs() {
 }
 
 #[test]
+fn debug_masks_secret_query_values_but_keeps_harmless_parameters() {
+    let url = "https://vault.example.com/sync?token=TOPSECRET&state=abc&api_key=KEY123#frag";
+    let masked = super::mask_url_secrets(url);
+    assert!(!masked.contains("TOPSECRET"), "{masked}");
+    assert!(!masked.contains("KEY123"), "{masked}");
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+    assert!(masked.contains("api_key=[redacted]"), "{masked}");
+    assert!(masked.contains("state=abc"), "{masked}");
+    assert!(masked.ends_with("#frag"), "{masked}");
+
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("TOPSECRET"), "{rendered}");
+    assert!(!rendered.contains("KEY123"), "{rendered}");
+    // The stored URL is still the exact value used for the mismatch check.
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
 fn restore_status_distinguishes_missing_and_user_mismatch() {
     // A missing cache is the normal first-launch case: no status text.
     assert_eq!(super::cache_restore_status(SyncCacheError::NotFound), None);
@@ -334,11 +353,36 @@ fn restore_status_distinguishes_missing_and_user_mismatch() {
 }
 
 #[test]
-fn invalid_body_is_rejected() {
+fn bounded_read_rechecks_the_size_after_metadata() {
+    // `load_detailed` checks `metadata.len()` first, then re-checks while
+    // reading (cache.rs:405-413). The helper is generic so the guard can be
+    // exercised with a small limit instead of a 64 MiB fixture: a file that
+    // grew by one byte is still rejected, and the reader is capped at
+    // limit + 1 bytes so no unbounded body is loaded.
+    let mut at_limit = std::io::Cursor::new(vec![b'x'; 8]);
+    assert_eq!(super::read_bounded(&mut at_limit, 8).unwrap().len(), 8);
+
+    let mut one_too_many = std::io::Cursor::new(vec![b'x'; 9]);
     assert_eq!(
-        SyncCache::from_body(b"not json".to_vec(), "https://vault.example.com"),
-        Err(SyncCacheError::InvalidCache)
+        super::read_bounded(&mut one_too_many, 8),
+        Err(CacheLoadError::CacheTooLarge)
     );
+
+    let mut much_too_many = std::io::Cursor::new(vec![b'x'; 1_000]);
+    assert_eq!(
+        super::read_bounded(&mut much_too_many, 8),
+        Err(CacheLoadError::CacheTooLarge)
+    );
+}
+
+#[test]
+fn invalid_body_is_rejected() {
+    // from_body returns the cause-carrying `CacheParse` variant, not the
+    // generic `InvalidCache` marker. PartialEq compares only message/detail,
+    // so an assert_eq! against InvalidCache passed without proving the type.
+    let error = SyncCache::from_body(b"not json".to_vec(), "https://vault.example.com")
+        .expect_err("invalid JSON must be rejected");
+    assert!(matches!(error, SyncCacheError::CacheParse(_)), "{error:?}");
 }
 
 #[test]

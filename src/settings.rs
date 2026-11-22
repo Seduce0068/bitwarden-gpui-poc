@@ -113,6 +113,31 @@ pub enum SharedSettingsField {
     Email,
 }
 
+/// Apply the email `Cf` policy shared by the UI input path and `sanitized()`.
+///
+/// A single leading zero-width character is common when pasting from a web
+/// form: strip it and keep the rest of the address. Only U+200B..U+200F at
+/// the very beginning of the text is tolerated; any other format character
+/// (a bidi override, a soft hyphen anywhere, a zero-width character in the
+/// middle) rejects the whole value. `None` therefore means "reject wholesale",
+/// and the caller either drops the pasted chunk or clears the stored email.
+fn normalize_email_text(text: &str) -> Option<String> {
+    let only_leading_zero_width = text.starts_with('\u{200b}')
+        && text
+            .chars()
+            .skip_while(|ch| matches!(ch, '\u{200b}'..='\u{200f}'))
+            .all(|ch| !crate::limits::is_format_character(ch));
+    if !has_format_character(text) || only_leading_zero_width {
+        Some(
+            text.chars()
+                .filter(|ch| !crate::limits::is_format_character(*ch))
+                .collect(),
+        )
+    } else {
+        None
+    }
+}
+
 impl Settings {
     /// Append text to a field owned by `Settings`, from either UI path.
     ///
@@ -136,24 +161,10 @@ impl Settings {
                 truncate_to_limit(&mut self.server_url, MAX_SERVER_URL_LEN);
             }
             SharedSettingsField::Email => {
-                // A single leading zero-width character is common when pasting
-                // from a web form: strip it and keep the rest of the address.
-                // Any other chunk containing Cf is rejected wholesale so a
-                // bidi override cannot silently reverse the visible address.
-                let filtered: String = text
-                    .chars()
-                    .filter(|ch| !crate::limits::is_format_character(*ch))
-                    .collect();
-                // Only U+200B..U+200F at the very beginning of a pasted chunk
-                // is tolerated (and stripped). Other format characters,
-                // including bidi overrides and soft hyphen anywhere in the
-                // chunk, reject the whole input.
-                let only_leading_zero_width = text.starts_with('\u{200b}')
-                    && text
-                        .chars()
-                        .skip_while(|ch| matches!(ch, '\u{200b}'..='\u{200f}'))
-                        .all(|ch| !crate::limits::is_format_character(ch));
-                if !has_format_character(text) || only_leading_zero_width {
+                // Share the exact normalization policy with `sanitized()` so a
+                // hand-edited settings file cannot reintroduce `Cf` characters
+                // that the UI input path would have rejected or stripped.
+                if let Some(filtered) = normalize_email_text(text) {
                     self.email.push_str(&filtered);
                 }
                 truncate_to_limit(&mut self.email, MAX_EMAIL_LEN);
@@ -534,6 +545,16 @@ impl Settings {
             result.device_id.clear();
         }
         truncate_to_limit(&mut result.server_url, MAX_SERVER_URL_LEN);
+        // A hand-edited settings file can carry Unicode `Cf` characters that
+        // the UI input path never accepts. Apply the same policy as
+        // `push_shared_text`: strip a leading zero-width run, reject (clear)
+        // any value containing other format characters. Without this, load()
+        // could persist an address that `auth::valid_email` always rejects.
+        if let Some(normalized) = normalize_email_text(&result.email) {
+            result.email = normalized;
+        } else {
+            result.email.clear();
+        }
         truncate_to_limit(&mut result.email, MAX_EMAIL_LEN);
         result.idle_lock_seconds = result
             .idle_lock_seconds

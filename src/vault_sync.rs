@@ -137,9 +137,10 @@ fn normalize_sync_keys(value: &mut serde_json::Value) -> Result<(), String> {
                 normalize_sync_keys(&mut child)?;
                 let target = camel_case_key(&key);
                 if normalized.contains_key(&target) {
-                    return Err(format!(
-                        "sync: conflicting keys `{key}` and `{target}` in the same object"
-                    ));
+                    // Do not echo the raw key names: a server-controlled body
+                    // can choose them, and this detail may reach diagnostics.
+                    // The variant is enough to classify the failure.
+                    return Err("sync: conflicting keys in the same object".to_string());
                 }
                 normalized.insert(target, child);
             }
@@ -233,8 +234,10 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
             // below. Tests cover the success and `Err(_)` branches.
             Ok(None) => "(名前なし)".to_string(),
             // Partial decryption failure: keep the folder with a placeholder
-            // instead of aborting the whole import.
-            Err(_) => format!("フォルダ ({id})"),
+            // instead of aborting the whole import. The internal folder id is
+            // deliberately not shown in the user-facing name; it remains in
+            // `Folder::id` where callers need it for filtering and lookup.
+            Err(_) => "(復号できませんでした)".to_string(),
         };
         folders.push(Folder {
             id: id.as_str().to_string(),
