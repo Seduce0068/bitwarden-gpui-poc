@@ -14,12 +14,46 @@ use crate::vault_sync::is_undecryptable_totp;
 /// Number of header rows rendered before the first audit item.
 pub(super) const AUDIT_HEADER_ROWS: usize = 3;
 
-/// Colour for a finding's severity, shared by the item header and its rows.
+/// Colour for a finding's severity on an unselected audit row.
 fn severity_color(severity: Severity) -> u32 {
     match severity {
         Severity::High => 0xf38ba8,
         Severity::Medium => 0xf9e2af,
         Severity::Low => 0xa6adc8,
+    }
+}
+
+/// Brighter severity tints for the selected audit row.
+///
+/// Selecting a row swaps its background from `0x1e1e2e` to `0x45475a`. The
+/// normal high (`~3.9:1`) and low (`~4.1:1`) tints then fall below WCAG 1.4.3's
+/// 4.5:1 minimum for small text. These variants keep the same hues while
+/// clearing that threshold; medium already clears it and keeps its colour.
+const SELECTED_HIGH_SEVERITY_COLOR: u32 = 0xffb3c8;
+const SELECTED_LOW_SEVERITY_COLOR: u32 = 0xcdd6f4;
+
+fn severity_color_for_row(severity: Severity, selected: bool) -> u32 {
+    if selected {
+        match severity {
+            Severity::High => SELECTED_HIGH_SEVERITY_COLOR,
+            Severity::Medium => severity_color(Severity::Medium),
+            Severity::Low => SELECTED_LOW_SEVERITY_COLOR,
+        }
+    } else {
+        severity_color(severity)
+    }
+}
+
+/// Audit row text with a non-colour marker for the highlighted row.
+///
+/// The selection background alone cannot be distinguished by colour-blind
+/// users. A leading triangle mirrors the header tabs' `panel_button_label`
+/// cue, so selection stays readable without colour perception.
+pub(super) fn audit_row_label(text: &str, selected: bool) -> String {
+    if selected {
+        format!("▶ {text}")
+    } else {
+        text.to_string()
     }
 }
 
@@ -118,14 +152,21 @@ pub(super) fn audit_panel<'a, V: 'static>(
             report.totp_coverage() * 100.0
         )));
     for (index, item) in report.items.iter().enumerate() {
-        let color = rgb(item.worst().map_or(0xa6adc8, severity_color));
+        let is_selected = selected == Some(index);
+        let color = rgb(match item.worst() {
+            Some(severity) => severity_color_for_row(severity, is_selected),
+            // An item in the report has findings; keep the fallback readable
+            // on the lighter selected background if that ever changes.
+            None if is_selected => SELECTED_LOW_SEVERITY_COLOR,
+            None => 0xa6adc8,
+        });
         let id = item.id.clone();
         let focus = focus.clone();
         panel = panel.child(
             div()
                 .id(SharedString::from(format!("audit-row-{id}")))
                 .mt_2()
-                .bg(if selected == Some(index) {
+                .bg(if is_selected {
                     rgb(0x45475a)
                 } else {
                     rgb(0x1e1e2e)
@@ -138,11 +179,14 @@ pub(super) fn audit_panel<'a, V: 'static>(
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(color)
-                        .child(format!(
-                            "[{}] {} ({})",
-                            item.worst().map_or("?", Severity::label),
-                            item.name,
-                            item.kind.label()
+                        .child(audit_row_label(
+                            &format!(
+                                "[{}] {} ({})",
+                                item.worst().map_or("?", Severity::label),
+                                item.name,
+                                item.kind.label()
+                            ),
+                            is_selected,
                         )),
                 )
                 .children(item.findings.iter().map(|finding| {
@@ -150,7 +194,7 @@ pub(super) fn audit_panel<'a, V: 'static>(
                     div()
                         .text_xs()
                         .pl_4()
-                        .text_color(rgb(severity_color(severity)))
+                        .text_color(rgb(severity_color_for_row(severity, is_selected)))
                         .child(format!("- [{}] {}", severity.label(), finding.message()))
                 })),
         );
@@ -516,6 +560,46 @@ mod tests {
         );
     }
 
+    #[::core::prelude::v1::test]
+    fn selected_audit_row_severity_colours_meet_text_contrast() {
+        const SELECTED_BG: u32 = 0x45475a;
+        const UNSELECTED_BG: u32 = 0x1e1e2e;
+
+        for severity in [Severity::High, Severity::Medium, Severity::Low] {
+            // Unselected rows keep the established palette.
+            assert_eq!(
+                severity_color_for_row(severity, false),
+                severity_color(severity)
+            );
+
+            // The original high/low tints are the regression: below 4.5:1 on
+            // the lighter selected background. Medium already clears it.
+            if severity != Severity::Medium {
+                assert!(
+                    contrast_ratio(severity_color(severity), SELECTED_BG) < 4.5,
+                    "the unselected {severity:?} tint should be the low-contrast case"
+                );
+            }
+
+            let selected = severity_color_for_row(severity, true);
+            assert!(
+                contrast_ratio(selected, SELECTED_BG) >= 4.5,
+                "{severity:?} must reach WCAG 1.4.3 text contrast on the selected row"
+            );
+            // Moving the highlight must not make the bright tint unreadable.
+            assert!(
+                contrast_ratio(selected, UNSELECTED_BG) >= 4.5,
+                "{severity:?} selected tint must stay readable after the highlight moves"
+            );
+        }
+
+        // Pin the exact tints so a future palette tweak cannot silently undo
+        // the fix while still passing the ratio assertions above.
+        assert_eq!(severity_color_for_row(Severity::High, true), 0xffb3c8);
+        assert_eq!(severity_color_for_row(Severity::Medium, true), 0xf9e2af);
+        assert_eq!(severity_color_for_row(Severity::Low, true), 0xcdd6f4);
+    }
+
     fn login_with_totp(secret: &str) -> crate::model::VaultItem {
         use crate::model::ItemData;
         use zeroize::Zeroizing;
@@ -602,5 +686,14 @@ mod tests {
         );
         // Every tab label gets the same cue, including the audit placeholder.
         assert!(panel_button_label("[監査 (未生成)]", true).starts_with("▶ "));
+    }
+
+    #[::core::prelude::v1::test]
+    fn selected_audit_row_has_a_non_colour_marker() {
+        let base = "[高] Example (Login)";
+        assert_eq!(audit_row_label(base, false), base);
+        assert_eq!(audit_row_label(base, true), format!("▶ {base}"));
+        assert!(audit_row_label(base, true).starts_with("▶ "));
+        assert_ne!(audit_row_label(base, true), audit_row_label(base, false));
     }
 }

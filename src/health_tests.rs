@@ -1050,3 +1050,98 @@ fn passphrase_with_an_unknown_word_uses_the_character_pool() {
         "a known passphrase must not use the character-pool fallback"
     );
 }
+
+#[test]
+fn twelve_digit_pin_sits_exactly_on_the_40_bit_boundary() {
+    // A numeric PIN is charged the 10-symbol pool: 12 * log2(10) rounds to
+    // exactly 40 bits, the Weak/Fair boundary (generator.rs:249 and the
+    // numeric branch of estimate_entropy). Eleven digits stay Weak.
+    let twelve = "123456789012";
+    let eleven = "12345678901";
+    assert_eq!(estimate_entropy(twelve), 40);
+    assert_eq!(estimate_entropy(eleven), 37);
+    assert_eq!(password_strength(twelve).1, Strength::Fair);
+    assert_eq!(password_strength(eleven).1, Strength::Weak);
+
+    // Documented limitation: the estimator has no "sequential digits" rule,
+    // so a 12-digit counter is Fair at the default threshold. The boundary is
+    // asserted here so a future pattern penalty is an intentional change.
+    let report = report_of(vec![login(
+        "1",
+        "Counter",
+        twelve,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        !report.items.iter().any(|item| item
+            .findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::WeakPassword { .. }))),
+        "40 bits is not below the 40-bit threshold: {report:?}"
+    );
+}
+
+#[test]
+fn empty_separator_passphrases_are_scored_with_the_word_list() {
+    use crate::generator::{passphrase_entropy, PassphraseSettings};
+    use crate::words::WORDS;
+
+    // The generator explicitly allows an empty separator and relies on the
+    // prefix-free list for unambiguous boundaries (generator.rs:169). The
+    // audit used to find no "non-alphanumeric separator" and fell back to the
+    // character-pool model, overestimating a two-word draw by ~20 bits.
+    let plain: String = WORDS[..4].iter().copied().collect();
+    let word_bits = passphrase_entropy(&PassphraseSettings {
+        words: 4,
+        separator: String::new(),
+        capitalize: false,
+        include_number: false,
+    });
+    let char_pool_bits = entropy_bits(LOWERCASE.len(), plain.chars().count()).round() as u32;
+    assert!(
+        char_pool_bits > word_bits.round() as u32 + 5,
+        "the fallback must be clearly higher for this to test the bug: {char_pool_bits} vs {word_bits}"
+    );
+    assert!((f64::from(estimate_entropy(&plain)) - word_bits).abs() <= 1.0);
+
+    for settings in [
+        PassphraseSettings {
+            words: 4,
+            separator: String::new(),
+            capitalize: false,
+            include_number: false,
+        },
+        PassphraseSettings {
+            words: 4,
+            separator: String::new(),
+            capitalize: true,
+            include_number: true,
+        },
+        PassphraseSettings {
+            words: 5,
+            separator: String::new(),
+            capitalize: false,
+            include_number: true,
+        },
+    ] {
+        let phrase = settings.generate().expect("passphrase should generate");
+        let expected = passphrase_entropy(&settings);
+        let actual = estimate_entropy(&phrase);
+        assert!(
+            (f64::from(actual) - expected).abs() <= 1.0,
+            "{phrase}: {actual} vs {expected}"
+        );
+        assert_eq!(
+            password_strength(&phrase).1,
+            Strength::from_bits(expected),
+            "{phrase}"
+        );
+    }
+
+    // Recognizer contract: a real concatenated draw is accepted, while a
+    // single word or a plain lowercase string is not treated as generated.
+    assert!(super::passphrase_estimate(&plain).is_some());
+    assert!(super::passphrase_estimate(WORDS[0]).is_none());
+    assert!(super::passphrase_estimate("abcdefghij").is_none());
+}

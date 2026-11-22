@@ -646,7 +646,9 @@ fn sanitized_clamps_shared_text_fields() {
 
 #[test]
 fn save_persists_the_sanitized_values_without_mutating_self() {
-    use crate::auth::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+    // Settings must not depend on the network-oriented auth module just for
+    // two neutral text caps; `limits` is the shared source of truth.
+    use crate::limits::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
@@ -949,4 +951,76 @@ fn file_schema_version_ignores_oversized_files() {
     std::fs::write(&path, &body).unwrap();
 
     assert_eq!(super::file_schema_version(&path), None);
+}
+
+#[test]
+fn save_replaces_a_corrupt_or_oversized_file() {
+    // `save` refuses only a *future* schema. Missing, unreadable, oversized and
+    // malformed files are all replaced with the sanitized struct, matching the
+    // load fallbacks (settings.rs:692-721).
+    for original in [
+        b"not json".to_vec(),
+        vec![b' '; MAX_SETTINGS_BYTES as usize + 2],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, &original).unwrap();
+
+        Settings {
+            email: "new@example.com".to_string(),
+            ..Default::default()
+        }
+        .save(&path)
+        .expect("a broken file must be replaced by save");
+
+        let loaded = Settings::load_detailed(&path).unwrap();
+        assert_eq!(loaded.email, "new@example.com");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+}
+
+#[test]
+fn load_advisories_warns_about_string_and_float_future_versions() {
+    for (body, expected_version) in [
+        (
+            br#"{"schema_version":"999","email":"e@example.com"}"#.as_slice(),
+            "999",
+        ),
+        (
+            br#"{"schema_version":99.0,"email":"e@example.com"}"#.as_slice(),
+            "99",
+        ),
+        (
+            br#"{"schema_version":2e3,"email":"e@example.com"}"#.as_slice(),
+            "2000",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, body).unwrap();
+
+        // The advisory must agree with `load_detailed`, which discards all
+        // schema-governed fields for such a file.
+        assert_eq!(Settings::load_detailed(&path).unwrap(), Settings::default());
+        let notices = load_advisories(&path);
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("未対応") && notice.contains(expected_version)),
+            "{body:?}: {notices:?}"
+        );
+    }
+}
+
+#[test]
+fn load_advisories_skips_an_oversized_file_even_with_a_future_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // The marker is right at the start, but the file is one byte past the cap:
+    // the advisory pass must not parse it (settings.rs:238-250).
+    let mut body = br#"{"schema_version":999,"email":"e@example.com"}"#.to_vec();
+    body.resize(MAX_SETTINGS_BYTES as usize + 1, b' ');
+    std::fs::write(&path, &body).unwrap();
+
+    assert!(load_advisories(&path).is_empty());
 }

@@ -108,6 +108,25 @@ fn countdown_and_progress_track_the_period() {
 }
 
 #[test]
+fn progress_uses_the_codes_own_custom_period() {
+    // `Code::progress()` divides by the code's period, not the usual 30s:
+    // with a 60-second window the same remaining time maps to half the bar.
+    let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&period=60");
+    for (time, expected) in [(0u64, 0.0f32), (30, 0.5), (59, 59.0 / 60.0)] {
+        let code = code_at(&uri, time).unwrap();
+        assert_eq!(code.period(), 60, "t={time}");
+        assert!(
+            (code.progress() - expected).abs() < 1e-6,
+            "t={time}: {} vs {expected}",
+            code.progress()
+        );
+    }
+    // A 30-second code at the same wall-clock instant is further along.
+    let standard = code_at(RFC_SECRET, 30).unwrap();
+    assert_eq!(standard.progress(), 0.0, "a new 30s window just started");
+}
+
+#[test]
 fn codes_change_at_the_period_boundary() {
     let before = code_at(RFC_SECRET, 29).unwrap().code().to_string();
     let after = code_at(RFC_SECRET, 30).unwrap().code().to_string();

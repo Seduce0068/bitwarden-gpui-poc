@@ -601,3 +601,96 @@ fn oversized_world_readable_file_keeps_its_size_classification() {
     std::fs::write(&path, vec![b'x'; (MAX_CACHE_BYTES + 1) as usize]).unwrap();
     assert_eq!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge));
 }
+
+#[test]
+fn unreadable_or_outdated_primary_never_falls_back_to_legacy() {
+    // The fallback is only for a *missing* primary file (the cache-directory
+    // migration). A primary that exists but cannot be trusted must report its
+    // own failure, otherwise a broken cache-dir file could silently revive
+    // stale legacy data. See `load_with_fallback` in cache.rs:216-236.
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-fallback-strict-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let new = root.join("cache").join("sync-cache.json");
+    let old = root.join("config").join("sync-cache.json");
+    std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    let legacy = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&old, &legacy).unwrap();
+    let legacy_bytes = std::fs::read(&old).unwrap();
+
+    // An outdated (version-mismatched) primary is an error, not a reason to
+    // read the legacy file.
+    let mut outdated = legacy.clone();
+    outdated.version += 1;
+    save(&new, &outdated).unwrap();
+    assert_eq!(
+        load_with_fallback(&new, &old).err(),
+        Some(CacheLoadError::VersionMismatch)
+    );
+
+    // The legacy file was not touched by either failed load.
+    assert_eq!(std::fs::read(&old).unwrap(), legacy_bytes);
+    assert_eq!(load_detailed(&old).unwrap(), legacy);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_primary_is_not_replaced_by_the_legacy_fallback() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-fallback-permission-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let new = root.join("cache").join("sync-cache.json");
+    let old = root.join("config").join("sync-cache.json");
+    std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    let legacy = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&old, &legacy).unwrap();
+    save(&new, &legacy).unwrap();
+
+    // Group/world permissions make the primary unreadable under the
+    // private-file policy, but the legacy file stays valid.
+    std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let error = load_with_fallback(&new, &old).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        "unreadable primary must be reported as-is: {error:?}"
+    );
+    assert_eq!(cache_error_message(error), REASON_UNREADABLE);
+    assert_eq!(load_detailed(&old).unwrap(), legacy);
+}
+
+#[test]
+fn secret_profile_keys_ignore_hyphen_and_underscore_separators() {
+    // `is_secret_profile_key` folds every separator away before comparing, so
+    // a body that spells the fields with hyphens or mixed case cannot smuggle
+    // key material onto disk. See cache.rs:143-158.
+    for key in [
+        "key",
+        "Key",
+        "KEY",
+        "privateKey",
+        "private_key",
+        "private-key",
+        "PRIVATE-KEY",
+        "Private-Key",
+        "private--key",
+        "-key-",
+    ] {
+        assert!(super::is_secret_profile_key(key), "must be redacted: {key}");
+    }
+    // Similarly named but non-secret fields must stay searchable/importable.
+    for key in [
+        "keyId",
+        "privateKeyValue",
+        "key-id-extra",
+        "monkey",
+        "id",
+        "",
+    ] {
+        assert!(
+            !super::is_secret_profile_key(key),
+            "must not be redacted: {key}"
+        );
+    }
+}

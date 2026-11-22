@@ -342,6 +342,48 @@ mod tests {
     }
 
     #[test]
+    fn select_index_reports_only_real_changes() {
+        let mut state = state_with_items();
+
+        // Out-of-range indices (including overflow-sized ones) are ignored.
+        assert!(!state.select_index(2));
+        assert!(!state.select_index(usize::MAX));
+        assert_eq!(state.selected_id, None);
+
+        // A real, not-yet-selected row reports the change.
+        assert!(state.select_index(1));
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+
+        // Re-selecting the already selected row is not a change.
+        assert!(!state.select_index(1));
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+
+        // Switching to a different visible row is a change.
+        assert!(state.select_index(0));
+        assert_eq!(state.selected_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn revalidate_selection_keeps_a_valid_selection_without_rewinding() {
+        let mut state = state_with_items();
+        state.selected_id = Some("b".into());
+        let before = state.rewind_calls;
+
+        assert!(state.revalidate_selection());
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+        assert_eq!(
+            state.rewind_calls, before,
+            "a still-valid selection must not rewind the list"
+        );
+
+        // The invalid branch stays the single rewind path.
+        state.selected_id = Some("missing".into());
+        assert!(!state.revalidate_selection());
+        assert_eq!(state.selected_id, None);
+        assert_eq!(state.rewind_calls, before + 1);
+    }
+
+    #[test]
     fn cycling_from_a_folder_or_nofolder_returns_to_all() {
         let mut state = state_with_items();
         state.filter = Filter::Folder("f1".into());

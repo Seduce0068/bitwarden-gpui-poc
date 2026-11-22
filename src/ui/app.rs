@@ -98,6 +98,21 @@ pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
     format!("{base}{}", unsaved_status_suffix(dirty))
 }
 
+/// Status shown after following an audit finding, in both outcomes.
+///
+/// Routing both branches through `status_with_unsaved` keeps the persistent
+/// "unsaved settings" warning visible when the user leaves the audit panel.
+/// The pure form lets the contract be tested without a GPUI window (this crate
+/// does not enable gpui's `test-support` feature).
+pub(super) fn audit_focus_status(id: &str, found: bool, dirty: bool) -> String {
+    let base = if found {
+        format!("監査の指摘項目を選択しました: {id}")
+    } else {
+        "指摘項目が一覧に見つかりません".to_string()
+    };
+    status_with_unsaved(&base, dirty)
+}
+
 /// Status the ticker leaves on screen after an idle auto-lock.
 ///
 /// `lock()` composes its own status (including the unsaved-settings warning),
@@ -442,10 +457,10 @@ impl BitwardenApp {
             self.view
                 .scroll_handle
                 .scroll_to_item(index, ScrollStrategy::Nearest);
-            self.status = format!("監査の指摘項目を選択しました: {id}");
+            self.status = audit_focus_status(&id, true, self.settings_dirty);
         } else {
             self.view.deselect_and_rewind();
-            self.status = "指摘項目が一覧に見つかりません".to_string();
+            self.status = audit_focus_status(&id, false, self.settings_dirty);
         }
         self.sync_totp_to_selection();
         cx.notify();
@@ -659,6 +674,27 @@ mod tests {
         let base = "監査行 1/2: example";
         assert!(!status_with_unsaved(base, false).contains("[未保存"));
         assert!(status_with_unsaved(base, true).contains("[未保存"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_focus_status_keeps_the_unsaved_marker_in_both_branches() {
+        let found_clean = audit_focus_status("item-42", true, false);
+        assert_eq!(found_clean, "監査の指摘項目を選択しました: item-42");
+        assert!(!found_clean.contains("[未保存"));
+
+        let found_dirty = audit_focus_status("item-42", true, true);
+        assert_eq!(found_dirty, status_with_unsaved(&found_clean, true));
+        assert!(found_dirty.starts_with(&found_clean));
+        assert!(found_dirty.contains("[未保存の設定変更があります]"));
+
+        let missing_clean = audit_focus_status("item-42", false, false);
+        assert_eq!(missing_clean, "指摘項目が一覧に見つかりません");
+        assert!(!missing_clean.contains("[未保存"));
+
+        let missing_dirty = audit_focus_status("item-42", false, true);
+        assert_eq!(missing_dirty, status_with_unsaved(&missing_clean, true));
+        assert!(missing_dirty.starts_with(&missing_clean));
+        assert!(missing_dirty.contains("[未保存の設定変更があります]"));
     }
 
     #[::core::prelude::v1::test]

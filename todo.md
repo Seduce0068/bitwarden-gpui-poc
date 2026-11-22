@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第57弾で 13 件すべてを完了）。
+なし（第58弾で 10 件すべてを完了）。
 
 ## 完了
 
+- [x] 第58弾（16 担当・2 回目）の指摘 10 件を完結（2026-11-22）
+  - キャッシュのフォールバック契約、空区切りパスフレーズの監査過大評価、
+    監査選択行の severity コントラストと非色マーカーを修正。
+  - auth / settings / vault_sync / model / totp の残りテストと
+    TOCTOU 修正、address 検索対応、ドキュメントの陳腐化を解消。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（420 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第57弾（対象16担当・細分化）の指摘 13 件を完結（2026-11-22）
   - 自動ロック時の未保存マーカー保持、TOTP バッジのコントラスト、
     タブの非色表示、キー分岐テストを追加。

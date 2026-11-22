@@ -971,3 +971,125 @@ fn timeout_wins_when_the_login_budget_expires() {
         "ログインがタイムアウトしました"
     );
 }
+
+#[test]
+fn legacy_unlock_details_lose_only_the_status_decoration_on_a_round_trip() {
+    use crate::error::BoxedCause;
+
+    // The legacy (non-structured) AppError variants store a fully formatted
+    // status message. `unlock_detail` must remove exactly that prefix/suffix
+    // so the round trip through UnlockError keeps the raw detail (auth.rs:250,
+    // 297-310); the modern constructors already store the raw detail.
+    for (app, expected_detail, formatted) in [
+        (
+            AppError::UnlockFailed("復号キーを取得できません（bad key）".into()),
+            "bad key",
+            AppError::unlock_failed("bad key"),
+        ),
+        (
+            AppError::ApplySyncFailed("同期データを取り込めません（bad sync）".into()),
+            "bad sync",
+            AppError::apply_sync_failed("bad sync"),
+        ),
+        (
+            AppError::ImportFailed("vault 変換に失敗しました（bad import）".into()),
+            "bad import",
+            AppError::import_failed("bad import"),
+        ),
+    ] {
+        let small = UnlockError::from(app);
+        match &small {
+            UnlockError::UnlockFailed(detail)
+            | UnlockError::ApplySyncFailed(detail)
+            | UnlockError::ImportFailed(detail) => {
+                assert_eq!(detail.as_str(), expected_detail, "{small:?}");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+        let restored = AppError::from(small);
+        assert_eq!(restored.message(), formatted.message(), "{restored:?}");
+    }
+
+    // A detail that itself contains the decoration is stripped only once.
+    let nested = "同期データを取り込めません（混入）";
+    let small = UnlockError::from(AppError::apply_sync_failed(nested));
+    assert!(
+        matches!(&small, UnlockError::ApplySyncFailed(detail) if detail.as_str() == nested),
+        "the embedded prefix must survive: {small:?}"
+    );
+
+    // Text without the expected prefix is never truncated.
+    let raw = UnlockError::from(AppError::ImportFailed("raw detail".into()));
+    assert_eq!(raw, UnlockError::ImportFailed("raw detail".into()));
+
+    // The cause-carrying legacy variants follow the same rule and keep source.
+    let cause = BoxedCause::text("original io failure");
+    let small = UnlockError::from(AppError::ImportFailedCause(
+        "vault 変換に失敗しました（cause detail）".into(),
+        cause,
+    ));
+    match &small {
+        UnlockError::ImportFailedCause(detail, _) => assert_eq!(detail.as_str(), "cause detail"),
+        other => panic!("unexpected variant: {other:?}"),
+    }
+    assert!(std::error::Error::source(&small).is_some());
+    assert_eq!(
+        AppError::from(small).message(),
+        AppError::import_failed_cause("cause detail", BoxedCause::text("original io failure"))
+            .message()
+    );
+}
+
+#[test]
+fn authenticate_with_timeout_clamps_a_copy_and_leaves_the_caller_untouched() {
+    fn snapshot(config: &AuthConfig) -> (String, String, String, String, String) {
+        (
+            config.server_url.clone(),
+            config.client_id.clone(),
+            config.client_secret.expose_secret().to_string(),
+            config.email.clone(),
+            config.master_password.expose_secret().to_string(),
+        )
+    }
+
+    // An empty client id fails validation deterministically on the clamped
+    // copy, so this test never touches the network. All other fields are
+    // deliberately over-long: if the function clamped `config` in place they
+    // would be shortened, which this assertion forbids (auth.rs:741-747).
+    let mut original = config();
+    original.server_url = "http://127.0.0.1:8080".into();
+    original.client_id.clear();
+    original.client_secret = SecretString::from("x".repeat(MAX_CLIENT_SECRET_LEN + 10));
+    original.email = format!("a@example.com{}", "b".repeat(MAX_EMAIL_LEN));
+    original.master_password = SecretString::from("p".repeat(MAX_MASTER_PASSWORD_LEN + 10));
+    let before = snapshot(&original);
+
+    let result = smol::block_on(authenticate_with_timeout(
+        &original,
+        "device",
+        std::time::Duration::ZERO,
+    ));
+    assert_eq!(result.err(), Some(AuthError::MissingField("client_id")));
+    assert_eq!(snapshot(&original), before, "caller config was mutated");
+}
+
+#[test]
+fn the_clamped_copy_is_what_validation_sees() {
+    // An over-long email is rejected by `validate_config`, but the private
+    // copy is clamped first. With a loopback URL and a zero budget the call
+    // must therefore reach the timeout race instead of returning InvalidEmail.
+    // This also proves the clamp is not merely a no-op copy.
+    let mut original = config();
+    original.server_url = "http://127.0.0.1:8080".into();
+    original.email = format!("a@example.com{}", "b".repeat(MAX_EMAIL_LEN));
+    assert_eq!(validate_config(&original), Err(AuthError::InvalidEmail));
+
+    let before_email = original.email.clone();
+    let result = smol::block_on(authenticate_with_timeout(
+        &original,
+        "device",
+        std::time::Duration::ZERO,
+    ));
+    assert_eq!(result.err(), Some(AuthError::Timeout));
+    assert_eq!(original.email, before_email);
+}

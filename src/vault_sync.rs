@@ -225,6 +225,12 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
     for id in vault.folders() {
         let name = match vault.folder_name(&id) {
             Ok(Some(value)) => value.expose_secret().to_string(),
+            // Known constraint: openwarden 0.1.1 returns `Ok(None)` only for a
+            // folder id that is *not* in the vault. `folders()` yields ids from
+            // that same list, so this branch is unreachable through the public
+            // API today and is kept defensively (with a placeholder rather than
+            // dropping the folder). The reachable failure is `Err(_)`, handled
+            // below. Tests cover the success and `Err(_)` branches.
             Ok(None) => "(名前なし)".to_string(),
             // Partial decryption failure: keep the folder with a placeholder
             // instead of aborting the whole import.
@@ -483,6 +489,12 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
 /// Individual field decryption failures are recorded as uninspectable (see
 /// [`UNDECRYPTABLE_PASSWORD`] and [`UNDECRYPTABLE_URI`]) instead of failing
 /// the import.
+///
+/// Known constraint: this production entry point calls
+/// [`import_logins_with_audit`] and **discards** its `Vec<ImportAudit>`. The
+/// auth/unlock path therefore cannot show duplicate-id decisions in the UI;
+/// only callers that use `import_logins_with_audit` directly (currently tests)
+/// can observe the change log.
 pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
     let (model, _) = import_logins_with_audit(vault)?;
     Ok(model)

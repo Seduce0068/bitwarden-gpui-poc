@@ -695,3 +695,66 @@ fn mixed_case_key_collision_is_rejected() {
     }"#;
     assert!(parse_sync(body).is_err());
 }
+
+#[test]
+fn dedup_counts_missing_and_invalid_revisions_as_unknown_and_keeps_first_on_ties() {
+    // `dedup_ciphers_by_revision` (vault_sync.rs:168-198) must not let a
+    // malformed timestamp outrank a real one, and equal revisions must keep
+    // the first row so normalization stays deterministic.
+    let mut value = serde_json::json!({
+        "ciphers": [
+            {"id": "missing", "revisionDate": null},
+            {"id": "missing", "revisionDate": "2024-01-02T00:00:00Z"},
+            {"id": "invalid", "revisionDate": "not-a-date"},
+            {"id": "invalid", "revisionDate": null},
+            {"id": "tie", "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "tie", "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "no-date"},
+            {"id": "no-date", "revisionDate": 12345},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    let ids: Vec<&str> = kept.iter().map(|row| row["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["missing", "invalid", "tie", "no-date"]);
+    assert_eq!(
+        kept[0]["revisionDate"],
+        serde_json::json!("2024-01-02T00:00:00Z"),
+        "a real revision beats a missing one"
+    );
+    assert_eq!(
+        kept[1]["revisionDate"],
+        serde_json::json!("not-a-date"),
+        "an unparsable revision is UNKNOWN_REVISION, tying with null: first wins"
+    );
+    assert_eq!(
+        kept[2]["revisionDate"],
+        serde_json::json!("2024-01-01T00:00:00Z")
+    );
+    assert!(
+        kept[3].get("revisionDate").is_none(),
+        "a non-string revision is unknown and ties with a missing one"
+    );
+}
+
+#[test]
+fn plain_import_discards_the_audit_the_with_audit_variant_exposes() {
+    let id = "audit-discard";
+    let vault = unlocked_vault_raw(&[
+        cipher(id, "2024-01-01T00:00:00Z"),
+        cipher(id, "2024-01-02T00:00:00Z"),
+    ]);
+    let from_plain = import_logins(&vault).expect("import should succeed");
+    let (from_audit, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    // Both entry points build the same model, but only the `*_with_audit`
+    // variant returns the duplicate decision; the production path drops it.
+    assert_eq!(from_plain.items, from_audit.items);
+    assert_eq!(from_plain.folders, from_audit.folders);
+    assert!(
+        audit
+            .iter()
+            .any(|entry| matches!(entry, ImportAudit::Updated { .. })),
+        "the change log exists but `import_logins` discards it: {audit:?}"
+    );
+}

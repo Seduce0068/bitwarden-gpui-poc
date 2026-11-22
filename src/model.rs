@@ -609,6 +609,11 @@ impl VaultItem {
                 out.push(Cow::Borrowed(&identity.last_name));
                 out.push(Cow::Borrowed(&identity.email));
                 out.push(Cow::Borrowed(&identity.phone));
+                // The street address is a normal search field, like the other
+                // identity metadata. `Debug` still redacts it (see the manual
+                // `IdentityData` Debug implementation), so search hints do not
+                // leak it into logs.
+                out.push(Cow::Borrowed(&identity.address));
                 out.push(Cow::Borrowed(&identity.company));
             }
             ItemData::SshKey(key) => {

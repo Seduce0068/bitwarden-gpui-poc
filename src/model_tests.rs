@@ -540,6 +540,63 @@ fn filter_labels_resolve_folder_names() {
 }
 
 #[test]
+fn sort_key_kind_orders_by_wire_number_then_name_and_has_a_label() {
+    let mut vault = Vault::new();
+    // Inserted out of kind order; names alone would sort differently.
+    vault.items.push(VaultItem::new(
+        "card-z",
+        "Zebra",
+        ItemData::Card(CardData::default()),
+    ));
+    vault
+        .items
+        .push(login("login-y", "Yankee", "u", "p", "https://y.example"));
+    vault.items.push(VaultItem::new(
+        "note-b",
+        "Bravo",
+        ItemData::SecureNote {
+            text: String::new(),
+        },
+    ));
+    vault
+        .items
+        .push(login("login-a", "Alpha", "u", "p", "https://a.example"));
+    vault.items.push(VaultItem::new(
+        "identity-m",
+        "Mike",
+        ItemData::Identity(IdentityData::default()),
+    ));
+    vault.items.push(VaultItem::new(
+        "ssh-s",
+        "Sierra",
+        ItemData::SshKey(SshKeyData::default()),
+    ));
+
+    let ids: Vec<&str> = vault
+        .view(&Filter::All, "", SortKey::Kind)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    // Login(1), SecureNote(2), Card(3), Identity(4), SshKey(5); ties by name.
+    assert_eq!(
+        ids,
+        vec![
+            "login-a",
+            "login-y",
+            "note-b",
+            "card-z",
+            "identity-m",
+            "ssh-s"
+        ]
+    );
+
+    assert_eq!(SortKey::Kind.label(), "種類");
+    assert_eq!(SortKey::NameAsc.label(), "名前 ↑");
+    assert_eq!(SortKey::NameDesc.label(), "名前 ↓");
+    assert_eq!(SortKey::RecentlyModified.label(), "更新が新しい順");
+}
+
+#[test]
 fn match_type_numbers_map_to_the_enum() {
     let uri = LoginUri {
         uri: "https://example.com".into(),
@@ -748,12 +805,16 @@ fn search_haystacks_cover_kind_specific_fields() {
             last_name: "Lovelace".into(),
             email: "ada@example.com".into(),
             phone: "090-1234".into(),
-            address: "Somewhere".into(),
+            address: "42 Maple Avenue".into(),
             company: "Analytical".into(),
         }),
     );
     assert!(identity.matches_query("lovelace"));
     assert!(identity.matches_query("analytical"));
+    // The address is a searchable identity field too (model.rs:607-613), but
+    // it stays redacted in Debug (see `debug_masks_identity_and_uri_details`).
+    assert!(identity.matches_query("maple avenue"));
+    assert!(identity.matches_query("MAPLE"));
 
     let ssh = VaultItem::new(
         "s",

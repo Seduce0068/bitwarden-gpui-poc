@@ -16,6 +16,14 @@ use serde::{Deserialize, Serialize};
 use crate::generator::{entropy_bits, Strength, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE, WEAK_BITS};
 use crate::model::{FingerprintVerify, ItemKind, Vault, VaultItem};
 use crate::totp::is_valid_secret;
+// Layering note: `health` depends on `vault_sync` (the openwarden bridge)
+// although the bridge is conceptually a lower, import-side layer. This
+// reverse dependency is temporarily allowed: the "could not decrypt" status
+// markers are defined next to the code that writes them so there is a single
+// source of truth, and the audit must recognize them to avoid mislabelling a
+// bad ciphertext as a weak password or a missing TOTP. Moving them to `model`
+// would change the model's public contract outside this change's scope;
+// duplicating the literals here would let the two views drift apart.
 use crate::vault_sync::{is_undecryptable_password, is_undecryptable_totp};
 use crate::words::WORDS;
 
@@ -374,36 +382,45 @@ pub fn estimate_entropy(password: &str) -> u32 {
 ///
 /// Recognizes only the exact shape [`PassphraseSettings`](crate::generator::PassphraseSettings)
 /// can emit: at least two words from the shared list, joined by one repeated
-/// non-alphanumeric separator, each optionally capitalized, with an optional
-/// single trailing digit. Anything else falls back to the character-pool
-/// estimate in [`estimate_entropy`].
+/// non-alphanumeric separator **or by no separator at all**, each optionally
+/// capitalized, with an optional single trailing digit. Anything else falls
+/// back to the character-pool estimate in [`estimate_entropy`].
+///
+/// The empty separator matters: the word list is prefix-free, so the generator
+/// happily emits `ableabove` for a two-word passphrase. Scoring that as a plain
+/// nine-letter lowercase string would report ~42 bit from the character pool,
+/// while the generator knows it is only a two-word draw (~22 bit). The audit
+/// must not overestimate such a passphrase.
 fn passphrase_estimate(value: &str) -> Option<u32> {
     let (body, with_number) = match value.as_bytes().last() {
         Some(byte) if byte.is_ascii_digit() => (&value[..value.len() - 1], true),
         _ => (value, false),
     };
-    let separator_char = body
-        .chars()
-        .find(|character| !character.is_alphanumeric())?;
-    let separator = separator_char.to_string();
-    let words: Vec<&str> = body.split(separator.as_str()).collect();
+    let (words, capitalized) = match body.chars().find(|character| !character.is_alphanumeric()) {
+        Some(separator_char) => {
+            let separator = separator_char.to_string();
+            let parts: Vec<&str> = body.split(separator.as_str()).collect();
+            // Exactly one repeated separator, not a mixture of different ones.
+            if parts.join(separator.as_str()) != body {
+                return None;
+            }
+            let mut capitalized = false;
+            let mut parsed = Vec::with_capacity(parts.len());
+            for word in parts {
+                let lower = word.to_lowercase();
+                if !WORDS.contains(&lower.as_str()) {
+                    return None;
+                }
+                capitalized |= word.chars().next().is_some_and(char::is_uppercase);
+                parsed.push(word);
+            }
+            (parsed, capitalized)
+        }
+        // No separator at all is a valid `PassphraseSettings::separator`.
+        None => words_without_separator(body)?,
+    };
     if words.len() < 2 {
         return None;
-    }
-    // Exactly one repeated separator, not a mixture of different ones.
-    if words.join(separator.as_str()) != body {
-        return None;
-    }
-    let mut capitalized = false;
-    for word in &words {
-        if word.is_empty() {
-            return None;
-        }
-        let lower = word.to_lowercase();
-        if !WORDS.contains(&lower.as_str()) {
-            return None;
-        }
-        capitalized |= word.chars().next().is_some_and(char::is_uppercase);
     }
     let mut bits = entropy_bits(WORDS.len(), words.len());
     if capitalized {
@@ -413,6 +430,39 @@ fn passphrase_estimate(value: &str) -> Option<u32> {
         bits += (10.0f64).log2();
     }
     Some(bits.round().clamp(0.0, 1000.0) as u32)
+}
+
+/// Greedily split a separator-free passphrase into shared-list words.
+///
+/// The list is prefix-free, so the first matching word at each step is the
+/// only possible parse. Only the two spellings the generator emits are
+/// accepted: an all-lowercase word, or a word with just its first ASCII letter
+/// capitalized. `None` means the value is not a generated passphrase and the
+/// caller falls back to the character-pool estimate.
+fn words_without_separator(body: &str) -> Option<(Vec<&str>, bool)> {
+    let mut words = Vec::new();
+    let mut rest = body;
+    let mut capitalized = false;
+    while !rest.is_empty() {
+        // `to_ascii_lowercase` preserves byte offsets, so slicing `rest` with
+        // the matched word's length is always a valid char boundary.
+        let folded = rest.to_ascii_lowercase();
+        let word: &str = WORDS
+            .iter()
+            .find(|candidate| folded.starts_with(**candidate))?;
+        if !rest.starts_with(word) {
+            // Only an uppercase ASCII first letter is allowed, and the tail
+            // must match the lowercase word verbatim.
+            let first = rest.chars().next()?;
+            if !first.is_ascii_uppercase() || !rest[1..].starts_with(&word[1..]) {
+                return None;
+            }
+            capitalized = true;
+        }
+        rest = rest.get(word.len()..)?;
+        words.push(word);
+    }
+    (words.len() >= 2).then_some((words, capitalized))
 }
 
 fn strip_trailing_digits(value: &str) -> Option<&str> {

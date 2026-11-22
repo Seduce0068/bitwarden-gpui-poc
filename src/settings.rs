@@ -236,12 +236,29 @@ impl core::fmt::Debug for Settings {
 /// `load_detailed`'s per-field tolerance. Files above `MAX_SETTINGS_BYTES` are
 /// skipped because `load_detailed` already reports them as too large.
 pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
-    if !std::fs::metadata(path).is_ok_and(|meta| meta.len() <= MAX_SETTINGS_BYTES) {
-        return Vec::new();
-    }
-    let Ok(contents) = std::fs::read_to_string(path) else {
+    let Ok(file) = std::fs::File::open(path) else {
         return Vec::new();
     };
+    if !file
+        .metadata()
+        .is_ok_and(|meta| meta.len() <= MAX_SETTINGS_BYTES)
+    {
+        return Vec::new();
+    }
+    // Read through the same cap as `file_schema_version` / `load_detailed`.
+    // A plain `metadata()` followed by `read_to_string()` was a TOCTOU: a file
+    // that grew in between (or a hostile file whose metadata lies) would be
+    // loaded in full just to inspect one marker. Reading one byte past the cap
+    // and rejecting that case keeps the advisory pass bounded.
+    let mut contents = String::new();
+    if file
+        .take(MAX_SETTINGS_BYTES.saturating_add(1))
+        .read_to_string(&mut contents)
+        .is_err()
+        || contents.len() as u64 > MAX_SETTINGS_BYTES
+    {
+        return Vec::new();
+    }
     let Ok(value) = serde_json::from_str::<Value>(&contents) else {
         return Vec::new();
     };
