@@ -488,8 +488,13 @@ pub(crate) const PASSWORD_PREFIX_LIMIT: usize = 16;
 /// The equivalent cap for the `"qwerty"` prefix; see [`PASSWORD_PREFIX_LIMIT`].
 const QWERTY_PREFIX_LIMIT: usize = 12;
 
-/// A small list of the passwords that show up first in every breach corpus.
-fn is_common_password(lower: &str) -> bool {
+/// Exact membership in the small list of breach-corpus passwords.
+///
+/// Split out from [`is_common_password`] so the exact-match branch can be
+/// tested independently of the `"password"`/`"qwerty"` prefix caps: an entry
+/// such as `correcthorsebatterystaple` relies on this branch alone, while an
+/// unlisted short `password...` value relies on the prefix rule alone.
+fn is_exact_common_password(lower: &str) -> bool {
     const COMMON: &[&str] = &[
         "password",
         "password1",
@@ -530,6 +535,15 @@ fn is_common_password(lower: &str) -> bool {
         "asdfghjkl",
         "correcthorsebatterystaple",
     ];
+    COMMON.contains(&lower)
+}
+
+/// Whether a lowercase password looks like a known dictionary guess.
+///
+/// Two independent branches: exact membership in the common list, or a short
+/// value capped to the `"password"` / `"qwerty"` prefix rule. Keeping them
+/// separate lets a test pin each one without the other masking a regression.
+fn is_common_password(lower: &str) -> bool {
     // A long random value that merely begins with "password" (or "qwerty")
     // is not a dictionary password. Cap the prefix matches so those values
     // keep their real (high) entropy estimate; see PASSWORD_PREFIX_LIMIT for
@@ -537,7 +551,7 @@ fn is_common_password(lower: &str) -> bool {
     // Count Unicode characters, not UTF-8 bytes: a multibyte suffix makes the
     // byte length exceed the cap even when the value is only a short
     // dictionary guess plus a few letters, which must still be flagged weak.
-    COMMON.contains(&lower)
+    is_exact_common_password(lower)
         || (lower.starts_with("password") && lower.chars().count() <= PASSWORD_PREFIX_LIMIT)
         || (lower.starts_with("qwerty") && lower.chars().count() <= QWERTY_PREFIX_LIMIT)
 }
@@ -690,7 +704,9 @@ fn audit_item(
         // Invisible whitespace, control and format characters (e.g. zero-width
         // space) can hide an insecure scheme anywhere in the string, so strip
         // them from the value used both for detection and for the masked
-        // finding. The raw URI is never stored.
+        // finding. Backslashes are treated as slashes the way browsers do, so
+        // `http:\host` cannot evade the scheme check. The raw URI is never
+        // stored: both the check and `mask_uri` use this normalized value.
         let visible: String = uri
             .uri
             .chars()
@@ -699,6 +715,7 @@ fn audit_item(
                     && !ch.is_control()
                     && !crate::limits::has_format_character(&ch.to_string())
             })
+            .map(|ch| if ch == '\\' { '/' } else { ch })
             .collect();
         if visible.to_lowercase().starts_with("http://") {
             findings.push(Finding::InsecureUri {

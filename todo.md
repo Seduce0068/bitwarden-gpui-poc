@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第65弾で 10 件すべてを完了）。
+なし（第66弾で 10 件すべてを完了）。
 
 ## 完了
 
+- [x] 第66弾（16 担当・10 回目）の指摘 10 件を完結（2026-11-23）
+  - `VaultItem` の Debug で notes をマスク、`is_common_password` の
+    完全一致/接頭辞分岐を分離、InsecureUri のバックスラッシュ正規化を追加。
+  - auth / settings / cache / sync / model / health / UI の残りテストと
+    既知制約の doc 明記を追加。start_search を本番共通ヘルパへ集約。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（552 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第65弾（16 担当・9 回目）の指摘 10 件を完結（2026-11-23）
   - Settings の Debug で server_url をマスク、cache の
     パラメータ名/二重エンコードの秘密マスクを修正。

@@ -245,9 +245,10 @@ impl BitwardenApp {
                 cx.notify();
             }
             UiAction::StartSearch => {
-                self.view.searching = true;
-                self.view.query.clear();
-                self.view.deselect_and_rewind();
+                // Delegate to the shared helper instead of duplicating its
+                // query reset here: its query-clearing contract is covered by
+                // `vault_view::tests::start_search_discards_a_previous_query_and_its_selection`.
+                self.view.start_search();
                 self.sync_totp_to_selection();
                 self.status = text_edit_start_status();
                 cx.notify();

@@ -6,6 +6,14 @@
 //! and TOTP secrets are decrypted here and copied into the model's `Zeroizing`
 //! buffers, so the UI can actually audit passwords and generate TOTP codes
 //! after a real login.
+//!
+//! Known constraint: there is no injection seam for the field decryptors.
+//! `login_item` and `folders_from` call the concrete `openwarden::Vault`
+//! readers directly, so a test cannot inject a decryption failure through a
+//! parameter; it must instead build a real vault with malformed `EncString`
+//! ciphertexts (see `undecryptable_password_keeps_the_vault_and_is_excluded_from_audit`).
+//! Adding a decryptor trait/closure parameter would change the public import
+//! signature and every caller, which is outside this module's change scope.
 
 use std::collections::{HashMap, HashSet};
 

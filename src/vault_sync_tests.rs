@@ -101,6 +101,26 @@ fn revision_dates_apply_rfc3339_offsets() {
 }
 
 #[test]
+fn pre_1970_timestamps_produce_negative_epoch_seconds() {
+    // The checked day arithmetic in `days_from_civil` (vault_sync.rs:481-500)
+    // must stay signed: a revision before the Unix epoch is a negative i64,
+    // not UNKNOWN_REVISION (0) and not a wrapped positive value.
+    assert_eq!(parse_revision(Some("1969-12-31T23:59:59Z")), Some(-1));
+    assert_eq!(parse_revision(Some("1969-12-31T00:00:00Z")), Some(-86_400));
+    // A positive offset subtracts from the local instant: 23:00 on the last
+    // day of 1969 at +09:00 is 14:00 UTC, i.e. -36000 seconds.
+    assert_eq!(
+        parse_revision(Some("1969-12-31T23:00:00+09:00")),
+        Some(-36_000)
+    );
+    // The same local clock time at UTC is also negative.
+    assert_eq!(parse_revision(Some("1969-12-31T23:00:00Z")), Some(-3_600));
+    let older = parse_revision(Some("1960-01-01T00:00:00Z")).unwrap();
+    assert!(older < 0, "{older}");
+    assert_ne!(older, crate::model::UNKNOWN_REVISION);
+}
+
+#[test]
 fn revision_dates_reject_malformed_timestamps() {
     for value in [
         "2023-11-14",                 // no time or offset
@@ -797,6 +817,28 @@ fn undecryptable_uri_marker_and_real_match_types_are_distinguished() {
     assert_eq!(uris[3].match_type, None);
     for uri in uris {
         assert!(!is_undecryptable_uri(&uri.uri));
+    }
+}
+
+#[test]
+fn uri_marker_rejects_pseudo_markers() {
+    // `is_undecryptable_uri` (vault_sync.rs:38-41) is exact equality, like its
+    // password/TOTP siblings. A lookalike must never trigger the
+    // "UriUninspectable" classification.
+    assert!(is_undecryptable_uri(UNDECRYPTABLE_URI));
+    for impostor in [
+        "",
+        "openwarden:uri-undecryptable",
+        "\u{0}openwarden:uri-undecryptable ",
+        "\u{0}OPENWARDEN:URI-UNDECRYPTABLE",
+        "\u{0}openwarden:uri-undecryptable\u{0}",
+        UNDECRYPTABLE_PASSWORD,
+        UNDECRYPTABLE_TOTP,
+    ] {
+        assert!(
+            !is_undecryptable_uri(impostor),
+            "pseudo-marker accepted as a URI marker: {impostor:?}"
+        );
     }
 }
 

@@ -584,6 +584,26 @@ fn cache_too_large_message_reaches_the_status_bar() {
     );
 }
 
+#[test]
+fn user_mismatch_cache_error_reaches_the_status_bar() {
+    // The cache layer's `UserMismatch` reason must not collapse into the plain
+    // Sync status: `cache_restore_failure` wraps it in `AuthError::Other`
+    // (auth.rs:834-844).
+    let error = cache_restore_failure(AppError::UserMismatch);
+    assert!(matches!(&error, AuthError::Other(text) if text.contains("別のアカウント")));
+    assert_eq!(
+        error.message(),
+        "同期に失敗しました（キャッシュが別のアカウントのものです）"
+    );
+    assert_eq!(
+        error.status_message(),
+        "同期に失敗しました（キャッシュが別のアカウントのものです）"
+    );
+    // The small enum's `Other` owns the text, so converting back preserves it.
+    let app = AppError::from(error);
+    assert!(matches!(app, AppError::Other(text) if text.contains("別のアカウント")));
+}
+
 use crate::auth::{AuthError, UnlockError};
 
 #[test]
@@ -1035,6 +1055,30 @@ fn missing_cache_plus_sync_failure_reports_only_the_sync_cause() {
     ));
     assert_eq!(combined.status_message(), "同期に失敗しました（HTTP 503）");
     assert!(!combined.status_message().contains("キャッシュ"));
+}
+
+#[test]
+fn sync_fallback_adopts_the_cause_message_when_there_is_no_source() {
+    // `AppError::Other` has no `Error::source()`. `sync_fallback_failure`
+    // (auth.rs:858-866) must then render `cause.message()` instead of dropping
+    // the discarded sync reason entirely.
+    let fallback = cache_restore_failure(AppError::CacheExpired);
+    let combined =
+        super::sync_fallback_failure(fallback, Some(AppError::Other("no-source reason".into())));
+    assert_eq!(combined.message(), AuthError::Sync.message());
+    assert_eq!(
+        combined.status_message(),
+        "同期に失敗しました（キャッシュが有効期限を過ぎています（no-source reason））"
+    );
+    // An empty message still leaves the tested cache status untouched.
+    let empty = super::sync_fallback_failure(
+        cache_restore_failure(AppError::CacheExpired),
+        Some(AppError::Other(String::new())),
+    );
+    assert_eq!(
+        empty.status_message(),
+        "同期に失敗しました（キャッシュが有効期限を過ぎています）"
+    );
 }
 
 #[test]

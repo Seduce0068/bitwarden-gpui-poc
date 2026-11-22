@@ -51,34 +51,37 @@ fn missing_and_broken_files_return_none() {
 fn load_detailed_distinguishes_failure_modes() {
     let missing = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-missing.json");
     let _ = std::fs::remove_file(&missing);
-    assert_eq!(
+    // `AppError`'s PartialEq compares rendered messages, so an `assert_eq!`
+    // could pass for a different variant with the same message. Pin the exact
+    // variant with `matches!` for every failure mode.
+    assert!(matches!(
         load_detailed(&missing).err(),
         Some(CacheLoadError::NotFound)
-    );
+    ));
 
     let broken = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-broken.json");
     write_fixture(&broken, b"not json");
-    assert_eq!(
+    assert!(matches!(
         load_detailed(&broken).err(),
-        Some(CacheLoadError::ParseFailed)
-    );
+        Some(CacheLoadError::ParseFailedCause(_))
+    ));
 
     // Reading a directory as a file fails (EISDIR on Unix).
     let directory = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-dir");
     std::fs::create_dir_all(&directory).unwrap();
-    assert_eq!(
+    assert!(matches!(
         load_detailed(&directory).err(),
-        Some(CacheLoadError::ReadFailed)
-    );
+        Some(CacheLoadError::ReadFailedCause(_))
+    ));
 
     let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     cache.version += 1;
     let outdated = std::env::temp_dir().join("bitwarden-gpui-poc-detailed-old.json");
     save(&outdated, &cache).unwrap();
-    assert_eq!(
+    assert!(matches!(
         load_detailed(&outdated).err(),
         Some(CacheLoadError::VersionMismatch)
-    );
+    ));
 
     for error in [
         CacheLoadError::NotFound,
@@ -408,6 +411,63 @@ fn restore_status_distinguishes_missing_and_user_mismatch() {
     );
     assert_eq!(REASON_MISSING, "キャッシュがありません");
     assert_eq!(REASON_USER_MISMATCH, "キャッシュが別のアカウントのものです");
+}
+
+#[test]
+fn cache_restore_status_covers_all_nine_branches_table_driven() {
+    use crate::error::BoxedCause;
+
+    // `cache_restore_status` (cache.rs:655-667) has one arm per reason plus
+    // the missing-cache arm and the catch-all. A table pins all nine so a
+    // future variant cannot silently inherit the generic message.
+    const GENERIC: &str = "同期に失敗しました（キャッシュを復元できませんでした）";
+    let cases: Vec<(CacheLoadError, Option<&str>, &str)> = vec![
+        (SyncCacheError::NotFound, None, "missing"),
+        (
+            SyncCacheError::CacheParse(BoxedCause::text("bad json")),
+            Some("同期に失敗しました（キャッシュが破損しています）"),
+            "corrupt",
+        ),
+        (
+            SyncCacheError::ReadFailedCause(BoxedCause::text("denied")),
+            Some("同期に失敗しました（キャッシュを読み込めません）"),
+            "unreadable",
+        ),
+        (
+            SyncCacheError::VersionMismatch,
+            Some("同期に失敗しました（キャッシュのバージョンに互換性がありません）"),
+            "outdated",
+        ),
+        (
+            SyncCacheError::CacheExpired,
+            Some("同期に失敗しました（キャッシュが有効期限を過ぎています）"),
+            "expired",
+        ),
+        (
+            SyncCacheError::UserMismatch,
+            Some("同期に失敗しました（キャッシュが別のアカウントのものです）"),
+            "user_mismatch",
+        ),
+        (
+            SyncCacheError::ServerMismatch,
+            Some("同期に失敗しました（キャッシュが別のサーバーのものです）"),
+            "server_mismatch",
+        ),
+        (
+            SyncCacheError::CacheTooLarge,
+            Some("同期に失敗しました（キャッシュがサイズ上限を超えています）"),
+            "too_large",
+        ),
+        (
+            SyncCacheError::Other("unrelated".into()),
+            Some(GENERIC),
+            "fallback",
+        ),
+    ];
+    assert_eq!(cases.len(), 9);
+    for (error, expected, name) in cases {
+        assert_eq!(super::cache_restore_status(error), expected, "{name}");
+    }
 }
 
 #[test]
@@ -764,7 +824,10 @@ fn oversized_cache_is_rejected_before_parsing() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cache.json");
     std::fs::write(&path, vec![b'x'; (MAX_CACHE_BYTES + 1) as usize]).unwrap();
-    assert_eq!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge));
+    assert!(matches!(
+        load_detailed(&path),
+        Err(CacheLoadError::CacheTooLarge)
+    ));
     assert_eq!(
         cache_error_message(CacheLoadError::CacheTooLarge),
         REASON_TOO_LARGE
@@ -915,7 +978,10 @@ fn oversized_cache_body_is_rejected_after_parsing() {
         created_at: None,
     };
     save(&path, &cache).unwrap();
-    assert_eq!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge));
+    assert!(matches!(
+        load_detailed(&path),
+        Err(CacheLoadError::CacheTooLarge)
+    ));
 }
 
 #[cfg(unix)]
@@ -955,7 +1021,10 @@ fn oversized_world_readable_file_keeps_its_size_classification() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cache.json");
     std::fs::write(&path, vec![b'x'; (MAX_CACHE_BYTES + 1) as usize]).unwrap();
-    assert_eq!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge));
+    assert!(matches!(
+        load_detailed(&path),
+        Err(CacheLoadError::CacheTooLarge)
+    ));
 }
 
 #[test]

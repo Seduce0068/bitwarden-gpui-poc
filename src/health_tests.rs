@@ -427,6 +427,42 @@ fn every_finding_has_a_nonempty_message() {
 }
 
 #[test]
+fn every_finding_variant_has_a_documented_severity() {
+    // `Finding::severity` (health.rs:116-130) partitions all 13 variants into
+    // High/Medium/Low. This table pins every current arm, so adding a finding
+    // variant is an explicit, reviewed change to this expectation as well.
+    let cases = [
+        (Finding::WeakPassword { bits: 10 }, Severity::Medium),
+        (Finding::ReusedPassword { count: 2 }, Severity::High),
+        (Finding::Stale { days: 400 }, Severity::Medium),
+        (
+            Finding::InsecureUri {
+                uri: "http://example.com".into(),
+            },
+            Severity::High,
+        ),
+        (Finding::NoTotp, Severity::Low),
+        (Finding::TotpUninspectable, Severity::Low),
+        (Finding::PasswordUninspectable, Severity::Low),
+        (Finding::NoUri, Severity::Low),
+        (Finding::UriUninspectable, Severity::Low),
+        (Finding::NoCardNumber, Severity::Medium),
+        (
+            Finding::SshFingerprintMismatch {
+                computed: "SHA256:AAAA".into(),
+            },
+            Severity::High,
+        ),
+        (Finding::SshFingerprintInvalid, Severity::Low),
+        (Finding::Unnamed, Severity::Low),
+    ];
+    assert_eq!(cases.len(), 13);
+    for (finding, expected) in cases {
+        assert_eq!(finding.severity(), expected, "{finding:?}");
+    }
+}
+
+#[test]
 fn insecure_uri_messages_never_include_secrets() {
     let finding = Finding::InsecureUri {
         uri: "http://user:token@example.com/path?key=secret".into(),
@@ -812,6 +848,47 @@ fn uppercase_and_control_character_http_uris_are_detected() {
 }
 
 #[test]
+fn backslashes_are_normalized_to_slashes_for_insecure_uri_detection() {
+    // Browsers accept `\` where `/` is expected. `audit_item` maps every
+    // backslash to '/' before both the scheme check and masking, so these
+    // spellings must all produce the same masked finding (health.rs:689-705).
+    for raw in [
+        "http:\\\\example.com",
+        "HTTP:\\\\Example.com\\path",
+        "http:\\/example.com",
+        "http:/\\example.com",
+        "http:\\\\user:token@example.com\\secret",
+    ] {
+        let report = report_of(vec![login("1", "A", "vT7#kQm2!zR9wP4$xL8@", raw, "SECRET")]);
+        let finding = report.items[0]
+            .findings
+            .iter()
+            .find(|finding| matches!(finding, Finding::InsecureUri { .. }))
+            .unwrap_or_else(|| panic!("insecure URI hidden in {raw:?}"));
+        let Finding::InsecureUri { uri } = finding else {
+            unreachable!()
+        };
+        assert_eq!(uri, "http://example.com", "raw: {raw:?}");
+        assert!(!finding.message().contains("token"), "{raw:?}");
+    }
+    // The normalization does not widen the rule to secure schemes.
+    let report = report_of(vec![login(
+        "2",
+        "B",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https:\\\\example.com",
+        "SECRET",
+    )]);
+    assert!(
+        !report.items.iter().any(|item| item
+            .findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::InsecureUri { .. }))),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn insecure_uri_message_shows_the_stored_mask_once() {
     // `audit_item` stores an already-masked URI (scheme + host only).
     // `mask_uri` is idempotent, so rendering it again must keep that value.
@@ -972,6 +1049,40 @@ fn qwerty_prefix_cap_boundary_changes_the_estimate() {
     assert!(at_bits < 20, "{at_bits}");
     assert!(past_bits >= Thresholds::default().weak_bits, "{past_bits}");
     assert!(past_bits > at_bits);
+}
+
+#[test]
+fn exact_common_list_and_prefix_rule_are_independent_branches() {
+    // Entries that do not start with "password"/"qwerty" can only be
+    // classified by the exact COMMON match (health.rs:491-557).
+    for word in [
+        "correcthorsebatterystaple",
+        "1234567890",
+        "letmein",
+        "trustno1",
+        "zaq12wsx",
+    ] {
+        assert!(
+            super::is_exact_common_password(word),
+            "exact list entry: {word}"
+        );
+        assert!(super::is_common_password(word), "{word}");
+    }
+    // An unlisted short value is common via the prefix cap, NOT via the list.
+    for prefixed in ["passwordabc", "qwertyabc"] {
+        assert!(
+            !super::is_exact_common_password(prefixed),
+            "not a literal COMMON entry: {prefixed}"
+        );
+        assert!(super::is_common_password(prefixed), "{prefixed}");
+    }
+    // The list is matched verbatim (callers pass a lowercased value), and a
+    // longer lookalike is not an exact member.
+    assert!(!super::is_exact_common_password("Password123"));
+    assert!(!super::is_exact_common_password(
+        "correcthorsebatterystaple!"
+    ));
+    assert!(!super::is_exact_common_password(""));
 }
 
 #[test]

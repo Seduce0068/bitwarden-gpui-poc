@@ -118,6 +118,39 @@ fn sanitized_clamps_editable_fields() {
 }
 
 #[test]
+fn sanitized_clamps_the_remaining_threshold_bounds() {
+    use crate::limits::{MAX_STALE_DAYS, MIN_WEAK_BITS};
+
+    // The opposite ends from `sanitized_clamps_editable_fields`: a too-small
+    // weak_bits and an over-large stale_days (settings.rs:606-613).
+    let settings = Settings {
+        thresholds: crate::health::Thresholds {
+            weak_bits: 0,
+            stale_days: i64::MAX,
+        },
+        ..Default::default()
+    };
+    let safe = settings.sanitized();
+    assert_eq!(safe.thresholds.weak_bits, MIN_WEAK_BITS);
+    assert_eq!(safe.thresholds.stale_days, MAX_STALE_DAYS);
+    // sanitized() is a pure clone-based operation.
+    assert_eq!(settings.thresholds.weak_bits, 0);
+    assert_eq!(settings.thresholds.stale_days, i64::MAX);
+
+    // The same bounds apply when the values come from a hand-edited file.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        br#"{"thresholds":{"weak_bits":0,"stale_days":9223372036854775807}}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.thresholds.weak_bits, MIN_WEAK_BITS);
+    assert_eq!(loaded.thresholds.stale_days, MAX_STALE_DAYS);
+}
+
+#[test]
 fn load_sanitizes_hand_edited_values() {
     let path = std::env::temp_dir().join("bitwarden-gpui-poc-sanitize.json");
     std::fs::write(
@@ -173,6 +206,20 @@ fn load_detailed_distinguishes_missing_and_malformed() {
     ] {
         assert!(!error.message().is_empty());
     }
+}
+
+#[test]
+fn invalid_utf8_is_a_read_failure_not_a_parse_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // `read_to_string` rejects an invalid UTF-8 sequence with an io error
+    // (settings.rs:733-738), so the file is unreadable rather than bad JSON.
+    // The classification must stay ReadFailed all the way to the UI enum.
+    std::fs::write(&path, b"{\"email\":\"\xff\"}").unwrap();
+    let error = Settings::load_detailed(&path).unwrap_err();
+    assert!(matches!(error, SettingsLoadError::ReadFailed), "{error:?}");
+    assert_eq!(error, SettingsLoadError::ReadFailed);
+    assert_eq!(Settings::load(&path), Settings::default());
 }
 
 // --- Robustness regressions: nested defaults, per-field fallback, size cap ---
@@ -1010,6 +1057,21 @@ fn load_advisories_reports_future_version_and_unknown_keys() {
         notices.iter().any(|n| n.contains("mystery_key")),
         "{notices:?}"
     );
+}
+
+#[test]
+fn every_serialized_settings_field_is_in_the_known_key_list() {
+    // `KNOWN` in `load_advisories` is maintained by hand next to `Settings`'s
+    // serde fields (settings.rs:331-365). A new field missing from that list
+    // would be reported as an unknown key on every load, so pin the subset
+    // relation through the public advisory output.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let value = serde_json::to_value(Settings::default()).unwrap();
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    let notices = load_advisories(&path);
+    assert!(notices.is_empty(), "{notices:?}");
 }
 
 #[test]

@@ -45,6 +45,34 @@ fn debug_never_reveals_item_secrets() {
     );
     let debug = format!("{ssh:?}");
     assert!(!debug.contains("PRIVATE-KEY-MATERIAL"), "{debug}");
+
+    // Free-form notes are secret-bearing too. The manual `VaultItem` Debug
+    // (model.rs:551-568) masks the whole value, including through `Vault`'s
+    // derived Debug, while search and serde still see the plain text.
+    const NOTES_SECRET: &str = "NOTES-SECRET-recovery-code-7X";
+    let mut noted = VaultItem::new(
+        "4",
+        "Noted",
+        ItemData::SecureNote {
+            text: String::new(),
+        },
+    );
+    noted.notes = NOTES_SECRET.into();
+    let debug = format!("{noted:?}");
+    assert!(!debug.contains(NOTES_SECRET), "{debug}");
+    assert!(debug.contains("notes: \"[redacted]\""), "{debug}");
+    let vault_debug = format!(
+        "{:?}",
+        Vault {
+            items: vec![noted.clone()],
+            folders: Vec::new(),
+        }
+    );
+    assert!(!vault_debug.contains(NOTES_SECRET), "{vault_debug}");
+    assert!(noted.matches_query("recovery-code"), "only Debug is masked");
+    assert!(serde_json::to_string(&noted)
+        .unwrap()
+        .contains(NOTES_SECRET));
 }
 
 #[test]
@@ -162,6 +190,45 @@ fn kind_round_trips_through_wire_numbers() {
     }
     assert_eq!(ItemKind::from_wire(0), None);
     assert_eq!(ItemKind::from_wire(6), None);
+}
+
+#[test]
+fn item_kind_labels_cover_all_five_variants() {
+    // `ItemKind::label` (model.rs:134-142) is the sidebar's display text; every
+    // wire kind needs one, so the five arms are pinned in a table.
+    for (kind, label) in [
+        (ItemKind::Login, "ログイン"),
+        (ItemKind::SecureNote, "メモ"),
+        (ItemKind::Card, "カード"),
+        (ItemKind::Identity, "ID"),
+        (ItemKind::SshKey, "SSH鍵"),
+    ] {
+        assert_eq!(kind.label(), label, "{kind:?}");
+    }
+}
+
+#[test]
+fn vault_is_empty_depends_only_on_items() {
+    // `Vault::is_empty` (model.rs:812-814) delegates to the item list: folders
+    // alone do not make a vault non-empty, and removal restores emptiness.
+    let mut vault = Vault::new();
+    assert!(vault.is_empty());
+    assert_eq!(vault.len(), 0);
+
+    vault.folders.push(Folder {
+        id: "f1".into(),
+        name: "仕事".into(),
+    });
+    assert!(vault.is_empty(), "folders are not items");
+
+    vault
+        .items
+        .push(login("1", "Item", "u", "p", "https://example.com"));
+    assert!(!vault.is_empty());
+    assert_eq!(vault.len(), 1);
+
+    assert!(vault.remove("1"));
+    assert!(vault.is_empty());
 }
 
 #[test]

@@ -170,8 +170,13 @@ impl VaultViewState {
         self.deselect_and_rewind();
     }
 
-    /// Begin a fresh search.
-    #[cfg(test)]
+    /// Begin a fresh search: enter search mode and drop the previous query.
+    ///
+    /// This is the single definition used by both the production
+    /// `UiAction::StartSearch` branch in [`crate::ui::input`] and the tests.
+    /// Keeping the query reset here (instead of inlining it at the call site)
+    /// lets one test cover "starting a search discards the old query" for
+    /// every caller.
     pub(super) fn start_search(&mut self) {
         self.searching = true;
         self.query.clear();
@@ -525,6 +530,35 @@ mod tests {
         state.filter = Filter::NoFolder;
         state.cycle_filter();
         assert_eq!(state.filter, Filter::All);
+    }
+
+    #[test]
+    fn start_search_discards_a_previous_query_and_its_selection() {
+        // The production `UiAction::StartSearch` branch calls the same helper,
+        // so this single test covers both the test-only caller and the app.
+        let mut state = state_with_items();
+        // A non-empty query that still matches "a": clearing it is observable
+        // in `query` and in the restored, unfiltered visible list.
+        state.query = "Alpha".into();
+        state.selected_id = Some("a".into());
+        assert_eq!(
+            state.visible_items().len(),
+            1,
+            "precondition: query filters"
+        );
+        let before = state.rewind_calls;
+
+        state.start_search();
+
+        assert!(state.searching, "starting a search must enter search mode");
+        assert_eq!(state.query, "", "a fresh search must drop the old query");
+        assert_eq!(state.selected_id, None);
+        assert_eq!(state.rewind_calls, before + 1);
+        assert_eq!(
+            state.visible_items().len(),
+            2,
+            "clearing the query must restore the unfiltered list"
+        );
     }
 
     #[test]

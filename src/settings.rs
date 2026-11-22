@@ -328,6 +328,14 @@ fn read_settings_json(path: &std::path::Path) -> Option<Value> {
 /// Only top-level keys are inspected; nested fields are validated by
 /// `load_detailed`'s per-field tolerance. Files above `MAX_SETTINGS_BYTES` are
 /// skipped because `load_detailed` already reports them as too large.
+///
+/// Known constraint: the `KNOWN` key list below is managed by hand, separately
+/// from [`Settings`]'s serde field list — there is no generated single source
+/// of truth. Adding a field to `Settings` without adding its key to `KNOWN`
+/// makes every file containing that key report a spurious "unknown key"
+/// advisory, so the two lists must be updated together. The regression test
+/// `every_serialized_settings_field_is_in_the_known_key_list` checks the
+/// one-way subset relation (every serialized field is known) on each run.
 pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
     // Both advisory and marker reads share `read_settings_json`, so the cap
     // and TOCTOU handling cannot drift between them.

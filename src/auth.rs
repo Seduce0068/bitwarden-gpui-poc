@@ -39,7 +39,7 @@ pub struct AuthConfig {
 /// Errors the authentication layer can report.
 ///
 /// Most variants stay cheap to copy so the UI can match and format them
-/// directly. Five variants (the `Detail` ones) own a `String`: a cause-carrying
+/// directly. Six variants (the `Detail` ones) own a `String`: a cause-carrying
 /// `AppError` cannot stay `Copy` while its rendered detail is surfaced in the
 /// status bar, so those variants retain the text that would otherwise be
 /// dropped by [`From<AppError> for AuthError`]. The typed cause itself stays in

@@ -531,7 +531,12 @@ impl ItemData {
 }
 
 /// One item in the vault.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` is implemented manually because free-form notes are a secret-bearing
+/// field: they may hold recovery codes, PINs or other text that must never reach
+/// a log line. Every other field stays visible, and the kind-specific payload
+/// applies its own redaction rules (see [`ItemData`]).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultItem {
     /// Stable id (a UUID in a real vault).
     pub id: String,
@@ -547,6 +552,22 @@ pub struct VaultItem {
     pub revision_date: i64,
     /// The kind-specific payload.
     pub data: ItemData,
+}
+
+impl core::fmt::Debug for VaultItem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("VaultItem")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("folder_id", &self.folder_id)
+            .field("favorite", &self.favorite)
+            // A placeholder replaces the whole value: even a single character
+            // of a recovery code must not survive in a diagnostic rendering.
+            .field("notes", &"[redacted]")
+            .field("revision_date", &self.revision_date)
+            .field("data", &self.data)
+            .finish()
+    }
 }
 
 impl VaultItem {
