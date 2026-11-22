@@ -88,6 +88,36 @@ pub(super) fn search_finished_status(result_count: usize, dirty: bool) -> String
     )
 }
 
+/// Confirm an active search because a row was clicked, and return its status.
+///
+/// The mouse path in `render.rs` sends `SelectRow`, which is the click
+/// equivalent of Enter/Escape: it leaves search mode, keeps the query and must
+/// replace the "入力中:" status installed by `StartSearch`. Factored over the
+/// `VaultViewState` so both the mode change and the count-dependent status can
+/// be tested without a GPUI window.
+pub(super) fn finish_search_from_row_click(
+    view: &mut crate::ui::vault_view::VaultViewState,
+    dirty: bool,
+) -> String {
+    view.finish_search();
+    search_finished_status(view.visible_items().len(), dirty)
+}
+
+/// Remove the last character of a confirmed query and return the new status.
+///
+/// `BackspaceQuery` (vault-panel Backspace while a query is present) edits the
+/// query after search confirmation. `pop_query` drops the selection and can
+/// change the match count, so leaving the previous "検索結果が0件です" text on
+/// screen would be misleading. Factored out so the count-dependent wording and
+/// the rewind contract are testable without a GPUI window.
+pub(super) fn backspace_confirmed_query(
+    view: &mut crate::ui::vault_view::VaultViewState,
+    dirty: bool,
+) -> String {
+    view.pop_query();
+    search_finished_status(view.visible_items().len(), dirty)
+}
+
 /// Status after a settings time field is adjusted with `i`/`u`, `3`/`4` or
 /// `5`/`6`.
 ///
@@ -233,7 +263,10 @@ impl BitwardenApp {
                 cx.notify();
             }
             UiAction::BackspaceQuery => {
-                self.view.pop_query();
+                // The previous status may still announce a zero-match
+                // confirmed search; report the count after this edit instead.
+                let status = backspace_confirmed_query(&mut self.view, self.settings_dirty);
+                self.status = status;
                 cx.notify();
             }
             UiAction::SetPanel(panel) => self.set_panel(panel, cx),
@@ -315,8 +348,10 @@ impl BitwardenApp {
             UiAction::SelectRow(index) => {
                 // A mouse click is an explicit selection: leaving search mode
                 // here keeps the row click and the keyboard path consistent.
+                // It must also replace the "入力中:" status from StartSearch.
                 if self.view.searching {
-                    self.view.finish_search();
+                    let status = finish_search_from_row_click(&mut self.view, self.settings_dirty);
+                    self.status = status;
                 }
                 if self.view.select_index(index) {
                     self.view
@@ -511,6 +546,113 @@ mod tests {
             );
             assert!(!empty.contains("項目を選択してください"), "{empty}");
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn row_click_during_search_confirms_search_and_restores_status() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        fn item(id: &str, name: &str) -> VaultItem {
+            VaultItem::new(
+                id,
+                name,
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            )
+        }
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(item("a", "Alpha"));
+        view.vault.items.push(item("b", "Beta"));
+        view.start_search();
+        view.push_query("Beta");
+        assert!(view.searching);
+        assert_eq!(view.visible_items().len(), 1, "precondition: query matches");
+        let before = view.rewind_calls;
+
+        // This is the status the render.rs click handler installs via
+        // `apply_action(UiAction::SelectRow(..))`.
+        let status = finish_search_from_row_click(&mut view, false);
+
+        assert!(!view.searching, "a row click confirms the search");
+        assert_eq!(view.query, "Beta", "confirming keeps the query");
+        assert_eq!(view.rewind_calls, before + 1);
+        assert_eq!(status, search_finished_status(1, false));
+        assert!(!status.contains("入力中"), "{status}");
+
+        // A click that leaves zero matches must show the dedicated message.
+        let mut empty = VaultViewState::new();
+        empty.start_search();
+        empty.push_query("missing");
+        let empty_status = finish_search_from_row_click(&mut empty, false);
+        assert_eq!(empty_status, search_finished_status(0, false));
+        assert!(empty_status.contains("0件"), "{empty_status}");
+        assert!(!empty_status.contains("入力中"), "{empty_status}");
+
+        // The unsaved marker survives the confirmation.
+        let dirty_status = finish_search_from_row_click(&mut view, true);
+        assert_eq!(dirty_status, search_finished_status(1, true));
+        assert!(dirty_status.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn backspace_after_confirmed_search_updates_the_count_status() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        view.vault.items.push(VaultItem::new(
+            "b",
+            "Beta",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        view.start_search();
+        // Two characters that match nothing, so one backspace still leaves an
+        // empty result set and only the second restores the full list.
+        view.push_query("Zq");
+        assert_eq!(view.visible_items().len(), 0, "precondition: no matches");
+        let confirmed = finish_search_from_row_click(&mut view, false);
+        assert!(!view.searching);
+        assert_eq!(confirmed, crate::ui::logic::NO_SEARCH_RESULTS_STATUS);
+
+        // One backspace leaves "Z": still zero matches, so the "0件" text is
+        // recomputed rather than left stale from the confirmation.
+        let before = view.rewind_calls;
+        let still_empty = backspace_confirmed_query(&mut view, false);
+        assert_eq!(view.query, "Z");
+        assert_eq!(view.visible_items().len(), 0);
+        assert_eq!(still_empty, search_finished_status(0, false));
+        assert_eq!(still_empty, crate::ui::logic::NO_SEARCH_RESULTS_STATUS);
+        assert_eq!(view.rewind_calls, before + 1, "each backspace rewinds");
+
+        // The next backspace empties the query: the generic selection prompt
+        // replaces the zero-match message.
+        let status = backspace_confirmed_query(&mut view, false);
+        assert_eq!(view.query, "");
+        assert_eq!(view.visible_items().len(), 2);
+        assert_eq!(status, search_finished_status(2, false));
+        assert_eq!(status, crate::ui::logic::no_selection_status());
+        assert!(!status.contains("0件"), "{status}");
+
+        // The unsaved marker is preserved in both count branches.
+        view.push_query("Zq");
+        let dirty_empty = backspace_confirmed_query(&mut view, true);
+        assert_eq!(dirty_empty, search_finished_status(0, true));
+        assert!(dirty_empty.contains("[未保存の設定変更があります]"));
+        let dirty_found = backspace_confirmed_query(&mut view, true);
+        assert_eq!(dirty_found, search_finished_status(2, true));
+        assert!(dirty_found.contains("[未保存の設定変更があります]"));
     }
 
     #[::core::prelude::v1::test]

@@ -96,6 +96,39 @@ fn load_detailed_distinguishes_failure_modes() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn file_open_non_not_found_error_is_classified_as_read_failed_cause() {
+    // `File::open` maps only `NotFound` to the silent missing case; every other
+    // `io::ErrorKind` becomes `ReadFailedCause` (cache.rs:567-573). Opening a
+    // directory succeeds on Unix and only fails at `read`, so the sibling test
+    // above does not exercise this arm. A regular file used as a directory
+    // component makes `open(2)` fail with ENOTDIR: the path exists but cannot be
+    // opened, which is distinct from ENOENT/NotFound.
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let path = blocker.join("sync-cache.json");
+
+    let error = load_detailed(&path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        "a path component that is a file must be unreadable, not missing: {error:?}"
+    );
+    assert!(
+        std::error::Error::source(&error).is_some(),
+        "the io error must stay reachable as the typed cause"
+    );
+    assert_eq!(cache_error_message(error), REASON_UNREADABLE);
+
+    // The NotFound sibling still takes the other arm of the same match.
+    let missing = dir.path().join("no-such-cache.json");
+    assert!(matches!(
+        load_detailed(missing).err(),
+        Some(CacheLoadError::NotFound)
+    ));
+}
+
 #[test]
 fn wrong_version_is_rejected() {
     let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
@@ -302,7 +335,7 @@ fn nested_per_item_keys_are_stripped_before_storage() {
 
 #[test]
 fn mask_url_userinfo_handles_missing_userinfo_scheme_and_query_at_signs() {
-    // No userinfo: unchanged (cache.rs:82-96).
+    // No userinfo: unchanged (cache.rs:88-113).
     assert_eq!(
         super::mask_url_userinfo("https://vault.example.com/path"),
         "https://vault.example.com/path"
@@ -370,7 +403,7 @@ fn sensitive_param_keys_cover_pass_pwd_pw_and_credential() {
 fn userinfo_is_masked_when_the_authority_contains_question_or_hash() {
     // A '?' or '#' before the '@' is part of an unescaped userinfo value, not a
     // query/fragment delimiter. Stopping the authority scan there used to hide
-    // the '@' and leave the credential in the diagnostic URL (cache.rs:82-101).
+    // the '@' and leave the credential in the diagnostic URL (cache.rs:88-142).
     for (url, expected) in [
         (
             "https://user:p?ss@vault.example.com/path",
@@ -404,6 +437,59 @@ fn userinfo_is_masked_when_the_authority_contains_question_or_hash() {
     // parameter before it marks the '?' as a genuine delimiter.
     let query = "https://vault.example.com?email=a@b.example";
     assert_eq!(super::mask_url_userinfo(query), query);
+}
+
+#[test]
+fn userinfo_separator_is_found_even_with_query_at_signs_and_unescaped_delimiters() {
+    // The separator is the last '@' of the authority, not the last '@' of the
+    // pre-path text (cache.rs:88-142). A password may itself hold `?`/`#`/`=`
+    // or an '@', and a query after the host may hold another '@'.
+    for (url, expected) in [
+        // No path: the query '@' must not be mistaken for the separator.
+        (
+            "https://user:pass@host?email=a@b",
+            "https://[redacted]@host?email=a@b",
+        ),
+        // An unescaped '?' (even with a `key=`-shaped value) inside the
+        // password is not a query delimiter.
+        ("https://user:pass?x=1@host", "https://[redacted]@host"),
+        // The same holds for '#', including a fragment after the real path.
+        (
+            "https://user:pa#ss=w@host/path#f=x",
+            "https://[redacted]@host/path#f=x",
+        ),
+        // Multiple '@'s in userinfo: the last one before the host separates.
+        (
+            "https://u:p@ss@host/path?email=a@b",
+            "https://[redacted]@host/path?email=a@b",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+    }
+
+    // A bare host (no userinfo marker) followed by a query/fragment '@' stays
+    // untouched, including the pre-existing `?email=` regression case and a
+    // numeric port (which is not a userinfo password).
+    for url in [
+        "https://host?email=a@b",
+        "https://host:8443?email=a@b",
+        "https://host#frag@x",
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+}
+
+#[test]
+fn debug_masks_userinfo_when_a_query_at_sign_is_present() {
+    // The search starts at the first separator in the authority, so a query
+    // '@' cannot hide a credential from the top-level `Debug` masker either.
+    let url = "https://user:SECRET@host?email=a@b";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("SECRET"), "{rendered}");
+    assert!(rendered.contains("[redacted]@host?email=a@b"), "{rendered}");
+    // The stored URL remains byte-for-byte identical for the mismatch check.
+    assert_eq!(cache.server_url, url);
 }
 
 #[test]

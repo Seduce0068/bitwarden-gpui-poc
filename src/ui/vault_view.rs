@@ -633,4 +633,65 @@ mod tests {
             "confirming search rewinds through deselect_and_rewind"
         );
     }
+
+    #[test]
+    fn empty_query_backspace_rewinds_every_time() {
+        // BackspaceSearch maps to `pop_query` even when the query is empty.
+        // The no-op character removal must still drop the selection and rewind
+        // the list, so repeated presses never leave a stale scroll position.
+        let mut state = state_with_items();
+        assert_eq!(state.query, "", "precondition: empty query");
+        state.selected_id = Some("b".into());
+        let before = state.rewind_calls;
+
+        state.pop_query();
+
+        assert_eq!(state.query, "", "an empty query stays empty");
+        assert_eq!(
+            state.selected_id, None,
+            "even a no-op pop drops the selection"
+        );
+        assert_eq!(state.rewind_calls, before + 1, "an empty pop still rewinds");
+
+        // The same holds without a selection and on repeated presses.
+        let mut empty = VaultViewState::new();
+        for expected in 1..=3 {
+            empty.pop_query();
+            assert_eq!(empty.query, "");
+            assert_eq!(empty.rewind_calls, expected);
+        }
+    }
+
+    #[test]
+    fn reset_restores_every_view_field() {
+        let mut state = state_with_items();
+        state.query = "Alpha".into();
+        state.filter = Filter::Favorites;
+        state.sort = SortKey::NameDesc;
+        state.searching = true;
+        state.selected_id = Some("a".into());
+        state.audit_report = Some(crate::health::Report::default());
+        let before = state.rewind_calls;
+
+        state.reset();
+
+        assert!(state.vault.items.is_empty(), "reset drops the vault data");
+        assert_eq!(state.query, "");
+        assert_eq!(state.filter, Filter::All);
+        assert_eq!(state.sort, SortKey::NameAsc);
+        assert!(!state.searching);
+        assert_eq!(state.selected_id, None);
+        assert_eq!(state.audit_report, None);
+        assert_eq!(state.rewind_calls, before + 1);
+
+        // A reset view must be indistinguishable from a freshly created one.
+        let fresh = VaultViewState::new();
+        assert_eq!(state.filter, fresh.filter);
+        assert_eq!(state.query, fresh.query);
+        assert_eq!(state.sort, fresh.sort);
+        assert_eq!(state.searching, fresh.searching);
+        assert_eq!(state.selected_id, fresh.selected_id);
+        assert_eq!(state.audit_report, fresh.audit_report);
+        assert!(fresh.vault.items.is_empty());
+    }
 }

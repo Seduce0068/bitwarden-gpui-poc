@@ -295,6 +295,52 @@ fn findings_sort_and_summarize() {
 }
 
 #[test]
+fn to_text_reports_totp_coverage_and_medium_low_counts() {
+    // Three logins with https URIs so no High/InsecureUri finding can skew the
+    // counts: one weak password (Medium), one missing TOTP (Low), one clean
+    // login with a usable TOTP. The weak-password login also carries a valid
+    // base32 secret, so coverage is 2/3 -> 67% after rounding.
+    let weak = login("1", "Weak", "1234", "https://a.example", "SECRET");
+    let no_totp = login(
+        "2",
+        "NoTotp",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://b.example",
+        "",
+    );
+    let clean = login(
+        "3",
+        "Clean",
+        "tQ8#wLr1!eZ5vKp3$sM7@",
+        "https://c.example",
+        "GEZDGNBVGY3TQOJQ",
+    );
+    let report = report_of(vec![weak, no_totp, clean]);
+
+    assert_eq!(report.examined, 3);
+    assert_eq!(report.logins, 3);
+    assert_eq!(report.with_totp, 2);
+    assert_eq!(report.affected(), 2);
+    assert_eq!(report.total_findings(), 2);
+    assert_eq!(report.count_of(Severity::High), 0);
+    assert_eq!(report.count_of(Severity::Medium), 1);
+    assert_eq!(report.count_of(Severity::Low), 1);
+
+    let summary = report.summary();
+    assert!(summary.contains("高 0 / 中 1 / 低 1"), "{summary}");
+    assert!(summary.contains("パスワード検査対象外: 0 件"), "{summary}");
+
+    // `to_text()` (health.rs:256-282) pins the TOTP coverage line separately
+    // from the summary: the ratio, denominator and rounded percentage must all
+    // be rendered, not just the `totp_coverage()` float.
+    let text = report.to_text();
+    assert!(text.starts_with("Vault 健全性レポート\n"), "{text}");
+    assert!(text.contains(summary.as_str()), "{text}");
+    assert!(text.contains("TOTP 設定済み: 2/3 (67%)\n"), "{text}");
+    assert!(text.contains("パスワード検査対象外: 0 件\n"), "{text}");
+}
+
+#[test]
 fn a_clean_vault_reports_no_problems() {
     let mut item = login(
         "1",

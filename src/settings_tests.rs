@@ -162,6 +162,11 @@ fn sanitized_clamps_the_remaining_threshold_bounds() {
 
 #[test]
 fn load_sanitizes_hand_edited_values() {
+    use crate::limits::{
+        MAX_CLIPBOARD_RESTORE_SECONDS, MAX_WEAK_BITS, MIN_IDLE_LOCK_SECONDS,
+        MIN_LOGIN_TIMEOUT_SECONDS, MIN_STALE_DAYS,
+    };
+
     let path = std::env::temp_dir().join("bitwarden-gpui-poc-sanitize.json");
     std::fs::write(
         &path,
@@ -170,11 +175,17 @@ fn load_sanitizes_hand_edited_values() {
     )
     .unwrap();
     let loaded = Settings::load_detailed(&path).unwrap();
-    assert_eq!(loaded.idle_lock_seconds, 60);
-    assert_eq!(loaded.login_timeout_seconds, 1);
-    assert_eq!(loaded.clipboard_restore_seconds, 3600);
-    assert_eq!(loaded.thresholds.weak_bits, 200);
-    assert_eq!(loaded.thresholds.stale_days, 1);
+    // Expectations come from the shared `limits` module, the same source of
+    // truth `Settings::sanitized()` clamps against; no duplicated magic numbers
+    // that could drift when a UI bound is revised.
+    assert_eq!(loaded.idle_lock_seconds, MIN_IDLE_LOCK_SECONDS);
+    assert_eq!(loaded.login_timeout_seconds, MIN_LOGIN_TIMEOUT_SECONDS);
+    assert_eq!(
+        loaded.clipboard_restore_seconds,
+        MAX_CLIPBOARD_RESTORE_SECONDS
+    );
+    assert_eq!(loaded.thresholds.weak_bits, MAX_WEAK_BITS);
+    assert_eq!(loaded.thresholds.stale_days, MIN_STALE_DAYS);
 }
 
 #[test]
@@ -951,6 +962,39 @@ fn future_schema_keeps_a_valid_device_id() {
     )
     .unwrap();
     assert!(Settings::load_detailed(&path).unwrap().device_id.is_empty());
+}
+
+#[test]
+fn future_schema_drops_non_string_device_ids() {
+    // A future file can carry a valid `device_id` through the wholesale
+    // fallback (settings.rs:786-793), but the rescue accepts only a JSON
+    // string. Numbers, arrays and objects are not opaque UUIDs: stringifying
+    // them would send a malformed identifier to the server, so each must yield
+    // the empty id that triggers `ensure_device_id`'s regeneration.
+    const VALID: &str = "A1B2C3D4-1234-4ABC-8DEF-0123456789AB";
+    let future = CURRENT_SCHEMA_VERSION + 1;
+    for device_id in [
+        serde_json::json!(42),
+        serde_json::json!([VALID]),
+        serde_json::json!({ "uuid": VALID }),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let body = serde_json::json!({
+            "schema_version": future,
+            "device_id": device_id,
+            "email": "future@example.com",
+        });
+        std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+        let loaded = Settings::load_detailed(&path).unwrap();
+        assert!(
+            loaded.device_id.is_empty(),
+            "must drop the non-string id {device_id}: {loaded:?}"
+        );
+        assert_eq!(loaded.email, "", "schema-governed fields still fall back");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    }
 }
 
 #[test]

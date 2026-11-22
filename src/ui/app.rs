@@ -106,6 +106,34 @@ pub(super) fn unsaved_panel_exit_status_for(
     }
 }
 
+/// Status installed by `set_panel` when it drops an active text-edit mode.
+///
+/// `set_panel` clears `editing`, the auth field and search mode so no key is
+/// swallowed by the destination panel. Each of those modes installs the
+/// "入力中:" guidance via [`crate::ui::input::text_edit_start_status`], so
+/// leaving one without replacing that text leaves stale guidance on screen.
+/// `None` means no mode was active and the caller must keep its current status
+/// (a login notice, an audit-focus message, ...). Kept pure so the contract can
+/// be tested without a GPUI window (this crate does not enable gpui's
+/// `test-support` feature).
+pub(super) fn panel_transition_status_after_edit(
+    panel: Panel,
+    was_editing: bool,
+    visible_count: usize,
+    dirty: bool,
+) -> Option<String> {
+    if !was_editing {
+        return None;
+    }
+    Some(match panel {
+        Panel::Audit => audit_no_selection_status(dirty),
+        Panel::Settings | Panel::Generator => {
+            crate::ui::input::settings_edit_finished_status(dirty)
+        }
+        Panel::Vault => crate::ui::input::search_finished_status(visible_count, dirty),
+    })
+}
+
 /// Marker appended to transient statuses and to the list detail line.
 ///
 /// Keeping it in one place makes the unsaved state visible outside the
@@ -569,17 +597,28 @@ impl BitwardenApp {
     /// Leaving a settings field, auth field or search active would swallow
     /// every key in the destination panel ("dead keys").
     pub(super) fn set_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
-        if let Some(status) = unsaved_panel_exit_status_for(self.panel, panel, self.settings_dirty)
-        {
-            // Leaving the settings-owning panels does not persist anything.
-            // Say so before the destination panel overwrites the status.
-            // Settings <-> Generator are excluded: `w`/`d` still work there.
-            self.status = status.to_string();
-        }
+        let exit_warning = unsaved_panel_exit_status_for(self.panel, panel, self.settings_dirty);
+        // Capture the modes *before* clearing them: each one installed the
+        // "入力中:" status, so leaving one must restore a normal status.
+        let was_editing =
+            self.editing.is_some() || self.auth.field().is_some() || self.view.searching;
         self.editing = None;
         self.auth.take_field();
         self.view.finish_search();
         self.panel = crate::ui::logic::effective_panel(panel, self.view.audit_report.is_some());
+        if let Some(status) = exit_warning {
+            // Leaving the settings-owning panels does not persist anything.
+            // Say so before the destination panel overwrites the status.
+            // Settings <-> Generator are excluded: `w`/`d` still work there.
+            self.status = status.to_string();
+        } else if let Some(status) = panel_transition_status_after_edit(
+            self.panel,
+            was_editing,
+            self.view.visible_items().len(),
+            self.settings_dirty,
+        ) {
+            self.status = status;
+        }
         cx.notify();
     }
 
@@ -1381,6 +1420,54 @@ mod tests {
             unsaved_panel_exit_status_for(Panel::Audit, Panel::Vault, true),
             None
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_transition_restores_a_normal_status_after_an_edit_mode() {
+        // The modes cleared by `set_panel` all install the "入力中:" prefix;
+        // without this assertion the test would pass without exercising the
+        // stale-status bug.
+        assert!(crate::ui::input::text_edit_start_status().contains("入力中"));
+
+        // With no edit mode active the caller keeps its existing status.
+        for panel in [
+            Panel::Vault,
+            Panel::Audit,
+            Panel::Generator,
+            Panel::Settings,
+        ] {
+            assert_eq!(
+                panel_transition_status_after_edit(panel, false, 3, false),
+                None,
+                "{panel:?} without an edit mode must not overwrite the status"
+            );
+        }
+
+        for dirty in [false, true] {
+            let vault = panel_transition_status_after_edit(Panel::Vault, true, 3, dirty).unwrap();
+            assert_eq!(vault, crate::ui::input::search_finished_status(3, dirty));
+            assert!(!vault.contains("入力中"), "{vault}");
+
+            let audit = panel_transition_status_after_edit(Panel::Audit, true, 3, dirty).unwrap();
+            assert_eq!(audit, audit_no_selection_status(dirty));
+            assert!(!audit.contains("入力中"), "{audit}");
+
+            for panel in [Panel::Settings, Panel::Generator] {
+                let status = panel_transition_status_after_edit(panel, true, 3, dirty).unwrap();
+                assert_eq!(
+                    status,
+                    crate::ui::input::settings_edit_finished_status(dirty),
+                    "{panel:?}"
+                );
+                assert!(!status.contains("入力中"), "{status}");
+            }
+
+            // A confirmed search with no visible row gets the dedicated
+            // message, not a prompt to select a non-existent row.
+            let empty = panel_transition_status_after_edit(Panel::Vault, true, 0, dirty).unwrap();
+            assert_eq!(empty, crate::ui::input::search_finished_status(0, dirty));
+            assert!(empty.contains("0件"), "{empty}");
+        }
     }
 
     #[::core::prelude::v1::test]

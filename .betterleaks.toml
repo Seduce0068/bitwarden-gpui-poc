@@ -13,7 +13,10 @@ filter.matchesAny(finding["secret"], [
   `テストアカウントのマスターパスワード`,
 ])
 || filter.containsAny(finding["match"], [`2001:db8::1`, `https://user:pass@host`,  `https://u:p@host:8443`, `passwordあいうえお`,
-  `secret=GEZDGNBVGY3TQOJQ`, `https://user:p?ss@host`,
+  `secret=GEZDGNBVGY3TQOJQ`,
+  `https://user:p?ss@host`, `https://user:pass?x=1@host`,
+  `https://user:pa#ss=w@host/path`, `https://host:8443?email=a@b`,
+  `https://user:SECRET@host?email=a@b`,
   `authenticate(&invalid, "device")`])
 || (
   filter.matchesAny(attributes["path"], [`vault_sync_tests\.rs`]) &&

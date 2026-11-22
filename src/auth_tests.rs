@@ -1510,12 +1510,18 @@ fn public_unlock_and_import_extracts_session_derived_inputs() {
 }
 
 #[test]
-fn authenticate_wrapper_delegates_with_the_default_timeout() {
-    // Validation runs before the timeout race, so an invalid config gives a
-    // deterministic, network-free result for both entry points. Equality
-    // proves the wrapper (auth.rs:824-829) delegates to
-    // `authenticate_with_timeout` with `DEFAULT_LOGIN_TIMEOUT` rather than a
-    // different budget or a separate implementation.
+fn authenticate_wrapper_matches_the_explicit_default_timeout_on_the_validation_path() {
+    // Honest scope: `authenticate()` (auth.rs:871-876) is a thin wrapper around
+    // `authenticate_with_timeout(..., DEFAULT_LOGIN_TIMEOUT)`. Its timeout
+    // argument is not observable from a returned error on a config that reaches
+    // the network: proving the watchdog used the default would require waiting
+    // the full 30 seconds, and there is no injection seam in the public
+    // signature. Validation runs *before* the race, so this test can only pin
+    // delegation on the deterministic invalid-config path. The timer itself is
+    // covered by `timeout_wins_when_the_login_budget_expires` (explicit zero
+    // budget) and `unrepresentable_deadline_takes_the_relative_timer_fallback`;
+    // the shared budget value is pinned here so a change cannot hide behind the
+    // two calls using the same constant.
     let mut invalid = config();
     invalid.email.clear();
     let wrapped = smol::block_on(authenticate(&invalid, "device")).err();
@@ -1527,10 +1533,7 @@ fn authenticate_wrapper_delegates_with_the_default_timeout() {
     .err();
     assert_eq!(wrapped, Some(AuthError::MissingField("email")));
     assert_eq!(wrapped, explicit);
-    assert!(
-        !DEFAULT_LOGIN_TIMEOUT.is_zero(),
-        "the wrapper must use a real budget, not the zero-duration test seam"
-    );
+    assert_eq!(DEFAULT_LOGIN_TIMEOUT, std::time::Duration::from_secs(30));
 }
 
 #[test]

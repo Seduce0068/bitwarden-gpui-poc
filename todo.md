@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第71弾で 10 件すべてを完了）。
+なし（第72弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第72弾（16 担当・16 回目）の指摘 7 件を完結（2026-11-23）
+  - URL userinfo マスクの '@' 共存・unescaped '?'/'#' 問題を修正。
+  - パネル遷移／行クリック／BackspaceQuery の status 残留を解消し、
+    VaultViewState の契約をテスト。
+  - デフォルト timeout テストの妥当化、limits 定数、未来スキーマの
+    device_id 型違反、File::open の非 NotFound、監査テキスト描画をテスト。
+  - CHANGELOG 0.1.0 の E2E 注記と README の TOTP 桁数を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（647 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第71弾（16 担当・15 回目）の指摘 10 件を完結（2026-11-23）
   - TOTP 非 ASCII ガードを otpauth URI に合わせて狭隘化し、
     digits/period 境界をテスト。

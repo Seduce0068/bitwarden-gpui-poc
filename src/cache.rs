@@ -75,36 +75,75 @@ pub struct SyncCache {
 /// Render a server URL for `Debug`, dropping any URL-embedded userinfo.
 ///
 /// A URL such as `https://user:pass@vault.example.com` must not leak the
-/// credentials through a log line. The userinfo before the last `@` in the
-/// authority is replaced by `[redacted]`; the host/path that follows is kept
-/// so diagnostics remain useful. URLs without an `@` are rendered unchanged,
-/// which is safe because they carry no userinfo.
+/// credentials through a log line. The userinfo before the userinfo delimiter
+/// is replaced by `[redacted]`; the host/path that follows is kept so
+/// diagnostics remain useful. URLs without an `@` in the authority are rendered
+/// unchanged, which is safe because they carry no userinfo.
+///
+/// The delimiter is the last `@` **of the authority**, not the last `@` of the
+/// whole pre-path text: a password may contain `@`, but an `@` in a query or
+/// fragment (`https://host?email=a@b`) is not userinfo. A `?`/`#` before the
+/// delimiter can be an unescaped character in the password, so it does not by
+/// itself terminate the authority ([`at_is_in_query`] decides).
 fn mask_url_userinfo(url: &str) -> String {
     let scheme_end = url.find("://").map(|at| at + 3).unwrap_or(0);
-    // A '/' always closes the authority. A '?' or '#' before the '@' is part of
-    // an *unescaped userinfo value* (e.g. `https://user:p?ss@host`); cutting the
-    // authority there would hide the '@' and leak the whole credential. Scan
-    // up to the path separator and take the last '@'. An '@' that really sits
-    // in a query/fragment is excluded when a `key=`-shaped parameter precedes
-    // it, so a URL such as `https://host?email=a@b` stays untouched.
+    // A path separator always closes the authority. '?'/'#' are *not* used as
+    // the boundary here: an unescaped one inside a password would hide the real
+    // delimiter and leave the credential in the diagnostic URL.
     let path_start = url[scheme_end..]
         .find('/')
         .map(|at| scheme_end + at)
         .unwrap_or(url.len());
     let scan = &url[scheme_end..path_start];
-    let at = scan.rfind('@').filter(|at| {
-        !scan[..*at]
-            .split(&['?', '#'][..])
-            .skip(1)
-            .any(|part| part.contains('='))
-    });
-    if let Some(at) = at {
-        // Everything before the last `@` in the authority is userinfo.
-        let host_start = scheme_end + at + 1;
-        format!("{}[redacted]@{}", &url[..scheme_end], &url[host_start..])
-    } else {
-        url.to_string()
-    }
+
+    // The userinfo separator is the last '@' that belongs to the authority.
+    // Earlier '@'s can be part of the password; later ones can belong to the
+    // query/fragment and must be left untouched.
+    let Some(at) = scan
+        .match_indices('@')
+        .map(|(index, _)| index)
+        .rev()
+        .find(|index| !at_is_in_query(scan, *index))
+    else {
+        return url.to_string();
+    };
+
+    let host_start = scheme_end + at + 1;
+    format!("{}[redacted]@{}", &url[..scheme_end], &url[host_start..])
+}
+
+/// Whether the `@` at byte index `at` of `scan` belongs to a query/fragment
+/// rather than to userinfo.
+///
+/// `scan` is the URL text between the scheme and the first path separator. A
+/// `?`/`#` before `at` is either an unescaped character in the password or a
+/// genuine query/fragment delimiter. It is genuine when the text before it has
+/// no userinfo-style `user:password` marker (`host:8443` is a port, not a
+/// password); an '@' already followed by a clean host also closes the authority,
+/// so a later `?`/`#` starts the query. This keeps `https://host?email=a@b`
+/// untouched while still masking `https://user:pass?x=1@host`.
+fn at_is_in_query(scan: &str, at: usize) -> bool {
+    let before = &scan[..at];
+    before.match_indices(&['?', '#'][..]).any(|(delimiter, _)| {
+        let head = &before[..delimiter];
+        let has_userinfo_colon = head.split(&['?', '#'][..]).any(|part| {
+            part.split_once(':').is_some_and(|(_, value)| {
+                !value.is_empty() && !value.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        });
+        let host_complete = head.match_indices('@').any(|(earlier, _)| {
+            let host = &head[earlier + 1..];
+            // A numeric `:port` is part of the host, not a password marker.
+            let host_ok = match host.split_once(':') {
+                Some((_, port)) => {
+                    !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
+                }
+                None => true,
+            };
+            !host.is_empty() && host_ok && !host.contains(&['@', '=', '?', '#'][..])
+        });
+        !has_userinfo_colon || host_complete
+    })
 }
 
 /// Whether a query/fragment parameter name denotes a credential.
