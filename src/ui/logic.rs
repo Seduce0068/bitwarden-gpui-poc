@@ -297,7 +297,12 @@ pub(super) fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 
 /// constants are its canonical pair (`MIN/MAX_CLIPBOARD_RESTORE_SECONDS` have
 /// the same values), so the clamp no longer duplicates the magic numbers.
 pub(super) fn adjust_seconds(current: u64, delta_seconds: i32) -> u64 {
-    let next = i64::try_from(current).unwrap_or(i64::MAX) + i64::from(delta_seconds);
+    // A stored value larger than `i64::MAX` saturates at `i64::MAX`; adding a
+    // positive step to that sentinel would overflow in a debug build and wrap
+    // in release, jumping a huge value to the *minimum* after the clamp below.
+    let next = i64::try_from(current)
+        .unwrap_or(i64::MAX)
+        .saturating_add(i64::from(delta_seconds));
     next.clamp(
         crate::limits::MIN_LOGIN_TIMEOUT_SECONDS as i64,
         crate::limits::MAX_LOGIN_TIMEOUT_SECONDS as i64,
@@ -669,5 +674,17 @@ mod seconds_tests {
         assert_eq!(adjust_seconds(3600, 1), 3600);
         assert_eq!(adjust_seconds(0, 0), 1);
         assert_eq!(adjust_seconds(u64::MAX, -1), 3600);
+    }
+
+    #[test]
+    fn adjust_seconds_saturates_large_values_before_clamping() {
+        let max = crate::limits::MAX_LOGIN_TIMEOUT_SECONDS;
+        // Overflow cases: the `u64::MAX` sentinel and the largest valid `i64`
+        // both overflow on `+ 1`, which used to panic in debug builds.
+        assert_eq!(adjust_seconds(u64::MAX, 1), max);
+        assert_eq!(adjust_seconds(u64::MAX, i32::MAX), max);
+        assert_eq!(adjust_seconds(i64::MAX as u64, 1), max);
+        // Normal steps are unchanged.
+        assert_eq!(adjust_seconds(30, 1), 31);
     }
 }

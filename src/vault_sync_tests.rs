@@ -897,6 +897,46 @@ fn camel_case_key_lowercases_only_the_leading_ascii_uppercase() {
 }
 
 #[test]
+fn revision_dates_combine_fractional_seconds_with_numeric_offsets() {
+    // `parse_revision` reads the optional fraction before the numeric offset
+    // (vault_sync.rs:392-430). A fraction must not hide the offset, and the
+    // offset must still be subtracted from the local wall-clock time.
+    let utc = Some(1_700_000_000);
+    for value in [
+        "2023-11-15T07:13:20.000+09:00",
+        "2023-11-15T07:13:20,123456+09:00",
+        "2023-11-14T17:13:20.999-05:00",
+        "2023-11-14T17:13:20,1-05:00",
+    ] {
+        assert_eq!(parse_revision(Some(value)), utc, "{value}");
+    }
+    // A valid fraction cannot rescue an out-of-range offset.
+    assert_eq!(parse_revision(Some("2023-11-15T07:13:20.5+24:00")), None);
+    assert_eq!(parse_revision(Some("2023-11-15T07:13:20.5+09:60")), None);
+    // Nor can a valid offset rescue an empty fraction or trailing bytes.
+    assert_eq!(parse_revision(Some("2023-11-15T07:13:20.+09:00")), None);
+    assert_eq!(parse_revision(Some("2023-11-15T07:13:20.1+09:00x")), None);
+}
+
+#[test]
+fn login_without_a_folder_id_imports_with_none() {
+    // `login_item` maps an absent `folderId` to `None`; the import must not
+    // fabricate a folder or discard the login (vault_sync.rs:347-350).
+    let vault = unlocked_vault(&[cipher("no-folder", "2024-01-01T00:00:00Z")]);
+    let model = import_logins(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].id, "no-folder");
+    assert_eq!(model.items[0].folder_id, None);
+    // A sibling row with an explicit folder keeps its assignment, so the
+    // assertion above is not just an all-None import.
+    let mut with_folder = cipher("with-folder", "2024-01-01T00:00:00Z");
+    with_folder["folderId"] = serde_json::json!("f1");
+    let vault = unlocked_vault(&[with_folder]);
+    let model = import_logins(&vault).expect("import should succeed");
+    assert_eq!(model.items[0].folder_id.as_deref(), Some("f1"));
+}
+
+#[test]
 fn pascal_case_cipher_fields_are_normalized_end_to_end() {
     // Build a real encrypted login, then rewrite every JSON key to PascalCase.
     // Unlike a duplicate `user_id` assertion, importing the result proves that

@@ -145,6 +145,16 @@ pub(super) fn seconds_adjust_status(dirty: bool) -> String {
     time_adjust_status("秒数", dirty)
 }
 
+/// Status after `+`/`-` adjusts the audit thresholds.
+///
+/// `refresh_audit` intentionally keeps the settings panel's own status (see
+/// `audit_refresh_status_for_panel`), so the threshold keys need their own
+/// feedback just like the other settings-adjustment keys. Kept pure so the
+/// wording can be tested without a GPUI window.
+pub(super) fn threshold_adjust_status(dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved("監査閾値を変更しました（w: 保存 / d: 破棄）", dirty)
+}
+
 impl BitwardenApp {
     pub(super) fn key_down(
         &mut self,
@@ -318,6 +328,10 @@ impl BitwardenApp {
                     crate::ui::logic::adjust_thresholds(self.settings.thresholds, delta);
                 self.mark_settings_dirty();
                 self.refresh_audit();
+                // Set the status *after* the refresh: on settings panels the
+                // refresh keeps the previous status, and on other panels this
+                // feedback must win over an audit-row description.
+                self.status = threshold_adjust_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::AdjustIdleLock(delta) => {
@@ -499,6 +513,29 @@ mod tests {
             assert!(
                 idle_lock_adjust_status(true).contains("分を変更しました"),
                 "{key} must report minutes, not seconds"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn threshold_adjust_status_reports_the_change_and_unsaved_marker() {
+        let clean = threshold_adjust_status(false);
+        assert_eq!(clean, "監査閾値を変更しました（w: 保存 / d: 破棄）");
+        assert!(!clean.contains("[未保存"), "{clean}");
+
+        // The branch marks the settings dirty before writing the status.
+        let dirty = threshold_adjust_status(true);
+        assert_eq!(dirty, crate::ui::app::status_with_unsaved(&clean, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+        assert!(dirty.contains("w: 保存 / d: 破棄"), "{dirty}");
+
+        // Confirm the keys that reach this branch are still the threshold keys.
+        for (key, delta) in [("+", 1), ("=", 1), ("-", -1), ("_", -1)] {
+            let ctx = context(Screen::Unlocked, Panel::Settings, key);
+            assert_eq!(
+                classify_key(&ctx),
+                UiAction::AdjustThreshold(delta),
+                "{key}"
             );
         }
     }

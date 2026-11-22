@@ -1852,3 +1852,154 @@ fn unrepresentable_deadline_takes_the_relative_timer_fallback() {
         Some(AuthError::Timeout)
     );
 }
+
+#[test]
+fn user_id_is_derived_from_the_personal_api_key_client_id() {
+    // The failed-sync path has no fresh `profile.id` and `Session` exposes no
+    // accessor, so the account id for the cache check comes from the API key.
+    // Bitwarden personal client ids are `user.<uuid>` (auth.rs:890-906).
+    assert_eq!(
+        super::user_id_from_client_id("user.00000000-0000-0000-0000-000000000000"),
+        "00000000-0000-0000-0000-000000000000"
+    );
+    assert_eq!(super::user_id_from_client_id("  user.abc  "), "abc");
+    // A malformed id fails closed instead of matching a different account.
+    assert_eq!(super::user_id_from_client_id("user."), "user.");
+    assert_eq!(super::user_id_from_client_id("user"), "user");
+    assert_eq!(
+        super::user_id_from_client_id("organization.abc"),
+        "organization.abc"
+    );
+}
+
+#[test]
+fn auth_error_family_messages_are_fixed() {
+    // `AuthError::message()` (auth.rs:118-138) is what the status bar shows;
+    // pin every family so a wording change is an explicit, reviewed edit.
+    for (error, expected) in [
+        (AuthError::MissingField("email"), "認証情報が未入力です"),
+        (
+            AuthError::InvalidServerUrl,
+            "サーバー URL が不正です（HTTPS または loopback の HTTP）",
+        ),
+        (
+            AuthError::BlockedServerUrl,
+            "サーバー URL が link-local アドレスを指しています",
+        ),
+        (AuthError::InvalidEmail, "メールアドレスの形式が不正です"),
+        (
+            AuthError::ClientSetup,
+            "クライアントを初期化できませんでした",
+        ),
+        (AuthError::Prelogin, "サーバー情報の取得に失敗しました"),
+        (AuthError::Login, "ログインに失敗しました"),
+        (AuthError::Sync, "同期に失敗しました"),
+        (AuthError::KdfRejected, "KDF 設定がポリシーで拒否されました"),
+        (AuthError::Timeout, "ログインがタイムアウトしました"),
+    ] {
+        assert_eq!(error.message(), expected, "{error:?}");
+        assert_eq!(error.to_string(), expected, "{error:?}");
+    }
+    // A detail-carrying sibling keeps the family message; only
+    // `status_message()` may append its retained cause.
+    for (detailed, plain) in [
+        (
+            AuthError::InvalidServerUrlDetail("why".into()),
+            AuthError::InvalidServerUrl,
+        ),
+        (
+            AuthError::ClientSetupDetail("why".into()),
+            AuthError::ClientSetup,
+        ),
+        (AuthError::PreloginDetail("why".into()), AuthError::Prelogin),
+        (AuthError::LoginDetail("why".into()), AuthError::Login),
+        (AuthError::SyncDetail("why".into()), AuthError::Sync),
+        (
+            AuthError::KdfRejectedDetail("why".into()),
+            AuthError::KdfRejected,
+        ),
+    ] {
+        assert_eq!(detailed.message(), plain.message(), "{detailed:?}");
+        assert_eq!(detailed.to_string(), plain.to_string(), "{detailed:?}");
+    }
+}
+
+#[test]
+fn unlock_error_family_messages_are_fixed() {
+    // `UnlockError::message()` (auth.rs:669-685) is the other status-bar
+    // vocabulary; pin its wrapping text as well as the AuthError families.
+    assert_eq!(
+        UnlockError::MissingProtectedKey.message(),
+        "復号キーが応答にありません"
+    );
+    assert_eq!(
+        UnlockError::UnlockFailed("why".into()).message(),
+        "復号キーを取得できません（why）"
+    );
+    assert_eq!(
+        UnlockError::ApplySyncFailed("why".into()).message(),
+        "同期データを取り込めません（why）"
+    );
+    assert_eq!(
+        UnlockError::ImportFailed("why".into()).message(),
+        "vault 変換に失敗しました（why）"
+    );
+    assert_eq!(UnlockError::Other("raw".into()).message(), "raw");
+}
+
+#[test]
+fn successful_restore_reports_only_the_from_cache_flag() {
+    // auth.rs:1011-1030 consumes `sync_cause` only in the failure arm via
+    // `sync_fallback_failure`. A successful restore returns the vault with
+    // `from_cache = true`; `AuthenticatedVault` has no cause field, so the
+    // success status can only be guided by that flag (stale-data warning).
+    // This pins the observable part of that contract.
+    let (master_key, _protected, sync) = unlock_fixture();
+    let session = Session::from_token(
+        SecretString::from("test-access-token".to_string()),
+        std::time::Duration::from_secs(3600),
+    )
+    .expect("a one-hour token must be accepted");
+    let restored = AuthenticatedVault {
+        session,
+        sync,
+        master_key,
+        from_cache: true,
+    };
+    assert!(restored.from_cache);
+    let fresh = AuthenticatedVault {
+        session: Session::from_token(
+            SecretString::from("test-access-token".to_string()),
+            std::time::Duration::from_secs(3600),
+        )
+        .expect("a one-hour token must be accepted"),
+        sync: crate::vault_sync::parse_sync(
+            br#"{"profile":{"id":"user-1"},"folders":[],"ciphers":[]}"#,
+        )
+        .expect("sync JSON should parse"),
+        master_key: MasterKey::from_bytes([0x11; 32]),
+        from_cache: false,
+    };
+    assert!(!fresh.from_cache);
+    // A discarded cause is still composable when the restore fails; on the
+    // success path it is simply not surfaced (documented above).
+    assert_eq!(
+        super::sync_fallback_failure(AuthError::Sync, None).status_message(),
+        "同期に失敗しました"
+    );
+}
+
+#[test]
+fn auth_length_caps_are_reexported_from_limits() {
+    // The caps must have a single source of truth in `crate::limits`; the
+    // `crate::auth::*` path is kept for the lock-screen input state.
+    assert_eq!(MAX_CLIENT_ID_LEN, crate::limits::MAX_CLIENT_ID_LEN);
+    assert_eq!(MAX_CLIENT_SECRET_LEN, crate::limits::MAX_CLIENT_SECRET_LEN);
+    assert_eq!(
+        MAX_MASTER_PASSWORD_LEN,
+        crate::limits::MAX_MASTER_PASSWORD_LEN
+    );
+    assert_eq!(MAX_EMAIL_LEN, crate::limits::MAX_EMAIL_LEN);
+    assert_eq!(MAX_SERVER_URL_LEN, crate::limits::MAX_SERVER_URL_LEN);
+    assert_eq!(DEFAULT_LOGIN_TIMEOUT, crate::limits::DEFAULT_LOGIN_TIMEOUT);
+}

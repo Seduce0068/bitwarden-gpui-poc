@@ -7,7 +7,10 @@
 //! Wiring (see [`cached_sync_for`]): the auth layer reads this cache when
 //! `/api/sync` fails *after* a successful login, then unlocks with the
 //! protected key from the live `Session`. This is a read-only, best-effort
-//! restore. There is currently no production writer: `openwarden` 0.1.0's
+//! restore. Both the server URL and the account id (derived from the personal
+//! API key's `client_id`) must match before a cached body is accepted, so a
+//! cache left by another account on the same server is refused. There is
+//! currently no production writer: `openwarden` 0.1.0's
 //! `Client::sync()` returns a parsed `SyncData` without the raw body and keeps
 //! `Session::access_token` private, so `from_body`/`save_default` cannot be
 //! fed from the login flow. A cache file therefore exists only if a legacy
@@ -59,8 +62,11 @@ pub struct SyncCache {
     /// credentials (for example `https://user:pass@host`). `from_body` does not
     /// strip userinfo from the URL because the offline-mismatch check compares
     /// the stored value byte-for-byte with the URL used at restore time, and no
-    /// production writer currently feeds this path. Treat the field as sensitive:
-    /// `Debug` masks it, and callers must not log or persist it via another route.
+    /// production writer currently feeds this path. Restore also compares
+    /// [`Self::user_id`] with the account id derived from the API key's
+    /// `client_id`, so a cache from another account on the same server is no
+    /// longer accepted. Treat the field as sensitive: `Debug` masks it, and
+    /// callers must not log or persist it via another route.
     pub server_url: String,
     /// Raw `/api/sync` JSON body.
     pub body: Vec<u8>,
@@ -122,28 +128,83 @@ fn mask_url_userinfo(url: &str) -> String {
 /// password); an '@' already followed by a clean host also closes the authority,
 /// so a later `?`/`#` starts the query. This keeps `https://host?email=a@b`
 /// untouched while still masking `https://user:pass?x=1@host`.
+///
+/// Bracketed IPv6 hosts need special care: the colons in `[::1]` belong to the
+/// address, not to a `user:password` marker, and `:1]` is not a port. Both
+/// colon heuristics therefore look through IPv6 literals first.
 fn at_is_in_query(scan: &str, at: usize) -> bool {
     let before = &scan[..at];
     before.match_indices(&['?', '#'][..]).any(|(delimiter, _)| {
         let head = &before[..delimiter];
         let has_userinfo_colon = head.split(&['?', '#'][..]).any(|part| {
+            let part = without_ipv6_literals(part);
             part.split_once(':').is_some_and(|(_, value)| {
                 !value.is_empty() && !value.bytes().all(|byte| byte.is_ascii_digit())
             })
         });
-        let host_complete = head.match_indices('@').any(|(earlier, _)| {
-            let host = &head[earlier + 1..];
-            // A numeric `:port` is part of the host, not a password marker.
-            let host_ok = match host.split_once(':') {
-                Some((_, port)) => {
-                    !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
-                }
-                None => true,
-            };
-            !host.is_empty() && host_ok && !host.contains(&['@', '=', '?', '#'][..])
-        });
+        let host_complete = head
+            .match_indices('@')
+            .any(|(earlier, _)| host_with_optional_port_ok(&head[earlier + 1..]));
         !has_userinfo_colon || host_complete
     })
+}
+
+/// Remove bracketed IPv6 literals so colon heuristics only see host and port.
+///
+/// In `[::1]` the colons are part of the address; treating them as a
+/// `user:password` marker makes a query '@' look like the userinfo separator
+/// and leaks the real credential. Dropping the literal is enough: the caller
+/// only asks whether a non-numeric colon remains.
+fn without_ipv6_literals(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('[') {
+        let Some(end_relative) = rest[start..].find(']') else {
+            break;
+        };
+        let end = start + end_relative;
+        out.push_str(&rest[..start]);
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether `host` is a plausible authority host with an optional numeric port.
+///
+/// A plain `split_once(':')` mistakes the `:1]` of `[::1]` for a non-numeric
+/// port, so a bracketed literal is parsed as an address closed by `]`; only an
+/// optional numeric `:port` may follow it. This makes `host_complete` in
+/// [`at_is_in_query`] recognize IPv6 hosts.
+fn host_with_optional_port_ok(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    let (hostname, port) = if let Some(rest) = host.strip_prefix('[') {
+        let Some(end) = rest.find(']') else {
+            return false;
+        };
+        let address = &rest[..end];
+        if address.is_empty() || !address.contains(':') {
+            return false;
+        }
+        let tail = &rest[end + 1..];
+        let port = match tail.strip_prefix(':') {
+            Some(port) => Some(port),
+            None if tail.is_empty() => None,
+            None => return false,
+        };
+        (address, port)
+    } else {
+        match host.split_once(':') {
+            Some((name, value)) => (name, Some(value)),
+            None => (host, None),
+        }
+    };
+    if hostname.is_empty() || hostname.contains(&['@', '=', '?', '#'][..]) {
+        return false;
+    }
+    port.is_none_or(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Whether a query/fragment parameter name denotes a credential.
@@ -660,10 +721,13 @@ fn save_to_path(path: Option<PathBuf>, cache: &SyncCache) -> Result<(), std::io:
 /// Load the encrypted cache for a best-effort offline restore.
 ///
 /// The auth layer calls this when `/api/sync` fails but the API-key login has
-/// already succeeded. Only the server URL can be checked here: a failed sync
-/// supplies no fresh user id, so a cross-account cache for the same server
-/// cannot be detected and is accepted by design in this PoC. [`validate`]
-/// likewise does not compare account ids; see its documentation.
+/// already succeeded. Both the server URL and the caller's `user_id` must
+/// match: a cache left by a different account on the same server is rejected
+/// with [`SyncCacheError::UserMismatch`] instead of being restored. The id is
+/// derived from the personal API key's `client_id` (`user.<uuid>`), which is
+/// the trusted account identifier available on a failed-sync path; a plain
+/// `client_id` without that prefix fails closed. [`validate`] applies the same
+/// two comparisons to a cache the caller already holds.
 /// Key material is never taken from the cache — its
 /// `profile.key` / `privateKey` are stripped by [`SyncCache::from_body`] and
 /// the live `Session` supplies the protected key at unlock time. A key change
@@ -679,12 +743,19 @@ fn save_to_path(path: Option<PathBuf>, cache: &SyncCache) -> Result<(), std::io:
 /// [`SyncCacheError::ParseFailedCause`] / [`SyncCacheError::CacheParse`] when
 /// the stored body is invalid, [`SyncCacheError::VersionMismatch`] when the
 /// format changed, [`SyncCacheError::ServerMismatch`] when it belongs to
-/// another server, and [`SyncCacheError::CacheRedact`] /
+/// another server, [`SyncCacheError::UserMismatch`] when it belongs to another
+/// account, and [`SyncCacheError::CacheRedact`] /
 /// [`SyncCacheError::CacheSerialize`] when sanitizing the body fails.
-pub fn cached_sync_for_detailed(server_url: &str) -> Result<openwarden::SyncData, SyncCacheError> {
+pub fn cached_sync_for_detailed(
+    server_url: &str,
+    user_id: &str,
+) -> Result<openwarden::SyncData, SyncCacheError> {
     let cache = load_default()?;
     if cache.server_url != server_url {
         return Err(SyncCacheError::ServerMismatch);
+    }
+    if cache.user_id != user_id {
+        return Err(SyncCacheError::UserMismatch);
     }
     let now = i64::try_from(crate::totp::now_unix()).unwrap_or(i64::MAX);
     if is_cache_expired(cache.created_at, now) {
@@ -694,19 +765,19 @@ pub fn cached_sync_for_detailed(server_url: &str) -> Result<openwarden::SyncData
 }
 
 /// Best-effort wrapper around [`cached_sync_for_detailed`] for callers that
-/// only need to know whether a usable cache was found.
-pub fn cached_sync_for(server_url: &str) -> Option<openwarden::SyncData> {
-    cached_sync_for_detailed(server_url).ok()
+/// only need to know whether a usable cache was found. Both the server URL and
+/// the account id are checked by the detailed entry point.
+pub fn cached_sync_for(server_url: &str, user_id: &str) -> Option<openwarden::SyncData> {
+    cached_sync_for_detailed(server_url, user_id).ok()
 }
 
-/// Validate the parts of a cache that the production restore path can check.
+/// Validate the parts of a cache that do not need a filesystem read.
 ///
-/// `user_id` is accepted for source compatibility but deliberately **not**
-/// compared: [`cached_sync_for_detailed`] runs after a failed `/api/sync`, so
-/// there is no fresh account id to compare against. Keeping a `UserMismatch`
-/// branch here would suggest the restore path rejects cross-account caches
-/// when it cannot. The account id is still stored and exposed on [`SyncCache`]
-/// for callers that do have a trusted id (for example a fresh sync response).
+/// Both the server URL and `user_id` are compared with the stored values,
+/// matching [`cached_sync_for_detailed`] so a caller that already holds a
+/// cache cannot accept another account's entry by skipping the restore path.
+/// The auth layer supplies the id derived from the personal API key's
+/// `client_id`; callers without a trusted id must not use this helper.
 ///
 /// Unlike [`cached_sync_for_detailed`], this helper deliberately does **not**
 /// apply the [`MAX_CACHE_AGE_SECS`] expiry window: it checks an object the
@@ -719,11 +790,15 @@ pub fn cached_sync_for(server_url: &str) -> Option<openwarden::SyncData> {
 ///
 /// # Errors
 ///
-/// [`SyncCacheError::ServerMismatch`] when the server differs, or a parse error
+/// [`SyncCacheError::ServerMismatch`] when the server differs,
+/// [`SyncCacheError::UserMismatch`] when the account differs, or a parse error
 /// when the body cannot be read back.
-pub fn validate(cache: &SyncCache, _user_id: &str, server_url: &str) -> Result<(), SyncCacheError> {
+pub fn validate(cache: &SyncCache, user_id: &str, server_url: &str) -> Result<(), SyncCacheError> {
     if cache.server_url != server_url {
         return Err(SyncCacheError::ServerMismatch);
+    }
+    if cache.user_id != user_id {
+        return Err(SyncCacheError::UserMismatch);
     }
     cache.sync()?;
     Ok(())

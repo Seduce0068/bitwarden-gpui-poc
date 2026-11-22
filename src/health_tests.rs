@@ -3,7 +3,7 @@
 use crate::generator::{entropy_bits, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::health::*;
 use crate::model::{CardData, ItemData, LoginUri, SshKeyData, VaultItem};
-use crate::vault_sync::{is_undecryptable_password, UNDECRYPTABLE_PASSWORD};
+use crate::vault_sync::{is_undecryptable_password, UNDECRYPTABLE_PASSWORD, UNDECRYPTABLE_TOTP};
 use zeroize::Zeroizing;
 
 const NOW: i64 = 1_700_000_000;
@@ -1617,4 +1617,56 @@ fn non_ascii_totp_does_not_crash_the_audit() {
     assert_eq!(report.with_totp, 1);
     assert!((report.totp_coverage() - 0.5).abs() < 1e-6);
     assert!(!crate::totp::is_valid_secret(BAD));
+}
+
+#[test]
+fn undecryptable_totp_marker_reaches_the_totp_uninspectable_finding() {
+    // The import layer writes `UNDECRYPTABLE_TOTP` when a TOTP field exists but
+    // its ciphertext cannot be opened (vault_sync.rs:329-336). The audit must
+    // follow that marker to `Finding::TotpUninspectable` rather than reporting
+    // `NoTotp`, so a 2FA-enabled login is not mislabelled as having no 2FA
+    // (health.rs:670-677).
+    let marked = login(
+        "totp-marked",
+        "Marked",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        UNDECRYPTABLE_TOTP,
+    );
+    assert!(crate::vault_sync::is_undecryptable_totp(
+        marked.totp_secret().unwrap()
+    ));
+    assert!(!has_usable_totp(&marked), "a marker is not a usable secret");
+    assert!(has_totp_field(&marked), "but the field is present");
+
+    let report = report_of(vec![marked]);
+    let item = report
+        .items
+        .iter()
+        .find(|item| item.id == "totp-marked")
+        .expect("the marked login must be reported");
+    assert_eq!(item.findings, vec![Finding::TotpUninspectable], "{item:?}");
+    assert!(!item.findings.contains(&Finding::NoTotp), "{item:?}");
+    assert_eq!(report.logins, 1);
+    assert_eq!(report.with_totp, 0);
+    assert_eq!(report.totp_coverage(), 0.0);
+    assert_eq!(
+        Finding::TotpUninspectable.message(),
+        "TOTP 検査対象外（復号できませんでした）"
+    );
+    // A genuinely empty field still takes the NoTotp branch.
+    let empty = report_of(vec![login(
+        "totp-empty",
+        "Empty",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://b.example",
+        "",
+    )]);
+    let empty_item = empty
+        .items
+        .iter()
+        .find(|item| item.id == "totp-empty")
+        .expect("the empty login must be reported");
+    assert!(empty_item.findings.contains(&Finding::NoTotp));
+    assert!(!empty_item.findings.contains(&Finding::TotpUninspectable));
 }

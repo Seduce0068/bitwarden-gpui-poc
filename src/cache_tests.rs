@@ -139,16 +139,23 @@ fn wrong_version_is_rejected() {
 }
 
 #[test]
-fn validation_checks_only_what_the_restore_path_can_know() {
+fn validation_checks_the_server_and_the_account() {
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     assert!(validate(&cache, "user-1", "https://vault.example.com").is_ok());
-    // The production restore path runs after a failed sync, so it has no fresh
-    // user id. `validate` documents that it cannot reject a different account
-    // instead of offering a check that is unreachable in production.
-    assert!(validate(&cache, "other", "https://vault.example.com").is_ok());
+    // The account id comes from the personal API key's `client_id`, so both
+    // this helper and the restore path reject another account's cache.
+    assert_eq!(
+        validate(&cache, "other", "https://vault.example.com"),
+        Err(SyncCacheError::UserMismatch)
+    );
     assert_eq!(cache.user_id, "user-1");
     assert_eq!(
         validate(&cache, "user-1", "https://other.example.com"),
+        Err(SyncCacheError::ServerMismatch)
+    );
+    // The server check wins when both values differ.
+    assert_eq!(
+        validate(&cache, "other", "https://other.example.com"),
         Err(SyncCacheError::ServerMismatch)
     );
 }
@@ -191,9 +198,12 @@ fn validate_reports_a_parse_failure_and_a_detailed_server_mismatch() {
         Err(SyncCacheError::CacheParse(_))
     ));
 
-    // A matching server but a different account stays accepted by design; the
-    // mismatch check is strictly about the server URL (cache.rs:449-468).
-    assert!(validate(&cache, "other", "https://vault.example.com").is_ok());
+    // A matching server but a different account is rejected by the account
+    // check that shares the restore path's policy.
+    assert_eq!(
+        validate(&cache, "other", "https://vault.example.com"),
+        Err(SyncCacheError::UserMismatch)
+    );
     assert_eq!(
         validate(&cache, "user-1", "https://other.example.com"),
         Err(SyncCacheError::ServerMismatch)
@@ -911,19 +921,20 @@ fn cached_sync_for_restores_only_a_usable_cache_for_this_server() {
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
 
     // No file: restore is a silent no-op so auth reports the sync failure.
-    assert!(cached_sync_for("https://vault.example.com").is_none());
+    assert!(cached_sync_for("https://vault.example.com", "user-1").is_none());
 
     save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
-    let restored = cached_sync_for("https://vault.example.com").expect("cache should restore");
+    let restored =
+        cached_sync_for("https://vault.example.com", "user-1").expect("cache should restore");
     assert_eq!(restored.user_id(), "user-1");
 
     // A cache from another server must never be restored.
-    assert!(cached_sync_for("https://other.example.com").is_none());
+    assert!(cached_sync_for("https://other.example.com", "user-1").is_none());
 
     // A corrupted cache is ignored just like a missing one.
     let path = default_path().expect("cache path");
     write_fixture(&path, b"not json");
-    assert!(cached_sync_for("https://vault.example.com").is_none());
+    assert!(cached_sync_for("https://vault.example.com", "user-1").is_none());
 }
 
 #[test]
@@ -1129,10 +1140,10 @@ fn expired_cache_is_rejected_by_the_restore_path() {
     };
     save_default(&stale).unwrap();
     assert_eq!(
-        cached_sync_for_detailed("https://vault.example.com").err(),
+        cached_sync_for_detailed("https://vault.example.com", "user-1").err(),
         Some(SyncCacheError::CacheExpired)
     );
-    assert!(cached_sync_for("https://vault.example.com").is_none());
+    assert!(cached_sync_for("https://vault.example.com", "user-1").is_none());
 }
 
 #[test]
@@ -1405,14 +1416,14 @@ fn cached_sync_for_detailed_reports_a_direct_server_mismatch() {
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
 
     save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
-    assert!(cached_sync_for_detailed("https://vault.example.com").is_ok());
+    assert!(cached_sync_for_detailed("https://vault.example.com", "user-1").is_ok());
     // The detailed entry point keeps the classified reason rather than
     // collapsing it into `None` like the best-effort wrapper does.
     assert!(matches!(
-        cached_sync_for_detailed("https://other.example.com"),
+        cached_sync_for_detailed("https://other.example.com", "user-1"),
         Err(SyncCacheError::ServerMismatch)
     ));
-    assert!(cached_sync_for("https://other.example.com").is_none());
+    assert!(cached_sync_for("https://other.example.com", "user-1").is_none());
 }
 
 #[test]
@@ -1463,11 +1474,11 @@ fn cached_sync_for_detailed_reports_a_broken_body_in_a_valid_envelope() {
     save_default(&broken).unwrap();
 
     assert!(matches!(
-        cached_sync_for_detailed("https://vault.example.com"),
+        cached_sync_for_detailed("https://vault.example.com", "user-1"),
         Err(SyncCacheError::CacheParse(_))
     ));
     // The best-effort wrapper still collapses the classified reason to None.
-    assert!(cached_sync_for("https://vault.example.com").is_none());
+    assert!(cached_sync_for("https://vault.example.com", "user-1").is_none());
 }
 
 #[test]
@@ -1545,12 +1556,12 @@ fn future_and_sentinel_created_at_are_expired_on_the_restore_path() {
         save_default(&cache).unwrap();
         assert!(
             matches!(
-                cached_sync_for_detailed("https://vault.example.com"),
+                cached_sync_for_detailed("https://vault.example.com", "user-1"),
                 Err(SyncCacheError::CacheExpired)
             ),
             "created_at={created_at} must be rejected by the restore path"
         );
-        assert!(cached_sync_for("https://vault.example.com").is_none());
+        assert!(cached_sync_for("https://vault.example.com", "user-1").is_none());
     }
 }
 
@@ -1651,7 +1662,7 @@ fn legacy_cache_is_used_by_the_offline_restore_path() {
     save(&legacy, &cache).unwrap();
     let before = std::fs::read(&legacy).unwrap();
 
-    let restored = cached_sync_for_detailed("https://vault.example.com")
+    let restored = cached_sync_for_detailed("https://vault.example.com", "user-1")
         .expect("the legacy cache must restore through load_default");
     assert_eq!(restored.user_id(), "user-1");
     // The fallback is read-only: neither location is created or rewritten.
@@ -1665,14 +1676,14 @@ fn legacy_cache_is_used_by_the_offline_restore_path() {
         "legacy file was rewritten"
     );
     assert!(matches!(
-        cached_sync_for_detailed("https://other.example.com"),
+        cached_sync_for_detailed("https://other.example.com", "user-1"),
         Err(SyncCacheError::ServerMismatch)
     ));
 
     // A missing primary still falls back, but an unusable primary does not.
     write_fixture(&primary, b"not json");
     assert!(matches!(
-        cached_sync_for_detailed("https://vault.example.com"),
+        cached_sync_for_detailed("https://vault.example.com", "user-1"),
         Err(SyncCacheError::ParseFailedCause(_))
     ));
     assert_eq!(std::fs::read(&legacy).unwrap(), before);
@@ -1713,4 +1724,98 @@ fn validate_does_not_apply_the_restore_expiry_window() {
     let fresh = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     assert!(!is_cache_expired(fresh.created_at, now));
     assert!(validate(&fresh, "user-1", "https://vault.example.com").is_ok());
+}
+
+#[test]
+fn mask_url_userinfo_handles_ipv6_hosts_and_query_at_signs() {
+    // The colons in `[::1]` were read as a `user:password` marker, so a query
+    // '@' became the userinfo separator and the real credential stayed in the
+    // diagnostic URL (cache.rs:121-208). Both must now be distinguished.
+    for (url, expected) in [
+        (
+            "https://user:SECRET@[::1]?email=a@b",
+            "https://[redacted]@[::1]?email=a@b",
+        ),
+        (
+            "https://user:SECRET@[::1]:8443?email=a@b",
+            "https://[redacted]@[::1]:8443?email=a@b",
+        ),
+        (
+            "https://user:SECRET@[::1]/path?email=a@b",
+            "https://[redacted]@[::1]/path?email=a@b",
+        ),
+        (
+            "user:SECRET@[2001:db8::1]?email=a@b",
+            "[redacted]@[2001:db8::1]?email=a@b",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+    }
+    // A host without userinfo is unchanged even when its query holds an '@':
+    // the address's colons must not invent a separator.
+    for url in [
+        "https://[::1]?email=a@b",
+        "https://[::1]:8443?email=a@b",
+        "https://[2001:db8::1]/path?email=a@b",
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+    // The Debug masker reaches the same helper and must not leak the password.
+    let url = "https://user:IPv6SECRET@[::1]:8443?email=a@b";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("IPv6SECRET"), "{rendered}");
+    assert!(rendered.contains("[redacted]@[::1]:8443"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn user_id_is_extracted_from_pascal_case_and_uppercase_bodies() {
+    // `from_body` parses a normalized *copy* of the raw body for the account id
+    // (cache.rs:404-418). Casing variants must not make the cache anonymous,
+    // otherwise the restore's account check could never match a real login.
+    let pascal = br#"{"Profile":{"Id":"user-pascal","Key":"K1"},"Ciphers":[]}"#;
+    let cache = SyncCache::from_body(pascal.to_vec(), "https://vault.example.com").unwrap();
+    assert_eq!(cache.user_id, "user-pascal");
+    assert!(!String::from_utf8(cache.body).unwrap().contains("K1"));
+
+    let upper = br#"{
+        "PROFILE": {"Id": "user-upper", "Key": "K2"},
+        "profile": {"Id": "user-upper", "PrivateKey": "K3"},
+        "CIPHERS": []
+    }"#;
+    let cache = SyncCache::from_body(upper.to_vec(), "https://vault.example.com").unwrap();
+    assert_eq!(cache.user_id, "user-upper");
+    let stored = String::from_utf8(cache.body).unwrap();
+    assert!(!stored.contains("K2"), "{stored}");
+    assert!(!stored.contains("K3"), "{stored}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cached_sync_for_detailed_rejects_a_cache_for_another_account() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-user-mismatch-restore-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
+
+    save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
+    // Same server and still fresh, but a different account: refuse to restore.
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", "user-2"),
+        Err(SyncCacheError::UserMismatch)
+    ));
+    assert!(cached_sync_for("https://vault.example.com", "user-2").is_none());
+    // An empty or wrong id cannot unlock another account's cache either.
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", ""),
+        Err(SyncCacheError::UserMismatch)
+    ));
+    // The matching account still restores; the server check still wins first.
+    assert!(cached_sync_for_detailed("https://vault.example.com", "user-1").is_ok());
+    assert!(matches!(
+        cached_sync_for_detailed("https://other.example.com", "user-1"),
+        Err(SyncCacheError::ServerMismatch)
+    ));
 }

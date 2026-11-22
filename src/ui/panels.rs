@@ -164,6 +164,27 @@ pub(super) fn totp_badge(item: &crate::model::VaultItem) -> TotpBadge {
     }
 }
 
+/// Detail line below the audit summary.
+///
+/// The row-selection keys only describe a real path when the report has rows.
+/// On an empty report they promised keys that select nothing, so that case now
+/// shows an explicit empty state instead. Kept pure so the wording can be
+/// tested without rendering a GPUI window.
+pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
+    let base = format!(
+        "{} TOTP 設定済み: {}/{} ({:.0}%)",
+        unsaved_marker(dirty),
+        report.with_totp,
+        report.logins,
+        report.totp_coverage() * 100.0
+    );
+    if report.items.is_empty() {
+        format!("{base} / 監査する問題はありません / g: 一覧 / l: ロック / Esc: 終了")
+    } else {
+        format!("{base} / ↑↓: 行を選択 / Enter: 対象を選択 / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了")
+    }
+}
+
 // Scrollable panel roots share the same pattern: a stable id keeps the scroll
 // offset in element state across frames, min_h_0 lets the flex item shrink
 // below its content height, and overflow_y_scroll keeps every row reachable
@@ -199,13 +220,12 @@ pub(super) fn audit_panel<'a, V: 'static>(
                 .text_color(rgb(0xa6adc8))
                 .child(report.summary()),
         )
-        .child(div().text_xs().text_color(rgb(0xa6adc8)).child(format!(
-            "{} TOTP 設定済み: {}/{} ({:.0}%) / ↑↓: 行を選択 / Enter: 対象を選択 / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了",
-            unsaved_marker(dirty),
-            report.with_totp,
-            report.logins,
-            report.totp_coverage() * 100.0
-        )));
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0xa6adc8))
+                .child(audit_panel_detail_line(report, dirty)),
+        );
     for (index, item) in report.items.iter().enumerate() {
         let is_selected = selected == Some(index);
         let color = rgb(match item.worst() {
@@ -817,6 +837,36 @@ mod tests {
         );
         // Every tab label gets the same cue, including the audit placeholder.
         assert!(panel_button_label("[監査 (未生成)]", true).starts_with("▶ "));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_panel_detail_line_hides_row_keys_on_an_empty_report() {
+        let empty = audit_panel_detail_line(&Report::default(), false);
+        assert!(empty.contains("監査する問題はありません"), "{empty}");
+        assert!(!empty.contains("↑↓"), "{empty}");
+        assert!(!empty.contains("Enter: 対象を選択"), "{empty}");
+        assert!(!empty.contains("行クリックでも選択"), "{empty}");
+        assert!(empty.contains("TOTP 設定済み"), "{empty}");
+        assert!(empty.contains("g: 一覧 / l: ロック / Esc: 終了"), "{empty}");
+
+        let with_rows = Report {
+            items: vec![crate::health::ItemReport {
+                id: "item-1".into(),
+                name: "Example".into(),
+                kind: crate::model::ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 1,
+            logins: 1,
+        };
+        let line = audit_panel_detail_line(&with_rows, true);
+        assert!(line.contains("↑↓: 行を選択"), "{line}");
+        assert!(line.contains("Enter: 対象を選択"), "{line}");
+        assert!(line.contains("行クリックでも選択"), "{line}");
+        assert!(!line.contains("監査する問題はありません"), "{line}");
+        assert!(line.contains(unsaved_marker(true)), "{line}");
+        assert!(line.contains("TOTP 設定済み: 1/1 (100%)"), "{line}");
     }
 
     #[::core::prelude::v1::test]

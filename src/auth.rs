@@ -8,9 +8,11 @@
 //! successful login, the internal
 //! authentication routine falls back to the encrypted offline cache
 //! ([`crate::cache::cached_sync_for_detailed`])
-//! and unlocks with the protected key from the live `Session`. The result is
-//! tagged with [`AuthenticatedVault::from_cache`] so callers know the data may
-//! be stale. See the ADR for why the cache has no production writer yet.
+//! and unlocks with the protected key from the live `Session`. The cache is
+//! accepted only when both the server URL and the account id from the personal
+//! API key's `client_id` match. The result is tagged with
+//! [`AuthenticatedVault::from_cache`] so callers know the data may be stale.
+//! See the ADR for why the cache has no production writer yet.
 
 use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 
@@ -330,19 +332,15 @@ impl From<AppError> for UnlockError {
 // backstop for configs assembled by callers that bypass the input layer.
 // ---------------------------------------------------------------------------
 
+// All auth text/length caps live in `crate::limits` so the input layer, the
+// login path and the settings layer cannot drift apart. Re-export them here to
+// keep the existing `crate::auth::MAX_*` call sites (including the lock-screen
+// input state) source-compatible.
 pub(crate) use crate::limits::{
     has_format_character, truncate_to_limit, DEFAULT_LOGIN_TIMEOUT, MAX_EMAIL_LEN,
     MAX_SERVER_URL_LEN,
 };
-
-/// Maximum length of a Client ID, in characters. Bitwarden keys are short
-/// (`user.<uuid>`); this leaves room for custom installations.
-pub const MAX_CLIENT_ID_LEN: usize = 256;
-/// Maximum length of a Client Secret, in characters.
-pub const MAX_CLIENT_SECRET_LEN: usize = 1024;
-/// Maximum length of a master password, in characters. Long passphrases are
-/// legitimate, but the in-memory buffer still needs a finite bound.
-pub const MAX_MASTER_PASSWORD_LEN: usize = 1024;
+pub use crate::limits::{MAX_CLIENT_ID_LEN, MAX_CLIENT_SECRET_LEN, MAX_MASTER_PASSWORD_LEN};
 
 /// Secret counterpart of [`truncate_to_limit`]. Replacing the value drops and
 /// zeroizes the previous secret buffer.
@@ -628,16 +626,13 @@ pub struct AuthenticatedVault {
     /// The login flow copies this flag before the vault is consumed and
     /// surfaces it in the success status, warning that the data may be stale.
     ///
-    /// Known constraint: the restore path has no trusted account id to compare
-    /// against. The fallback runs only after `/api/sync` failed, so unlike a
-    /// fresh response it yields no `profile.id`; the public `openwarden::Session`
-    /// does not expose one either. [`crate::cache::cached_sync_for_detailed`]
-    /// therefore matches the cache by server URL only, and a cache left by a
-    /// *different account on the same server* can be restored here even though
-    /// the caller authenticated as someone else. Callers that do have a trusted
-    /// id can use [`crate::cache::SyncCache`]'s stored `user_id` themselves; the
-    /// login flow cannot, so this is recorded as a known limitation instead of
-    /// implying an account check that is not performed.
+    /// The restore is account-scoped: [`crate::cache::cached_sync_for_detailed`]
+    /// receives both the server URL and the user id encoded in the personal
+    /// API key's `client_id` (see `user_id_from_client_id`), and refuses a
+    /// cache whose stored `profile.id` differs. The failed `/api/sync` itself
+    /// supplies no fresh id and `openwarden::Session` has no accessor, so the
+    /// API key is the trusted source. A non-`user.` client id fails closed: no
+    /// cache is restored, rather than risking another account's vault.
     pub from_cache: bool,
 }
 
@@ -890,6 +885,24 @@ pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
     }
 }
 
+/// The account id encoded in a personal API key's `client_id` (`user.<uuid>`).
+///
+/// A failed `/api/sync` yields no fresh `profile.id` and the public
+/// `openwarden::Session` has no user-id accessor, but the API-key login itself
+/// authenticates a specific account: Bitwarden personal client ids carry that
+/// account's id after the `user.` prefix. The offline cache is therefore
+/// matched by both server URL and this derived id. A client id without the
+/// prefix (or with nothing after it) is returned unchanged, so the comparison
+/// against the cache's `profile.id` fails closed instead of restoring another
+/// account's vault.
+fn user_id_from_client_id(client_id: &str) -> &str {
+    let trimmed = client_id.trim();
+    trimmed
+        .strip_prefix("user.")
+        .filter(|id| !id.is_empty())
+        .unwrap_or(trimmed)
+}
+
 /// Compose the status when both the live sync and its cache fallback fail.
 ///
 /// `cause` is the discarded sync/parse failure. Folding its detail into a
@@ -902,6 +915,14 @@ pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
 /// of `cause` is rendered. A nested inner cause is not flattened further, so
 /// its text may still be absent from the status bar. A cause that yields no
 /// text at all leaves the fallback message unchanged.
+///
+/// Scope: this function is the **only** consumer of the discarded sync cause,
+/// and it runs only when the cache restore also fails. On a *successful*
+/// restore `sync_cause` is dropped: [`AuthenticatedVault`] has no field for it,
+/// so the success status can only be guided by the `from_cache` flag (stale
+/// data warning). The original live-sync failure is not surfaced in that case;
+/// this is the current behaviour, recorded explicitly instead of implying a
+/// status message that is not produced.
 fn sync_fallback_failure(fallback: AuthError, cause: Option<AppError>) -> AuthError {
     let Some(cause) = cause else {
         return fallback;
@@ -989,18 +1010,21 @@ async fn authenticate_inner(
         Some(sync) => (sync, false),
         // A transport failure or an unparsable (e.g. PascalCase) body both
         // leave us without a fresh vault; try the encrypted cache in either
-        // case, as the pre-0.1.1 path did. No fresh `profile.id` exists on this
-        // path, so the cache can only be matched by server URL (see the
-        // `from_cache` field docs for the cross-account limitation).
-        None => match crate::cache::cached_sync_for_detailed(config.server_url.trim()) {
-            Ok(sync) => (sync, true),
-            Err(cache_error) => {
-                return Err(sync_fallback_failure(
-                    cache_restore_failure(cache_error),
-                    sync_cause,
-                ));
+        // case, as the pre-0.1.1 path did. The account id comes from the
+        // personal API key's `client_id`, so the cache is matched by server URL
+        // *and* account (see the `from_cache` field docs).
+        None => {
+            let user_id = user_id_from_client_id(&config.client_id);
+            match crate::cache::cached_sync_for_detailed(config.server_url.trim(), user_id) {
+                Ok(sync) => (sync, true),
+                Err(cache_error) => {
+                    return Err(sync_fallback_failure(
+                        cache_restore_failure(cache_error),
+                        sync_cause,
+                    ));
+                }
             }
-        },
+        }
     };
     // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
     let password = config.master_password.clone();

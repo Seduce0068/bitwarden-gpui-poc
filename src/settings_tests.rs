@@ -1983,3 +1983,51 @@ fn ui_clamp_bounds_come_from_the_shared_limits_module() {
     assert_eq!(MIN_LOGIN_TIMEOUT_SECONDS, MIN_CLIPBOARD_RESTORE_SECONDS);
     assert_eq!(MAX_LOGIN_TIMEOUT_SECONDS, MAX_CLIPBOARD_RESTORE_SECONDS);
 }
+
+#[test]
+fn save_reports_an_io_failure_without_touching_the_destination() {
+    // `Settings::save` delegates the final write to `write_private`, whose
+    // atomic persist must fail when the destination is a directory. The error
+    // has to reach the caller instead of being swallowed after serialization.
+    let dir = tempfile::tempdir().unwrap();
+    let error = Settings::default().save(dir.path()).unwrap_err();
+    assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(!error.to_string().is_empty());
+    assert!(dir.path().is_dir(), "the directory must remain intact");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+
+    // A path whose parent is a regular file fails even earlier (mkdir), and
+    // still surfaces as an io error rather than a successful save.
+    let file = dir.path().join("not-a-directory");
+    std::fs::write(&file, b"x").unwrap();
+    let nested = file.join("settings.json");
+    let error = Settings::default().save(&nested).unwrap_err();
+    assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(std::fs::read(&file).unwrap(), b"x");
+}
+
+#[test]
+fn load_advisories_messages_match_exactly() {
+    // The two advisory strings are user-facing status text (settings.rs:349-404).
+    // Pin them verbatim: a `contains` check would let a wording regression or
+    // a missing key list slip through unnoticed.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        br#"{"schema_version":99,"mystery_key":1,"another_key":2}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        load_advisories(&path),
+        vec![
+            "設定ファイルのバージョン 99 は未対応です。既定値で起動します".to_string(),
+            "未知の設定キーは無視されます: mystery_key, another_key".to_string(),
+        ]
+    );
+
+    // A current file with only known keys produces no notice at all.
+    std::fs::write(&path, br#"{"schema_version":1,"email":"e@example.com"}"#).unwrap();
+    assert_eq!(load_advisories(&path), Vec::<String>::new());
+}

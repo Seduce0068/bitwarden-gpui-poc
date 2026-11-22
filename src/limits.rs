@@ -10,6 +10,14 @@ pub const MAX_EMAIL_LEN: usize = 254;
 /// Maximum length of a server URL, in characters. Well above a normal
 /// self-hosted URL, but below the ~2 KiB limit many HTTP stacks apply.
 pub const MAX_SERVER_URL_LEN: usize = 2048;
+/// Maximum length of a Client ID, in characters. Bitwarden personal keys are
+/// short (`user.<uuid>`); this leaves room for custom installations.
+pub const MAX_CLIENT_ID_LEN: usize = 256;
+/// Maximum length of a Client Secret, in characters.
+pub const MAX_CLIENT_SECRET_LEN: usize = 1024;
+/// Maximum length of a master password, in characters. Long passphrases are
+/// legitimate, but the in-memory buffer still needs a finite bound.
+pub const MAX_MASTER_PASSWORD_LEN: usize = 1024;
 /// Default time budget for the whole login sequence.
 pub const DEFAULT_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Default inactivity before auto-lock, in seconds.
@@ -121,5 +129,19 @@ mod tests {
         let mut ascii = "abcdef".to_string();
         truncate_to_limit(&mut ascii, 2);
         assert_eq!(ascii, "ab");
+    }
+
+    #[test]
+    fn auth_field_caps_have_one_source_of_truth() {
+        // Auth re-exports these from here so the lock-screen input state, the
+        // clamp on the login path and the settings layer share the same caps.
+        assert_eq!(MAX_EMAIL_LEN, 254);
+        assert_eq!(MAX_SERVER_URL_LEN, 2048);
+        assert_eq!(MAX_CLIENT_ID_LEN, 256);
+        assert_eq!(MAX_CLIENT_SECRET_LEN, 1024);
+        assert_eq!(MAX_MASTER_PASSWORD_LEN, 1024);
+        assert_eq!(DEFAULT_LOGIN_TIMEOUT, std::time::Duration::from_secs(30));
+        const { assert!(MAX_CLIENT_ID_LEN < MAX_SERVER_URL_LEN) };
+        const { assert!(MAX_EMAIL_LEN < MAX_SERVER_URL_LEN) };
     }
 }

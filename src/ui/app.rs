@@ -134,6 +134,20 @@ pub(super) fn panel_transition_status_after_edit(
     })
 }
 
+/// Finish search on a panel transition, but only when a search is active.
+///
+/// [`VaultViewState::finish_search`] always runs `deselect_and_rewind`, even
+/// when `searching` is already false. Calling it unconditionally from
+/// [`BitwardenApp::set_panel`] therefore dropped the selected row and its
+/// scroll target on every ordinary panel change. Kept as a pure view-level
+/// helper so the selection/scroll contract can be tested without a GPUI
+/// window (this crate does not enable gpui's `test-support` feature).
+pub(super) fn finish_search_on_panel_transition(view: &mut VaultViewState) {
+    if view.searching {
+        view.finish_search();
+    }
+}
+
 /// Marker appended to transient statuses and to the list detail line.
 ///
 /// Keeping it in one place makes the unsaved state visible outside the
@@ -604,7 +618,7 @@ impl BitwardenApp {
             self.editing.is_some() || self.auth.field().is_some() || self.view.searching;
         self.editing = None;
         self.auth.take_field();
-        self.view.finish_search();
+        finish_search_on_panel_transition(&mut self.view);
         self.panel = crate::ui::logic::effective_panel(panel, self.view.audit_report.is_some());
         if let Some(status) = exit_warning {
             // Leaving the settings-owning panels does not persist anything.
@@ -1420,6 +1434,33 @@ mod tests {
             unsaved_panel_exit_status_for(Panel::Audit, Panel::Vault, true),
             None
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_transition_only_finishes_an_active_search() {
+        let mut view = VaultViewState::new();
+        view.vault.items.push(crate::model::VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        view.selected_id = Some("a".into());
+        let rewinds = view.rewind_calls;
+
+        // An ordinary panel change with no search must preserve the selected
+        // row and its scroll target: `finish_search` rewinds unconditionally.
+        finish_search_on_panel_transition(&mut view);
+        assert_eq!(view.selected_id.as_deref(), Some("a"));
+        assert_eq!(view.rewind_calls, rewinds);
+
+        // Leaving an actual search still drops the now-meaningless selection.
+        view.searching = true;
+        finish_search_on_panel_transition(&mut view);
+        assert!(!view.searching);
+        assert_eq!(view.selected_id, None);
+        assert_eq!(view.rewind_calls, rewinds + 1);
     }
 
     #[::core::prelude::v1::test]

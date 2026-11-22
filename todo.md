@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第72弾で 7 件すべてを完了）。
+なし（第73弾で 11 件すべてを完了）。
 
 ## 完了
 
+- [x] 第73弾（16 担当・17 回目）の指摘 11 件を完結（2026-11-23）
+  - キャッシュ復元へ client_id 由来のアカウント照合を追加。
+  - IPv6 host の URL マスク、set_panel の検索解除、閾値変更 status、
+    adjust_seconds のオーバーフロー、空監査の案内を修正。
+  - auth / settings / cache / sync / model / health の残りテストと
+    上限定数の limits 集約を実施。
+  - CHANGELOG に第71〜72弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（665 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第72弾（16 担当・16 回目）の指摘 7 件を完結（2026-11-23）
   - URL userinfo マスクの '@' 共存・unescaped '?'/'#' 問題を修正。
   - パネル遷移／行クリック／BackspaceQuery の status 残留を解消し、
