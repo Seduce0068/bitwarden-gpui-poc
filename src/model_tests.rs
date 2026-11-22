@@ -1480,3 +1480,111 @@ fn ssh_fingerprint_rejects_insufficient_base64_padding() {
         None
     );
 }
+
+#[test]
+fn matches_query_trims_a_padded_needle_like_view() {
+    let item = login("1", "Café", "user", "pw", "https://example.com");
+    // A raw caller may copy a query with padding; `view()` trims it before
+    // normalization (model.rs:857-864), so the public method must do the same.
+    assert!(item.matches_query("  café \t"));
+    assert!(item.matches_query(" \tCAFE\u{301}\n "));
+    assert!(!item.matches_query("  tea  "));
+
+    let mut vault = Vault::new();
+    vault.items.push(item);
+    // The normalized needle that view() passes in must survive a second
+    // normalization without regaining the trimmed whitespace.
+    assert_eq!(
+        vault.view(&Filter::All, "  café  ", SortKey::NameAsc).len(),
+        1
+    );
+}
+
+#[test]
+fn every_item_data_variant_round_trips_through_serde() {
+    // Internally tagged `ItemData` must keep its `type` tag and every field —
+    // especially the four non-Login payloads, whose newtype/struct variants
+    // share the same wire shape (model.rs:461-492).
+    let cases = [
+        (
+            "login",
+            ItemData::Login {
+                username: "alice".into(),
+                password: Zeroizing::new("pw".into()),
+                totp: Zeroizing::new("JBSWY3DPEHPK3PXP".into()),
+                uris: vec![LoginUri::new("https://example.com")],
+            },
+        ),
+        (
+            "secure_note",
+            ItemData::SecureNote {
+                text: "private note".into(),
+            },
+        ),
+        (
+            "card",
+            ItemData::Card(CardData {
+                cardholder_name: "Alice".into(),
+                brand: "Visa".into(),
+                number: "4111111111111234".into(),
+                exp_month: "12".into(),
+                exp_year: "2030".into(),
+                code: "987".into(),
+            }),
+        ),
+        (
+            "identity",
+            ItemData::Identity(IdentityData {
+                first_name: "Ada".into(),
+                last_name: "Lovelace".into(),
+                email: "ada@example.com".into(),
+                phone: "090-1234".into(),
+                address: "1 Maple Avenue".into(),
+                company: "Analytical".into(),
+            }),
+        ),
+        (
+            "ssh_key",
+            ItemData::SshKey(SshKeyData {
+                public_key: "ssh-ed25519 AQ== fp".into(),
+                private_key: "private-key-material".into(),
+                fingerprint: "SHA256:fp".into(),
+            }),
+        ),
+    ];
+
+    for (expected_tag, data) in cases {
+        let item = VaultItem::new("1", "Name", data);
+        let json = serde_json::to_string(&item).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["data"]["type"], expected_tag, "{json}");
+        let restored: VaultItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, item, "{json}");
+        assert_eq!(restored.data.kind(), item.data.kind());
+        // A second serialization must be stable, not lossy.
+        assert_eq!(serde_json::to_string(&restored).unwrap(), json);
+    }
+}
+
+#[test]
+fn login_uri_match_enum_maps_wire_zero_one_and_two() {
+    // The two low wire values are the ones the enum mapping is most likely to
+    // silently collapse into the default; pin each one and its serde form
+    // (model.rs:145-168).
+    for (wire, expected) in [
+        (0, openwarden::UriMatch::Domain),
+        (1, openwarden::UriMatch::Host),
+        (2, openwarden::UriMatch::StartsWith),
+    ] {
+        let uri = LoginUri {
+            uri: "https://example.com".into(),
+            match_type: Some(wire),
+        };
+        assert_eq!(uri.match_enum(), Some(expected), "wire {wire}");
+        let json = serde_json::to_string(&uri).unwrap();
+        let restored: LoginUri = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, uri, "{json}");
+        assert_eq!(restored.match_enum(), Some(expected));
+    }
+    assert_eq!(LoginUri::new("https://example.com").match_enum(), None);
+}

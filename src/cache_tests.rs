@@ -1319,3 +1319,68 @@ fn value_less_parameters_survive_masking_verbatim() {
     assert!(masked.ends_with("#bare"), "{masked}");
     assert!(!masked.contains("SECRET"), "{masked}");
 }
+
+#[test]
+fn mask_url_userinfo_without_a_path_delimiter_masks_the_authority() {
+    // With no '/', '?' or '#' after the authority, `authority_end` is the end
+    // of the string (cache.rs:84-87). The whole remainder is still scanned for
+    // the last '@', so userinfo must be masked on this path too.
+    assert_eq!(
+        super::mask_url_userinfo("https://user:SECRET@vault.example.com"),
+        "https://[redacted]@vault.example.com"
+    );
+    assert_eq!(
+        super::mask_url_userinfo("https://u:p@host:8443"),
+        "https://[redacted]@host:8443"
+    );
+    assert_eq!(
+        super::mask_url_userinfo("user:SECRET@vault.example.com"),
+        "[redacted]@vault.example.com"
+    );
+    // No userinfo means no rewrite, even without a delimiter.
+    assert_eq!(
+        super::mask_url_userinfo("https://vault.example.com:8443"),
+        "https://vault.example.com:8443"
+    );
+
+    let url = "https://user:SECRET@vault.example.com";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("SECRET"), "{rendered}");
+    assert!(
+        rendered.contains("[redacted]@vault.example.com"),
+        "{rendered}"
+    );
+    // Debug-only masking: the stored URL stays byte-for-byte identical.
+    assert_eq!(cache.server_url, url);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn future_and_sentinel_created_at_are_expired_on_the_restore_path() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join("bitwarden-gpui-poc-future-restore-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.join("xdg-config-home"));
+
+    let now = i64::try_from(crate::totp::now_unix()).unwrap();
+    for created_at in [now + MAX_CACHE_AGE_SECS, i64::MAX] {
+        let cache = SyncCache {
+            version: SyncCache::VERSION,
+            user_id: "user-1".to_string(),
+            server_url: "https://vault.example.com".to_string(),
+            body: body(),
+            created_at: Some(created_at),
+        };
+        save_default(&cache).unwrap();
+        assert!(
+            matches!(
+                cached_sync_for_detailed("https://vault.example.com"),
+                Err(SyncCacheError::CacheExpired)
+            ),
+            "created_at={created_at} must be rejected by the restore path"
+        );
+        assert!(cached_sync_for("https://vault.example.com").is_none());
+    }
+}

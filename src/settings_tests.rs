@@ -1636,3 +1636,63 @@ fn leading_zero_width_run_followed_by_another_cf_is_rejected_wholesale() {
     assert_eq!(clean.email, "alice@example.com");
     assert!(crate::auth::valid_email(&clean.email));
 }
+
+#[test]
+fn tolerant_struct_returns_defaults_for_non_object_input() {
+    // The per-field fallback only makes sense for a JSON object. If the
+    // initial deserialization fails because the value is a scalar or an array,
+    // `tolerant_struct` returns T::default() without attempting a field walk
+    // (settings.rs:461-467).
+    for input in [
+        serde_json::Value::Null,
+        serde_json::Value::Bool(true),
+        serde_json::Value::Number(serde_json::Number::from(42)),
+        serde_json::Value::String("email".to_string()),
+        serde_json::Value::Array(Vec::new()),
+        serde_json::Value::Array(vec![serde_json::json!({"email": "a@example.com"})]),
+    ] {
+        let restored: Settings = super::tolerant_struct(input.clone());
+        assert_eq!(restored, Settings::default(), "input {input:?}");
+    }
+}
+
+#[test]
+fn load_advisories_ignores_unknown_keys_nested_in_known_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // Only top-level keys are inspected (settings.rs:328-329, 368-372): an
+    // unknown key inside a known object is left to the per-field tolerance.
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "password_generator": {"length": 20, "nested_unknown": true},
+            "thresholds": {"weak_bits": 80, "mystery_nested": "x"}
+        }"#,
+    )
+    .unwrap();
+    let notices = load_advisories(&path);
+    assert!(notices.is_empty(), "nested keys must not warn: {notices:?}");
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.password_generator.length, 20);
+    assert_eq!(loaded.thresholds.weak_bits, 80);
+
+    // A top-level unknown key is still reported, so nested tolerance is a
+    // deliberate boundary rather than a blanket silence.
+    std::fs::write(
+        &path,
+        br#"{"thresholds": {"mystery_nested": 1}, "top_unknown": 2}"#,
+    )
+    .unwrap();
+    let notices = load_advisories(&path);
+    assert!(
+        notices.iter().any(|notice| notice.contains("top_unknown")),
+        "{notices:?}"
+    );
+    assert!(
+        !notices
+            .iter()
+            .any(|notice| notice.contains("mystery_nested")),
+        "{notices:?}"
+    );
+}

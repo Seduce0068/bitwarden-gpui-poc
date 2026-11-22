@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第67弾で 11 件すべてを完了）。
+なし（第68弾で 11 件すべてを完了）。
 
 ## 完了
 
+- [x] 第68弾（16 担当・12 回目）の指摘 11 件を完結（2026-11-23）
+  - 自動ロック時の案内揃え、0件時の詳細行非表示、i/u の分表記、
+    複数文字 key_char、invalidate/clear の契約を UI 側で修正・テスト。
+  - ApplySyncFailedCause 往復、settings の非オブジェクト入力、URL マスク、
+    負 revision、serde 往復、match_enum、未来 revision をコア側でテスト。
+  - `matches_query` の trim と NFKD doc を修正。
+  - cross-review 小計と CHANGELOG の注記を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（589 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第67弾（16 担当・11 回目）の指摘 11 件を完結（2026-11-23）
   - 監査未選択 Enter の未保存マーカー、生成 y/Y の案内、
     `TotpState::clear()` と Alt+文字のテストを追加。

@@ -1401,3 +1401,120 @@ fn only_digit_suffixes_get_the_word_suffix_discount() {
     let plain = estimate_entropy("sunflower");
     assert!(digits > plain, "{digits} vs {plain}");
 }
+
+#[test]
+fn separator_free_words_reject_invalid_capitalization() {
+    use crate::words::WORDS;
+
+    let lower = WORDS[0];
+    let other = WORDS[1];
+    let plain = format!("{lower}{other}");
+    let capitalized = format!("{}{other}", upper_first(lower));
+    assert_eq!(
+        super::words_without_separator(&plain),
+        Some((vec![lower, other], false)),
+        "{plain}"
+    );
+    assert_eq!(
+        super::words_without_separator(&capitalized),
+        Some((vec![lower, other], true)),
+        "{capitalized}"
+    );
+
+    // Only an ASCII-uppercase first letter with an otherwise lowercase tail
+    // is accepted. A capital inside a word, an all-caps word and a mismatched
+    // tail all fail instead of being silently folded (health.rs:453-459).
+    let inner_caps = format!("{}{}", upper_second(lower), other);
+    let all_caps = format!("{}{}", lower.to_ascii_uppercase(), other);
+    let wrong_tail = format!(
+        "{}{}{}",
+        &lower[..1],
+        lower[1..].to_ascii_uppercase(),
+        other
+    );
+    for bad in [inner_caps, all_caps, wrong_tail] {
+        assert_eq!(
+            super::words_without_separator(&bad),
+            None,
+            "invalid capitalization must be rejected: {bad}"
+        );
+    }
+    // A single word is never scored as a generated passphrase.
+    assert_eq!(super::words_without_separator(lower), None);
+}
+
+fn upper_first(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn upper_second(word: &str) -> String {
+    let mut chars = word.chars();
+    match (chars.next(), chars.next()) {
+        (Some(first), Some(second)) => {
+            format!("{first}{}", second.to_ascii_uppercase()) + chars.as_str()
+        }
+        _ => word.to_string(),
+    }
+}
+
+#[test]
+fn future_revision_never_produces_a_stale_finding() {
+    let mut future = login(
+        "1",
+        "Future",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "S",
+    );
+    // A clock-skewed or forged future revision must not stay fresh forever;
+    // the guard at health.rs:727 skips it instead of computing a negative age.
+    future.revision_date = NOW + 86_400;
+    let mut vault = Vault::new();
+    vault.items = vec![future];
+    let report = audit(
+        &vault,
+        Thresholds {
+            stale_days: 0,
+            ..Thresholds::default()
+        },
+        NOW,
+    );
+    assert!(
+        report.items[0]
+            .findings
+            .iter()
+            .all(|finding| !matches!(finding, Finding::Stale { .. })),
+        "{report:?}"
+    );
+
+    // A past revision with the same threshold does produce Stale, so the
+    // assertion above is testing the future-date guard and not a silent skip.
+    let mut past = login(
+        "1",
+        "Past",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "S",
+    );
+    past.revision_date = NOW - 86_400;
+    let mut vault = Vault::new();
+    vault.items = vec![past];
+    let report = audit(
+        &vault,
+        Thresholds {
+            stale_days: 0,
+            ..Thresholds::default()
+        },
+        NOW,
+    );
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::Stale { days: 1 }),
+        "{report:?}"
+    );
+}

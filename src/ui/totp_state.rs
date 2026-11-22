@@ -301,6 +301,34 @@ mod tests {
     }
 
     #[test]
+    fn invalidate_keeps_the_secret_but_clear_discards_it() {
+        let mut state = TotpState::new();
+        let displayed = state.display(SECRET, 40);
+        assert!(displayed.starts_with("287 082"), "{displayed}");
+        assert!(state.has_secret());
+        assert!(state.matches_secret(SECRET));
+        assert_eq!(state.current_code(), Some("287082"));
+
+        // invalidate() drops only the cached snapshot (code and error). The
+        // secret stays owned, so the ticker keeps running and the next display
+        // can reuse the same secret instead of treating it as a new selection.
+        state.invalidate();
+        assert!(state.has_secret(), "invalidate must keep the secret");
+        assert!(state.matches_secret(SECRET));
+        assert_eq!(state.current_code(), None);
+        let refreshed = state.display(SECRET, 40);
+        assert_eq!(refreshed, displayed);
+        assert!(state.has_secret());
+        assert!(state.matches_secret(SECRET));
+
+        // clear() is the only path that really forgets the secret.
+        state.clear();
+        assert!(!state.has_secret());
+        assert!(state.matches_secret(""));
+        assert_eq!(state.current_code(), None);
+    }
+
+    #[test]
     fn invalidate_clears_the_cached_error_message() {
         let mut state = TotpState::new();
         let invalid = "not base32!";

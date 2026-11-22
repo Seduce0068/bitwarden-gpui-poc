@@ -83,16 +83,31 @@ pub(super) fn search_finished_status(dirty: bool) -> String {
     text_edit_finished_status(crate::ui::logic::no_selection_status(), dirty)
 }
 
-/// Status after a settings seconds field is adjusted with `i`/`u`, `3`/`4` or
+/// Status after a settings time field is adjusted with `i`/`u`, `3`/`4` or
 /// `5`/`6`.
 ///
 /// The threshold keys already report through `refresh_audit`, but these three
-/// seconds-only branches previously changed the settings without touching the
-/// status bar, leaving whatever the last action had written on screen. Sharing
-/// one status makes the keyboard feedback consistent with the other settings
-/// edits. Kept pure so the contract can be tested without a GPUI window.
+/// branches previously changed the settings without touching the status bar,
+/// leaving whatever the last action had written on screen. `unit` is `分` for
+/// the idle auto-lock timeout (`i`/`u`, which moves in one-minute steps, see
+/// [`crate::ui::logic::adjust_idle_lock`]) and `秒数` for the genuinely
+/// seconds-based `3`-`6` fields. Kept pure so the wording can be tested
+/// without a GPUI window.
+pub(super) fn time_adjust_status(unit: &str, dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved(
+        &format!("{unit}を変更しました（w: 保存 / d: 破棄）"),
+        dirty,
+    )
+}
+
+/// Status after `i`/`u` adjusts the minute-based idle auto-lock timeout.
+pub(super) fn idle_lock_adjust_status(dirty: bool) -> String {
+    time_adjust_status("分", dirty)
+}
+
+/// Status after `3`-`6` adjusts a seconds-based settings field.
 pub(super) fn seconds_adjust_status(dirty: bool) -> String {
-    crate::ui::app::status_with_unsaved("秒数を変更しました（w: 保存 / d: 破棄）", dirty)
+    time_adjust_status("秒数", dirty)
 }
 
 impl BitwardenApp {
@@ -267,7 +282,8 @@ impl BitwardenApp {
                 self.settings.idle_lock_seconds =
                     crate::ui::logic::adjust_idle_lock(self.settings.idle_lock_seconds, delta);
                 self.mark_settings_dirty();
-                self.status = seconds_adjust_status(self.settings_dirty);
+                // `i`/`u` move in minutes, not seconds: report the right unit.
+                self.status = idle_lock_adjust_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::AdjustLoginTimeout(delta) => {
@@ -398,8 +414,8 @@ mod tests {
         assert_eq!(clean, "秒数を変更しました（w: 保存 / d: 破棄）");
         assert!(!clean.contains("[未保存"), "{clean}");
 
-        // i/u, 3/4 and 5/6 all mark the settings dirty before writing the
-        // status, so the persistent unsaved marker must survive the feedback.
+        // The seconds-based 3/4 and 5/6 branches mark the settings dirty
+        // before writing the status, so the unsaved marker must survive.
         let dirty = seconds_adjust_status(true);
         assert_eq!(
             dirty,
@@ -407,6 +423,40 @@ mod tests {
         );
         assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
         assert!(dirty.contains("w: 保存 / d: 破棄"), "{dirty}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn idle_lock_adjust_status_reports_minutes_not_seconds() {
+        let clean = idle_lock_adjust_status(false);
+        assert_eq!(clean, "分を変更しました（w: 保存 / d: 破棄）");
+        assert!(!clean.contains("秒"), "{clean}");
+
+        let dirty = idle_lock_adjust_status(true);
+        assert_eq!(
+            dirty,
+            crate::ui::app::status_with_unsaved(clean.as_str(), true)
+        );
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+        assert!(dirty.contains("w: 保存 / d: 破棄"), "{dirty}");
+
+        // The 3-6 fields really are seconds-based and keep their wording.
+        assert_eq!(
+            seconds_adjust_status(false),
+            "秒数を変更しました（w: 保存 / d: 破棄）"
+        );
+        assert!(!seconds_adjust_status(false).contains("分を変更"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn idle_lock_keys_route_to_the_minute_status() {
+        for (key, delta) in [("i", 1), ("u", -1)] {
+            let ctx = context(Screen::Unlocked, Panel::Settings, key);
+            assert_eq!(classify_key(&ctx), UiAction::AdjustIdleLock(delta));
+            assert!(
+                idle_lock_adjust_status(true).contains("分を変更しました"),
+                "{key} must report minutes, not seconds"
+            );
+        }
     }
 
     #[::core::prelude::v1::test]

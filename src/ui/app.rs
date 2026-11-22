@@ -125,23 +125,38 @@ pub(super) fn audit_no_selection_status(dirty: bool) -> String {
     )
 }
 
+/// Key guidance shared by every transition into the locked screen.
+///
+/// `lock()` and the idle ticker both leave the user on the same lock screen,
+/// so both statuses must advertise the same recovery keys. Building the tail
+/// in one place prevents the ticker from dropping `m: モック` when it replaces
+/// the manual lock's status.
+fn lock_guidance() -> String {
+    format!("（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}）")
+}
+
 /// Status the ticker leaves on screen after an idle auto-lock.
 ///
 /// `lock()` composes its own status (including the unsaved-settings warning),
 /// but the ticker then replaces it to explain *why* the vault locked. Without
-/// re-applying the marker here an idle lock silently drops that warning.
+/// re-applying the marker here an idle lock silently drops that warning; the
+/// same applies to the lock screen's key guidance.
 pub(super) fn auto_lock_status(idle_lock_seconds: u64, dirty: bool) -> String {
     // Keep both pieces of information: the persistent unsaved marker *and*
     // the concrete recovery guidance that `lock()` showed before the ticker
     // replaced its status. Without the guidance the user only sees a marker
-    // and has no way to learn that a re-login is required to save.
-    let guidance = if dirty {
+    // and has no way to learn that a re-login is required to save, or that a
+    // demo vault can be reopened with `m`.
+    let unsaved_guidance = if dirty {
         "（未保存の設定変更があります / 再ログイン後に保存してください）"
     } else {
         ""
     };
     status_with_unsaved(
-        &format!("無操作のため自動ロックしました（{idle_lock_seconds}秒）{guidance}"),
+        &format!(
+            "無操作のため自動ロックしました（{idle_lock_seconds}秒）{unsaved_guidance}{}",
+            lock_guidance()
+        ),
         dirty,
     )
 }
@@ -482,9 +497,7 @@ impl BitwardenApp {
         } else {
             ""
         };
-        self.status = format!(
-            "ロックしました{unsaved}（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}）"
-        );
+        self.status = format!("ロックしました{unsaved}{}", lock_guidance());
         cx.notify();
     }
 
@@ -949,13 +962,19 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn auto_lock_status_keeps_the_unsaved_marker() {
+    fn auto_lock_status_keeps_the_unsaved_marker_and_lock_guidance() {
+        let guidance = lock_guidance();
         let clean = auto_lock_status(300, false);
-        assert_eq!(clean, "無操作のため自動ロックしました（300秒）");
+        assert_eq!(
+            clean,
+            format!("無操作のため自動ロックしました（300秒）{guidance}")
+        );
         assert!(!clean.contains("[未保存"));
 
         let dirty = auto_lock_status(300, true);
-        assert!(dirty.starts_with(&clean));
+        assert!(dirty.starts_with(
+            "無操作のため自動ロックしました（300秒）（未保存の設定変更があります / 再ログイン後に保存してください）"
+        ));
         assert!(dirty.contains("[未保存の設定変更があります]"));
         assert!(
             dirty.contains("再ログイン後に保存してください"),
@@ -964,10 +983,30 @@ mod tests {
         assert_eq!(
             dirty,
             status_with_unsaved(
-                "無操作のため自動ロックしました（300秒）（未保存の設定変更があります / 再ログイン後に保存してください）",
+                &format!(
+                    "無操作のため自動ロックしました（300秒）（未保存の設定変更があります / 再ログイン後に保存してください）{guidance}"
+                ),
                 true
             )
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn auto_lock_status_advertises_the_same_keys_as_a_manual_lock() {
+        // The idle ticker overwrites `lock()`'s status. Losing "m: モック"
+        // there left no visible way to reopen the demo vault after an idle
+        // lock, so the guidance must be byte-identical to the manual lock.
+        let manual_guidance = lock_guidance();
+        for dirty in [false, true] {
+            let status = auto_lock_status(60, dirty);
+            assert!(
+                status.contains(&manual_guidance),
+                "idle lock must reuse the manual lock guidance: {status}"
+            );
+            for key in ["Enter: ログイン", "m: モック", FOCUS_RECOVERY_HINT] {
+                assert!(status.contains(key), "missing {key} in {status}");
+            }
+        }
     }
     use crate::ui::state::AuthField;
     use std::time::{Duration, Instant};

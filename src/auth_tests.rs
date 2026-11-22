@@ -1573,3 +1573,79 @@ fn unlock_and_import_forwards_the_session_kdf_to_openwarden() {
         "the supplied KDF must reach openwarden's unlocked vault"
     );
 }
+
+#[test]
+fn apply_sync_failed_cause_round_trips_through_app_error() {
+    use crate::error::BoxedCause;
+
+    // `UnlockError::ApplySyncFailedCause` becomes the legacy cause-carrying
+    // `AppError`, whose text is fully decorated (auth.rs:269-271). The reverse
+    // conversion strips exactly that decoration (auth.rs:303-306), so the raw
+    // detail and the typed cause must both survive the round trip.
+    let detail = "key changed during apply_sync";
+    let small = UnlockError::ApplySyncFailedCause(
+        detail.to_string(),
+        BoxedCause::text("openwarden key mismatch"),
+    );
+    let decorated = format!("同期データを取り込めません（{detail}）");
+    assert_eq!(small.message(), decorated);
+    assert!(std::error::Error::source(&small).is_some());
+
+    let app = AppError::from(small.clone());
+    assert!(
+        matches!(&app, AppError::ApplySyncFailedCause(text, _) if text.as_str() == decorated),
+        "AppError must hold the decorated status text: {app:?}"
+    );
+    assert_eq!(app.message(), decorated);
+    assert!(std::error::Error::source(&app).is_some());
+
+    let restored = UnlockError::from(app);
+    match &restored {
+        UnlockError::ApplySyncFailedCause(restored_detail, cause) => {
+            assert_eq!(restored_detail.as_str(), detail);
+            assert_eq!(cause.to_string(), "openwarden key mismatch");
+        }
+        other => panic!("cause was dropped: {other:?}"),
+    }
+    assert_eq!(restored.message(), decorated);
+    assert_eq!(restored, UnlockError::ApplySyncFailed(detail.into()));
+    assert!(std::error::Error::source(&restored).is_some());
+    // Converting back adds the decoration exactly once, never twice.
+    assert_eq!(AppError::from(restored).message(), decorated);
+}
+
+#[test]
+fn legacy_apply_sync_cause_text_is_stripped_only_once() {
+    use crate::error::BoxedCause;
+
+    // The legacy variant stores a formatted message. `unlock_detail` removes
+    // prefix and suffix as a pair (auth.rs:253-258, 303-306); an embedded copy
+    // of the decoration must not be swallowed as well.
+    let nested = "同期データを取り込めません（混入）";
+    let app = AppError::ApplySyncFailedCause(
+        format!("同期データを取り込めません（{nested}）"),
+        BoxedCause::text("io failure"),
+    );
+    let small = UnlockError::from(app);
+    assert!(
+        matches!(&small, UnlockError::ApplySyncFailedCause(detail, _) if detail == nested),
+        "only the outer decoration may be stripped: {small:?}"
+    );
+    assert!(std::error::Error::source(&small).is_some());
+
+    // A message with the prefix but no closing suffix is kept verbatim as the
+    // detail; the next conversion decorates that text exactly once.
+    let truncated = "同期データを取り込めません（truncated";
+    let raw = UnlockError::from(AppError::ApplySyncFailedCause(
+        truncated.to_string(),
+        BoxedCause::text("io failure"),
+    ));
+    assert_eq!(
+        raw,
+        UnlockError::ApplySyncFailedCause(truncated.to_string(), BoxedCause::text("io failure"))
+    );
+    assert_eq!(
+        AppError::from(raw).message(),
+        format!("同期データを取り込めません（{truncated}）")
+    );
+}

@@ -82,6 +82,7 @@
 - 認証エラーの cause 保持と status 具体化、Settings 保存 / スキーマの
   堅牢化、UI の選択必須化・TOTP 同期・未保存表示・監査キー導線を改善
 - CI に週次 schedule と pre-commit / CI の gitleaks 版整合チェックを追加
+  （その後 2026-11-22 に Betterleaks 1.10.1 へ置換済み）
 - opt-in E2E を kiri 上の Vaultwarden 1.30.2 に対して実行し成功。
   任意の既知値照合と説明を追加
 - 公開リポジトリ化に伴うメタデータ・ドキュメント・gitleaks 設定の整備

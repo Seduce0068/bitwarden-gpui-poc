@@ -31,6 +31,17 @@ fn status_bar_text(status: &str, screen: Screen, panel: Panel) -> String {
     }
 }
 
+/// Text for the vault list's detail row, when it should be drawn.
+///
+/// With zero visible items the list body already renders
+/// `一致する項目がありません`. Drawing `no_selection_status()`
+/// (`項目を選択してください`) underneath asked the user to select a row that
+/// does not exist, so the detail row is suppressed instead. Kept pure so the
+/// contract can be tested without a GPUI window.
+fn vault_detail_row(count: usize, detail: String) -> Option<String> {
+    (count > 0).then_some(detail)
+}
+
 impl BitwardenApp {
     fn render_locked(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -273,16 +284,20 @@ impl BitwardenApp {
             } else {
                 list.into_any_element()
             })
-            .child(
-                div()
+            .child(match vault_detail_row(count, detail) {
+                Some(text) => div()
                     .px_4()
                     .py_2()
                     .border_t_1()
                     .border_color(rgb(0x313244))
                     .text_xs()
                     .text_color(rgb(0xcdd6f4))
-                    .child(detail),
-            )
+                    .child(text)
+                    .into_any_element(),
+                // No matches: the empty-list message above is enough; an
+                // empty element draws no detail row (and no border).
+                None => div().into_any_element(),
+            })
     }
 }
 
@@ -450,6 +465,18 @@ impl Render for BitwardenApp {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn vault_detail_row_is_hidden_when_no_items_match() {
+        let prompt = crate::ui::logic::no_selection_status();
+        assert_eq!(prompt, "項目を選択してください");
+        assert_eq!(vault_detail_row(0, prompt.to_string()), None);
+        assert_eq!(
+            vault_detail_row(1, prompt.to_string()),
+            Some(prompt.to_string())
+        );
+        assert!(vault_detail_row(7, "詳細".into()).is_some());
+    }
 
     #[::core::prelude::v1::test]
     fn status_bar_shows_the_focus_hint_only_once() {

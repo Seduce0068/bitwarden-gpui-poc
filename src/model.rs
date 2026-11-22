@@ -683,12 +683,12 @@ impl VaultItem {
 
     /// Whether any searchable field contains `needle`.
     ///
-    /// `Vault::view` already passes a normalized needle, but this is a public
-    /// method and callers may pass raw user input, so `needle` is normalized
-    /// here too. `comparison_key` is idempotent, so the double normalization
-    /// on the `view()` path cannot change the result.
+    /// `Vault::view` already trims and normalizes the query, but this is a
+    /// public method and callers may pass raw user input, so `needle` is
+    /// trimmed here too. `comparison_key` is idempotent, so the double
+    /// normalization on the `view()` path cannot change the result.
     pub fn matches_query(&self, needle: &str) -> bool {
-        let needle = comparison_key(needle);
+        let needle = comparison_key(needle.trim());
         self.haystacks()
             .iter()
             .any(|field| comparison_key(field.as_ref()).contains(needle.as_str()))
@@ -942,7 +942,7 @@ impl Vault {
         before != self.items.len()
     }
 
-    /// Duplicate names (NFKC-equivalent and case-insensitive), each with its
+    /// Duplicate names (NFKD-equivalent and case-insensitive), each with its
     /// item ids. Blank names are ignored: an unnamed item is not a duplicate
     /// of every other unnamed item.
     pub fn duplicate_names(&self) -> Vec<(String, Vec<String>)> {

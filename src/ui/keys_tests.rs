@@ -849,3 +849,41 @@ fn empty_key_char_falls_back_to_the_physical_key() {
     value.searching = true;
     assert_eq!(classify_key(&value), UiAction::BackspaceSearch);
 }
+
+#[test]
+fn multi_character_key_char_falls_back_to_the_physical_key() {
+    use crate::ui::keys::GeneratorOption;
+
+    // IME can report a multi-character composition in `key_char` while the
+    // physical key still names a command. `command_key` filters by character
+    // count, so such text must not suppress the physical-key command.
+    let mut value = ctx("1");
+    value.key_char = Some("日本語");
+    value.panel = Panel::Settings;
+    assert_eq!(
+        classify_key(&value),
+        UiAction::EditSettingsField(crate::ui::state::SettingsField::ServerUrl),
+        "multi-character key_char must not block the physical-key command"
+    );
+
+    value.panel = Panel::Generator;
+    value.key = "+";
+    value.key_char = Some("かな文字");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::Generator(GeneratorOption::LengthUp)
+    );
+
+    // Lock-screen commands use the same fallback.
+    value.screen = Screen::Locked;
+    value.key = "m";
+    value.key_char = Some("かな文字");
+    assert_eq!(classify_key(&value), UiAction::OpenDemoVault);
+
+    // A single-character key_char still wins over the physical key.
+    value.screen = Screen::Unlocked;
+    value.panel = Panel::Generator;
+    value.key = "y";
+    value.key_char = Some("Y");
+    assert_eq!(classify_key(&value), UiAction::CopyPassphrase);
+}

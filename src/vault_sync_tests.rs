@@ -1285,3 +1285,49 @@ fn dedup_is_a_no_op_when_ciphers_is_missing_or_not_an_array() {
         assert_eq!(value["ciphers"], wrong, "{wrong}");
     }
 }
+
+#[test]
+fn dedup_prefers_unknown_revision_over_a_negative_one() {
+    // Pre-epoch timestamps parse to negative i64 seconds, while a missing or
+    // unparsable date becomes UNKNOWN_REVISION (0). The comparison at
+    // vault_sync.rs:194-198 must therefore let 0 outrank a negative revision.
+    let negative = "1969-12-31T23:59:59Z";
+    assert!(parse_revision(Some(negative)).unwrap() < crate::model::UNKNOWN_REVISION);
+
+    let mut value = serde_json::json!({
+        "ciphers": [
+            {"id": "dup", "revisionDate": negative, "name": "negative"},
+            {"id": "dup", "revisionDate": null, "name": "unknown"},
+            {"id": "invalid", "revisionDate": negative, "name": "negative"},
+            {"id": "invalid", "revisionDate": "not-a-date", "name": "unknown"},
+            {"id": "future", "revisionDate": negative, "name": "negative"},
+            {"id": "future", "revisionDate": "2024-01-01T00:00:00Z", "name": "positive"},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    let names: Vec<&str> = kept
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["unknown", "unknown", "positive"]);
+}
+
+#[test]
+fn login_without_a_name_keeps_an_empty_name_without_leaking_the_id() {
+    // `cipher()` stores "name": null; removing the key exercises the same
+    // result through serde's default. openwarden's `Vault::name` maps a
+    // missing name to an empty SecretString, so `.ok().map(...)` yields
+    // Some("") and the placeholder arm at vault_sync.rs:294-298 is reserved
+    // for a decryption failure. Pin the real outcome: no id in the name, no
+    // invented placeholder.
+    let mut row = cipher("nameless-secret-id", "2024-01-01T00:00:00Z");
+    row.as_object_mut()
+        .expect("cipher fixture must be an object")
+        .remove("name");
+    let vault = unlocked_vault(&[row]);
+    let model = import_logins(&vault).expect("a missing name must not abort the import");
+    let item = model.item("nameless-secret-id").unwrap();
+    assert_eq!(item.name, "");
+    assert!(!item.name.contains("nameless-secret-id"));
+}
