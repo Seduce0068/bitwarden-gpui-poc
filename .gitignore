@@ -1,6 +1,6 @@
 /target
 
-# ローカル秘密情報・生成物（gitleaks の最終ゲートと併用）
+# ローカル秘密情報・生成物（Betterleaks の最終ゲートと併用）
 .env
 .env.*
 *.pem

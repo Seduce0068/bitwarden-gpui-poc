@@ -39,27 +39,27 @@ jobs:
         grep -Fq "markdownlint-cli@${MARKDOWNLINT_VERSION}" README.md
         markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
         # シークレットスキャンは pre-commit を主軸とし、CI を最終ゲートとする。
-        GITLEAKS_VERSION=8.28.0
+        BETTERLEAKS_VERSION=1.10.1
         # pre-commit と CI の版がずれないようにする（片方だけの更新を検出）。
-        grep -q "rev: v${GITLEAKS_VERSION}" .pre-commit-config.yaml
-        GITLEAKS_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        grep -q "rev: v${BETTERLEAKS_VERSION}" .pre-commit-config.yaml
+        BETTERLEAKS_ARCHIVE="betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz"
         curl -sSfL \
-          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GITLEAKS_ARCHIVE}" \
-          -o "/tmp/${GITLEAKS_ARCHIVE}"
+          "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${BETTERLEAKS_ARCHIVE}" \
+          -o "/tmp/${BETTERLEAKS_ARCHIVE}"
         curl -sSfL \
-          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" \
-          -o /tmp/gitleaks-checksums.txt
+          "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/checksums.txt" \
+          -o /tmp/betterleaks-checksums.txt
         # --ignore-missing だけだと対象行が欠けても0件で成功するため、
         # アーカイブの行を明示的に確認してからその1行だけを検証する。
-        (cd /tmp && grep -Fq "${GITLEAKS_ARCHIVE}" gitleaks-checksums.txt)
-        (cd /tmp && grep -F "${GITLEAKS_ARCHIVE}" gitleaks-checksums.txt | sha256sum -c -)
-        tar -xzf "/tmp/${GITLEAKS_ARCHIVE}" -C /tmp gitleaks
-        /tmp/gitleaks dir --redact --config .gitleaks.toml
+        (cd /tmp && grep -Fq "${BETTERLEAKS_ARCHIVE}" betterleaks-checksums.txt)
+        (cd /tmp && grep -F "${BETTERLEAKS_ARCHIVE}" betterleaks-checksums.txt | sha256sum -c -)
+        tar -xzf "/tmp/${BETTERLEAKS_ARCHIVE}" -C /tmp betterleaks
+        /tmp/betterleaks dir --redact --config .betterleaks.toml .
         # pre-commit を回避して投入された秘密を履歴からも検出する。
         # 浅いクローンのまま走ると過去の秘密を見逃すため、必要なときだけ
         # 全履歴を取得し、失敗した場合はゲートを失敗させる。
         if git rev-parse --is-shallow-repository | grep -q '^true$'; then
           git fetch --unshallow
         fi
-        /tmp/gitleaks git --redact --config .gitleaks.toml
+        /tmp/betterleaks git --redact --config .betterleaks.toml .
       # Clippy lints (unwrap/expect/panic/unsafe) are denied via Cargo.toml [lints.clippy].

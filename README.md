@@ -243,19 +243,19 @@ markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
 cargo run
 ```
 
-シークレットスキャンは [gitleaks](https://github.com/gitleaks/gitleaks) を
+シークレットスキャンは [Betterleaks](https://github.com/betterleaks/betterleaks) を
 pre-commit フックとして使います。初回のみ次を実行してください:
 
 ```bash
-# gitleaks フックは Go ツールチェーンを必要とする（初回のみ）
+# Betterleaks フックは Go ツールチェーンを必要とする（初回のみ）
 sudo apt install -y golang-go
 pip install pre-commit
 pre-commit install
 ```
 
 CI でも最終ゲートとして作業ツリーと Git 履歴を走査します（バージョンは
-8.28.0 に固定）。`pre-commit autoupdate` でフックを更新する場合は
-`.github/workflows/ci.yml` の `GITLEAKS_VERSION` も同時に更新してください。
+1.10.1 に固定）。`pre-commit autoupdate` でフックを更新する場合は
+`.github/workflows/ci.yml` の `BETTERLEAKS_VERSION` も同時に更新してください。
 
 Linux では Wayland/X11 と GPU ドライバが必要です（`gpui-kit` / wgpu 経由）。
 
@@ -274,7 +274,7 @@ mise use rust@1.95
 `.github/workflows/ci.yml` から共通ワークフロー
 `Seduce0068/workflows/.github/workflows/rust-gates.yml@v1` を呼び出します。
 fmt → check → test → clippy → `cargo audit` → doc → `cargo deny check` →
-markdownlint → gitleaks（dir と git 履歴）のゲートを実行します。
+markdownlint → Betterleaks（dir と git 履歴）のゲートを実行します。
 markdownlint は CI で
 `markdownlint-cli@0.50.0` に固定しています。
 clippy の `unwrap_used` / `expect_used` / `panic` /
@@ -323,11 +323,11 @@ CI（`.github/workflows/ci.yml`）と pre-commit で共通して使うツール�
 
 | ツール | CI | pre-commit |
 | --- | --- | --- |
-| gitleaks | `GITLEAKS_VERSION` = 8.28.0 | `rev`（`.pre-commit-config.yaml`） |
+| betterleaks | `BETTERLEAKS_VERSION` = 1.10.1 | `rev`（pre-commit config） |
 | cargo-deny | `cargo install --version 0.21.0` | — |
 | markdownlint-cli | `npm install --global markdownlint-cli@0.50.0` | — |
 
-gitleaks は CI 起動時に pre-commit の `rev` と一致するか検査し、ずれがあれば
+Betterleaks は CI 起動時に pre-commit の `rev` と一致するか検査し、ずれがあれば
 ゲートを失敗させます。他の固定ツールも CI が README の記載と突き合わせ、
 片方だけの更新を検出します。最新版の確認は週次の依存監査時に行い、
 更新する場合は CI と README の両方を同じ版へ変更してください。

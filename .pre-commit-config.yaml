@@ -1,5 +1,6 @@
 repos:
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.28.0
+  - repo: https://github.com/betterleaks/betterleaks
+    rev: v1.10.1
     hooks:
-      - id: gitleaks
+      - id: betterleaks
+        entry: betterleaks git --pre-commit --redact --staged --verbose --config .betterleaks.toml

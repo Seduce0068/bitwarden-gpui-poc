@@ -1,0 +1,23 @@
+title = "betterleaks config for bitwarden-gpui-poc"
+
+# Generated build output is skipped before regex matching.
+prefilter = '''
+filter.matchesAny(attributes["path"], [`(^|/)target/`])
+'''
+
+# Known synthetic fixtures used only in tests and documentation.
+# Scoped to these literals so real secrets in the same commits are still detected.
+filter = '''
+filter.matchesAny(finding["secret"], [
+  `2\.aWxvdGhlcg==`,
+  `テストアカウントのマスターパスワード`,
+])
+|| filter.containsAny(finding["match"], [`2001:db8::1`])
+|| (
+  filter.matchesAny(attributes["path"], [`vault_sync_tests\.rs`]) &&
+  filter.matchesAny(finding["line"], [`"Password"\s*:`])
+)
+'''
+
+[extend]
+useDefault = true
