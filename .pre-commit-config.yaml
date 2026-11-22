@@ -2,5 +2,5 @@ repos:
   - repo: https://github.com/betterleaks/betterleaks
     rev: v1.10.1
     hooks:
-      - id: betterleaks
+      - id: betterleaks-system
         entry: betterleaks git --pre-commit --redact --staged --verbose --config .betterleaks.toml

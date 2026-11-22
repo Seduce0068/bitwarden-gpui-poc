@@ -247,9 +247,9 @@ cargo run
 pre-commit フックとして使います。初回のみ次を実行してください:
 
 ```bash
-# Betterleaks フックは Go ツールチェーンを必要とする（初回のみ）
-sudo apt install -y golang-go
-pip install pre-commit
+# pre-commit は PEP 668 対応のため uv tool または pipx で導入する
+uv tool install pre-commit
+# betterleaks 本体はリリースバイナリを ~/.local/bin に配置済みであること
 pre-commit install
 ```
 
