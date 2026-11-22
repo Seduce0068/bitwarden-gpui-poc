@@ -260,7 +260,20 @@ impl core::fmt::Debug for Settings {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Settings")
             .field("schema_version", &self.schema_version)
-            .field("server_url", &self.server_url)
+            // A server URL is credential-bearing: `https://user:pass@host` and
+            // `...?token=...` are both valid inputs. The cache layer's
+            // `mask_url_secrets` establishes the policy that embedded
+            // credentials never reach a log line; here the whole value is
+            // replaced so even a plain default URL is not rendered verbatim.
+            // The empty case stays empty, matching the email field below.
+            .field(
+                "server_url",
+                &if self.server_url.is_empty() {
+                    ""
+                } else {
+                    "[redacted]"
+                },
+            )
             .field(
                 "email",
                 &if self.email.is_empty() {

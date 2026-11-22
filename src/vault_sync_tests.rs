@@ -297,6 +297,82 @@ fn newer_duplicate_replaces_the_older_revision() {
 }
 
 #[test]
+fn missing_and_invalid_revision_dates_fall_back_to_unknown_revision() {
+    // Both the import item (vault_sync.rs:343-344) and the audit entry
+    // (vault_sync.rs:548-549) use the same fallback when `revisionDate` is
+    // absent or unparsable. `unlocked_vault_raw` keeps the rows as supplied.
+    let mut missing = cipher("no-revision", "2024-01-01T00:00:00Z");
+    missing
+        .as_object_mut()
+        .expect("cipher is an object")
+        .remove("revisionDate");
+    let invalid = cipher("bad-revision", "not-a-date");
+    let vault = unlocked_vault_raw(&[missing, invalid]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 2);
+    for id in ["no-revision", "bad-revision"] {
+        assert_eq!(
+            model.item(id).expect("imported item").revision_date,
+            crate::model::UNKNOWN_REVISION,
+            "{id}"
+        );
+    }
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: "no-revision".to_string(),
+                revision: crate::model::UNKNOWN_REVISION,
+            },
+            ImportAudit::Added {
+                id: "bad-revision".to_string(),
+                revision: crate::model::UNKNOWN_REVISION,
+            },
+        ]
+    );
+}
+
+#[test]
+fn three_duplicate_rows_chain_a_clipped_then_an_updated_decision() {
+    // A clipped row must not overwrite the accepted revision in the tracking
+    // map: the following newer row has to compare against the *kept* rev and
+    // emit `Updated { old_revision: kept, .. }` (vault_sync.rs:551-585).
+    let id = "chain-1";
+    let kept = parse_revision(Some("2024-02-01T00:00:00Z")).unwrap();
+    let regressed = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    let newest = parse_revision(Some("2024-03-01T00:00:00Z")).unwrap();
+    let vault = unlocked_vault_raw(&[
+        cipher(id, "2024-02-01T00:00:00Z"),
+        cipher(id, "2024-01-01T00:00:00Z"),
+        cipher(id, "2024-03-01T00:00:00Z"),
+    ]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1, "all three rows collapse to one item");
+    assert_eq!(model.items[0].revision_date, newest);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: kept,
+            },
+            ImportAudit::Clipped {
+                id: id.to_string(),
+                old_revision: kept,
+                new_revision: regressed,
+            },
+            ImportAudit::Updated {
+                id: id.to_string(),
+                old_revision: kept,
+                new_revision: newest,
+            },
+        ]
+    );
+}
+
+#[test]
 fn duplicate_with_same_revision_is_ignored() {
     let id = "rev-3";
     let revision = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();

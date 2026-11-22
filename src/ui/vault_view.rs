@@ -403,6 +403,76 @@ mod tests {
     }
 
     #[test]
+    fn selection_indexes_address_the_visible_list_under_filter_and_sort() {
+        let mut state = state_with_items(); // a=Alpha, b=Beta
+        state.vault.items.push(VaultItem::new(
+            "c",
+            "Gamma",
+            ItemData::SecureNote {
+                text: String::new(),
+            },
+        ));
+        // Hide Alpha behind the Favorites filter; keep Beta and Gamma visible.
+        state.vault.items[1].favorite = true;
+        state.vault.items[2].favorite = true;
+
+        // Descending sort reverses the visible rows relative to insertion order.
+        state.sort = SortKey::NameDesc;
+        let ids: Vec<String> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.id.clone())
+            .collect();
+        assert_eq!(ids, vec!["c", "b", "a"]);
+
+        // Row 0 is the first *visible* row, not the first inserted vault item.
+        assert!(state.select_index(0));
+        assert_eq!(state.selected_id.as_deref(), Some("c"));
+        {
+            let all = state.visible_items();
+            let next = state.next_index_in(&all, 1).unwrap();
+            assert_eq!(next, 1);
+            assert_eq!(all[next].id, "b", "Down follows the sorted visible list");
+            assert_eq!(state.next_index_in(&all, -1), Some(0));
+        }
+
+        // With the filter applied, index 1 must name the second surviving row.
+        state.filter = Filter::Favorites;
+        let visible_ids: Vec<String> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.id.clone())
+            .collect();
+        assert_eq!(visible_ids, vec!["c", "b"]);
+        assert!(state.select_index(1));
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+        assert!(
+            !state.select_index(2),
+            "an index past the visible list must be ignored"
+        );
+        assert_eq!(state.selected_id.as_deref(), Some("b"));
+
+        // A selection hidden by the filter is not located by its position in
+        // the whole vault: the move starts from the first/last visible row.
+        state.selected_id = Some("a".into());
+        {
+            let visible = state.visible_items();
+            let down = state.next_index_in(&visible, 1).unwrap();
+            assert_eq!(visible[down].id, "c");
+            let up = state.next_index_in(&visible, -1).unwrap();
+            assert_eq!(visible[up].id, "b");
+        }
+
+        // From a visible selection the relative move clamps inside that list.
+        state.selected_id = Some("b".into());
+        {
+            let visible = state.visible_items();
+            assert_eq!(state.next_index_in(&visible, 1), Some(1));
+            assert_eq!(state.next_index_in(&visible, -1), Some(0));
+        }
+    }
+
+    #[test]
     fn revalidate_selection_keeps_a_valid_selection_without_rewinding() {
         let mut state = state_with_items();
         state.selected_id = Some("b".into());

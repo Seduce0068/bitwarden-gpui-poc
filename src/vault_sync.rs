@@ -525,6 +525,16 @@ pub fn import_logins(vault: &OpenVault) -> Result<Vault, SyncError> {
 /// highest revision wins: an out-of-order (regressed) row is clipped and
 /// recorded in the audit log instead of overwriting the accepted item.
 ///
+/// Known constraint: on the `Updated` branch the audit entry records only
+/// revision metadata. The replacement item's decrypted fields are re-read
+/// from the concrete `openwarden::Vault` **by id**, and `Vault::cipher(id)`
+/// returns the *first* matching row. When raw duplicates reach this branch
+/// (only possible for callers that bypass [`parse_sync`]), the newer revision
+/// therefore inherits the first row's field values. Production is safe
+/// because [`parse_sync`] collapses duplicates before `apply_sync`. See also
+/// [`import_logins`], which discards the audit log entirely: the auth/unlock
+/// path cannot surface duplicate-id decisions in the UI.
+///
 /// # Errors
 ///
 /// [`SyncError::Locked`] when the source vault has no decryption key.

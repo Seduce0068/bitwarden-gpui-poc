@@ -21,16 +21,19 @@ mod unicode_normalize {
         input.chars().nfkd().collect()
     }
 
-    /// Fully case-folded NFKD key shared by search, duplicate-name detection
-    /// and sorting.
+    /// NFKD key with a small set of extra case mappings, shared by search,
+    /// duplicate-name detection and sorting.
     ///
-    /// `str::to_lowercase` alone is not a full Unicode case fold: `ß`/`ẞ`
-    /// stay distinct from `ss`, and the final sigma `ς` stays distinct from
-    /// `σ`. The small mapping below covers those well-known cases without a
-    /// new dependency (`unicode-normalization` provides NFKD only, not case
-    /// folding). Every other character uses the standard library's mapping.
-    /// The result is idempotent, so normalizing an already-normalized needle
-    /// a second time is harmless.
+    /// This is **not** a complete Unicode full case fold. `str::to_lowercase`
+    /// is Unicode lowercasing, which is not the same operation as case folding,
+    /// and `unicode-normalization` supplies NFKD only. The explicit mapping
+    /// below covers the well-known cases that would otherwise differ (`ß`/`ẞ`
+    /// vs `ss`, final sigma `ς` vs `σ`, and long s `ſ` vs `s`); every other
+    /// character falls back to the standard library's lowercase mapping.
+    /// Other full-fold equivalences are therefore *not* guaranteed to compare
+    /// equal here. Callers must not rely on a stronger contract than the
+    /// listed cases. The result is idempotent, so normalizing an already-
+    /// normalized needle a second time is harmless.
     pub(crate) fn comparison_key(input: &str) -> String {
         let mut out = String::new();
         for character in nfkd(input).chars() {
@@ -608,6 +611,10 @@ impl VaultItem {
     }
 
     /// Every searchable text field, NFKD-normalized lazily by the caller.
+    ///
+    /// Known constraint: login URIs are included **verbatim**, so a token or
+    /// password embedded in a URI query can still be found through search
+    /// hints. [`mask_uri`] protects `Debug` and reports, not this index.
     fn haystacks(&self) -> Vec<std::borrow::Cow<'_, str>> {
         use std::borrow::Cow;
         let mut out: Vec<Cow<'_, str>> = vec![

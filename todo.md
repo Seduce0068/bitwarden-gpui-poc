@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第64弾で 12 件すべてを完了）。
+なし（第65弾で 10 件すべてを完了）。
 
 ## 完了
 
+- [x] 第65弾（16 担当・9 回目）の指摘 10 件を完結（2026-11-23）
+  - Settings の Debug で server_url をマスク、cache の
+    パラメータ名/二重エンコードの秘密マスクを修正。
+  - 監査スクロールのリセット、TOTP 有効→無効遷移、可視リスト下の選択、
+    auth / settings / cache / sync / model の残りテストを追加。
+  - comparison_key と検索ヒントの doc を実態へ修正し、
+    ImportAudit 破棄などを既知制約として記録。
+  - CHANGELOG に第64弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（538 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第64弾（16 担当・8 回目）の指摘 12 件を完結（2026-11-23）
   - URL マスクのフラグメント/エンコード済み入れ子 URL、
     `is_common_password` の文字数ベース判定を修正。

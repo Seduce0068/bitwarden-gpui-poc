@@ -169,14 +169,22 @@ fn mask_param_pairs(pairs: &str) -> String {
         }
         first = false;
         if let Some((key, value)) = pair.split_once('=') {
-            if is_sensitive_param_key(key) {
+            // A key can hide a credential name behind percent escapes
+            // (`%74oken` is `token`). Decode before the substring match so a
+            // crafted key cannot slip past `is_sensitive_param_key`. The
+            // original spelling is kept in the diagnostic output.
+            let decoded_key = percent_decode(key);
+            if is_sensitive_param_key(&decoded_key) {
                 out.push_str(key);
                 out.push_str("=[redacted]");
             } else {
-                // Decode before the nested-URL check: `%3Ftoken=...` is the
-                // same credential as `?token=...`. A decoded value that is
-                // not a nested URL is discarded, leaving the original pair.
-                let decoded = percent_decode(value);
+                // Decode *twice* before the nested-URL check: a doubly encoded
+                // delimiter such as `%253F` becomes `%3F` after one pass and
+                // `?` only after the second. A single pass would let a
+                // double-encoded `?token=...` evade the recursive masker. A
+                // decoded value that is not a nested URL is discarded,
+                // leaving the original pair verbatim.
+                let decoded = percent_decode(&percent_decode(value));
                 if decoded.contains('?') || decoded.contains('#') || decoded.contains("://") {
                     out.push_str(key);
                     out.push('=');

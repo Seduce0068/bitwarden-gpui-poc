@@ -167,6 +167,44 @@ mod tests {
     }
 
     #[test]
+    fn valid_code_switches_directly_to_an_invalid_secret() {
+        let mut state = TotpState::new();
+        let valid = state.display(SECRET, 40);
+        assert!(valid.starts_with("287 082"), "{valid}");
+        assert_eq!(state.current_code(), Some("287082"));
+        assert_eq!(state.error_message(), None);
+
+        // Same instant, so only the `secret != ...` branch in `display` can
+        // resample. No clear() and no invalidate(): the selection simply moved
+        // from a working code to a broken secret.
+        let invalid = "not base32!";
+        let failed = state.display(invalid, 40);
+        assert_eq!(failed, "コード生成失敗");
+        assert_eq!(
+            state.current_code(),
+            None,
+            "the previous code must not linger after a direct switch"
+        );
+        assert!(
+            state
+                .error_message()
+                .is_some_and(|message| message.contains("TOTP")),
+            "the copy path must report the new failure, not the stale code"
+        );
+        assert!(state.has_secret(), "the invalid string is still owned");
+        assert!(state.matches_secret(invalid));
+        assert!(!state.matches_secret(SECRET));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40));
+
+        // Switching back at the same instant restores the code and drops the
+        // cached failure reason again.
+        let restored = state.display(SECRET, 40);
+        assert_eq!(restored, valid);
+        assert_eq!(state.current_code(), Some("287082"));
+        assert_eq!(state.error_message(), None);
+    }
+
+    #[test]
     fn invalid_secret_reports_failure() {
         let mut state = TotpState::new();
         let value = state.display("not base32!", 0);

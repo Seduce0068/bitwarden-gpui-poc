@@ -479,6 +479,25 @@ fn error_messages_are_present() {
 }
 
 #[test]
+fn plain_read_failure_uses_the_unreadable_reason() {
+    // The cause-carrying sibling is covered by the bounded-read test; the
+    // plain `ReadFailed` arm (cache.rs:673) must map to the same reason so a
+    // caller that drops the cause still sees "unreadable", not "corrupt".
+    assert_eq!(
+        cache_error_message(SyncCacheError::ReadFailed),
+        REASON_UNREADABLE
+    );
+    assert_ne!(
+        cache_error_message(SyncCacheError::ReadFailed),
+        cache_error_message(SyncCacheError::ParseFailed)
+    );
+    assert_eq!(
+        super::cache_restore_status(SyncCacheError::ReadFailed),
+        Some("同期に失敗しました（キャッシュを読み込めません）")
+    );
+}
+
+#[test]
 fn cache_errors_are_not_all_reported_as_corruption() {
     use crate::error::BoxedCause;
 
@@ -1092,6 +1111,50 @@ fn percent_encoded_nested_urls_are_decoded_and_masked() {
     assert_eq!(super::mask_url_secrets(literal), literal);
     assert_eq!(super::percent_decode("%3F%23%3a%2F%2F"), "?#://");
     assert_eq!(super::percent_decode("%E3%81%82"), "%E3%81%82");
+}
+
+#[test]
+fn percent_encoded_keys_are_matched_after_decoding() {
+    // A key can hide a sensitive name behind escapes. `is_sensitive_param_key`
+    // is fed the decoded form (cache.rs:172), but the diagnostic keeps the
+    // original spelling so the URL stays traceable.
+    for (encoded, secret) in [
+        ("%74oken", "ENCODED_TOKEN_SECRET"),
+        ("%61pi%5Fkey", "ENCODED_KEY_SECRET"),
+        ("%73ession%5Fid", "ENCODED_SESSION_SECRET"),
+    ] {
+        let url = format!("https://vault.example.com/sync?{encoded}={secret}&state=ok");
+        let masked = super::mask_url_secrets(&url);
+        assert!(!masked.contains(secret), "leaked {secret}: {masked}");
+        assert!(
+            masked.contains(&format!("{encoded}=[redacted]")),
+            "{masked}"
+        );
+        assert!(masked.contains("state=ok"), "{masked}");
+    }
+}
+
+#[test]
+fn double_encoded_nested_urls_are_decoded_twice_before_masking() {
+    // `%253F` decodes to `%3F` and only a second pass yields `?`. Without the
+    // second pass the nested `?token=...` would be copied verbatim.
+    let query = "https://vault.example.com/login?next=https%3A%2F%2Fcb.example.com%2Fdone%253Ftoken%253DDOUBLE_SECRET&state=ok";
+    let masked = super::mask_url_secrets(query);
+    assert!(!masked.contains("DOUBLE_SECRET"), "{masked}");
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // The same applies to a doubly encoded fragment delimiter (`%2523`).
+    let fragment =
+        "https://vault.example.com/cb#next=https%3A%2F%2Fcb.example.com%2Fdone%2523code%253DDOUBLE_FRAGMENT";
+    let masked = super::mask_url_secrets(fragment);
+    assert!(!masked.contains("DOUBLE_FRAGMENT"), "{masked}");
+    assert!(masked.contains("code=[redacted]"), "{masked}");
+
+    // A doubly encoded but harmless value is not a nested URL: the pair must
+    // remain verbatim rather than being rewritten by the extra decode pass.
+    let harmless = "https://vault.example.com/p?state=%252Fdone";
+    assert_eq!(super::mask_url_secrets(harmless), harmless);
 }
 
 #[cfg(target_os = "linux")]

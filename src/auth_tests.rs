@@ -1389,6 +1389,58 @@ fn unlock_and_import_success_branch_uses_the_real_importer() {
 }
 
 #[test]
+fn public_unlock_and_import_extracts_session_derived_inputs() {
+    // The public entry point (auth.rs:726-742) reads `protected_key` and `kdf`
+    // from the authenticated `Session` and forwards them to the shared helper.
+    // `Session::from_token` is the only public constructor that needs no login
+    // response; it leaves both fields unset, so the extracted protected key is
+    // empty and must surface as `MissingProtectedKey`. This exercises the real
+    // extraction path, not just the seam used by the four branch tests above.
+    let (master_key, _protected, sync) = unlock_fixture();
+    let session = Session::from_token(
+        SecretString::from("test-access-token".to_string()),
+        std::time::Duration::from_secs(3600),
+    )
+    .expect("a one-hour token must be accepted");
+    assert_eq!(session.protected_key(), None, "fixture precondition");
+    assert_eq!(session.kdf(), None, "fixture precondition");
+
+    let authenticated = AuthenticatedVault {
+        session,
+        sync,
+        master_key,
+        from_cache: false,
+    };
+    let error = unlock_and_import(authenticated).unwrap_err();
+    assert_eq!(error, UnlockError::MissingProtectedKey);
+    assert_eq!(error.message(), "復号キーが応答にありません");
+}
+
+#[test]
+fn authenticate_wrapper_delegates_with_the_default_timeout() {
+    // Validation runs before the timeout race, so an invalid config gives a
+    // deterministic, network-free result for both entry points. Equality
+    // proves the wrapper (auth.rs:824-829) delegates to
+    // `authenticate_with_timeout` with `DEFAULT_LOGIN_TIMEOUT` rather than a
+    // different budget or a separate implementation.
+    let mut invalid = config();
+    invalid.email.clear();
+    let wrapped = smol::block_on(authenticate(&invalid, "device")).err();
+    let explicit = smol::block_on(authenticate_with_timeout(
+        &invalid,
+        "device",
+        DEFAULT_LOGIN_TIMEOUT,
+    ))
+    .err();
+    assert_eq!(wrapped, Some(AuthError::MissingField("email")));
+    assert_eq!(wrapped, explicit);
+    assert!(
+        !DEFAULT_LOGIN_TIMEOUT.is_zero(),
+        "the wrapper must use a real budget, not the zero-duration test seam"
+    );
+}
+
+#[test]
 fn the_clamped_copy_is_what_validation_sees() {
     // An over-long email is rejected by `validate_config`, but the private
     // copy is clamped first. With a loopback URL and a zero budget the call

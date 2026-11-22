@@ -43,7 +43,7 @@ fn round_trip_through_temp_file() {
 }
 
 #[test]
-fn debug_masks_email() {
+fn debug_masks_email_and_server_url() {
     let settings = Settings {
         email: "alice@example.com".into(),
         ..Default::default()
@@ -51,7 +51,38 @@ fn debug_masks_email() {
     let debug = format!("{settings:?}");
     assert!(!debug.contains("alice@example.com"), "{debug}");
     assert!(debug.contains("[redacted]"), "{debug}");
-    assert!(debug.contains("vault.bitwarden.com"), "{debug}");
+    // The default URL used to be printed verbatim; it is now masked like the
+    // email, so no URL (plain or credential-bearing) reaches a log line.
+    assert!(!debug.contains("vault.bitwarden.com"), "{debug}");
+    assert!(debug.contains("server_url: \"[redacted]\""), "{debug}");
+    // Non-secret fields stay diagnostic: the device id is an identifier.
+    assert!(debug.contains("device_id:"), "{debug}");
+}
+
+#[test]
+fn debug_masks_server_url_embedded_credentials_without_mutating_settings() {
+    // Same policy as the cache layer's `mask_url_secrets`: userinfo and query
+    // credentials must never be rendered. Settings masks the whole value, so
+    // neither the host nor the secrets survive in `Debug`.
+    let url = "https://user:SECRET-PASS@vault.example.com:8443/path?token=SECRET-TOKEN";
+    let settings = Settings {
+        server_url: url.into(),
+        ..Default::default()
+    };
+    let debug = format!("{settings:?}");
+    for secret in ["SECRET-PASS", "SECRET-TOKEN", "vault.example.com"] {
+        assert!(!debug.contains(secret), "leaked {secret}: {debug}");
+    }
+    assert!(debug.contains("server_url: \"[redacted]\""), "{debug}");
+    // Masking is Debug-only; the stored URL stays byte-for-byte identical.
+    assert_eq!(settings.server_url, url);
+
+    // An empty URL is rendered as an empty string, never as a redaction marker.
+    let empty = Settings {
+        server_url: String::new(),
+        ..Default::default()
+    };
+    assert!(format!("{empty:?}").contains("server_url: \"\""));
 }
 
 #[test]
@@ -829,6 +860,48 @@ fn save_device_id_only_preserves_other_on_disk_fields() {
     assert_eq!(loaded.email, "keep@example.com");
     assert_eq!(loaded.server_url, "https://vault.example.com");
     assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn save_device_id_only_preserves_nested_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // The id-only path re-reads the file and stamps the schema before writing
+    // (settings.rs:639-677). Nested objects must survive that read-modify-write
+    // just like the flat fields; only `device_id` and `schema_version` change.
+    std::fs::write(
+        &path,
+        br#"{
+            "email": "keep@example.com",
+            "password_generator": {
+                "length": 42, "lowercase": true, "uppercase": false,
+                "digits": true, "symbols": false, "avoid_ambiguous": true
+            },
+            "passphrase_generator": {
+                "words": 6, "separator": "_", "capitalize": false, "include_number": true
+            },
+            "thresholds": {"weak_bits": 70, "stale_days": 30},
+            "idle_lock_seconds": 123
+        }"#,
+    )
+    .unwrap();
+
+    let id = generate_device_id().unwrap();
+    Settings::save_device_id_only(&path, &id).unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.device_id, id);
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.password_generator.length, 42);
+    assert!(!loaded.password_generator.uppercase);
+    assert!(loaded.password_generator.avoid_ambiguous);
+    assert_eq!(loaded.passphrase_generator.words, 6);
+    assert_eq!(loaded.passphrase_generator.separator, "_");
+    assert!(!loaded.passphrase_generator.capitalize);
+    assert!(loaded.passphrase_generator.include_number);
+    assert_eq!(loaded.thresholds.weak_bits, 70);
+    assert_eq!(loaded.thresholds.stale_days, 30);
+    assert_eq!(loaded.idle_lock_seconds, 123);
 }
 
 #[test]

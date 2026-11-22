@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 全体改善（第64弾 / 2026-11-23）
+
+- URL フラグメントとエンコード済み入れ子 URL の秘密マスクを改善
+- `is_common_password` の prefix cap をバイト長から文字数へ修正
+- auth / settings / cache / sync / model / health / UI の残りテストを追加
+
 ### 全体改善（第60〜63弾 / 2026-11-22）
 
 - email 共有欄の Cf 入力フィルタ、cache redact の再帰化、local part 検証、

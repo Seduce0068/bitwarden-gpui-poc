@@ -207,6 +207,20 @@ pub(super) fn audit_row_scroll_index(selection: Option<usize>) -> Option<usize> 
     selection.map(|index| index + crate::ui::panels::AUDIT_HEADER_ROWS)
 }
 
+/// Return the audit panel's scroll handle to its initial state.
+///
+/// `ScrollHandle::set_offset` clears the pixel offset but leaves a queued
+/// `scroll_to_item` target in place: the next prepaint would scroll the freshly
+/// unlocked panel straight back to the old row. Replacing the handle drops the
+/// offset, the queued target and the stale item bounds together. The highlight
+/// is cleared in the same step so no selection can point into the old report.
+/// Kept as a free function so this can be tested without a GPUI window (this
+/// crate does not enable gpui's `test-support` feature).
+pub(super) fn reset_audit_scroll(handle: &mut ScrollHandle, selection: &mut Option<usize>) {
+    *handle = ScrollHandle::new();
+    *selection = None;
+}
+
 /// Status describing the audit row left highlighted after a refresh.
 ///
 /// Uses the same wording as the keyboard move status, so a threshold edit
@@ -432,8 +446,11 @@ impl BitwardenApp {
             &mut self.last_activity,
             std::time::Instant::now(),
         );
-        // A highlight into the old report has no meaning after a lock/unlock.
-        self.audit_row_selection = None;
+        // A highlight into the old report, and the scroll position that
+        // followed it, have no meaning after a lock/unlock or a re-login.
+        // Replacing the handle (instead of only zeroing its offset) also drops
+        // any queued `scroll_to_item` target before the next audit render.
+        reset_audit_scroll(&mut self.audit_scroll_handle, &mut self.audit_row_selection);
     }
 
     /// Lock the vault: discard the data and clear every transient input mode.
@@ -1028,6 +1045,38 @@ mod tests {
             before + 1,
             "the lock/unlock reset must rewind the same way as filter, \
              search and revalidation paths"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn state_reset_replaces_the_audit_scroll_handle_and_clears_the_row() {
+        let mut handle = ScrollHandle::new();
+        handle.set_offset(Point {
+            x: px(0.0),
+            y: px(240.0),
+        });
+        // Queue a row target too: zeroing only the offset would leave this
+        // pending and scroll the next render back to the old finding.
+        handle.scroll_to_item(9);
+        let old = handle.clone();
+        assert_eq!(handle.offset().y, px(240.0));
+
+        let mut selection = Some(4);
+        reset_audit_scroll(&mut handle, &mut selection);
+
+        assert_eq!(
+            selection, None,
+            "the stale audit highlight must not survive the reset"
+        );
+        assert_eq!(
+            handle.offset(),
+            Point::default(),
+            "a fresh handle starts at the top of the audit panel"
+        );
+        assert_eq!(
+            old.offset().y,
+            px(240.0),
+            "the old handle is replaced, not mutated: its queued target dies with it"
         );
     }
 

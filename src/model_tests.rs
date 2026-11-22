@@ -367,6 +367,52 @@ fn password_and_totp_secrets_are_not_searchable() {
 }
 
 #[test]
+fn raw_login_uris_stay_in_the_search_haystack() {
+    // `haystacks` pushes `uri.uri` verbatim (model.rs:620-623). `mask_uri`
+    // protects Debug and reports, but the search index is a separate path: a
+    // credential in a URI query can still be found through search hints. This
+    // is a documented known constraint, asserted here so it cannot drift
+    // silently.
+    let item = login(
+        "1",
+        "Site",
+        "alice",
+        "pw",
+        "https://example.com/cb?token=RAW_URI_SECRET",
+    );
+    assert!(item.matches_query("token=RAW_URI_SECRET"));
+    assert!(item.matches_query("raw_uri_secret"));
+    assert!(item.matches_query("example.com"));
+    let debug = format!("{item:?}");
+    assert!(!debug.contains("RAW_URI_SECRET"), "{debug}");
+}
+
+#[test]
+fn login_only_accessors_return_none_or_empty_for_non_login_items() {
+    // The `_ =>` arms of `login`/`password`/`totp_secret`/`uris`
+    // (model.rs:568-603) must not panic or fall through for other kinds.
+    let items = [
+        VaultItem::new(
+            "n",
+            "note",
+            ItemData::SecureNote {
+                text: "text".into(),
+            },
+        ),
+        VaultItem::new("c", "card", ItemData::Card(CardData::default())),
+        VaultItem::new("i", "identity", ItemData::Identity(IdentityData::default())),
+        VaultItem::new("s", "ssh", ItemData::SshKey(SshKeyData::default())),
+    ];
+    for item in &items {
+        assert!(item.login().is_none(), "{}", item.id);
+        assert_eq!(item.password(), None, "{}", item.id);
+        assert_eq!(item.totp_secret(), None, "{}", item.id);
+        assert!(item.uris().is_empty(), "{}", item.id);
+        assert!(!item.matches_page("https://example.com", &openwarden::MatchOptions::default()));
+    }
+}
+
+#[test]
 fn card_numbers_are_only_searchable_by_last_four() {
     let mut vault = Vault::new();
     vault.items.push(VaultItem::new(
@@ -417,6 +463,14 @@ fn favorites_folders_and_removal_round_trip() {
     assert!(vault.set_folder("3", Some("f1".into())));
     assert!(!vault.set_folder("nope", None));
     assert_eq!(vault.folder_counts(), vec![("f1".to_string(), 2)]);
+
+    // `None` removes the folder assignment rather than being ignored, and a
+    // subsequent assignment is accepted again (model.rs:876-885).
+    assert!(vault.set_folder("3", None));
+    assert_eq!(vault.item("3").unwrap().folder_id, None);
+    assert_eq!(vault.folder_counts(), vec![("f1".to_string(), 1)]);
+    assert!(vault.set_folder("3", Some("f1".into())));
+    assert_eq!(vault.item("3").unwrap().folder_id.as_deref(), Some("f1"));
 
     assert!(vault.remove("3"));
     assert!(!vault.remove("3"));
@@ -517,9 +571,11 @@ fn search_absorbs_unicode_form_differences() {
 }
 
 #[test]
-fn comparison_key_applies_full_case_folding_and_is_idempotent() {
+fn comparison_key_folds_the_documented_cases_and_is_idempotent() {
     // `to_lowercase` alone leaves these pairs distinct; the search, duplicate
-    // and sort paths all go through this one key so they agree.
+    // and sort paths all go through this one key so they agree. The doc does
+    // not claim a complete Unicode full case fold (model.rs:24-37): only the
+    // explicitly listed mappings are guaranteed.
     assert_eq!(comparison_key("Straße"), comparison_key("STRASSE"));
     assert_eq!(comparison_key("ß"), comparison_key("ss"));
     assert_eq!(comparison_key("ẞ"), comparison_key("ss"));
