@@ -4,7 +4,7 @@
 //! Bitwarden's three `totp` field forms (`otpauth://` URI, `steam://`, and a
 //! bare base32 secret). This module adds the presentation concerns the UI
 //! needs: a redacted wrapper so an accidental `{:?}` or log line can't leak a
-//! live code, a countdown, and the next-code preview.
+//! live code and a countdown. The next-code preview was not implemented.
 
 use openwarden::{SecretString, TotpCode};
 

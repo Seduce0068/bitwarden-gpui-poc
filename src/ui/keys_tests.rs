@@ -89,6 +89,28 @@ fn lock_screen_keys_and_retry_gate() {
 }
 
 #[test]
+fn lock_screen_email_client_id_and_master_password_field_keys() {
+    let mut value = ctx("2");
+    value.screen = Screen::Locked;
+    assert_eq!(
+        classify_key(&value),
+        UiAction::EditAuthField(AuthField::Email)
+    );
+
+    value.key = "3";
+    assert_eq!(
+        classify_key(&value),
+        UiAction::EditAuthField(AuthField::ClientId)
+    );
+
+    value.key = "5";
+    assert_eq!(
+        classify_key(&value),
+        UiAction::EditAuthField(AuthField::MasterPassword)
+    );
+}
+
+#[test]
 fn generator_keys_toggle_options_and_clamp_lengths() {
     use crate::ui::keys::GeneratorOption;
 
@@ -141,6 +163,16 @@ fn vault_keys_map_to_actions() {
     assert_eq!(classify_key(&ctx("/")), UiAction::StartSearch);
     assert_eq!(classify_key(&ctx("c")), UiAction::SetPanel(Panel::Settings));
     assert_eq!(classify_key(&ctx("q")), UiAction::None);
+}
+
+#[test]
+fn vault_filter_sort_and_generator_navigation_keys() {
+    assert_eq!(classify_key(&ctx("t")), UiAction::CycleFilter);
+    assert_eq!(classify_key(&ctx("s")), UiAction::CycleSort);
+    assert_eq!(
+        classify_key(&ctx("n")),
+        UiAction::SetPanel(Panel::Generator)
+    );
 }
 
 #[test]
@@ -446,6 +478,16 @@ fn settings_editing_keeps_every_letter_as_text() {
     }
     value.key = "enter";
     assert_eq!(classify_key(&value), UiAction::FinishSettingsEdit);
+}
+
+#[test]
+fn settings_editing_backspace_maps_to_backspace_settings() {
+    let mut value = ctx("backspace");
+    value.panel = Panel::Settings;
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    value.editing_settings = true;
+    assert_eq!(classify_key(&value), UiAction::BackspaceSettings);
 }
 
 #[test]

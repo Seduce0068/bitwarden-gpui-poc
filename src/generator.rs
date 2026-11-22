@@ -41,7 +41,7 @@ pub struct PasswordSettings {
     pub digits: bool,
     /// Include `!@#$%^&*`.
     pub symbols: bool,
-    /// Exclude characters that are easy to confuse (`l`, `I`, `1`, `O`, `0`).
+    /// Exclude characters that are easy to confuse (`l`, `I`, `1`, `O`, `0`, `o`).
     pub avoid_ambiguous: bool,
 }
 

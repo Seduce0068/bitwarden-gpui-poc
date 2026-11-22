@@ -49,9 +49,10 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 1. `auth` モジュール（新設）: サーバー URL、API key、マスターパスワードを
    受け取り、`prelogin` → `login_api_key` → `sync_body`（0.1.1。0.1.0 では
    `sync`）を実行して `Session` と同期 body を返す
-2. `vault_sync` モジュール（新設）: `MasterKey::derive` と `Vault::unlock` で
-   復号キーを作り、`apply_sync(SyncData)` の後に `logins()` / `folders()` 等
-   から既存の `model::Vault` / `VaultItem` へ変換する
+2. `vault_sync` モジュール（新設）: PascalCase 正規化と重複 id の集約を行い、
+   `apply_sync(SyncData)` の後に `logins()` / `folders()` 等から既存の
+   `model::Vault` / `VaultItem` へ変換する。復号キー (`MasterKey::derive`)
+   と `Vault::unlock` は現在 `auth` モジュールが担当する
 3. `src/main.rs`: ロック画面から API key とマスターパスワードを入力させ、
    統合層を非同期で呼ぶ。認証情報は `Settings` に保存しない
 4. `cache` モジュール（新設）: 暗号化済み同期 body を保持し、同期 body の
@@ -182,7 +183,7 @@ openwarden 統合の検証）に見合わないため採用しない。既定値
 ## Decision Update (2026-11-21): 再検討トリガー#1の発動と再裁定
 
 **発動**: openwarden 0.1.1 が `Client::sync_body()` を公開し、
-`src/auth.rs:726-742` が本番認証経路で生 body を取得している。
+`src/auth.rs` の `authenticate_inner` が本番認証経路で生 body を取得している。
 2026-11-18 に定めた「raw body が公開されたら見直す」というトリガー#1は
 発動済みである。
 

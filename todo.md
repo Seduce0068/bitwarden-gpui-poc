@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第55弾で 8 件すべてを完了）。
+なし（第56弾で 9 件すべてを完了）。
 
 ## 完了
 
+- [x] 第56弾（13 観点・3 回目）の指摘 9 件を完結（2026-11-22）
+  - ADR の担当モジュール／行参照、totp doc、generator doc を実態へ修正。
+    固定ツール版の README 突き合わせを CI 側の変数値へ変更。
+  - Vault / 設定編集 / ロック画面の未テストキー分岐と haystacks の
+    kind 別検索フィールドをテストで固定。
+  - 起動エージェント: 14 体（補充探索 13 + キーテスト 1）。
+  - 検証: fmt / check / test（378 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / gitleaks すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第55弾（13 観点・2 回目）の指摘 8 件を完結（2026-11-22）
   - README のキャッシュ期限・Debug マスキングの実態整合、username の
     マスク、主要キー分岐とセンチネルの実体テスト、ウィンドウクローズ時の
@@ -718,3 +727,10 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
   削除せず維持する。根拠: いずれも型／呼び出し側の不変条件に依存する
   防御的コードであり、削除すると将来の入力経路追加時に panic または
   未定義の挙動に直結する。機能バグではないため TODO 化しない。
+
+### 2026-11-22 `Filter::Folder` の扱い
+
+- `Filter::Folder(String)` は `model` 側に実装済みだが、UI の `cycle_filter` が
+  生成経路を持たないため本番では到達不能。現状は「フォルダ別絞り込みは
+  未実装」として扱い、UI に新しいキー／操作を追加する設計判断が必要になる
+  ため、今回は TODO 化せず記録のみとした。

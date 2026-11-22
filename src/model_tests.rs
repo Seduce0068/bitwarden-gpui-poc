@@ -709,3 +709,60 @@ fn name_sort_uses_the_same_nfkd_key_as_search() {
     let ids: Vec<&str> = sorted.iter().map(|item| item.id.as_str()).collect();
     assert_eq!(ids, vec!["a-full", "a-decomposed", "b-plain"]);
 }
+
+#[test]
+fn search_haystacks_cover_kind_specific_fields() {
+    let note = VaultItem::new(
+        "n",
+        "note-title",
+        ItemData::SecureNote {
+            text: "needle-note".into(),
+        },
+    );
+    assert!(note.matches_query("needle-note"));
+
+    let card = VaultItem::new(
+        "c",
+        "card-title",
+        ItemData::Card(CardData {
+            cardholder_name: "Card Holder".into(),
+            brand: "Visa".into(),
+            number: "1234 5678 9012 3456".into(),
+            exp_month: "01".into(),
+            exp_year: "30".into(),
+            code: "123".into(),
+        }),
+    );
+    assert!(card.matches_query("card holder"));
+    assert!(card.matches_query("3456"));
+    assert!(
+        !card.matches_query("9012"),
+        "the full PAN must not be searchable"
+    );
+
+    let identity = VaultItem::new(
+        "i",
+        "id-title",
+        ItemData::Identity(IdentityData {
+            first_name: "Ada".into(),
+            last_name: "Lovelace".into(),
+            email: "ada@example.com".into(),
+            phone: "090-1234".into(),
+            address: "Somewhere".into(),
+            company: "Analytical".into(),
+        }),
+    );
+    assert!(identity.matches_query("lovelace"));
+    assert!(identity.matches_query("analytical"));
+
+    let ssh = VaultItem::new(
+        "s",
+        "ssh-title",
+        ItemData::SshKey(SshKeyData {
+            public_key: "ssh-ed25519 AAAA".into(),
+            private_key: String::new(),
+            fingerprint: "SHA256:abc".into(),
+        }),
+    );
+    assert!(ssh.matches_query("SHA256:abc"));
+}
