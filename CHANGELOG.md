@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第75〜76弾 / 2026-11-23）
+
+- 監査選択消滅時のスクロール target 破棄、KDF 拒否実経路、
+  IPv6 片括弧、空 URI、ZeroizingText Display をテスト
+- 固定 temp パスを tempfile 化し、注入シーム doc を是正
+- PageUp/PageDown/Home/End を追加し、生成ヒントに F1 を反映
+- `comparison_key` を冪等化し、ambiguous 除外の既知制約を doc 化
+
 ### 全体改善（第73〜74弾 / 2026-11-23）
 
 - キャッシュ復元へ client_id 由来のアカウント照合を追加

@@ -992,7 +992,7 @@ impl Vault {
             b.favorite
                 .cmp(&a.favorite)
                 .then_with(|| b.revision_date.cmp(&a.revision_date))
-                // Use the same folded name key as `compare` (model.rs:1064-1066)
+                // Use the same folded name key as `compare` (model.rs:1085-1087)
                 // and fall back to the id so equal names order deterministically
                 // instead of depending on the input order.
                 .then_with(|| {

@@ -657,16 +657,24 @@ fn device_id_is_generated_once_and_reused_on_resync() {
 fn malformed_stored_device_id_is_replaced_on_next_sync() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
-    let legacy = Settings {
-        device_id: "bitwarden-gpui-poc-install".to_string(),
-        ..Default::default()
-    };
-    legacy.save(&path).unwrap();
+    // Write the legacy value as raw JSON: `Settings::save` calls `sanitized()`
+    // (settings.rs:632-638) and would clear the id *before* writing, so it
+    // cannot exercise the read-time sanitization under test here. Every other
+    // field falls back to its serde default, which is exactly the shape of a
+    // hand-edited or older settings file.
+    let raw = br#"{"schema_version":1,"device_id":"bitwarden-gpui-poc-install"}"#;
+    std::fs::write(&path, raw).unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("bitwarden-gpui-poc-install"),
+        "the malformed value must really be on disk before load"
+    );
 
     let mut loaded = Settings::load(&path);
     assert!(
         loaded.device_id.is_empty(),
-        "sanitized() must clear the old hardcoded value"
+        "sanitized() must clear the old hardcoded value on load"
     );
     let fresh = loaded.ensure_device_id(Some(&path)).unwrap().to_string();
     assert!(is_valid_device_id(&fresh));
@@ -789,6 +797,44 @@ fn save_device_id_only_aborts_on_a_read_failed_file() {
         std::fs::read_dir(path).unwrap().count(),
         0,
         "nothing was written"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn save_device_id_only_reports_a_failed_final_write() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let original = br#"{"schema_version":1,"email":"keep@example.com"}"#;
+    std::fs::write(&path, original).unwrap();
+
+    // Reading and parsing still succeed; a read-only parent stops the final
+    // `write_private` (settings.rs:752) before it can create its temporary
+    // file (private_file.rs:47). This isolates the write failure from the
+    // read/parse abort cases above.
+    let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+    perms.set_mode(0o500);
+    std::fs::set_permissions(dir.path(), perms).unwrap();
+
+    let id = generate_device_id().unwrap();
+    let error = Settings::save_device_id_only(&path, &id).unwrap_err();
+
+    // Restore write access before asserting so TempDir can clean up.
+    let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+    perms.set_mode(0o700);
+    std::fs::set_permissions(dir.path(), perms).unwrap();
+
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{error:?}"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original.as_slice(),
+        "a failed write must leave the existing file byte-for-byte intact"
     );
 }
 

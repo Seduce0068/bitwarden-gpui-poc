@@ -183,6 +183,35 @@ fn reused_passwords_compare_exactly() {
 }
 
 #[test]
+fn a_password_shared_by_three_logins_reports_a_count_of_three() {
+    // `audit_item` reports the whole group size (health.rs:664-666), not a
+    // fixed "2 件". A strong shared password keeps WeakPassword out of the
+    // way so only the reuse finding carries the count.
+    const SHARED: &str = "vT7#kQm2!zR9wP4$xL8@";
+    let report = report_of(vec![
+        login("1", "A", SHARED, "https://a.example", "GEZDGNBVGY3TQOJQ"),
+        login("2", "B", SHARED, "https://b.example", "GEZDGNBVGY3TQOJQ"),
+        login("3", "C", SHARED, "https://c.example", "GEZDGNBVGY3TQOJQ"),
+    ]);
+    let counts: Vec<usize> = report
+        .items
+        .iter()
+        .flat_map(|item| item.findings.iter())
+        .filter_map(|finding| match finding {
+            Finding::ReusedPassword { count } => Some(*count),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(counts, vec![3, 3, 3]);
+    assert_eq!(report.examined, 3);
+    assert_eq!(report.logins, 3);
+    assert_eq!(report.affected(), 3);
+    let message = (Finding::ReusedPassword { count: 3 }).message();
+    assert!(message.contains("3 件"), "{message}");
+    assert!(!message.contains("2 件"), "{message}");
+}
+
+#[test]
 fn insecure_uris_and_missing_totp_and_uri_are_reported() {
     let report = report_of(vec![login(
         "1",

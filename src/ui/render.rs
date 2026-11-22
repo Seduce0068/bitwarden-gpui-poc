@@ -10,20 +10,58 @@ use gpui_kit::prelude::*;
 use gpui_kit::StatefulInteractiveElement;
 use gpui_kit::*;
 
+/// Remove the focus-recovery hint from a status that already shows it inline.
+///
+/// The lock guidance in `ui::app::lock_guidance` wraps its keys in parentheses
+/// and ends with F1, so deleting only the hint text left the preceding `" / "`
+/// in front of `"）"`. Strip the adjacent separator together with the hint and
+/// drop a parenthesis pair that becomes empty as a result. Kept pure so the
+/// exact output can be tested without a GPUI window.
+fn strip_inline_focus_hint(status: &str) -> String {
+    let mut text = status.to_string();
+    let mut removed = false;
+    while let Some(start) = text.find(FOCUS_RECOVERY_HINT) {
+        removed = true;
+        let end = start + FOCUS_RECOVERY_HINT.len();
+        let mut before = &text[..start];
+        let mut after = &text[end..];
+        // F1 is normally the last item, so consume the separator before it;
+        // when it leads the key list, consume the one after it instead.
+        if let Some(trimmed) = before.strip_suffix(" / ") {
+            before = trimmed;
+        } else if let Some(trimmed) = after.strip_prefix(" / ") {
+            after = trimmed;
+        }
+        // A parenthesised key list may be empty once F1 is gone.
+        if before.ends_with('（') && after.starts_with('）') {
+            before = &before[..before.len() - '（'.len_utf8()];
+            after = &after['）'.len_utf8()..];
+        }
+        text = format!("{before}{after}");
+    }
+    if removed {
+        // Defensive: a stale separator next to a parenthesis must never be
+        // rendered as " / ）" or "（ / " when F1 led the key list.
+        text = text.replace(" / ）", "）");
+        text = text.replace("（ / ", "（");
+    }
+    text
+}
+
 /// Text drawn in the status bar on the current screen.
 ///
-/// The lock screen's `auth_hint` and the settings panel's `settings_hint`
-/// already carry the F1 recovery guidance. The status bar is the fallback
-/// advertiser for panels without an inline hint: when a hint is present, drop
-/// F1 from the status text instead of appending it a second time.
+/// The lock screen's `auth_hint`, the settings panel's `settings_hint` and the
+/// generator panel's `generator_panel_key_hint` already carry the F1 recovery
+/// guidance. The status bar is the fallback advertiser for panels without an
+/// inline hint: when a hint is present, drop F1 from the status text instead of
+/// appending it a second time.
 fn status_bar_text(status: &str, screen: Screen, panel: Panel) -> String {
     let has_inline_hint = match screen {
         Screen::Locked => true,
-        Screen::Unlocked => panel == Panel::Settings,
+        Screen::Unlocked => matches!(panel, Panel::Settings | Panel::Generator),
     };
     if has_inline_hint {
-        let marker = format!(" / {FOCUS_RECOVERY_HINT}");
-        status.replace(marker.as_str(), "")
+        strip_inline_focus_hint(status)
     } else if status.contains(FOCUS_RECOVERY_HINT) {
         status.to_string()
     } else {
@@ -40,6 +78,28 @@ fn status_bar_text(status: &str, screen: Screen, panel: Panel) -> String {
 /// contract can be tested without a GPUI window.
 fn vault_detail_row(count: usize, detail: String) -> Option<String> {
     (count > 0).then_some(detail)
+}
+
+/// Header text above the vault list.
+///
+/// `PageUp`/`PageDown` and `Home`/`End` move the vault selection just like
+/// Up/Down (see `ui::keys::classify_key`), so the header advertises them next
+/// to the row-move key. Kept pure so the wording can be tested without a GPUI
+/// window.
+fn vault_list_header_text(
+    count: usize,
+    total: usize,
+    filter_label: &str,
+    sort_label: &str,
+    query: &str,
+    searching: bool,
+) -> String {
+    format!(
+        "Vault: {count} / {total} 件  |  フィルタ: {filter_label}  |  並び: {sort_label}  |  検索: {}{}  |  ↑↓: 行を選択 / {}",
+        if query.is_empty() { "(なし)" } else { query },
+        if searching { " _" } else { "" },
+        crate::ui::panels::LIST_PAGE_AND_EDGE_HINT
+    )
 }
 
 impl BitwardenApp {
@@ -258,18 +318,13 @@ impl BitwardenApp {
                     .border_color(rgb(0x313244))
                     .text_sm()
                     .text_color(rgb(0xa6adc8))
-                    .child(format!(
-                        "Vault: {} / {} 件  |  フィルタ: {}  |  並び: {}  |  検索: {}{}",
+                    .child(vault_list_header_text(
                         count,
                         self.view.vault.len(),
-                        filter_label,
+                        &filter_label,
                         self.view.sort.label(),
-                        if self.view.query.is_empty() {
-                            "(なし)"
-                        } else {
-                            &self.view.query
-                        },
-                        if self.view.searching { " _" } else { "" }
+                        &self.view.query,
+                        self.view.searching,
                     )),
             )
             .child(if count == 0 {
@@ -506,6 +561,83 @@ mod tests {
         assert_eq!(
             status_bar_text(&with_hint, Screen::Unlocked, Panel::Audit),
             with_hint
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_panel_does_not_repeat_the_focus_hint_in_the_status_bar() {
+        // The generator's inline `generator_panel_key_hint` already ends with
+        // F1, so its status must drop the key instead of appending it again.
+        let with_hint = format!("生成しました / {FOCUS_RECOVERY_HINT}");
+        assert_eq!(
+            status_bar_text(&with_hint, Screen::Unlocked, Panel::Generator),
+            "生成しました"
+        );
+        let plain = "パスワードを生成しました（30秒後に復元）";
+        assert_eq!(
+            status_bar_text(plain, Screen::Unlocked, Panel::Generator),
+            plain,
+            "a plain generator status must not gain a second F1"
+        );
+        // Panels without an inline hint keep the fallback behaviour.
+        assert_eq!(
+            status_bar_text(plain, Screen::Unlocked, Panel::Audit),
+            format!("{plain}  |  {FOCUS_RECOVERY_HINT}")
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn lock_status_f1_removal_leaves_no_separator_or_empty_parens() {
+        // Mirrors `ui::app::lock_guidance`: the keys are wrapped in full-width
+        // parentheses and F1 closes the list.
+        let lock = format!("ロックしました（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}）");
+        assert_eq!(
+            status_bar_text(&lock, Screen::Locked, Panel::Vault),
+            "ロックしました（Enter: ログイン / m: モック）"
+        );
+
+        // A stale trailing separator must be cleaned up, never shown as
+        // " / ）" in the status bar.
+        let stale =
+            format!("ロックしました（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT} / ）");
+        assert_eq!(
+            status_bar_text(&stale, Screen::Locked, Panel::Vault),
+            "ロックしました（Enter: ログイン / m: モック）"
+        );
+
+        // F1 as the only key leaves no empty parentheses behind.
+        let only = format!("ロックしました（{FOCUS_RECOVERY_HINT}）");
+        assert_eq!(
+            status_bar_text(&only, Screen::Locked, Panel::Vault),
+            "ロックしました"
+        );
+
+        // The idle-lock status appends the unsaved marker after the guidance;
+        // removing F1 must not consume that marker or its separator.
+        let idle = format!(
+            "無操作のため自動ロックしました（300秒）（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}） | [未保存の設定変更があります]"
+        );
+        assert_eq!(
+            status_bar_text(&idle, Screen::Locked, Panel::Vault),
+            "無操作のため自動ロックしました（300秒）（Enter: ログイン / m: モック） | [未保存の設定変更があります]"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_header_advertises_page_and_edge_keys() {
+        let header = vault_list_header_text(2, 7, "お気に入り", "名前 ↑", "", false);
+        for key in ["PageUp", "PageDown", "Home", "End"] {
+            assert!(header.contains(key), "missing {key} in {header}");
+        }
+        assert!(header.contains("↑↓: 行を選択"), "{header}");
+        assert!(header.contains("Vault: 2 / 7 件"), "{header}");
+        assert!(header.contains("検索: (なし)"), "{header}");
+
+        let searching = vault_list_header_text(1, 7, "すべてのアイテム", "名前 ↓", "abc", true);
+        assert!(searching.contains("検索: abc _"), "{searching}");
+        assert!(
+            searching.contains(crate::ui::panels::LIST_PAGE_AND_EDGE_HINT),
+            "{searching}"
         );
     }
 }

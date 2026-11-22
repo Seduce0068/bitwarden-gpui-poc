@@ -662,7 +662,7 @@ fn comparison_key_folds_the_documented_cases_and_is_idempotent() {
 fn comparison_key_is_idempotent_for_titlecase_dz_variants() {
     // U+01C4/01C5/01C6 (capital / titlecase / small DZ with caron) all NFKD to
     // D or d + z + combining caron once lowercasing is applied. The fixed-point
-    // loop (model.rs:20-70) must leave the folded key unchanged on a second
+    // loop (model.rs:59-69) must leave the folded key unchanged on a second
     // pass; otherwise a normalized needle would drift on the `view()` path.
     let title = comparison_key("\u{01c5}");
     let small = comparison_key("\u{01c6}");
@@ -673,6 +673,26 @@ fn comparison_key_is_idempotent_for_titlecase_dz_variants() {
         assert_eq!(comparison_key(key), *key, "{key:?}");
         assert_eq!(comparison_key(&comparison_key(key)), *key, "{key:?}");
     }
+}
+
+#[test]
+fn comparison_key_is_idempotent_for_combining_greek_ypogegrammeni() {
+    // U+0345 COMBINING GREEK YPOGEGRAMMENI is a combining mark that this
+    // Unicode table keeps verbatim. The fixed-point loop must still leave it
+    // unchanged, so a normalized search needle does not drift when fed back
+    // through `view()`.
+    let key = comparison_key("\u{0345}");
+    assert_eq!(comparison_key(&key), key, "{key:?}");
+    assert_eq!(comparison_key(&comparison_key(&key)), key, "{key:?}");
+
+    // The same must hold when the mark follows a base letter.
+    let with_base = comparison_key("Α\u{0345}");
+    assert_eq!(comparison_key(&with_base), with_base, "{with_base:?}");
+    assert_eq!(
+        comparison_key(&comparison_key(&with_base)),
+        with_base,
+        "{with_base:?}"
+    );
 }
 
 #[test]
@@ -808,8 +828,8 @@ fn sort_key_next_cycles_through_all_four_variants() {
 #[test]
 fn view_sorting_uses_comparison_keys_for_names() {
     // `compare()` normalizes both names with `comparison_key` before ordering
-    // (model.rs:1064-1066), and `Vault::view` normalizes the query the same way
-    // (model.rs:950-961). NFD/uppercase spellings must therefore sort and
+    // (model.rs:1084-1087), and `Vault::view` normalizes the query the same way
+    // (model.rs:972-978). NFD/uppercase spellings must therefore sort and
     // search identically to their precomposed/lowercase counterparts.
     let mut vault = Vault::new();
     vault
@@ -916,6 +936,58 @@ fn match_type_numbers_map_to_the_enum() {
     // "http://x/", whose base domain "x" differs from "example.com", so
     // the page must not match.
     assert!(!bad.matches("https://example.com/", &openwarden::MatchOptions::default()));
+}
+
+#[test]
+fn login_uri_matches_host_starts_with_and_regex_modes() {
+    let opts = openwarden::MatchOptions::default();
+
+    // Host (wire 1): host and port must agree; subdomains and a downgraded
+    // scheme do not match.
+    let host = LoginUri {
+        uri: "https://app.example.com:8443/login".into(),
+        match_type: Some(1),
+    };
+    assert_eq!(host.match_enum(), Some(openwarden::UriMatch::Host));
+    assert!(host.matches("https://app.example.com:8443/other", &opts));
+    assert!(
+        !host.matches("https://app.example.com/login", &opts),
+        "a different port must not match"
+    );
+    assert!(!host.matches("https://evil-app.example.com:8443/login", &opts));
+    assert!(!host.matches("http://app.example.com:8443/login", &opts));
+
+    // StartsWith (wire 2): the page must begin with the URI at a boundary.
+    let prefix = LoginUri {
+        uri: "https://bank.example.com".into(),
+        match_type: Some(2),
+    };
+    assert_eq!(prefix.match_enum(), Some(openwarden::UriMatch::StartsWith));
+    assert!(prefix.matches("https://bank.example.com/login", &opts));
+    assert!(prefix.matches("https://bank.example.com:8443/", &opts));
+    assert!(!prefix.matches("https://bank.example.com.evil.net/", &opts));
+
+    // RegularExpression (wire 4): regex is off by default, opt-in and
+    // case-insensitive once enabled.
+    let regex = LoginUri {
+        uri: r"^https://[a-z]+\.example\.com/login$".into(),
+        match_type: Some(4),
+    };
+    assert_eq!(
+        regex.match_enum(),
+        Some(openwarden::UriMatch::RegularExpression)
+    );
+    assert!(
+        !regex.matches("https://app.example.com/login", &opts),
+        "regex must stay inert unless explicitly enabled"
+    );
+    let regex_opts = openwarden::MatchOptions {
+        allow_regex: true,
+        ..Default::default()
+    };
+    assert!(regex.matches("https://app.example.com/login", &regex_opts));
+    assert!(regex.matches("https://APP.EXAMPLE.COM/login", &regex_opts));
+    assert!(!regex.matches("https://app.example.com/other", &regex_opts));
 }
 
 #[test]
@@ -1188,7 +1260,7 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
 
 #[test]
 fn page_matching_ties_use_the_folded_name_key_then_the_id() {
-    // `matches_page` shares the `compare` tiebreak (model.rs:963-985,1063-1066):
+    // `matches_page` shares the `compare` tiebreak (model.rs:985-1001,1084-1087):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
     let page = "https://example.com/shared";
@@ -1502,7 +1574,7 @@ fn ssh_fingerprint_rejects_insufficient_base64_padding() {
 fn matches_query_trims_a_padded_needle_like_view() {
     let item = login("1", "Café", "user", "pw", "https://example.com");
     // A raw caller may copy a query with padding; `view()` trims it before
-    // normalization (model.rs:950-958), so the public method must do the same.
+    // normalization (model.rs:972-973), so the public method must do the same.
     assert!(item.matches_query("  café \t"));
     assert!(item.matches_query(" \tCAFE\u{301}\n "));
     assert!(!item.matches_query("  tea  "));

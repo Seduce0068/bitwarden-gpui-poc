@@ -75,6 +75,27 @@ fn sha256_and_sha512_are_honoured() {
 }
 
 #[test]
+fn otpauth_uris_reject_unknown_algorithm_values() {
+    // openwarden accepts only SHA1 / SHA256 / SHA512 (case-insensitively);
+    // anything else fails parsing as an ordinary Invalid family. The check
+    // below keeps a typo in the vault from silently falling back to SHA-1.
+    for algorithm in ["MD5", "SHA3", "SHA-256", "SHA224", "SHA1x", ""] {
+        let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&algorithm={algorithm}");
+        assert_eq!(code_at(&uri, 59), Err(TotpError::Invalid), "{algorithm:?}");
+        assert!(!is_valid_secret(&uri), "{algorithm:?}");
+        let tick = Tick::sample(&uri, 59);
+        assert_eq!(tick.error, Some(TotpError::Invalid), "{algorithm:?}");
+        assert!(tick.code.is_none(), "{algorithm:?}");
+    }
+
+    // Supported names remain valid in mixed case.
+    for algorithm in ["sha1", "Sha256", "SHA512"] {
+        let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&algorithm={algorithm}");
+        assert!(code_at(&uri, 59).is_ok(), "{algorithm:?}");
+    }
+}
+
+#[test]
 fn a_custom_period_changes_the_window() {
     let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&period=60");
     let code = code_at(&uri, 59).unwrap();

@@ -24,6 +24,16 @@ pub(super) const AUDIT_HEADER_ROWS: usize = 3;
 /// so explicitly instead of implying a keyboard path exists.
 pub(super) const MOUSE_WHEEL_SCROLL_ONLY_HINT: &str = "スクロールはマウス／ホイールのみ";
 
+/// Navigation keys for the vault list and the audit rows.
+///
+/// `ui::keys::classify_key` binds `PageUp`/`PageDown` to `MoveSelectionPage`
+/// and `Home`/`End` to `MoveSelectionToEdge` in both panels, so their inline
+/// hints must advertise those keys alongside Up/Down instead of promising only
+/// single-row moves. Kept as one shared constant so the two hints cannot drift
+/// apart.
+pub(super) const LIST_PAGE_AND_EDGE_HINT: &str =
+    "PageUp/PageDown: ページ移動 / Home/End: 先頭/末尾へ移動";
+
 /// Labels for the two `+/-` rows in the generator panel.
 ///
 /// Both labels explicitly say that the same key changes the *other* generator
@@ -184,7 +194,7 @@ pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
     if report.items.is_empty() {
         format!("{base} / 監査する問題はありません / g: 一覧 / l: ロック / Esc: 終了")
     } else {
-        format!("{base} / ↑↓: 行を選択 / Enter: 対象を選択 / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了")
+        format!("{base} / ↑↓: 行を選択 / {LIST_PAGE_AND_EDGE_HINT} / Enter: 対象を選択 / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了")
     }
 }
 
@@ -886,6 +896,31 @@ mod tests {
         assert!(!line.contains("監査する問題はありません"), "{line}");
         assert!(line.contains(unsaved_marker(true)), "{line}");
         assert!(line.contains("TOTP 設定済み: 1/1 (100%)"), "{line}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_detail_line_advertises_page_and_edge_keys_when_rows_exist() {
+        for key in ["PageUp", "PageDown", "Home", "End"] {
+            assert!(LIST_PAGE_AND_EDGE_HINT.contains(key), "missing {key}");
+        }
+        let report = Report {
+            items: vec![crate::health::ItemReport {
+                id: "item-1".into(),
+                name: "Example".into(),
+                kind: crate::model::ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 1,
+            logins: 1,
+        };
+        let line = audit_panel_detail_line(&report, false);
+        assert!(line.contains(LIST_PAGE_AND_EDGE_HINT), "{line}");
+        assert!(line.contains("↑↓: 行を選択"), "{line}");
+
+        // With no rows there is nothing to page through or jump to.
+        let empty = audit_panel_detail_line(&Report::default(), false);
+        assert!(!empty.contains(LIST_PAGE_AND_EDGE_HINT), "{empty}");
     }
 
     #[::core::prelude::v1::test]

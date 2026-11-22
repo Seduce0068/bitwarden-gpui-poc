@@ -1906,3 +1906,52 @@ fn unclosed_ipv6_bracket_takes_the_no_closing_bracket_branches() {
     let at = scan.rfind('@').expect("an '@' after the query marker");
     assert!(!super::at_is_in_query(scan, at));
 }
+
+#[test]
+fn host_with_optional_port_ok_rejects_malformed_brackets_and_ports() {
+    // A bracketed literal must be a closed '[...]' containing a colon
+    // (cache.rs:183-190): `[]` has no address and `[host]` is not IPv6.
+    assert!(!super::host_with_optional_port_ok("[]"));
+    assert!(!super::host_with_optional_port_ok("[host]"));
+    // Only an empty tail or ':port' may follow ']' (cache.rs:191-196).
+    assert!(!super::host_with_optional_port_ok("[::1]x"));
+    assert!(!super::host_with_optional_port_ok("[::1]:8443x"));
+    // A port, when present, must be non-empty and all ASCII digits
+    // (cache.rs:207).
+    assert!(!super::host_with_optional_port_ok("vault.example.com:"));
+    assert!(!super::host_with_optional_port_ok("vault.example.com:http"));
+    assert!(!super::host_with_optional_port_ok("[::1]:"));
+    assert!(!super::host_with_optional_port_ok("[::1]:http"));
+    // Controls: the rejections above are about malformed input, not about
+    // bracketed IPv6 or ports in general.
+    assert!(super::host_with_optional_port_ok("vault.example.com"));
+    assert!(super::host_with_optional_port_ok("vault.example.com:8443"));
+    assert!(super::host_with_optional_port_ok("[::1]"));
+    assert!(super::host_with_optional_port_ok("[::1]:8443"));
+}
+
+#[test]
+fn nested_url_userinfo_is_masked_by_the_recursive_pass() {
+    // A nested URL in a harmless-looking parameter still goes through
+    // `mask_url_secrets` (cache.rs:344-369), whose first step masks userinfo
+    // (cache.rs:94-119). Credentials in the nested authority must not leak.
+    let with_query = "https://vault.example.com/login?next=https://user:NESTED_USER_SECRET@cb.example.com/done?state=ok";
+    let masked = super::mask_url_secrets(with_query);
+    assert!(!masked.contains("NESTED_USER_SECRET"), "{masked}");
+    assert!(masked.contains("[redacted]@cb.example.com"), "{masked}");
+    assert!(masked.contains("next=https://"), "{masked}");
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // The same holds for a nested URL carried in a fragment value.
+    let with_fragment =
+        "https://vault.example.com/cb#next=https://u:FRAG_USER_SECRET@cb.example.com/done#x=1";
+    let masked = super::mask_url_secrets(with_fragment);
+    assert!(!masked.contains("FRAG_USER_SECRET"), "{masked}");
+    assert!(masked.contains("[redacted]@cb.example.com"), "{masked}");
+
+    // Percent-encoded nested userinfo is decoded before the recursive pass.
+    let encoded = "https://vault.example.com/login?next=https%3A%2F%2Fu%3AENCODED_USER_SECRET%40cb.example.com%2Fdone%3Fstate%3Dok";
+    let masked = super::mask_url_secrets(encoded);
+    assert!(!masked.contains("ENCODED_USER_SECRET"), "{masked}");
+    assert!(masked.contains("[redacted]@cb.example.com"), "{masked}");
+}

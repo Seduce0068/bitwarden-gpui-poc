@@ -1142,7 +1142,7 @@ fn missing_cache_plus_sync_failure_reports_only_the_sync_cause() {
 #[test]
 fn sync_fallback_adopts_the_cause_message_when_there_is_no_source() {
     // `AppError::Other` has no `Error::source()`. `sync_fallback_failure`
-    // (auth.rs:858-866) must then render `cause.message()` instead of dropping
+    // (auth.rs:926-933) must then render `cause.message()` instead of dropping
     // the discarded sync reason entirely.
     let fallback = cache_restore_failure(AppError::CacheExpired);
     let combined =
@@ -1417,7 +1417,7 @@ fn authenticate_with_timeout_clamps_a_copy_and_leaves_the_caller_untouched() {
     // An empty client id fails validation deterministically on the clamped
     // copy, so this test never touches the network. All other fields are
     // deliberately over-long: if the function clamped `config` in place they
-    // would be shortened, which this assertion forbids (auth.rs:741-747).
+    // would be shortened, which this assertion forbids (auth.rs:840-846).
     let mut original = config();
     original.server_url = "http://127.0.0.1:8080".into();
     original.client_id.clear();

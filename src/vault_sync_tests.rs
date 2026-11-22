@@ -1516,13 +1516,46 @@ fn non_login_ciphers_are_excluded_from_import_and_audit() {
         "name": "Visa",
         "revisionDate": "2024-01-01T00:00:00Z",
     });
-    let vault = unlocked_vault(&[note, card, cipher("login-1", "2024-01-01T00:00:00Z")]);
+    // `type: 1` alone is not enough: openwarden's `StoredCipher::parse` drops
+    // any cipher that is owned by an organization or soft-deleted. Both carry
+    // a full login object here so only that account field can exclude them.
+    let org_login = serde_json::json!({
+        "id": "org-1",
+        "type": 1,
+        "organizationId": "org-abc",
+        "name": "Org login",
+        "login": { "uris": [] },
+        "revisionDate": "2024-01-01T00:00:00Z",
+    });
+    let deleted_login = serde_json::json!({
+        "id": "deleted-1",
+        "type": 1,
+        "deletedDate": "2024-01-02T00:00:00Z",
+        "name": "Deleted login",
+        "login": { "uris": [] },
+        "revisionDate": "2024-01-01T00:00:00Z",
+    });
+    let vault = unlocked_vault(&[
+        note,
+        card,
+        org_login,
+        deleted_login,
+        cipher("login-1", "2024-01-01T00:00:00Z"),
+    ]);
 
     let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
-    assert_eq!(model.items.len(), 1, "only the login cipher is imported");
+    assert_eq!(
+        model.items.len(),
+        1,
+        "only the personal live login is imported"
+    );
     assert_eq!(model.items[0].id, "login-1");
-    assert!(model.item("note-1").is_none());
-    assert!(model.item("card-1").is_none());
+    for excluded in ["note-1", "card-1", "org-1", "deleted-1"] {
+        assert!(
+            model.item(excluded).is_none(),
+            "{excluded} must be excluded"
+        );
+    }
     assert_eq!(
         audit,
         vec![ImportAudit::Added {
@@ -1562,6 +1595,23 @@ fn password_and_totp_markers_reject_the_other_status_markers() {
             "TOTP marker accepted {extended:?}"
         );
     }
+}
+
+#[test]
+fn undecryptable_markers_begin_with_a_nul_literal() {
+    // The NUL prefix (vault_sync.rs:28-55) is what makes a marker practically
+    // impossible to collide with a real password or TOTP value. Assert the
+    // literal itself, not just a helper's verdict, so dropping or changing the
+    // prefix is caught even if the recognisers are updated in lockstep.
+    assert_eq!(UNDECRYPTABLE_PASSWORD, "\0openwarden:undecryptable");
+    assert_eq!(UNDECRYPTABLE_TOTP, "\0openwarden:totp-undecryptable");
+    assert_eq!(UNDECRYPTABLE_URI, "\0openwarden:uri-undecryptable");
+    assert!(UNDECRYPTABLE_PASSWORD.starts_with('\0'));
+    assert!(UNDECRYPTABLE_TOTP.starts_with('\0'));
+    assert!(UNDECRYPTABLE_URI.starts_with('\0'));
+    // A lookalike without the leading NUL is not a marker.
+    assert!(!is_undecryptable_password("openwarden:undecryptable"));
+    assert!(!is_undecryptable_totp("openwarden:totp-undecryptable"));
 }
 
 #[test]

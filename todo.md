@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第76弾で 7 件すべてを完了）。
+なし（第77弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第77弾（16 担当・21 回目）の指摘 8 件を完結（2026-11-23）
+  - 生成パネルの F1 重複、ロック status の区切り残存、
+    ページ移動キーのヒントを修正。
+  - device ID の読込時サニタイズ、final write 失敗、IPv6 不正分岐、
+    ネスト URL userinfo、NUL マーカー、U+0345 冪等、
+    UriMatch 実照合、algorithm 不正値、再利用 3件をテスト。
+  - 行参照を現行位置へ修正、CHANGELOG 第75〜76弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（720 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第76弾（16 担当・20 回目）の指摘 7 件を完結（2026-11-23）
   - Vault/Audit に PageUp/PageDown/Home/End を追加、生成ヒントに
     F1 を追加、pop_query のマルチバイトと不正 secret 切替をテスト。
