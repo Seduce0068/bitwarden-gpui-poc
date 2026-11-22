@@ -1177,6 +1177,57 @@ fn caps_lock_glyphs_keep_generator_and_settings_commands_bound() {
 }
 
 #[test]
+fn caps_lock_uppercase_glyphs_are_inserted_verbatim_in_text_fields() {
+    // GPUI lowercases the physical `key` under Caps Lock but reports the typed
+    // glyph in `key_char`. Command matching folds ASCII case, while the text
+    // insertion path must keep the uppercase glyph exactly as typed.
+    for glyph in ["A", "M", "L", "Z"] {
+        let ascii = glyph.to_ascii_lowercase();
+        let mut value = ctx(&ascii);
+        value.key_char = Some(glyph);
+
+        value.searching = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSearchText(glyph.into()),
+            "search/{glyph} must stay uppercase"
+        );
+
+        value.searching = false;
+        value.panel = Panel::Settings;
+        value.editing_settings = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSettingsText(glyph.into()),
+            "settings/{glyph} must stay uppercase"
+        );
+
+        value.panel = Panel::Vault;
+        value.editing_settings = false;
+        value.screen = Screen::Locked;
+        value.editing_auth = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertAuthText(glyph.into()),
+            "auth/{glyph} must stay uppercase"
+        );
+    }
+
+    // Even when the physical key also carries an uppercase letter, insertion
+    // prefers the glyph and never lowercases layout-provided text.
+    let mut value = ctx("A");
+    value.key_char = Some("A");
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText("A".into()));
+
+    // With no glyph at all, the physical key is inserted exactly as reported;
+    // that is the documented difference from the glyph path above.
+    value.key_char = None;
+    value.key = "a";
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText("a".into()));
+}
+
+#[test]
 fn case_folding_preserves_copy_password_and_copy_passphrase() {
     let mut value = ctx("y");
     value.panel = Panel::Generator;

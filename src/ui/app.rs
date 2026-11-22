@@ -196,13 +196,15 @@ pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
 
 /// Status shown after following an audit finding, in both outcomes.
 ///
-/// Routing both branches through `status_with_unsaved` keeps the persistent
-/// "unsaved settings" warning visible when the user leaves the audit panel.
-/// The pure form lets the contract be tested without a GPUI window (this crate
-/// does not enable gpui's `test-support` feature).
-pub(super) fn audit_focus_status(id: &str, found: bool, dirty: bool) -> String {
+/// `name` is the finding's display name from the current report (the same text
+/// the keyboard path shows), never the internal item id. Routing both branches
+/// through `status_with_unsaved` keeps the persistent "unsaved settings"
+/// warning visible when the user leaves the audit panel. The pure form lets the
+/// contract be tested without a GPUI window (this crate does not enable gpui's
+/// `test-support` feature).
+pub(super) fn audit_focus_status(name: &str, found: bool, dirty: bool) -> String {
     let base = if found {
-        format!("監査の指摘項目を選択しました: {id}")
+        format!("監査の指摘項目を選択しました: {name}")
     } else {
         "指摘項目が一覧に見つかりません".to_string()
     };
@@ -432,6 +434,42 @@ pub(super) fn refresh_audit_scroll(
     } else {
         *handle = ScrollHandle::new();
     }
+}
+
+/// Resolve the audit row, scroll target and display name for a followed id.
+///
+/// A mouse click on an audit row carries the item id rather than a row index.
+/// Translating it back against the current report is what moves the keyboard
+/// highlight off the previously selected row. The name is the same one the
+/// keyboard path (`move_audit_selection`) reports, so the status never shows
+/// the internal id. Pure so the mapping can be tested without a GPUI window
+/// (this crate does not enable gpui's `test-support` feature).
+pub(super) fn audit_focus_target<'a>(
+    report: Option<&'a crate::health::Report>,
+    id: &str,
+) -> Option<(usize, usize, &'a str)> {
+    let report = report?;
+    let index = report.items.iter().position(|item| item.id == id)?;
+    let scroll_index = audit_row_scroll_index(Some(index))?;
+    Some((index, scroll_index, report.items[index].name.as_str()))
+}
+
+/// Align the audit highlight and scroll to the row identified by `id`.
+///
+/// Applies the same row-and-scroll update as the keyboard path after a click.
+/// Returns the row name for the status bar, or `None` when the id is not in the
+/// current report (the highlight is left untouched in that case). Free so the
+/// alignment can be tested without a GPUI window.
+pub(super) fn align_audit_focus(
+    report: Option<&crate::health::Report>,
+    id: &str,
+    handle: &mut ScrollHandle,
+    selection: &mut Option<usize>,
+) -> Option<String> {
+    let (index, scroll_index, name) = audit_focus_target(report, id)?;
+    *selection = Some(index);
+    handle.scroll_to_item(scroll_index);
+    Some(name.to_string())
 }
 
 /// Status describing the audit row left highlighted after a refresh.
@@ -825,14 +863,24 @@ impl BitwardenApp {
         self.view.filter = Filter::All;
         self.view.query.clear();
         self.view.finish_search();
+        // A click carries an item id, not a row index. Move the audit highlight
+        // to the clicked row (and queue its scroll) so the old row does not stay
+        // highlighted, and name that row in the status as the keyboard path does.
+        let focus_name = align_audit_focus(
+            self.view.audit_report.as_ref(),
+            &id,
+            &mut self.audit_scroll_handle,
+            &mut self.audit_row_selection,
+        )
+        .unwrap_or_else(|| id.clone());
         if let Some(index) = self.view.select_id(&id) {
             self.view
                 .scroll_handle
                 .scroll_to_item(index, ScrollStrategy::Nearest);
-            self.status = audit_focus_status(&id, true, self.settings_dirty);
+            self.status = audit_focus_status(&focus_name, true, self.settings_dirty);
         } else {
             self.view.deselect_and_rewind();
-            self.status = audit_focus_status(&id, false, self.settings_dirty);
+            self.status = audit_focus_status(&focus_name, false, self.settings_dirty);
         }
         self.sync_totp_to_selection();
         cx.notify();
@@ -1088,6 +1136,118 @@ mod tests {
         assert_eq!(missing_dirty, status_with_unsaved(&missing_clean, true));
         assert!(missing_dirty.starts_with(&missing_clean));
         assert!(missing_dirty.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_focus_target_resolves_clicked_row_name_and_scroll() {
+        use crate::health::ItemReport;
+        use crate::model::ItemKind;
+
+        let report = Report {
+            items: vec![
+                ItemReport {
+                    id: "uuid-first".into(),
+                    name: "古いパスワード".into(),
+                    kind: ItemKind::Login,
+                    findings: Vec::new(),
+                },
+                ItemReport {
+                    id: "uuid-second".into(),
+                    name: "二要素なし".into(),
+                    kind: ItemKind::Login,
+                    findings: Vec::new(),
+                },
+            ],
+            examined: 2,
+            with_totp: 0,
+            logins: 2,
+        };
+
+        let (index, scroll_index, name) = audit_focus_target(Some(&report), "uuid-second")
+            .expect("a clicked finding id must resolve to a row in the current report");
+        assert_eq!(index, 1, "the clicked second row must become the highlight");
+        assert_eq!(
+            scroll_index,
+            1 + crate::ui::panels::AUDIT_HEADER_ROWS,
+            "the scroll target must match the keyboard path for the same row"
+        );
+        assert_eq!(name, "二要素なし");
+        assert_ne!(
+            name, "uuid-second",
+            "the status must name the row, not the internal item id"
+        );
+
+        // Both status outcomes use that row name instead of the id.
+        let found = audit_focus_status(name, true, false);
+        assert!(found.contains("二要素なし"), "{found}");
+        assert!(!found.contains("uuid-second"), "{found}");
+        let missing = audit_focus_status(name, false, false);
+        assert!(!missing.contains("uuid-second"), "{missing}");
+
+        // Unknown ids and a missing report have no row to resolve.
+        assert_eq!(audit_focus_target(Some(&report), "missing"), None);
+        assert_eq!(audit_focus_target(None, "uuid-second"), None);
+    }
+
+    #[::core::prelude::v1::test]
+    fn align_audit_focus_moves_the_stale_highlight_and_queues_the_clicked_row() {
+        use crate::health::ItemReport;
+        use crate::model::ItemKind;
+
+        let report = Report {
+            items: vec![
+                ItemReport {
+                    id: "a".into(),
+                    name: "一行目".into(),
+                    kind: ItemKind::Login,
+                    findings: Vec::new(),
+                },
+                ItemReport {
+                    id: "b".into(),
+                    name: "二行目".into(),
+                    kind: ItemKind::Login,
+                    findings: Vec::new(),
+                },
+            ],
+            examined: 2,
+            with_totp: 0,
+            logins: 2,
+        };
+
+        let mut handle = ScrollHandle::new();
+        handle.set_offset(Point {
+            x: px(0.0),
+            y: px(180.0),
+        });
+        let mut selection = Some(0); // stale highlight left on the old row
+
+        let name = align_audit_focus(Some(&report), "b", &mut handle, &mut selection)
+            .expect("the clicked id must be in the report");
+
+        assert_eq!(
+            selection,
+            Some(1),
+            "the stale highlight must move to the clicked row"
+        );
+        assert_eq!(name, "二行目");
+        assert_eq!(
+            handle.offset().y,
+            px(180.0),
+            "the surviving path queues a target on the same handle instead of resetting it"
+        );
+
+        // An id outside the report leaves the highlight untouched and reports
+        // no name, so the caller falls back to the raw id for the status.
+        assert_eq!(
+            align_audit_focus(Some(&report), "missing", &mut handle, &mut selection),
+            None
+        );
+        assert_eq!(selection, Some(1));
+        assert_eq!(
+            align_audit_focus(None, "b", &mut handle, &mut selection),
+            None
+        );
+        assert_eq!(selection, Some(1));
     }
 
     #[::core::prelude::v1::test]

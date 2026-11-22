@@ -2475,3 +2475,57 @@ fn save_writes_a_sanitized_device_id_without_mutating_self() {
         serde_json::json!(CURRENT_SCHEMA_VERSION)
     );
 }
+
+#[test]
+fn non_object_nested_values_fall_back_per_field_without_discarding_siblings() {
+    // `parse_settings` offers each nested field to `tolerant_struct`, which
+    // returns `T::default()` when the value is not a JSON object
+    // (settings.rs:547-556). That repair is per field: correctly typed
+    // top-level siblings must still survive alongside the three defaults.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "email": "shape@example.com",
+            "server_url": "https://shape.example",
+            "password_generator": 42,
+            "passphrase_generator": ["not", "an", "object"],
+            "thresholds": "oops",
+            "idle_lock_seconds": 600
+        }"#,
+    )
+    .unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    let defaults = Settings::default();
+
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.email, "shape@example.com");
+    assert_eq!(loaded.server_url, "https://shape.example");
+    assert_eq!(loaded.idle_lock_seconds, 600);
+
+    assert_eq!(loaded.password_generator, defaults.password_generator);
+    assert_eq!(loaded.passphrase_generator, defaults.passphrase_generator);
+    assert_eq!(loaded.thresholds, defaults.thresholds);
+
+    // The sibling test on a *bad leaf inside* an object must keep working: a
+    // non-object field replaces only that nested struct, not the whole file.
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "email": "leaf@example.com",
+            "password_generator": {"length": 24, "lowercase": false},
+            "thresholds": "oops"
+        }"#,
+    )
+    .unwrap();
+    let mixed = Settings::load_detailed(&path).unwrap();
+    assert_eq!(mixed.email, "leaf@example.com");
+    assert_eq!(mixed.password_generator.length, 24);
+    assert!(!mixed.password_generator.lowercase);
+    assert_eq!(mixed.thresholds, defaults.thresholds);
+    let _ = std::fs::remove_file(&path);
+}

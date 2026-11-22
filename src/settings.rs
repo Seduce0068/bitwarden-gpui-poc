@@ -52,6 +52,26 @@
 //! call site that reads `settings.thresholds`. There is no injected seam for
 //! the type here, so this note records the constraint instead of implying a
 //! layer boundary that does not exist.
+//!
+//! # Known constraint: direct dependency on the generator types
+//!
+//! [`Settings`] also stores `password_generator: PasswordSettings` and
+//! `passphrase_generator: PassphraseSettings` by value. The persistence layer
+//! repairs both nested objects through `tolerant_struct::<PasswordSettings>`
+//! and `tolerant_struct::<PassphraseSettings>`, and [`Settings::sanitized`]
+//! clamps `password_generator.length` and `passphrase_generator.words` against
+//! the shared `crate::limits` constants. That is a second direct dependency
+//! from persistence toward the generator layer, mirroring the `Thresholds`
+//! inversion recorded above: the opposite direction from dependency inversion,
+//! where settings would own neutral DTOs/ports and `generator` would depend on
+//! them.
+//!
+//! This is an accepted PoC constraint too. The persisted JSON shape *is* the
+//! generators' settings shape, and introducing DTO/trait seams would change the
+//! serde contract and every call site that reads `settings.password_generator`
+//! or `settings.passphrase_generator`. No seam is injected for either type; the
+//! per-field fallback tests in `settings_tests.rs` pin the current shape rather
+//! than implying a layer boundary that does not exist.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

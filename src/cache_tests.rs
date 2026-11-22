@@ -2588,3 +2588,82 @@ fn cached_sync_for_detailed_classifies_version_size_and_read_failures() {
         "user-1"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn body_without_profile_id_fails_closed_on_both_validation_paths() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+    let url = "https://vault.example.com";
+
+    // A syntactically valid body without `profile.id` is not a sync response:
+    // `parse_sync` rejects it, so an envelope naming the right server/account
+    // must still fail closed instead of being restored offline. The documented
+    // second branch ("the resulting id cannot match a non-empty envelope") is
+    // unreachable because the id is mandatory in the wire format (cache.rs:910-915).
+    for raw in [
+        br#"{"folders":[],"ciphers":[]}"#.as_slice(),
+        br#"{"profile":{},"folders":[],"ciphers":[]}"#.as_slice(),
+        br#"{"Profile":{},"Ciphers":[]}"#.as_slice(),
+    ] {
+        let cache = SyncCache {
+            version: SyncCache::VERSION,
+            user_id: "user-1".to_string(),
+            server_url: url.to_string(),
+            body: raw.to_vec(),
+            created_at: None,
+        };
+
+        assert!(
+            matches!(cache.sync(), Err(SyncCacheError::CacheParse(_))),
+            "{raw:?}"
+        );
+        assert!(
+            matches!(
+                validate(&cache, "user-1", url),
+                Err(SyncCacheError::CacheParse(_))
+            ),
+            "{raw:?}"
+        );
+
+        save_default(&cache).unwrap();
+        assert!(
+            matches!(
+                cached_sync_for_detailed(url, "user-1"),
+                Err(SyncCacheError::CacheParse(_))
+            ),
+            "{raw:?}"
+        );
+        assert!(cached_sync_for(url, "user-1").is_none(), "{raw:?}");
+    }
+}
+
+#[test]
+fn nested_userinfo_password_with_equals_uses_the_pair_start_zero_branch() {
+    // With no `?`/`#`/`/` before the '@', `pair_start == 0` and the *first*
+    // '=' is the `key=` separator; later '=' characters are part of the
+    // password (cache.rs:383-395). A `rfind('=')` shortcut would cut at
+    // `x=1` and leave the real credential in the diagnostic URL.
+    for pairs in [
+        "next=user:P=SS&x=1@cb.example.com/done",
+        "next=user:P=SS;x=1@cb.example.com/done",
+        "next=user:a=b=c&flag=1@cb.example.com/done",
+    ] {
+        assert_eq!(
+            super::mask_nested_userinfo_in_pairs(pairs),
+            "next=[redacted]@cb.example.com/done",
+            "{pairs}"
+        );
+    }
+
+    let url = "https://vault.example.com/login?next=user:P=SS&x=1@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(url);
+    assert!(!masked.contains("P=SS"), "{masked}");
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+}

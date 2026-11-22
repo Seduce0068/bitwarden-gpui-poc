@@ -2005,3 +2005,103 @@ fn parse_sync_removes_duplicate_folder_ids_end_to_end() {
     ids.sort_unstable();
     assert_eq!(ids, vec!["f1", "f2"]);
 }
+
+#[test]
+fn clipped_revision_does_not_overwrite_the_accepted_items_encrypted_fields() {
+    // The `Clipped` branch only records the decision and `continue`s
+    // (vault_sync.rs:642-649), so the already accepted item keeps its decrypted
+    // fields. Raw duplicates (bypassing `parse_sync`) are required to reach the
+    // branch; give every secret-bearing field a distinct ciphertext so a
+    // stray replacement would be observable.
+    let id = "clipped-fields";
+    let kept = parse_revision(Some("2024-05-01T00:00:00Z")).unwrap();
+    let dropped = parse_revision(Some("2024-04-01T00:00:00Z")).unwrap();
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).unwrap();
+    let enc = |plain: &[u8]| {
+        serde_json::json!(openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string())
+    };
+
+    let mut accepted = encrypted_login(id, "KEPT_PASSWORD_VALUE", REAL_TOTP);
+    accepted["revisionDate"] = serde_json::json!("2024-05-01T00:00:00Z");
+
+    let mut regressed = encrypted_login(id, "CLIPPED_PASSWORD_VALUE", "CLIPPED_TOTP_VALUE");
+    regressed["revisionDate"] = serde_json::json!("2024-04-01T00:00:00Z");
+    regressed["name"] = enc(b"Clipped Name");
+    regressed["login"]["username"] = enc(b"clipped@example.com");
+    regressed["login"]["uris"] =
+        serde_json::json!([{ "uri": enc(b"https://clipped.example.com") }]);
+
+    let vault = unlocked_vault_raw(&[accepted, regressed]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: kept,
+            },
+            ImportAudit::Clipped {
+                id: id.to_string(),
+                old_revision: kept,
+                new_revision: dropped,
+            },
+        ]
+    );
+    let item = model.item(id).expect("the accepted item must survive");
+    assert_eq!(item.revision_date, kept);
+    assert_eq!(item.name, "Example Login");
+    assert_eq!(item.login().unwrap().0, "alice@example.com");
+    assert_eq!(item.password(), Some("KEPT_PASSWORD_VALUE"));
+    assert_eq!(item.totp_secret(), Some(REAL_TOTP));
+    assert_eq!(item.uris()[0].uri, "https://example.com");
+}
+
+#[test]
+fn pascal_case_body_with_excluded_newer_duplicates_keeps_eligible_rows() {
+    // A Vaultwarden body can be PascalCase *and* carry excluded duplicates with
+    // a newer revision. `normalize_sync_keys` must fold `OrganizationId` /
+    // `DeletedDate` to camelCase before `dedup_ciphers_by_revision` checks
+    // exclusions; otherwise the excluded row wins, openwarden drops it and the
+    // item disappears entirely (vault_sync.rs:151-176, 194-258).
+    let mut org_old = encrypted_login("pascal-org", "KEPT_ORG_PASSWORD", REAL_TOTP);
+    org_old["revisionDate"] = serde_json::json!("2024-01-01T00:00:00Z");
+    let mut org_new = encrypted_login("pascal-org", "ORG_PASSWORD", REAL_TOTP);
+    org_new["revisionDate"] = serde_json::json!("2024-06-01T00:00:00Z");
+    org_new["organizationId"] = serde_json::json!("org-1");
+
+    let mut deleted_new = encrypted_login("pascal-deleted", "DELETED_PASSWORD", REAL_TOTP);
+    deleted_new["revisionDate"] = serde_json::json!("2024-06-01T00:00:00Z");
+    deleted_new["deletedDate"] = serde_json::json!("2024-07-01T00:00:00Z");
+    let mut deleted_old = encrypted_login("pascal-deleted", "KEPT_DELETED_PASSWORD", REAL_TOTP);
+    deleted_old["revisionDate"] = serde_json::json!("2024-01-01T00:00:00Z");
+
+    let mut body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [],
+        "ciphers": [org_old, org_new, deleted_new, deleted_old],
+    });
+    pascalize(&mut body);
+    let vault = vault_from_body(body.to_string().as_bytes());
+    let (model, audit) = import_logins_with_audit(&vault)
+        .expect("PascalCase rows with excluded duplicates must import");
+
+    assert_eq!(model.items.len(), 2, "one eligible row per id survives");
+    let kept_revision = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    let org = model.item("pascal-org").expect("eligible row must survive");
+    assert_eq!(org.revision_date, kept_revision);
+    assert_eq!(org.password(), Some("KEPT_ORG_PASSWORD"));
+    let deleted = model
+        .item("pascal-deleted")
+        .expect("eligible row must survive");
+    assert_eq!(deleted.revision_date, kept_revision);
+    assert_eq!(deleted.password(), Some("KEPT_DELETED_PASSWORD"));
+
+    assert_eq!(audit.len(), 2, "pre-sync dedup leaves two Added decisions");
+    for entry in &audit {
+        assert!(matches!(entry, ImportAudit::Added { .. }), "{entry:?}");
+    }
+}

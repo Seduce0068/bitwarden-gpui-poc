@@ -2015,3 +2015,41 @@ fn separated_passphrases_reject_invalid_capitalization() {
     );
     assert_eq!(super::word_capitalization("", first), None);
 }
+
+#[test]
+fn non_ascii_uppercase_passphrases_are_rejected() {
+    use crate::words::WORDS;
+
+    let kite = "kite";
+    let second = WORDS[0]; // "able"
+    assert!(WORDS.contains(&kite));
+
+    // The generator emits only ASCII capitals. U+212A KELVIN SIGN lowercases to
+    // ASCII `k`, so the word-list lookup succeeds, but `word_capitalization`
+    // must still reject the word because `is_ascii_uppercase()` is false
+    // (health.rs:468-488). The ASCII-capitalized control is accepted.
+    let kelvin = format!("\u{212a}ite-{second}");
+    let ascii_capitalized = format!("Kite-{second}");
+    assert_eq!(super::word_capitalization("\u{212a}ite", kite), None);
+    assert_eq!(super::word_capitalization("Kite", kite), Some(true));
+    assert_eq!(super::passphrase_estimate(&kelvin), None, "{kelvin}");
+    assert!(
+        super::passphrase_estimate(&ascii_capitalized).is_some(),
+        "{ascii_capitalized}"
+    );
+    assert!(
+        estimate_entropy(&kelvin) > estimate_entropy(&ascii_capitalized),
+        "a rejected passphrase must fall back to the wider character pool"
+    );
+
+    // A full-width capital does not even fold to an ASCII word, so the
+    // recognizer rejects it before the capitalization check. The
+    // separator-free recognizer rejects the Kelvin form too: it folds with
+    // `to_ascii_lowercase`, which leaves U+212A untouched.
+    let fullwidth = format!("\u{ff21}ble-{second}");
+    assert_eq!(super::passphrase_estimate(&fullwidth), None, "{fullwidth}");
+    assert_eq!(
+        super::words_without_separator(&format!("\u{212a}ite{second}")),
+        None
+    );
+}

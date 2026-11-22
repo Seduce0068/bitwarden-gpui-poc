@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 全体改善（第84弾 / 2026-11-23）
+
+- 監査レポート未生成時の g キーに理由 status を表示
+- '&' を含む nested userinfo マスク、pair_start==0 分岐、
+  復元のエラー分類、folders 早期リターンを修正・テスト
+- mask_uri doc、ADR のエラー分類列挙を更新
+
 ### 全体改善（第82〜83弾 / 2026-11-23）
 
 - Caps Lock 時のキーコマンドを ASCII 大小折り上げで維持

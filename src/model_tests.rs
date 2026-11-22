@@ -2353,3 +2353,52 @@ fn vault_item_kind_follows_the_data_payload() {
         assert_eq!(item.data.kind(), expected, "{}", item.id);
     }
 }
+
+#[test]
+fn mask_uri_drops_scheme_default_ports() {
+    // `url::Url::port()` reports None for a port equal to the scheme default
+    // (model.rs:82-110), so explicitly written `:443` / `:80` must not survive
+    // into a report or a Debug line. Non-default ports are kept verbatim.
+    for (raw, expected) in [
+        ("https://example.com:443/login", "https://example.com"),
+        ("http://example.com:80/login", "http://example.com"),
+        ("https://example.com:8443/login", "https://example.com:8443"),
+        ("http://example.com:8080/login", "http://example.com:8080"),
+    ] {
+        assert_eq!(mask_uri(raw), expected, "{raw}");
+    }
+    // Credentials, path and query are still stripped alongside the port.
+    assert_eq!(
+        mask_uri("https://user:token@example.com:443/path?token=secret"),
+        "https://example.com"
+    );
+    // Masking stays idempotent for both the default-port and explicit-port forms.
+    assert_eq!(mask_uri("https://example.com"), "https://example.com");
+    assert_eq!(
+        mask_uri("https://example.com:8443"),
+        "https://example.com:8443"
+    );
+}
+
+#[test]
+fn card_debug_keeps_expiry_but_masks_secrets() {
+    // `CardData`'s manual Debug (model.rs:506-516) keeps the harmless brand and
+    // expiry as diagnostics while masking the cardholder, number and code.
+    let card = CardData {
+        cardholder_name: "Ada Lovelace".into(),
+        brand: "Visa".into(),
+        number: "4111111111111234".into(),
+        exp_month: "07".into(),
+        exp_year: "2031".into(),
+        code: "987".into(),
+    };
+    let debug = format!("{card:?}");
+
+    assert!(debug.contains("CardData"), "{debug}");
+    assert!(debug.contains("brand: \"Visa\""), "{debug}");
+    assert!(debug.contains("exp_month: \"07\""), "{debug}");
+    assert!(debug.contains("exp_year: \"2031\""), "{debug}");
+    for secret in ["Ada Lovelace", "4111111111111234", "987"] {
+        assert!(!debug.contains(secret), "leaked {secret}: {debug}");
+    }
+}

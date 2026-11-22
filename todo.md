@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第84弾で 6 件すべてを完了）。
+なし（第85弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第85弾（16 担当・29 回目）の指摘 8 件を完結（2026-11-23）
+  - 監査行クリック時の選択/スクロール同期、status の行名表示、
+    Caps Lock の挿入文字を修正・テスト。
+  - generator 型逆依存、入れ子非オブジェクト、Profile.Id 欠落、
+    パスワード内 '='、Clipped の暗号文、PascalCase＋除外行、
+    既定ポート、CardData 有効期限、非ASCII大文字をテスト。
+  - CHANGELOG に第84弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（806 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第84弾（16 担当・28 回目）の指摘 6 件を完結（2026-11-23）
   - 監査未生成時の g キーに理由 status を表示。
   - '&' を含む nested userinfo、pair_start==0、復元のエラー分類、
