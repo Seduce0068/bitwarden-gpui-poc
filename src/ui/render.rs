@@ -108,11 +108,16 @@ fn vault_list_header_text(
     query: &str,
     searching: bool,
 ) -> String {
+    let row_keys = crate::ui::panels::row_selection_keys_hint(count);
+    let row_suffix = if row_keys.is_empty() {
+        String::new()
+    } else {
+        format!("  |  {row_keys}")
+    };
     format!(
-        "Vault: {count} / {total} 件  |  フィルタ: {filter_label}  |  並び: {sort_label}  |  検索: {}{}  |  ↑↓: 行を選択 / {}",
+        "Vault: {count} / {total} 件  |  フィルタ: {filter_label}  |  並び: {sort_label}  |  検索: {}{}{row_suffix}",
         if query.is_empty() { "(なし)" } else { query },
         if searching { " _" } else { "" },
-        crate::ui::panels::LIST_PAGE_AND_EDGE_HINT
     )
 }
 

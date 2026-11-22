@@ -2202,3 +2202,68 @@ fn pascal_case_body_with_excluded_newer_duplicates_keeps_eligible_rows() {
         assert!(matches!(entry, ImportAudit::Added { .. }), "{entry:?}");
     }
 }
+
+#[test]
+fn revision_dates_accept_zero_utc_offsets_in_both_signs() {
+    // RFC 3339 allows both `+00:00` and `-00:00`. The sign is applied to a zero
+    // magnitude, so both spellings must produce the exact same epoch value as
+    // `Z` (vault_sync.rs:474-498).
+    let utc = parse_revision(Some("2023-11-14T22:13:20Z")).unwrap();
+    assert_eq!(parse_revision(Some("2023-11-14T22:13:20+00:00")), Some(utc));
+    assert_eq!(parse_revision(Some("2023-11-14T22:13:20-00:00")), Some(utc));
+    assert_eq!(parse_revision(Some("1970-01-01T00:00:00+00:00")), Some(0));
+    assert_eq!(parse_revision(Some("1970-01-01T00:00:00-00:00")), Some(0));
+    // A fractional second in front of a zero offset is still the same instant.
+    assert_eq!(
+        parse_revision(Some("2023-11-14T22:13:20.999-00:00")),
+        Some(utc)
+    );
+}
+
+#[test]
+fn dedup_ties_between_excluded_rows_keep_the_first_row() {
+    // When both duplicates are excluded (organization-owned / soft-deleted),
+    // the ordinary newest-revision rule still applies: a higher revision wins
+    // and an equal revision keeps the first row (vault_sync.rs:215-231).
+    // openwarden drops the single survivor either way, but the choice must
+    // stay deterministic. Distinct `name` values make the winner observable.
+    let mut value = serde_json::json!({
+        "ciphers": [
+            {"id": "org", "revisionDate": "2024-01-01T00:00:00Z",
+             "organizationId": "org-1", "name": "first"},
+            {"id": "org", "revisionDate": "2024-01-01T00:00:00Z",
+             "organizationId": "org-2", "name": "second"},
+            {"id": "deleted", "revisionDate": "2024-01-01T00:00:00Z",
+             "deletedDate": "2024-02-01T00:00:00Z", "name": "first"},
+            {"id": "deleted", "revisionDate": "2024-01-01T00:00:00Z",
+             "deletedDate": "2024-03-01T00:00:00Z", "name": "second"},
+            // Missing and unparsable dates both become UNKNOWN_REVISION (0),
+            // so two excluded rows tying there must also keep the first.
+            {"id": "unknown", "organizationId": "org-3", "name": "first"},
+            {"id": "unknown", "revisionDate": "not-a-date",
+             "organizationId": "org-4", "name": "second"},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 3, "one row per id");
+    for (index, id) in ["org", "deleted", "unknown"].iter().enumerate() {
+        assert_eq!(kept[index]["id"], serde_json::json!(id));
+        assert_eq!(kept[index]["name"], "first", "first excluded row wins {id}");
+    }
+
+    // Control: with the same excluded status but a strictly newer revision,
+    // the newer excluded row still wins rather than the tie rule applying.
+    let mut newer = serde_json::json!({
+        "ciphers": [
+            {"id": "x", "revisionDate": "2024-01-01T00:00:00Z",
+             "organizationId": "a", "name": "old"},
+            {"id": "x", "revisionDate": "2024-02-01T00:00:00Z",
+             "organizationId": "b", "name": "new"},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut newer);
+    let kept = newer["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["name"], "new");
+}

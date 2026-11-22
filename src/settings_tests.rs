@@ -2570,3 +2570,61 @@ fn save_creates_missing_parent_directories() {
         assert_eq!(mode & 0o077, 0, "parent dir is not private: {mode:04o}");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn non_not_found_open_errors_are_classified_as_read_failed() {
+    // `read_bounded_settings_text` maps only `ErrorKind::NotFound` to the
+    // silent missing case; every other `File::open` error becomes
+    // `ReadFailedCause` and then `SettingsLoadError::ReadFailed`
+    // (settings.rs:383-401). The existing directory test exercises a failing
+    // `read_to_string` *after* a successful open, so it does not cover this
+    // arm. Using a regular file as an intermediate path component makes
+    // `open(2)` fail with ENOTDIR, which is distinct from ENOENT/NotFound.
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("not-a-directory");
+    std::fs::write(&blocker, b"x").unwrap();
+    let path = blocker.join("settings.json");
+
+    let error = Settings::load_detailed(&path).unwrap_err();
+    assert_eq!(error, SettingsLoadError::ReadFailed, "{error:?}");
+    assert_eq!(
+        error.message(),
+        "設定ファイルを読み込めません（既定値を使用）"
+    );
+    // Every public reader shares the bounded reader, so all three collapse
+    // this open error the same way instead of reporting a parse failure.
+    assert_eq!(Settings::load(&path), Settings::default());
+    assert_eq!(super::file_schema_version(&path), None);
+    assert!(load_advisories(&path).is_empty());
+
+    // Control: a genuinely absent path still takes the NotFound arm of the
+    // very same match, so the assertions above are about the error kind.
+    let missing = dir.path().join("missing.json");
+    assert_eq!(
+        Settings::load_detailed(&missing).err(),
+        Some(SettingsLoadError::NotFound)
+    );
+}
+
+#[test]
+fn default_server_url_is_pinned_to_the_bitwarden_cloud_endpoint() {
+    // A missing or hand-edited file falls back to this exact endpoint. Pin the
+    // literal rather than just `contains("bitwarden")` so a silent default
+    // change is an explicit, reviewed edit (settings.rs:163-179).
+    const EXPECTED: &str = "https://vault.bitwarden.com";
+    assert_eq!(Settings::default().server_url, EXPECTED);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    assert_eq!(Settings::load(&path).server_url, EXPECTED);
+    assert_eq!(
+        Settings::parse_settings(r#"{"email":"a@example.com"}"#)
+            .unwrap()
+            .server_url,
+        EXPECTED
+    );
+    // A saved-and-reloaded default stays on the same endpoint.
+    Settings::default().save(&path).unwrap();
+    assert_eq!(Settings::load(&path).server_url, EXPECTED);
+}

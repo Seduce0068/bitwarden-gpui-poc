@@ -2569,3 +2569,52 @@ fn missing_protected_key_round_trips_through_app_error() {
     assert_eq!(from_app, UnlockError::MissingProtectedKey);
     assert_eq!(AppError::from(from_app).message(), message);
 }
+
+#[test]
+fn every_unparseable_or_unsupported_url_is_invalid_server_url() {
+    // A URL `url::Url` cannot parse, a host-less URL with no authority, and a
+    // scheme `self_hosted` refuses all reach the same parser error arm
+    // (auth.rs:601-603). None of these inputs is link-local, so the SSRF
+    // classifier must not claim them first; none is blank, so the MissingField
+    // check must not fire either. Every one must surface as InvalidServerUrl
+    // with the parser detail preserved in the small enum.
+    for value in [
+        "not a url",                // Url::parse failure: no scheme
+        "vault.example.com",        // Url::parse failure: bare relative reference
+        "://bad",                   // Url::parse failure: empty scheme
+        "https://exa mple.com",     // Url::parse failure: whitespace in host
+        "https://",                 // Url::parse failure: empty host
+        "mailto:alice@example.com", // parseable, but host-less
+        "data:text/plain,hello",    // parseable, but host-less
+        "about:blank",              // parseable, but host-less
+        "http://vault.example.com", // parseable, but not https / loopback
+    ] {
+        assert!(
+            !is_blocked_server_url_without_dns(value),
+            "fixture must not be a blocked host: {value}"
+        );
+        let mut invalid = config();
+        invalid.server_url = value.into();
+        let error = validate_config(&invalid).unwrap_err();
+        assert_eq!(error, AuthError::InvalidServerUrl, "{value}");
+        assert!(
+            matches!(&error, AuthError::InvalidServerUrlDetail(_)),
+            "the parser reason must survive for {value}: {error:?}"
+        );
+        assert!(error
+            .status_message()
+            .starts_with(AuthError::InvalidServerUrl.message()));
+    }
+
+    // The only URL-shaped inputs that are NOT InvalidServerUrl are blank ones:
+    // the earlier field check reports them as missing (auth.rs:580-582).
+    for blank in ["", " ", " \t\n\u{3000}"] {
+        let mut missing = config();
+        missing.server_url = blank.into();
+        assert_eq!(
+            validate_config(&missing),
+            Err(AuthError::MissingField("server_url")),
+            "{blank:?}"
+        );
+    }
+}

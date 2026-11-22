@@ -2053,3 +2053,83 @@ fn non_ascii_uppercase_passphrases_are_rejected() {
         None
     );
 }
+
+#[test]
+fn mixed_capitalization_adds_the_passphrase_bonus_only_once() {
+    use crate::words::WORDS;
+
+    let words = [WORDS[0], WORDS[1], WORDS[2]];
+    assert!(
+        words
+            .iter()
+            .all(|word| word.chars().all(|ch| ch.is_ascii_lowercase())),
+        "fixture words must be lowercase ASCII"
+    );
+
+    // `capitalized` is a single bool OR-ed across every word and then charged
+    // `words.len()` bits once (health.rs:411-435, 449-467). Capitalizing just
+    // one word must therefore score the same as capitalizing all three - not
+    // one bonus per capitalized word.
+    let base = format!("{}-{}-{}", words[0], words[1], words[2]);
+    let mixed = format!("{}-{}-{}", upper_first(words[0]), words[1], words[2]);
+    let all = format!(
+        "{}-{}-{}",
+        upper_first(words[0]),
+        upper_first(words[1]),
+        upper_first(words[2])
+    );
+    let word_bits = entropy_bits(WORDS.len(), words.len());
+    let expected = (word_bits + words.len() as f64).round() as u32;
+
+    assert_eq!(
+        super::passphrase_estimate(&base),
+        Some(word_bits.round() as u32),
+        "{base}"
+    );
+    assert_eq!(
+        super::passphrase_estimate(&mixed),
+        Some(expected),
+        "{mixed}"
+    );
+    assert_eq!(super::passphrase_estimate(&all), Some(expected), "{all}");
+    assert_eq!(
+        super::passphrase_estimate(&mixed),
+        super::passphrase_estimate(&all),
+        "the capitalization bonus must not scale with the number of capitals"
+    );
+    assert_eq!(
+        super::passphrase_estimate(&mixed).unwrap() - super::passphrase_estimate(&base).unwrap(),
+        words.len() as u32,
+        "exactly one word's worth of bits is added"
+    );
+
+    // The separator-free recognizer ORs the same flag, so a single capitalized
+    // word gets the identical one-shot bonus on that path too.
+    let flat_base: String = words.concat();
+    let flat_mixed = format!("{}{}{}", upper_first(words[0]), words[1], words[2]);
+    let flat_all = format!(
+        "{}{}{}",
+        upper_first(words[0]),
+        upper_first(words[1]),
+        upper_first(words[2])
+    );
+    assert_eq!(
+        super::passphrase_estimate(&flat_base),
+        Some(word_bits.round() as u32),
+        "{flat_base}"
+    );
+    assert_eq!(
+        super::passphrase_estimate(&flat_mixed),
+        Some(expected),
+        "{flat_mixed}"
+    );
+    assert_eq!(
+        super::passphrase_estimate(&flat_all),
+        Some(expected),
+        "{flat_all}"
+    );
+
+    // The public estimator forwards the same number to the strength meter.
+    assert_eq!(estimate_entropy(&mixed), expected);
+    assert_eq!(estimate_entropy(&flat_mixed), expected);
+}

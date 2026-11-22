@@ -34,6 +34,24 @@ pub(super) const MOUSE_WHEEL_SCROLL_ONLY_HINT: &str = "スクロールはマウ�
 pub(super) const LIST_PAGE_AND_EDGE_HINT: &str =
     "PageUp/PageDown: ページ移動 / Home/End: 先頭/末尾へ移動";
 
+/// Row-selection keys for a panel that renders a selectable row list.
+///
+/// This is the shared "common hint" tail: the audit detail line already uses
+/// it, and the vault list header should use it too, so the two panels cannot
+/// drift apart. It bundles Up/Down, the shared page/edge keys and `Enter` into
+/// one string. `selectable_rows` is the number of rows the user can actually
+/// select. With zero rows these keys would promise a selection path that does
+/// not exist, so the empty case returns `""`; callers then drop the whole hint
+/// segment (including its leading separator). Pure, so the wording can be
+/// pinned by tests without rendering a GPUI window.
+pub(super) fn row_selection_keys_hint(selectable_rows: usize) -> String {
+    if selectable_rows == 0 {
+        String::new()
+    } else {
+        format!("↑↓: 行を選択 / {LIST_PAGE_AND_EDGE_HINT} / Enter: 対象を選択")
+    }
+}
+
 /// Labels for the two `+/-` rows in the generator panel.
 ///
 /// Both labels explicitly say that the same key changes the *other* generator
@@ -181,7 +199,9 @@ pub(super) fn totp_badge(item: &crate::model::VaultItem) -> TotpBadge {
 ///
 /// The row-selection keys only describe a real path when the report has rows.
 /// On an empty report they promised keys that select nothing, so that case now
-/// shows an explicit empty state instead. Kept pure so the wording can be
+/// shows an explicit empty state instead. The non-empty branch reuses
+/// [`row_selection_keys_hint`], the same shared helper the vault list header
+/// uses, so the two panels cannot drift apart. Kept pure so the wording can be
 /// tested without rendering a GPUI window.
 pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
     let base = format!(
@@ -191,10 +211,11 @@ pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
         report.logins,
         report.totp_coverage() * 100.0
     );
-    if report.items.is_empty() {
+    let row_keys = row_selection_keys_hint(report.items.len());
+    if row_keys.is_empty() {
         format!("{base} / 監査する問題はありません / g: 一覧 / l: ロック / Esc: 終了")
     } else {
-        format!("{base} / ↑↓: 行を選択 / {LIST_PAGE_AND_EDGE_HINT} / Enter: 対象を選択 / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了")
+        format!("{base} / {row_keys} / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了")
     }
 }
 
@@ -921,6 +942,54 @@ mod tests {
         // With no rows there is nothing to page through or jump to.
         let empty = audit_panel_detail_line(&Report::default(), false);
         assert!(!empty.contains(LIST_PAGE_AND_EDGE_HINT), "{empty}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn row_selection_keys_hint_hides_all_row_keys_when_the_list_is_empty() {
+        let empty = row_selection_keys_hint(0);
+        assert!(empty.is_empty(), "{empty}");
+        assert!(!empty.contains("↑↓"), "{empty}");
+        assert!(!empty.contains(LIST_PAGE_AND_EDGE_HINT), "{empty}");
+        assert!(!empty.contains("Enter"), "{empty}");
+        for key in ["PageUp", "PageDown", "Home", "End"] {
+            assert!(!empty.contains(key), "unexpected {key} in {empty}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn row_selection_keys_hint_advertises_row_keys_when_rows_exist() {
+        let hint = row_selection_keys_hint(2);
+        assert!(hint.contains("↑↓: 行を選択"), "{hint}");
+        assert!(hint.contains(LIST_PAGE_AND_EDGE_HINT), "{hint}");
+        assert!(hint.contains("Enter: 対象を選択"), "{hint}");
+        for key in ["PageUp", "PageDown", "Home", "End"] {
+            assert!(hint.contains(key), "missing {key} in {hint}");
+        }
+        // The bundled hint must stay a strict superset of the shared constant.
+        let expected_prefix = format!("↑↓: 行を選択 / {LIST_PAGE_AND_EDGE_HINT}");
+        assert!(hint.starts_with(expected_prefix.as_str()), "{hint}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_detail_line_uses_the_shared_row_keys_helper() {
+        let report = Report {
+            items: vec![crate::health::ItemReport {
+                id: "item-1".into(),
+                name: "Example".into(),
+                kind: crate::model::ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 1,
+            logins: 1,
+        };
+        let row_keys = row_selection_keys_hint(1);
+        let line = audit_panel_detail_line(&report, false);
+        assert!(line.contains(row_keys.as_str()), "{line}");
+
+        let empty_line = audit_panel_detail_line(&Report::default(), false);
+        assert!(!empty_line.contains(row_keys.as_str()), "{empty_line}");
+        assert!(!empty_line.contains("Enter"), "{empty_line}");
     }
 
     #[::core::prelude::v1::test]

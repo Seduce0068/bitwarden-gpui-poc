@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第85〜86弾 / 2026-11-23）
+
+- 監査行クリック時の選択/スクロール同期と status の行名表示
+- 先頭スラッシュ付き scheme-less authority のマスク、
+  Settings::save の親ディレクトリ自動作成を修正
+- PascalCase 重複 folder、非オブジェクト要素、RecentlyModified
+  タイブレーク、既定ポート、CardData 有効期限をテスト
+- health doc の自己矛盾、cross-review/ADR ログを是正
+
 ### 全体改善（第84弾 / 2026-11-23）
 
 - 監査レポート未生成時の g キーに理由 status を表示

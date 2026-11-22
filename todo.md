@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第86弾で 5 件すべてを完了）。
+なし（第87弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第87弾（16 担当・31 回目）の指摘 6 件を完結（2026-11-23）
+  - 空一覧で行選択キーを出さない共通ヘルパを一覧ヘッダへ配線。
+  - parse 失敗 URL の第2防壁、File::open エラー、既定 server_url、
+    末尾区切り、マルチバイト前進、±00:00、除外行同値、
+    混在キャピタライズをテスト。matches_page コメントを修正。
+  - CHANGELOG に第85〜86弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（822 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第86弾（16 担当・30 回目）の指摘 5 件を完結（2026-11-23）
   - 先頭スラッシュ付き scheme-less authority のマスク、
     Settings::save の親ディレクトリ自動作成を修正・テスト。

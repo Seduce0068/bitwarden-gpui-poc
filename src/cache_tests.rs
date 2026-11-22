@@ -2736,3 +2736,50 @@ fn leading_slash_scheme_less_authority_userinfo_is_masked() {
     );
     assert_eq!(cache.server_url, encoded);
 }
+
+#[test]
+fn trailing_pair_separator_preserves_the_empty_final_pair() {
+    // `mask_param_pairs` keeps the original delimiter and always pushes the
+    // trailing slice, even when a query ends with `&`/`;` and that final pair
+    // is empty (cache.rs:441-453). The empty pair must survive verbatim rather
+    // than being dropped, duplicated, or turned into a stray rewrite.
+    assert_eq!(
+        super::mask_param_pairs("a=1&token=SECRET&", 0),
+        "a=1&token=[redacted]&"
+    );
+    assert_eq!(super::mask_param_pairs("a=1&", 0), "a=1&");
+    assert_eq!(super::mask_param_pairs("&", 0), "&");
+    assert_eq!(
+        super::mask_param_pairs("token=SECRET;", 0),
+        "token=[redacted];"
+    );
+    assert_eq!(super::mask_param_pairs(";;", 0), ";;");
+    assert_eq!(super::mask_param_pairs("a=1&;", 0), "a=1&;");
+
+    // The same branch is reached through the public query and fragment masks.
+    let url = "https://vault.example.com/p?token=SECRET&state=ok&";
+    assert_eq!(
+        super::mask_url_secrets(url),
+        "https://vault.example.com/p?token=[redacted]&state=ok&"
+    );
+    let fragment = "https://vault.example.com/cb#code=FRAGMENT_SECRET;";
+    assert_eq!(
+        super::mask_url_secrets(fragment),
+        "https://vault.example.com/cb#code=[redacted];"
+    );
+}
+
+#[test]
+fn percent_decode_advances_by_whole_non_ascii_characters() {
+    // A non-'%' character is copied and the remaining slice advances by
+    // `first.len_utf8()` (cache.rs:334-350). Advancing by one byte would slice
+    // inside a multibyte scalar and panic, so each case puts a valid escape
+    // directly after a multibyte character: both the byte advance and the
+    // decoded result are observable.
+    assert_eq!(super::percent_decode("あ%41"), "あA");
+    assert_eq!(super::percent_decode("あい%3F%23"), "あい?#");
+    assert_eq!(super::percent_decode("🔑%74oken"), "🔑token");
+    assert_eq!(super::percent_decode("%41あ%42"), "AあB");
+    // A multibyte character between incomplete escapes keeps both literal.
+    assert_eq!(super::percent_decode("%2あ%"), "%2あ%");
+}
