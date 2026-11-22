@@ -1037,6 +1037,55 @@ fn kdf_rejection_is_reflexive_and_keeps_its_detail() {
 }
 
 #[test]
+fn kdf_rejected_detail_renders_the_same_family_message() {
+    // `message()` ignores the retained detail for every Detail variant
+    // (auth.rs:119-135), so the KDF family text is identical with and without
+    // one; only `status_message()` is allowed to differ.
+    let plain = AuthError::KdfRejected;
+    let detailed = AuthError::KdfRejectedDetail("policy: iterations 1000".into());
+    assert_eq!(detailed.message(), plain.message());
+    assert_eq!(detailed.message(), "KDF 設定がポリシーで拒否されました");
+    assert_eq!(detailed.to_string(), plain.to_string());
+    assert_eq!(detailed, plain);
+    assert_eq!(plain, detailed);
+    assert!(detailed
+        .status_message()
+        .contains("policy: iterations 1000"));
+    assert_eq!(plain.status_message(), plain.message());
+
+    // The equality rule is symmetric across different detail texts, and the
+    // conversion back to AppError keeps the cause attached to the same family.
+    assert_eq!(
+        AuthError::KdfRejectedDetail("a".into()),
+        AuthError::KdfRejectedDetail("b".into())
+    );
+    let app: crate::error::AppError = detailed.into();
+    assert!(matches!(app, crate::error::AppError::KdfRejectedCause(_)));
+    assert_eq!(app.message(), AuthError::KdfRejected.message());
+}
+
+#[test]
+fn unparseable_urls_never_consult_the_resolver() {
+    // `Url::parse` fails before the host classifier runs (auth.rs:501-503), so
+    // a resolver that panics proves no DNS path was reached. The plain
+    // network-free entry point must agree and return false for the same input.
+    for value in ["not a url", "://bad", "https://exa mple.com", ""] {
+        assert!(
+            !is_blocked_server_url_with(value, |_| {
+                panic!("a URL parse failure must not consult DNS")
+            }),
+            "{value}"
+        );
+        assert!(!is_blocked_server_url_without_dns(value), "{value}");
+    }
+    // A parseable host still reaches the injected resolver, so the guard above
+    // is about the parse branch and not a blanket "no DNS" rule.
+    assert!(is_blocked_server_url_with("http://metadata", |_| {
+        panic!("known metadata host must not trigger DNS")
+    }));
+}
+
+#[test]
 fn missing_cache_plus_sync_failure_reports_only_the_sync_cause() {
     use crate::error::{AppError, BoxedCause};
 

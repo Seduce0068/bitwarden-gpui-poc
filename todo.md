@@ -24,10 +24,24 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第70弾で 11 件すべてを完了）。
+なし（第71弾で 10 件すべてを完了）。
 
 ## 完了
 
+- [x] 第71弾（16 担当・15 回目）の指摘 10 件を完結（2026-11-23）
+  - TOTP 非 ASCII ガードを otpauth URI に合わせて狭隘化し、
+    digits/period 境界をテスト。
+  - URL マスクの資格情報キー拡張と authority 内 '?'/'#' の修正、
+    クランプ定数の limits 集約、TOTP 失敗理由の区別表示、
+    0件検索確定の専用文面を修正。
+  - auth / settings / vault_sync / model の残りテストと
+    doc の矛盾を修正。CHANGELOG 第69〜70弾と README の
+    schema_version 0/0.0 記述を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（637 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第70弾（16 担当・14 回目）の指摘 11 件を完結（2026-11-23）
   - 非 ASCII TOTP secret のパニック防止、AltGr 由来文字の挿入、
     閾値変更時の status 上書き、認証確定後の m/r 案内を修正。

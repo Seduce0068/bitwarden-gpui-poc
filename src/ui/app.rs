@@ -150,6 +150,24 @@ pub(super) fn audit_no_selection_status(dirty: bool) -> String {
     )
 }
 
+/// Detail-line text for a login's TOTP field, keeping the failure reason.
+///
+/// `TotpState::display` collapses every sampling failure into the same
+/// `コード生成失敗`, so an undecryptable field (the ciphertext could not be
+/// opened) would look identical to a malformed secret. `totp_state.rs` is
+/// outside this task's write scope, so the marker check lives here and the
+/// cached generation reason covers the remaining failure. `generated` is
+/// returned untouched when a code was produced.
+pub(super) fn totp_detail_text(secret: &str, generated: String, error: Option<String>) -> String {
+    if crate::vault_sync::is_undecryptable_totp(secret) {
+        "復号不可（TOTP フィールドを復号できませんでした）".to_string()
+    } else if let Some(reason) = error {
+        format!("コード生成失敗（不正な TOTP secret: {reason}）")
+    } else {
+        generated
+    }
+}
+
 /// Key guidance shared by every transition into the locked screen.
 ///
 /// `lock()` and the idle ticker both leave the user on the same lock screen,
@@ -786,7 +804,8 @@ impl BitwardenApp {
                 let code = if secret.trim().is_empty() {
                     "なし".to_string()
                 } else {
-                    self.totp_text(&secret)
+                    let generated = self.totp_text(&secret);
+                    totp_detail_text(&secret, generated, self.totp.error_message())
                 };
                 let password_label = if crate::vault_sync::is_undecryptable_password(&password) {
                     "復号不可".to_string()
@@ -909,6 +928,34 @@ mod tests {
         let dirty = audit_no_selection_status(true);
         assert_eq!(dirty, status_with_unsaved(&clean, true));
         assert!(dirty.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn totp_detail_text_distinguishes_undecryptable_from_invalid_secret() {
+        let reason = Some("TOTP シークレットを解釈できません".to_string());
+        let undecryptable = totp_detail_text(
+            crate::vault_sync::UNDECRYPTABLE_TOTP,
+            "コード生成失敗".to_string(),
+            reason.clone(),
+        );
+        assert!(undecryptable.contains("復号不可"), "{undecryptable}");
+        assert!(!undecryptable.contains("不正"), "{undecryptable}");
+
+        let invalid = totp_detail_text("not base32!", "コード生成失敗".to_string(), reason);
+        assert!(invalid.contains("コード生成失敗"), "{invalid}");
+        assert!(invalid.contains("不正"), "{invalid}");
+        assert!(
+            invalid.contains("TOTP シークレットを解釈できません"),
+            "{invalid}"
+        );
+        assert!(!invalid.contains("復号不可"), "{invalid}");
+        assert_ne!(undecryptable, invalid);
+
+        // Successful codes and cached values are passed through unchanged.
+        assert_eq!(
+            totp_detail_text("JBSWY3DPEHPK3PXP", "123 456 (あと20秒)".to_string(), None),
+            "123 456 (あと20秒)"
+        );
     }
 
     #[::core::prelude::v1::test]

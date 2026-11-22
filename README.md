@@ -222,7 +222,8 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 | `clipboard_restore_seconds` | number | `30` | 1〜3600 |
 
 `schema_version` は文字列や整数浮動小数の将来版も拒否します。欠落や不正な
-型は legacy(0) として扱い、保存時に現行版へ昇格します。
+型、および明示的な `0` / `0.0` は legacy(0) として扱い、保存時に現行版へ
+昇格します。
 
 数値は型として表現できる範囲外の値がクランプされ、負数・小数など型として
 表現できない値は既定値へ置き換えられます。`server_url` / `email` の上限は

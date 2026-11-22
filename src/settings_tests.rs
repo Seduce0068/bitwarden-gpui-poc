@@ -715,6 +715,62 @@ fn shared_field_edits_are_owned_by_settings() {
 }
 
 #[test]
+fn settings_load_error_messages_are_pinned() {
+    // These four strings are shown verbatim in the status bar; changing one
+    // silently would break the UI wording contract (settings.rs:228-239).
+    assert_eq!(
+        SettingsLoadError::NotFound.message(),
+        "設定ファイルが未作成です（既定値を使用）"
+    );
+    assert_eq!(
+        SettingsLoadError::ReadFailed.message(),
+        "設定ファイルを読み込めません（既定値を使用）"
+    );
+    assert_eq!(
+        SettingsLoadError::ParseFailed.message(),
+        "設定ファイルが破損しています（既定値を使用）"
+    );
+    assert_eq!(
+        SettingsLoadError::TooLarge.message(),
+        "設定ファイルがサイズ上限（1 MiB）を超えています（既定値を使用）"
+    );
+
+    for error in [
+        SettingsLoadError::NotFound,
+        SettingsLoadError::ReadFailed,
+        SettingsLoadError::ParseFailed,
+        SettingsLoadError::TooLarge,
+    ] {
+        let expected = error.message();
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(AppError::from(error).message(), expected);
+    }
+}
+
+#[test]
+fn save_device_id_only_aborts_on_a_read_failed_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // A directory cannot be read as a settings file: File::open succeeds but
+    // read_to_string fails with EISDIR, which `read_bounded_settings_text`
+    // classifies as ReadFailed (settings.rs:318-336). No other load failure
+    // (malformed / oversized) is accepted on the id-only write path.
+    let path = dir.path();
+    let id = generate_device_id().unwrap();
+    let error = Settings::save_device_id_only(path, &id).unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("中止"), "{text}");
+    assert!(text.contains("ReadFailed"), "{text}");
+    // The id-only path aborts instead of falling back to defaults, so the
+    // promise of "default values" must not appear in its error text.
+    assert!(!text.contains("既定値"), "{text}");
+    assert_eq!(
+        std::fs::read_dir(path).unwrap().count(),
+        0,
+        "nothing was written"
+    );
+}
+
+#[test]
 fn settings_error_round_trip_keeps_status_text() {
     use crate::error::OTHER_ERROR_MESSAGE;
     let settings = SettingsLoadError::Other("設定固有の失敗");

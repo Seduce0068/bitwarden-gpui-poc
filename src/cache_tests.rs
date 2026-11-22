@@ -327,6 +327,86 @@ fn mask_url_userinfo_handles_missing_userinfo_scheme_and_query_at_signs() {
 }
 
 #[test]
+fn sensitive_param_keys_cover_pass_pwd_pw_and_credential() {
+    // A bare `pass`/`pwd`/`pw`/`credential` key is just as secret as
+    // `password`/`api_key`; the case-insensitive substring match must catch
+    // them and the common camel/upper-case spellings (cache.rs:98-112).
+    for key in [
+        "pass",
+        "pwd",
+        "pw",
+        "credential",
+        "PassWord",
+        "passphrase",
+        "x-pwd",
+        "apiCredential",
+        "CREDENTIALS",
+        "pW",
+    ] {
+        assert!(super::is_sensitive_param_key(key), "must be masked: {key}");
+    }
+    for key in ["state", "redirect", "nonce", "scope"] {
+        assert!(
+            !super::is_sensitive_param_key(key),
+            "harmless key must stay: {key}"
+        );
+    }
+
+    let url = "https://vault.example.com/sync?pass=P1&pwd=P2&pw=P3&credential=P4&state=ok";
+    let masked = super::mask_url_secrets(url);
+    for secret in ["P1", "P2", "P3", "P4"] {
+        assert!(!masked.contains(secret), "leaked {secret}: {masked}");
+    }
+    for key in ["pass", "pwd", "pw", "credential"] {
+        assert!(
+            masked.contains(&format!("{key}=[redacted]")),
+            "{key} not masked: {masked}"
+        );
+    }
+    assert!(masked.contains("state=ok"), "{masked}");
+}
+
+#[test]
+fn userinfo_is_masked_when_the_authority_contains_question_or_hash() {
+    // A '?' or '#' before the '@' is part of an unescaped userinfo value, not a
+    // query/fragment delimiter. Stopping the authority scan there used to hide
+    // the '@' and leave the credential in the diagnostic URL (cache.rs:82-101).
+    for (url, expected) in [
+        (
+            "https://user:p?ss@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+        ),
+        (
+            "https://user:p#ss@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+        ),
+        (
+            "https://user:p?ss@vault.example.com:8443",
+            "https://[redacted]@vault.example.com:8443",
+        ),
+        (
+            "user:p?ss@vault.example.com/x",
+            "[redacted]@vault.example.com/x",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains("p?ss"), "{rendered}");
+        assert!(!rendered.contains("p#ss"), "{rendered}");
+        assert!(
+            rendered.contains("[redacted]@vault.example.com"),
+            "{rendered}"
+        );
+    }
+
+    // An '@' that really belongs to a query stays untouched: the `key=`
+    // parameter before it marks the '?' as a genuine delimiter.
+    let query = "https://vault.example.com?email=a@b.example";
+    assert_eq!(super::mask_url_userinfo(query), query);
+}
+
+#[test]
 fn debug_masks_secret_query_values_but_keeps_harmless_parameters() {
     let url = "https://vault.example.com/sync?token=TOPSECRET&state=abc&api_key=KEY123#frag";
     let masked = super::mask_url_secrets(url);

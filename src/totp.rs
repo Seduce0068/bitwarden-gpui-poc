@@ -99,13 +99,18 @@ pub fn code_at(secret: &str, unix_time: u64) -> Result<Code, TotpError> {
     if secret.is_empty() {
         return Err(TotpError::Missing);
     }
-    // openwarden 0.1.1 detects the `otpauth://` form with `secret[..10]`
-    // (byte slicing). A field whose first characters are multi-byte can put
-    // byte 10 inside a UTF-8 code point and panic before any error is
-    // returned. Every form openwarden accepts is ASCII, so reject the whole
-    // field here: the health audit calls this on untrusted vault data and
-    // must never crash on it (see `non_ascii_secrets_are_rejected_without_panicking`).
-    if !secret.is_ascii() {
+    // openwarden 0.1.1 detects the `otpauth://` form with the byte slice
+    // `secret[..10]` (compared case-insensitively). A field whose first bytes
+    // are multi-byte can put byte 10 inside a UTF-8 code point and panic before
+    // any error is returned. When the first ten bytes are exactly the ASCII
+    // `otpauth://` prefix the slice is on a char boundary, and openwarden parses
+    // the remainder as a URI whose label/issuer may legitimately be non-ASCII.
+    // Only the other forms (bare base32 / steam secrets) are rejected here: the
+    // health audit calls this on untrusted vault data and must never crash.
+    let has_otpauth_prefix = secret
+        .get(..10)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("otpauth://"));
+    if !has_otpauth_prefix && !secret.is_ascii() {
         return Err(TotpError::Invalid);
     }
     let secret = SecretString::from(secret.to_string());

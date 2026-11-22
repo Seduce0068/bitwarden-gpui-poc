@@ -141,6 +141,36 @@ fn revision_dates_reject_malformed_timestamps() {
 }
 
 #[test]
+fn revision_dates_accept_the_maximum_numeric_utc_offsets() {
+    // parse_revision validates the offset with `offset_hour > 23` and
+    // `offset_minute > 59` (vault_sync.rs:411-418), so +23:59 and -23:59 are
+    // the last accepted spellings on either side of UTC.
+    let utc = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    let plus = parse_revision(Some("2024-01-01T00:00:00+23:59"));
+    let minus = parse_revision(Some("2024-01-01T00:00:00-23:59"));
+
+    // 23 * 3600 + 59 * 60 = 86_340 seconds.
+    assert_eq!(plus, Some(utc - 86_340));
+    assert_eq!(minus, Some(utc + 86_340));
+    // Cross-check against the equivalent UTC calendar spellings.
+    assert_eq!(plus, parse_revision(Some("2023-12-31T00:01:00Z")));
+    assert_eq!(minus, parse_revision(Some("2024-01-01T23:59:00Z")));
+    let plus = plus.unwrap();
+    let minus = minus.unwrap();
+    assert!(plus < utc && utc < minus, "{plus} < {utc} < {minus}");
+
+    // One minute/hour past either boundary is still rejected.
+    for value in [
+        "2024-01-01T00:00:00+24:00",
+        "2024-01-01T00:00:00-24:00",
+        "2024-01-01T00:00:00+23:60",
+        "2024-01-01T00:00:00-23:60",
+    ] {
+        assert_eq!(parse_revision(Some(value)), None, "{value}");
+    }
+}
+
+#[test]
 fn days_from_civil_matches_known_dates() {
     assert_eq!(days_from_civil(1970, 1, 1), Some(0));
     assert_eq!(days_from_civil(2000, 2, 29), Some(11_016));
@@ -859,7 +889,7 @@ fn pascal_case_sync_body_is_normalized_for_openwarden() {
 }
 
 #[test]
-fn camel_case_keys_and_values_are_left_unchanged() {
+fn camel_case_key_lowercases_only_the_leading_ascii_uppercase() {
     let key = camel_case_key("RevisionDate");
     assert_eq!(key, "revisionDate");
     assert_eq!(camel_case_key("privateKey"), "privateKey");

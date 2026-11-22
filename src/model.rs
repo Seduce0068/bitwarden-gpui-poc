@@ -284,7 +284,7 @@ pub struct IdentityData {
 pub struct SshKeyData {
     /// Public key line.
     pub public_key: String,
-    /// Private key (not persisted by this PoC). Wiped on drop and replacement.
+    /// Private key. Wiped on drop and replacement; serialized as a plain string.
     #[serde(with = "zeroizing_text_serde")]
     pub private_key: ZeroizingText,
     /// Key fingerprint.
@@ -971,7 +971,7 @@ impl Vault {
             b.favorite
                 .cmp(&a.favorite)
                 .then_with(|| b.revision_date.cmp(&a.revision_date))
-                // Use the same folded name key as `compare` (model.rs:969-972)
+                // Use the same folded name key as `compare` (model.rs:1064-1066)
                 // and fall back to the id so equal names order deterministically
                 // instead of depending on the input order.
                 .then_with(|| {

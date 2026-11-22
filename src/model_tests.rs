@@ -791,7 +791,7 @@ fn sort_key_next_cycles_through_all_four_variants() {
 #[test]
 fn view_sorting_uses_comparison_keys_for_names() {
     // `compare()` normalizes both names with `comparison_key` before ordering
-    // (model.rs:969-972), and `Vault::view` normalizes the query the same way
+    // (model.rs:1064-1066), and `Vault::view` normalizes the query the same way
     // (model.rs:857-867). NFD/uppercase spellings must therefore sort and
     // search identically to their precomposed/lowercase counterparts.
     let mut vault = Vault::new();
@@ -1171,7 +1171,7 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
 
 #[test]
 fn page_matching_ties_use_the_folded_name_key_then_the_id() {
-    // `matches_page` shares the `compare` tiebreak (model.rs:869-889,969-972):
+    // `matches_page` shares the `compare` tiebreak (model.rs:964-985,1064-1066):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
     let page = "https://example.com/shared";
@@ -1255,7 +1255,7 @@ fn search_hints_exclude_card_code_and_ssh_private_key() {
 
 #[test]
 fn login_username_is_redacted_in_debug() {
-    // Regression for model.rs:490: the manual `ItemData` Debug prints a
+    // Regression for model.rs:587-611: the manual `ItemData` Debug prints a
     // placeholder for username, not the actual value.
     let item = login(
         "1",
@@ -1762,4 +1762,45 @@ fn ssh_base64_codec_handles_plus_and_slash() {
     // The URL-safe alphabet is not a substitute for standard base64.
     assert_eq!(decode(b"-__/"), None);
     assert_eq!(decode(b"+_+/"), None);
+}
+
+#[test]
+fn item_kind_uses_snake_case_strings_on_the_wire() {
+    // `ItemKind` derives `#[serde(rename_all = "snake_case")]` (model.rs:94-96):
+    // its serde form is a string, not the numeric `to_wire()` value.
+    for (kind, text) in [
+        (ItemKind::Login, "login"),
+        (ItemKind::SecureNote, "secure_note"),
+        (ItemKind::Card, "card"),
+        (ItemKind::Identity, "identity"),
+        (ItemKind::SshKey, "ssh_key"),
+    ] {
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, format!("\"{text}\""), "{kind:?}");
+        let restored: ItemKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, kind);
+        assert_eq!(kind.label(), restored.label());
+    }
+    assert!(serde_json::from_str::<ItemKind>("1").is_err());
+    assert!(serde_json::from_str::<ItemKind>("\"Login\"").is_err());
+    assert!(serde_json::from_str::<ItemKind>("\"unknown\"").is_err());
+}
+
+#[test]
+fn debug_distinguishes_an_empty_totp_from_a_populated_one() {
+    // The manual `ItemData` Debug (model.rs:587-611) prints an empty string
+    // for an unset TOTP and a redaction marker for a set one.
+    let mut item = login("1", "Sample", "alice", "pw", "https://example.com");
+    assert_eq!(item.totp_secret(), Some(""));
+    let empty = format!("{item:?}");
+    assert!(empty.contains("totp: \"\""), "{empty}");
+    assert!(!empty.contains("totp: \"[redacted]\""), "{empty}");
+
+    if let ItemData::Login { totp, .. } = &mut item.data {
+        *totp = Zeroizing::new("JBSWY3DPEHPK3PXP".to_string());
+    }
+    let populated = format!("{item:?}");
+    assert!(populated.contains("totp: \"[redacted]\""), "{populated}");
+    assert!(!populated.contains("JBSWY3DPEHPK3PXP"), "{populated}");
+    assert!(!populated.contains("totp: \"\""), "{populated}");
 }

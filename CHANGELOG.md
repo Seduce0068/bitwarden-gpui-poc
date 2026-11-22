@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 全体改善（第69〜70弾 / 2026-11-23）
+
+- 認証の絶対デッドラインタイムアウト、カード番号・コード・notes の
+  Zeroizing 化、設定読み取りの TOCTOU 共通化を修正
+- パネル間遷移の案内、選択スクロール契約、二重エンコード、
+  同 revision の先頭保持、SSH key_type をテスト
+- 非 ASCII TOTP secret のパニック防止、AltGr 由来文字の挿入、
+  閾値変更時の status 上書きを修正
+- タイムアウト退避、schema_version 0.0、未来版 device_id 救済、
+  legacy fallback、非ログイン除外、Zeroizing 化、limits 集約を実施
+
 ### 全体改善（第67〜68弾 / 2026-11-23）
 
 - 監査未選択 Enter の未保存マーカー、生成 y/Y の案内、

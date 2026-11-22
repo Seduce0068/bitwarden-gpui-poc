@@ -79,8 +79,13 @@ pub(super) fn auth_edit_finished_status(dirty: bool) -> String {
 /// Confirming a search clears the selection and rewinds the list (see
 /// `VaultViewState::finish_search`), so the restored status matches the detail
 /// line's "nothing selected" state instead of claiming a selection survives.
-pub(super) fn search_finished_status(dirty: bool) -> String {
-    text_edit_finished_status(crate::ui::logic::no_selection_status(), dirty)
+/// With zero matches that generic prompt would point at a row that does not
+/// exist, so the confirmed result count selects a dedicated message instead.
+pub(super) fn search_finished_status(result_count: usize, dirty: bool) -> String {
+    text_edit_finished_status(
+        &crate::ui::logic::no_selection_status_for_count(result_count),
+        dirty,
+    )
 }
 
 /// Status after a settings time field is adjusted with `i`/`u`, `3`/`4` or
@@ -185,9 +190,13 @@ impl BitwardenApp {
             }
             UiAction::FinishSearch => {
                 self.view.finish_search();
+                // `finish_search` keeps the query, so the visible count is the
+                // confirmed search's result count. It lets the status report
+                // "no matches" instead of asking for a non-existent row.
+                let result_count = self.view.visible_items().len();
                 // Same contract as the auth field: confirmation is not still
                 // an editing session, so restore the normal vault status.
-                self.status = search_finished_status(self.settings_dirty);
+                self.status = search_finished_status(result_count, self.settings_dirty);
                 cx.notify();
             }
             UiAction::FinishSettingsEdit => {
@@ -475,10 +484,13 @@ mod tests {
             assert!(!auth.contains("入力中"), "{auth}");
             assert!(auth.contains("F1: フォーカス復帰"), "{auth}");
 
-            let search = search_finished_status(dirty);
+            let search = search_finished_status(3, dirty);
             assert_eq!(
                 search,
-                crate::ui::app::status_with_unsaved(crate::ui::logic::no_selection_status(), dirty)
+                crate::ui::app::status_with_unsaved(
+                    &crate::ui::logic::no_selection_status_for_count(3),
+                    dirty
+                )
             );
             assert!(!search.contains("入力中"), "{search}");
             assert_eq!(
@@ -486,6 +498,18 @@ mod tests {
                 dirty,
                 "{search}"
             );
+
+            // A confirmed search with no matches must not ask the user to
+            // select a row: the dedicated message keeps the unsaved marker.
+            let empty = search_finished_status(0, dirty);
+            assert_eq!(
+                empty,
+                crate::ui::app::status_with_unsaved(
+                    crate::ui::logic::NO_SEARCH_RESULTS_STATUS,
+                    dirty
+                )
+            );
+            assert!(!empty.contains("項目を選択してください"), "{empty}");
         }
     }
 

@@ -46,6 +46,23 @@ pub(super) fn no_selection_status() -> &'static str {
     "項目を選択してください"
 }
 
+/// Status when a confirmed search matched no item at all.
+pub(super) const NO_SEARCH_RESULTS_STATUS: &str = "検索結果が0件です（一致する項目がありません）";
+
+/// Status for a "nothing selected" state that knows the visible item count.
+///
+/// [`no_selection_status`] asks the user to choose a row. After confirming a
+/// search with zero matches there is no row to choose, so callers pass the
+/// result count here and get a dedicated message instead. The generic helper
+/// is kept unchanged for the callers that have no count to report.
+pub(super) fn no_selection_status_for_count(count: usize) -> String {
+    if count == 0 {
+        NO_SEARCH_RESULTS_STATUS.to_string()
+    } else {
+        no_selection_status().to_string()
+    }
+}
+
 /// Run the vault health audit with an explicit clock value.
 ///
 /// Keeping the clock as a parameter makes the audit reproducible in tests.
@@ -273,14 +290,23 @@ pub(super) fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 
     (next * 60) as u64
 }
 
-/// Adjust a seconds-based setting by one UI step, clamped to 1..=3600.
+/// Adjust a seconds-based setting by one UI step, clamped to the shared
+/// 1..=3600 second bounds declared in [`crate::limits`].
+///
+/// Both seconds-based settings use the same range, and the login-timeout
+/// constants are its canonical pair (`MIN/MAX_CLIPBOARD_RESTORE_SECONDS` have
+/// the same values), so the clamp no longer duplicates the magic numbers.
 pub(super) fn adjust_seconds(current: u64, delta_seconds: i32) -> u64 {
     let next = i64::try_from(current).unwrap_or(i64::MAX) + i64::from(delta_seconds);
-    next.clamp(1, 3600) as u64
+    next.clamp(
+        crate::limits::MIN_LOGIN_TIMEOUT_SECONDS as i64,
+        crate::limits::MAX_LOGIN_TIMEOUT_SECONDS as i64,
+    ) as u64
 }
 
-/// Adjust audit thresholds by one UI step, clamping to safe bounds:
-/// 1..=200 bits and 1..=3650 days.
+/// Adjust audit thresholds by one UI step, clamped to the shared bounds in
+/// [`crate::limits`]: `MIN_WEAK_BITS..=MAX_WEAK_BITS` and
+/// `MIN_STALE_DAYS..=MAX_STALE_DAYS`.
 ///
 /// `delta` is +1 for `+`/`=` and -1 for `-`/`_`.
 pub(super) fn adjust_thresholds(current: Thresholds, delta: i32) -> Thresholds {
@@ -288,20 +314,26 @@ pub(super) fn adjust_thresholds(current: Thresholds, delta: i32) -> Thresholds {
     let day_step = delta.saturating_mul(30);
     Thresholds {
         weak_bits: if weak_step > 0 {
-            current.weak_bits.saturating_add(weak_step as u32).min(200)
+            current
+                .weak_bits
+                .saturating_add(weak_step as u32)
+                .min(crate::limits::MAX_WEAK_BITS)
         } else {
             current
                 .weak_bits
                 .saturating_sub(weak_step.unsigned_abs())
-                .max(1)
+                .max(crate::limits::MIN_WEAK_BITS)
         },
         stale_days: if day_step > 0 {
-            current.stale_days.saturating_add(day_step as i64).min(3650)
+            current
+                .stale_days
+                .saturating_add(day_step as i64)
+                .min(crate::limits::MAX_STALE_DAYS)
         } else {
             current
                 .stale_days
                 .saturating_sub(day_step.unsigned_abs() as i64)
-                .max(1)
+                .max(crate::limits::MIN_STALE_DAYS)
         },
     }
 }
@@ -362,6 +394,19 @@ mod tests {
         assert!(clipboard_restore_failure_status().contains("手動で消去"));
         assert_eq!(unsaved_marker(true), "[未保存]");
         assert_eq!(unsaved_marker(false), "");
+    }
+
+    #[test]
+    fn no_selection_status_for_count_explains_an_empty_result() {
+        assert_eq!(
+            no_selection_status_for_count(0),
+            "検索結果が0件です（一致する項目がありません）"
+        );
+        assert_eq!(no_selection_status_for_count(1), no_selection_status());
+        assert_eq!(no_selection_status_for_count(7), no_selection_status());
+        // The shared helper is still the generic prompt for callers without a
+        // result count (render.rs / actions.rs).
+        assert_eq!(no_selection_status(), "項目を選択してください");
     }
 
     #[test]

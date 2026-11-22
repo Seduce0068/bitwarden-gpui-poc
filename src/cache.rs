@@ -81,12 +81,24 @@ pub struct SyncCache {
 /// which is safe because they carry no userinfo.
 fn mask_url_userinfo(url: &str) -> String {
     let scheme_end = url.find("://").map(|at| at + 3).unwrap_or(0);
-    let authority_end = url[scheme_end..]
-        .find(&['/', '?', '#'][..])
+    // A '/' always closes the authority. A '?' or '#' before the '@' is part of
+    // an *unescaped userinfo value* (e.g. `https://user:p?ss@host`); cutting the
+    // authority there would hide the '@' and leak the whole credential. Scan
+    // up to the path separator and take the last '@'. An '@' that really sits
+    // in a query/fragment is excluded when a `key=`-shaped parameter precedes
+    // it, so a URL such as `https://host?email=a@b` stays untouched.
+    let path_start = url[scheme_end..]
+        .find('/')
         .map(|at| scheme_end + at)
         .unwrap_or(url.len());
-    let authority = &url[scheme_end..authority_end];
-    if let Some(at) = authority.rfind('@') {
+    let scan = &url[scheme_end..path_start];
+    let at = scan.rfind('@').filter(|at| {
+        !scan[..*at]
+            .split(&['?', '#'][..])
+            .skip(1)
+            .any(|part| part.contains('='))
+    });
+    if let Some(at) = at {
         // Everything before the last `@` in the authority is userinfo.
         let host_start = scheme_end + at + 1;
         format!("{}[redacted]@{}", &url[..scheme_end], &url[host_start..])
@@ -99,13 +111,26 @@ fn mask_url_userinfo(url: &str) -> String {
 ///
 /// The match is a case-insensitive substring so common variants such as
 /// `api_key`, `accessToken` and `session_id` are covered by the same small
-/// list. The list deliberately includes every sensitive key named by the
-/// audit contract: `secret`, `password`, `passwd`, `auth`, `sig`, `session`
-/// and `code` (plus the pre-existing `token` and `key`).
+/// list. Besides the audit contract's `secret`, `password`, `passwd`, `auth`,
+/// `sig`, `session` and `code`, the list includes the short spellings `pass`,
+/// `pwd`, `pw` and `credential` (plus the pre-existing `token` and `key`):
+/// a bare `?pass=…` or `?credential=…` is just as secret as `?password=…`.
 fn is_sensitive_param_key(key: &str) -> bool {
     let folded = key.to_ascii_lowercase();
     [
-        "token", "key", "secret", "password", "passwd", "auth", "sig", "session", "code",
+        "token",
+        "key",
+        "secret",
+        "password",
+        "passwd",
+        "pass",
+        "pwd",
+        "pw",
+        "credential",
+        "auth",
+        "sig",
+        "session",
+        "code",
     ]
     .iter()
     .any(|needle| folded.contains(needle))

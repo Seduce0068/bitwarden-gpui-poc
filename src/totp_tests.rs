@@ -298,7 +298,7 @@ fn surrounding_whitespace_is_trimmed_before_parsing() {
 fn non_ascii_secrets_are_rejected_without_panicking() {
     // openwarden 0.1.1 checks `secret[..10]` for the `otpauth://` prefix. Four
     // three-byte characters put byte 10 in the middle of a code point, which
-    // panics in the old code path (totp.rs:97-104). These are exactly the
+    // panics in the unguarded code path (totp.rs:102-114). These are exactly the
     // values an audit of untrusted vault fields could encounter.
     let panicking_prefix = "あいうえおotpauth://totp/x?secret=GEZDGNBVGY3TQOJQ";
     assert!(
@@ -326,4 +326,66 @@ fn non_ascii_secrets_are_rejected_without_panicking() {
     assert!(is_valid_secret(&format!(
         "otpauth://totp/x?secret={RFC_SECRET}"
     )));
+}
+
+#[test]
+fn otpauth_uris_with_non_ascii_labels_and_issuers_are_accepted() {
+    // openwarden 0.1.1 only byte-slices `secret[..10]`. With the ASCII
+    // `otpauth://` prefix that slice is safe, and the non-ASCII label/issuer is
+    // parsed by its URL parser instead of being rejected by our guard.
+    let uri = format!(
+        "otpauth://totp/あい:{RFC_SECRET}?secret={RFC_SECRET}&issuer=日本&digits=8&period=30"
+    );
+    let code = code_at(&uri, 59).unwrap();
+    assert_eq!(code.code(), "94287082");
+    assert_eq!(code.period(), 30);
+    assert_eq!(code.remaining(), 1);
+    assert!(is_valid_secret(&uri));
+    let tick = Tick::sample(&uri, 59);
+    assert!(tick.code.is_some(), "{tick:?}");
+    assert_eq!(tick.error, None);
+
+    // A URI whose non-ASCII text begins exactly at byte 10 is safe too.
+    let uri = format!("otpauth://あ?secret={RFC_SECRET}");
+    assert!(is_valid_secret(&uri), "{uri}");
+
+    // openwarden compares the prefix case-insensitively; so does the guard.
+    let upper = format!("OTPAUTH://totp/あ?secret={RFC_SECRET}");
+    assert_eq!(code_at(&upper, 59).unwrap().code(), "287082");
+}
+
+#[test]
+fn otpauth_digits_and_period_boundaries_are_enforced() {
+    // openwarden accepts digits 1..=10 and any strictly positive period.
+    for digits in [1u8, 10] {
+        let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&digits={digits}");
+        let code = code_at(&uri, 59).unwrap();
+        assert_eq!(code.code().len(), digits as usize, "digits={digits}");
+    }
+    for period in [1u64, 86_400] {
+        let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&period={period}");
+        let code = code_at(&uri, 59).unwrap();
+        assert_eq!(code.period(), period, "period={period}");
+        assert!(code.remaining() <= period, "period={period}");
+    }
+
+    // Out-of-range or unparsable values fail as an ordinary Invalid family.
+    // `InvalidCause` compares equal to `Invalid`, as `AppError` ignores causes.
+    for bad in [
+        "digits=0",
+        "digits=11",
+        "digits=-1",
+        "digits=1.5",
+        "digits=abc",
+        "period=0",
+        "period=-1",
+        "period=abc",
+    ] {
+        let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&{bad}");
+        assert_eq!(code_at(&uri, 59), Err(TotpError::Invalid), "{bad}");
+        assert!(!is_valid_secret(&uri), "{bad}");
+        let tick = Tick::sample(&uri, 59);
+        assert_eq!(tick.error, Some(TotpError::Invalid), "{bad}");
+        assert!(tick.code.is_none(), "{bad}");
+    }
 }
