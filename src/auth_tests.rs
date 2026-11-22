@@ -2327,3 +2327,47 @@ fn embedded_link_local_literals_are_detected_in_non_leading_and_hyphenated_label
     blocked.server_url = "http://prefix.169.254.169.254.nip.io".into();
     assert_eq!(validate_config(&blocked), Err(AuthError::BlockedServerUrl));
 }
+
+#[test]
+fn sync_fallback_strips_the_sync_prefix_from_a_generic_cache_other() {
+    use crate::error::{AppError, BoxedCause};
+
+    // An unrelated cache error has no specific reason, so `cache_restore_status`
+    // supplies the generic, already-prefixed status that `cache_restore_failure`
+    // wraps in `AuthError::Other` (cache.rs:861-874, auth.rs:876-885).
+    // `sync_fallback_failure` must strip that family prefix and the surrounding
+    // parentheses before composing the detail (auth.rs:941-953); otherwise the
+    // status bar would read "同期に失敗しました（同期に失敗しました（…））".
+    let fallback = cache_restore_failure(AppError::Other("unclassified cache failure".into()));
+    assert!(matches!(&fallback, AuthError::Other(_)));
+    assert_eq!(
+        fallback.status_message(),
+        "同期に失敗しました（キャッシュを復元できませんでした）"
+    );
+
+    let combined = super::sync_fallback_failure(
+        fallback,
+        Some(AppError::SyncCause(BoxedCause::text("HTTP 503"))),
+    );
+    assert_eq!(combined.message(), AuthError::Sync.message());
+    assert_eq!(
+        combined.status_message(),
+        "同期に失敗しました（キャッシュを復元できませんでした（HTTP 503））"
+    );
+    assert!(matches!(
+        &combined,
+        AuthError::SyncDetail(detail)
+            if detail.as_str() == "キャッシュを復元できませんでした（HTTP 503）"
+    ));
+
+    // An `Other` without the family prefix is kept verbatim by the `unwrap_or`
+    // of the same strip step (auth.rs:942-944).
+    let bare = super::sync_fallback_failure(
+        AuthError::Other("未分類の失敗"),
+        Some(AppError::Other("no-source reason".into())),
+    );
+    assert_eq!(
+        bare.status_message(),
+        "同期に失敗しました（未分類の失敗（no-source reason））"
+    );
+}

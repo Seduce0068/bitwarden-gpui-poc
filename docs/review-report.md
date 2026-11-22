@@ -14,7 +14,7 @@ verified:
   by: "dsh-agent (lead)"
   at: "2026-11-21T04:49:12+09:00"
 status: "approved"
-stale_after: "2027-05-17T01:48:58+09:00"
+stale_after: "2027-05-21T04:49:12+09:00"
 ---
 
 ## 概要

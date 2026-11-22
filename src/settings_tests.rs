@@ -2372,3 +2372,67 @@ fn every_known_key_maps_to_a_real_settings_field() {
         .iter()
         .any(|notice| notice.contains("not_a_settings_field")));
 }
+
+#[test]
+fn push_shared_text_truncates_multibyte_input_on_a_utf8_boundary() {
+    use crate::limits::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+    use crate::settings::SharedSettingsField;
+
+    // `truncate_to_limit` counts characters, not bytes (limits.rs:107-118).
+    // A 3-byte character straddling the cap must be dropped whole, leaving a
+    // valid UTF-8 string of exactly the capped character count.
+    let mut settings = Settings::default();
+    settings.email.clear();
+    settings.push_shared_text(SharedSettingsField::Email, &"あ".repeat(MAX_EMAIL_LEN + 3));
+    assert_eq!(settings.email.chars().count(), MAX_EMAIL_LEN);
+    assert_eq!(settings.email, "あ".repeat(MAX_EMAIL_LEN));
+    assert!(std::str::from_utf8(settings.email.as_bytes()).is_ok());
+
+    settings.server_url.clear();
+    settings.push_shared_text(
+        SharedSettingsField::ServerUrl,
+        &"あ".repeat(MAX_SERVER_URL_LEN + 3),
+    );
+    assert_eq!(settings.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(settings.server_url, "あ".repeat(MAX_SERVER_URL_LEN));
+    assert!(std::str::from_utf8(settings.server_url.as_bytes()).is_ok());
+
+    // Crossing the boundary on a later append keeps the already-stored text
+    // and admits only the characters that still fit.
+    settings.email.clear();
+    settings.push_shared_text(SharedSettingsField::Email, &"a".repeat(MAX_EMAIL_LEN - 1));
+    settings.push_shared_text(SharedSettingsField::Email, "あい");
+    assert_eq!(settings.email.chars().count(), MAX_EMAIL_LEN);
+    assert!(settings.email.ends_with('あ'));
+    assert!(!settings.email.ends_with('い'));
+    assert_eq!(
+        settings.email,
+        format!("{}あ", "a".repeat(MAX_EMAIL_LEN - 1))
+    );
+}
+
+#[test]
+fn save_writes_a_sanitized_device_id_without_mutating_self() {
+    // `save` clones through `sanitized()` (settings.rs:911-915), so a malformed
+    // stored id must be cleared on disk even though the in-memory value stays.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let settings = Settings {
+        device_id: "not-a-uuid".to_string(),
+        ..Default::default()
+    };
+    settings.save(&path).unwrap();
+
+    assert_eq!(
+        settings.device_id, "not-a-uuid",
+        "save must not mutate self"
+    );
+    let loaded = Settings::load(&path);
+    assert!(loaded.device_id.is_empty(), "{loaded:?}");
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(raw["device_id"], serde_json::json!(""));
+    assert_eq!(
+        raw["schema_version"],
+        serde_json::json!(CURRENT_SCHEMA_VERSION)
+    );
+}

@@ -686,7 +686,7 @@ impl core::fmt::Debug for VaultItem {
 }
 
 impl VaultItem {
-    /// Build an item with a generated id.
+    /// Build an item from the caller-supplied id, name and payload.
     pub fn new(id: impl Into<String>, name: impl Into<String>, data: ItemData) -> Self {
         Self {
             id: id.into(),

@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第79弾で 7 件すべてを完了、1 件を誤検知として却下）。
+なし（第80弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第80弾（16 担当・24 回目）の指摘 6 件を完結（2026-11-23）
+  - URL マスクに深さ上限を追加し、本文 Profile.Id との照合を実装。
+  - sync_fallback の汎用合成、UTF-8 境界、device_id サニタイズ、
+    username-only userinfo、非オブジェクト JSON、SSH コメント省略、
+    fingerprint 伝播、空白カード番号をテスト。
+  - VaultItem::new doc、model_tests の行参照、review-report の
+    stale_after を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（748 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第79弾（16 担当・23 回目）の指摘 7 件を完結（2026-11-23）
   - Separator 未知値、有効 TOTP→空欄切替、期限の飽和、非 ASCII ポート、
     favorite/notes 既定値、base64 1バイト剰余、VaultItem Debug をテスト。

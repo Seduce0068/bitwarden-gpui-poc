@@ -1276,6 +1276,79 @@ fn ssh_fingerprint_checks_are_wired_into_the_audit() {
 }
 
 #[test]
+fn mismatch_computed_fingerprint_reaches_the_finding_message() {
+    const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMVYTn6DgHoRS29obD0RhrnbKgHhM1eqLvmbTWMGwSmR fp-test@example";
+    const COMPUTED: &str = "SHA256:rU5/Ssu4iQF+Dh5DRCbEpCjexkxaSKWYzYW9pUPi7R0";
+    let key = VaultItem::new(
+        "ssh-mismatch",
+        "SSH key",
+        ItemData::SshKey(SshKeyData {
+            public_key: KEY.into(),
+            private_key: String::new().into(),
+            fingerprint: "SHA256:DIFFERENT".into(),
+        }),
+    );
+    let ItemData::SshKey(ssh) = &key.data else {
+        panic!("the fixture must be an SSH key")
+    };
+    let computed = match ssh.verify_fingerprint() {
+        crate::model::FingerprintVerify::Mismatch { computed } => computed,
+        other => panic!("a wrong stored fingerprint must be a mismatch: {other:?}"),
+    };
+    assert_eq!(computed, COMPUTED);
+
+    let report = report_of(vec![key]);
+    let finding = report.items[0]
+        .findings
+        .iter()
+        .find(|finding| matches!(finding, Finding::SshFingerprintMismatch { .. }))
+        .expect("the recomputed mismatch must be audited");
+    let Finding::SshFingerprintMismatch { computed: reported } = finding else {
+        panic!("the finding must be a fingerprint mismatch")
+    };
+    assert_eq!(reported, &computed, "computed must propagate unchanged");
+    let message = finding.message();
+    assert!(message.contains("計算値"), "{message}");
+    assert!(message.contains(COMPUTED), "{message}");
+}
+
+#[test]
+fn whitespace_only_card_numbers_are_flagged_as_no_card_number() {
+    for number in ["", " ", "  \t  ", "\n", "\u{3000}"] {
+        let card = VaultItem::new(
+            "card-blank",
+            "Card",
+            ItemData::Card(CardData {
+                number: number.into(),
+                ..CardData::default()
+            }),
+        );
+        let report = report_of(vec![card]);
+        let item = report
+            .items
+            .iter()
+            .find(|item| item.id == "card-blank")
+            .unwrap_or_else(|| panic!("a blank card number must be flagged: {number:?}"));
+        assert!(
+            item.findings.contains(&Finding::NoCardNumber),
+            "number {number:?}: {:?}",
+            item.findings
+        );
+    }
+
+    // A real number is not flagged, so this is not a blanket rule for cards.
+    let filled = VaultItem::new(
+        "card-filled",
+        "Card",
+        ItemData::Card(CardData {
+            number: "4111 1111 1111 1234".into(),
+            ..CardData::default()
+        }),
+    );
+    assert!(report_of(vec![filled]).items.is_empty());
+}
+
+#[test]
 fn empty_names_use_a_placeholder_in_the_report() {
     // The placeholder branch only covers a truly empty name; whitespace-only
     // names keep their raw value (see `unnamed_items_are_reported`).

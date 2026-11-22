@@ -47,7 +47,7 @@ fn debug_never_reveals_item_secrets() {
     assert!(!debug.contains("PRIVATE-KEY-MATERIAL"), "{debug}");
 
     // Free-form notes are secret-bearing too. The manual `VaultItem` Debug
-    // (model.rs:651-665) masks the whole value, including through `Vault`'s
+    // (model.rs:672-686) masks the whole value, including through `Vault`'s
     // derived Debug, while search and serde still see the plain text.
     const NOTES_SECRET: &str = "NOTES-SECRET-recovery-code-7X";
     let mut noted = VaultItem::new(
@@ -102,7 +102,7 @@ fn mask_uri_handles_ipv6_and_credentials() {
 fn mask_uri_handles_schemes_without_a_host() {
     // `url::Url::parse` accepts opaque, non-hierarchical URLs with no host.
     // The masker must keep the scheme and return an empty authority rather
-    // than fabricating a host from the path (model.rs:78-87).
+    // than fabricating a host from the path (model.rs:86-112).
     assert_eq!(mask_uri("mailto:alice@example.com"), "mailto://");
     assert_eq!(mask_uri("data:text/plain,hello"), "data://");
     assert_eq!(mask_uri("about:blank"), "about://");
@@ -194,7 +194,7 @@ fn kind_round_trips_through_wire_numbers() {
 
 #[test]
 fn item_kind_labels_cover_all_five_variants() {
-    // `ItemKind::label` (model.rs:134-142) is the sidebar's display text; every
+    // `ItemKind::label` (model.rs:155-163) is the sidebar's display text; every
     // wire kind needs one, so the five arms are pinned in a table.
     for (kind, label) in [
         (ItemKind::Login, "ログイン"),
@@ -209,7 +209,7 @@ fn item_kind_labels_cover_all_five_variants() {
 
 #[test]
 fn vault_is_empty_depends_only_on_items() {
-    // `Vault::is_empty` (model.rs:900-903) delegates to the item list: folders
+    // `Vault::is_empty` (model.rs:922-924) delegates to the item list: folders
     // alone do not make a vault non-empty, and removal restores emptiness.
     let mut vault = Vault::new();
     assert!(vault.is_empty());
@@ -435,7 +435,7 @@ fn password_and_totp_secrets_are_not_searchable() {
 
 #[test]
 fn raw_login_uris_stay_in_the_search_haystack() {
-    // `haystacks` pushes `uri.uri` verbatim (model.rs:742-745). `mask_uri`
+    // `haystacks` pushes `uri.uri` verbatim (model.rs:763-765). `mask_uri`
     // protects Debug and reports, but the search index is a separate path: a
     // credential in a URI query can still be found through search hints. This
     // is a documented known constraint, asserted here so it cannot drift
@@ -457,7 +457,7 @@ fn raw_login_uris_stay_in_the_search_haystack() {
 #[test]
 fn login_only_accessors_return_none_or_empty_for_non_login_items() {
     // The `_ =>` arms of `login`/`password`/`totp_secret`/`uris`
-    // (model.rs:687-721) must not panic or fall through for other kinds.
+    // (model.rs:708-742) must not panic or fall through for other kinds.
     let items = [
         VaultItem::new(
             "n",
@@ -532,7 +532,7 @@ fn favorites_folders_and_removal_round_trip() {
     assert_eq!(vault.folder_counts(), vec![("f1".to_string(), 2)]);
 
     // `None` removes the folder assignment rather than being ignored, and a
-    // subsequent assignment is accepted again (model.rs:998-1007).
+    // subsequent assignment is accepted again (model.rs:1020-1028).
     assert!(vault.set_folder("3", None));
     assert_eq!(vault.item("3").unwrap().folder_id, None);
     assert_eq!(vault.folder_counts(), vec![("f1".to_string(), 1)]);
@@ -801,7 +801,7 @@ fn filter_labels_resolve_folder_names() {
 #[test]
 fn filter_labels_cover_favorites_and_no_folder() {
     let vault = sample();
-    // Both sidebar-only filters must have a stable label (model.rs:829-841).
+    // Both sidebar-only filters must have a stable label (model.rs:851-862).
     assert_eq!(Filter::Favorites.label(&vault.folders), "お気に入り");
     assert_eq!(Filter::NoFolder.label(&vault.folders), "フォルダなし");
     // Labels do not depend on folder contents when the filter is not a folder.
@@ -811,7 +811,7 @@ fn filter_labels_cover_favorites_and_no_folder() {
 
 #[test]
 fn sort_key_next_cycles_through_all_four_variants() {
-    // All four branches of `SortKey::next` (model.rs:858-867) must form one
+    // All four branches of `SortKey::next` (model.rs:881-888) must form one
     // closed cycle; a missing branch would leave the UI sort button stuck.
     assert_eq!(SortKey::NameAsc.next(), SortKey::NameDesc);
     assert_eq!(SortKey::NameDesc.next(), SortKey::RecentlyModified);
@@ -1068,10 +1068,35 @@ fn ssh_fingerprint_ignores_comment_and_extra_whitespace() {
 }
 
 #[test]
+fn ssh_fingerprint_works_without_an_optional_comment_field() {
+    // `sha256_fingerprint` reads only the algorithm label and the base64 blob
+    // (model.rs:469-476). OpenSSH's trailing comment is optional, so a
+    // two-field line must yield the same fingerprint as the commented key.
+    let blob = REFERENCE_PUBLIC_KEY.split_whitespace().nth(1).unwrap();
+    let two_fields = format!("ssh-ed25519 {blob}");
+    for line in [
+        two_fields.as_str(),
+        "  ssh-ed25519   AAAAC3NzaC1lZDI1NTE5AAAAIMVYTn6DgHoRS29obD0RhrnbKgHhM1eqLvmbTWMGwSmR  ",
+    ] {
+        assert_eq!(
+            super::ssh_fingerprint::sha256_fingerprint(line).as_deref(),
+            Some(REFERENCE_FINGERPRINT),
+            "line {line:?}"
+        );
+        let key = ssh_key(line, REFERENCE_FINGERPRINT);
+        assert_eq!(
+            key.verify_fingerprint(),
+            FingerprintVerify::Match,
+            "{line:?}"
+        );
+    }
+}
+
+#[test]
 fn ssh_fingerprint_rejects_extra_base64_padding() {
     // Padding is optional, but a surplus `=` must not decode to the same blob:
     // otherwise distinct public-key lines would share one fingerprint
-    // (model.rs:358-412).
+    // (model.rs:380-433).
     let canonical = super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ== fp");
     assert!(canonical.is_some());
     for extra in [
@@ -1098,7 +1123,7 @@ fn ssh_fingerprint_rejects_extra_base64_padding() {
 #[test]
 fn ssh_fingerprint_rejects_non_canonical_base64_padding_bits() {
     // The decoder must verify the unused low bits of the final base64
-    // character (model.rs:389-398). `AQ==` is canonical for byte 0x01, while
+    // character (model.rs:410-419). `AQ==` is canonical for byte 0x01, while
     // `AR==` decodes to the same 0x01 only if those low bits are ignored.
     // Accepting it would let two different fingerprints map to one key blob.
     let canonical = "ssh-ed25519 AQ== fp";
@@ -1204,7 +1229,7 @@ fn name_sort_uses_the_same_nfkd_key_as_search() {
 
 #[test]
 fn notes_are_searchable_even_for_non_login_items() {
-    // `haystacks` always includes `notes` (model.rs:733-738), so a free-form
+    // `haystacks` always includes `notes` (model.rs:754-759), so a free-form
     // note is findable regardless of the item's kind, including text that is
     // absent from the name and kind-specific fields.
     let mut item = VaultItem::new(
@@ -1260,7 +1285,7 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
 
 #[test]
 fn page_matching_ties_use_the_folded_name_key_then_the_id() {
-    // `matches_page` shares the `compare` tiebreak (model.rs:985-1001,1084-1087):
+    // `matches_page` shares the `compare` tiebreak (model.rs:985-1005,1084-1087):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
     let page = "https://example.com/shared";
@@ -1310,7 +1335,7 @@ fn cardholder_name_is_redacted_in_debug_but_brand_stays_visible() {
 
 #[test]
 fn search_hints_exclude_card_code_and_ssh_private_key() {
-    // `haystacks` (model.rs:733-776) lists only non-secret kind-specific
+    // `haystacks` (model.rs:754-797) lists only non-secret kind-specific
     // fields. The card security code and SSH private key must not be fished
     // out through search even though they live in the same item.
     let card = VaultItem::new(
@@ -1344,7 +1369,7 @@ fn search_hints_exclude_card_code_and_ssh_private_key() {
 
 #[test]
 fn login_username_is_redacted_in_debug() {
-    // Regression for model.rs:587-611: the manual `ItemData` Debug prints a
+    // Regression for model.rs:608-632: the manual `ItemData` Debug prints a
     // placeholder for username, not the actual value.
     let item = login(
         "1",
@@ -1404,7 +1429,7 @@ fn search_haystacks_cover_kind_specific_fields() {
     );
     assert!(identity.matches_query("lovelace"));
     assert!(identity.matches_query("analytical"));
-    // The address is a searchable identity field too (model.rs:758-769), but
+    // The address is a searchable identity field too (model.rs:779-790), but
     // it stays redacted in Debug (see `debug_masks_identity_and_uri_details`).
     assert!(identity.matches_query("maple avenue"));
     assert!(identity.matches_query("MAPLE"));
@@ -1426,7 +1451,7 @@ fn unset_or_foreign_format_fingerprints_are_reported_as_mismatch() {
     // Current contract: only an unparsable *public key* has a third outcome
     // (`InvalidPublicKey`). An empty or differently formatted stored
     // fingerprint is a string mismatch, with the recomputed SHA256 value
-    // returned for diagnostics (model.rs:309-334).
+    // returned for diagnostics (model.rs:330-355).
     let expected = FingerprintVerify::Mismatch {
         computed: REFERENCE_FINGERPRINT.to_string(),
     };
@@ -1528,7 +1553,7 @@ fn view_trims_surrounding_whitespace_from_the_query() {
         .items
         .push(login("1", "Café", "user", "pw", "https://example.com"));
 
-    // `Vault::view` trims the raw query before normalizing it (model.rs:952),
+    // `Vault::view` trims the raw query before normalizing it (model.rs:973),
     // so a pasted value with stray whitespace behaves like the bare needle.
     for query in ["Café", "  Café  ", "\tCafé\n", "  CAFE\u{301}  "] {
         assert_eq!(
@@ -1547,7 +1572,7 @@ fn view_trims_surrounding_whitespace_from_the_query() {
 #[test]
 fn ssh_fingerprint_rejects_insufficient_base64_padding() {
     // Padding is optional, but when it is present the run of `=` must match
-    // the encoded byte count (model.rs:399-410). A partial run must not decode
+    // the encoded byte count (model.rs:420-431). A partial run must not decode
     // to the same key blob as the canonical form.
     let canonical = super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ== fp");
     assert!(canonical.is_some());
@@ -1621,7 +1646,7 @@ fn empty_and_whitespace_needles_match_every_item() {
 fn every_item_data_variant_round_trips_through_serde() {
     // Internally tagged `ItemData` must keep its `type` tag and every field —
     // especially the four non-Login payloads, whose newtype/struct variants
-    // share the same wire shape (model.rs:555-585).
+    // share the same wire shape (model.rs:576-606).
     let cases = [
         (
             "login",
@@ -1687,7 +1712,7 @@ fn every_item_data_variant_round_trips_through_serde() {
 fn login_uri_match_enum_maps_every_wire_value() {
     // Every wire number must reach its own enum variant, not collapse into
     // the low-value defaults; pin each one and its serde form
-    // (model.rs:149-168). Wire 3 and 5 are the upper-bound regressions: they
+    // (model.rs:169-189). Wire 3 and 5 are the upper-bound regressions: they
     // are the last two values `from_wire` accepts.
     for (wire, expected) in [
         (0, openwarden::UriMatch::Domain),
@@ -1763,7 +1788,7 @@ fn card_and_notes_secrets_keep_their_wire_and_length_shape() {
 fn ssh_fingerprint_discards_the_key_type_field() {
     // `sha256_fingerprint` hashes only the decoded blob (the second
     // whitespace-separated field); the algorithm label is read and discarded
-    // (model.rs:447-455). Re-labelling the same blob must not change the
+    // (model.rs:469-476). Re-labelling the same blob must not change the
     // computed fingerprint, even though OpenSSH itself would reject such a
     // line as inconsistent.
     let blob = "AAAAC3NzaC1lZDI1NTE5AAAAIMVYTn6DgHoRS29obD0RhrnbKgHhM1eqLvmbTWMGwSmR";
@@ -1897,7 +1922,7 @@ fn ssh_base64_codec_handles_plus_and_slash() {
 fn ssh_base64_encode_one_byte_remainder_uses_two_chars_and_double_padding() {
     use super::ssh_fingerprint::{decode, encode};
 
-    // model.rs:443-449: a single leftover byte takes the `[a]` arm, emitting
+    // model.rs:444-449: a single leftover byte takes the `[a]` arm, emitting
     // two alphabet characters followed by `==`. A wrapping or 3-byte-only
     // implementation would drop the byte or produce the wrong padding.
     assert_eq!(encode(&[]), "");
@@ -1917,7 +1942,7 @@ fn ssh_base64_encode_one_byte_remainder_uses_two_chars_and_double_padding() {
 
 #[test]
 fn vault_item_debug_shows_non_secret_metadata_and_masks_notes() {
-    // model.rs:672-685 prints every non-secret metadata field verbatim while
+    // model.rs:672-686 prints every non-secret metadata field verbatim while
     // replacing the secret-bearing notes wholesale. Diagnostics must stay
     // useful (id / folder / favorite / revision) without revealing notes.
     let mut item = VaultItem::new(
@@ -1954,7 +1979,7 @@ fn vault_item_debug_shows_non_secret_metadata_and_masks_notes() {
 
 #[test]
 fn item_kind_uses_snake_case_strings_on_the_wire() {
-    // `ItemKind` derives `#[serde(rename_all = "snake_case")]` (model.rs:94-96):
+    // `ItemKind` derives `#[serde(rename_all = "snake_case")]` (model.rs:115-117):
     // its serde form is a string, not the numeric `to_wire()` value.
     for (kind, text) in [
         (ItemKind::Login, "login"),
@@ -1976,7 +2001,7 @@ fn item_kind_uses_snake_case_strings_on_the_wire() {
 
 #[test]
 fn debug_distinguishes_an_empty_totp_from_a_populated_one() {
-    // The manual `ItemData` Debug (model.rs:587-611) prints an empty string
+    // The manual `ItemData` Debug (model.rs:608-632) prints an empty string
     // for an unset TOTP and a redaction marker for a set one.
     let mut item = login("1", "Sample", "alice", "pw", "https://example.com");
     assert_eq!(item.totp_secret(), Some(""));
@@ -1995,11 +2020,11 @@ fn debug_distinguishes_an_empty_totp_from_a_populated_one() {
 
 #[test]
 fn an_unknown_folder_id_is_never_counted_but_still_filters() {
-    // `folder_counts` walks the declared folders (model.rs:913-926), so a
+    // `folder_counts` walks the declared folders (model.rs:935-947), so a
     // dangling `folder_id` is never materialised as a bucket and its item is
     // counted nowhere. `Filter::Folder`, however, compares the raw id, so the
     // item stays reachable through that filter and the label degrades
-    // gracefully (model.rs:818-841).
+    // gracefully (model.rs:851-862).
     let mut vault = Vault::new();
     vault.folders = vec![
         Folder {
@@ -2041,7 +2066,7 @@ fn an_unknown_folder_id_is_never_counted_but_still_filters() {
 fn zeroizing_text_display_prints_the_plain_text_while_debug_masks_it() {
     let secret = ZeroizingText::new("plain-text-secret");
     // Display is the rendering path and deliberately exposes the plaintext;
-    // only Debug is masked (model.rs:224-233). The split is pinned so a future
+    // only Debug is masked (model.rs:245-255). The split is pinned so a future
     // "safety" change cannot silently break status/search text.
     assert_eq!(secret.as_str(), "plain-text-secret");
     assert_eq!(secret.to_string(), "plain-text-secret");
@@ -2066,7 +2091,7 @@ fn zeroizing_text_display_prints_the_plain_text_while_debug_masks_it() {
 
 #[test]
 fn item_data_rejects_an_unknown_or_missing_type_tag() {
-    // `ItemData` is internally tagged with `type` (model.rs:555-557), so both
+    // `ItemData` is internally tagged with `type` (model.rs:576-578), so both
     // an unknown tag and a missing tag must be rejected instead of falling
     // back to a variant with default fields.
     for body in [
@@ -2093,7 +2118,7 @@ fn item_data_rejects_an_unknown_or_missing_type_tag() {
 #[test]
 fn duplicate_names_ignore_surrounding_whitespace_differences() {
     // `duplicate_names` compares `comparison_key(item.name.trim())`
-    // (model.rs:1063-1080), so padding a name with ASCII or Unicode whitespace
+    // (model.rs:1063-1081), so padding a name with ASCII or Unicode whitespace
     // must not split it into a separate group.
     let mut vault = Vault::new();
     vault

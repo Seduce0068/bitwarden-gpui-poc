@@ -276,6 +276,15 @@ fn percent_decode(value: &str) -> String {
     out
 }
 
+/// Maximum recursion depth when a harmless parameter value is itself a URL.
+///
+/// A diagnostic URL can nest URLs in values (`?next=https://h/?next=...`).
+/// Unbounded recursion would let a hostile URL exhaust the stack. Past this
+/// depth the nested value is replaced by `[redacted]` instead of being
+/// descended into, so a credential hidden in the unrendered tail cannot leak.
+/// The legitimate one- and two-level cases stay fully masked.
+pub(crate) const MAX_MASK_DEPTH: usize = 8;
+
 /// Redact secret-bearing `key=value` pairs in a query or a fragment.
 ///
 /// A harmless key whose *value* is itself a URL is masked recursively: a
@@ -284,8 +293,9 @@ fn percent_decode(value: &str) -> String {
 /// percent-encoded (`%3F`, `%23`, `%3A%2F%2F`): it is decoded first so an
 /// encoded credential cannot hide behind escapes. When a nested URL is found
 /// the decoded, masked form is rendered; plain values are copied unchanged so
-/// the URL stays useful for debugging.
-fn mask_param_pairs(pairs: &str) -> String {
+/// the URL stays useful for debugging. Recursion is capped by
+/// [`MAX_MASK_DEPTH`]; `depth` is the number of nested URLs already entered.
+fn mask_param_pairs(pairs: &str, depth: usize) -> String {
     let mut out = String::with_capacity(pairs.len());
     let mut first = true;
     for pair in pairs.split('&') {
@@ -315,7 +325,14 @@ fn mask_param_pairs(pairs: &str) -> String {
                 if decoded.contains('?') || decoded.contains('#') || decoded.contains("://") {
                     out.push_str(key);
                     out.push('=');
-                    out.push_str(&mask_url_secrets(&decoded));
+                    if depth >= MAX_MASK_DEPTH {
+                        // Stop the descent before the stack grows further. The
+                        // whole tail is replaced, so nothing behind the cap is
+                        // rendered into the diagnostic URL.
+                        out.push_str("[redacted]");
+                    } else {
+                        out.push_str(&mask_url_secrets_inner(&decoded, depth + 1));
+                    }
                 } else {
                     out.push_str(pair);
                 }
@@ -342,6 +359,11 @@ fn mask_param_pairs(pairs: &str) -> String {
 /// `?` as a query delimiter would copy the fragment text before it verbatim
 /// into the output and leak its credentials.
 fn mask_url_secrets(url: &str) -> String {
+    mask_url_secrets_inner(url, 0)
+}
+
+/// Depth-limited implementation of [`mask_url_secrets`].
+fn mask_url_secrets_inner(url: &str, depth: usize) -> String {
     let masked = mask_url_userinfo(url);
     let fragment_start = masked.find('#');
     let query_start = masked
@@ -351,17 +373,20 @@ fn mask_url_secrets(url: &str) -> String {
         let query_end = fragment_start.unwrap_or(masked.len());
         let mut out = String::with_capacity(masked.len());
         out.push_str(&masked[..query_start + 1]);
-        out.push_str(&mask_param_pairs(&masked[query_start + 1..query_end]));
+        out.push_str(&mask_param_pairs(
+            &masked[query_start + 1..query_end],
+            depth,
+        ));
         if let Some(fragment_start) = fragment_start {
             out.push('#');
-            out.push_str(&mask_param_pairs(&masked[fragment_start + 1..]));
+            out.push_str(&mask_param_pairs(&masked[fragment_start + 1..], depth));
         }
         out
     } else if let Some(fragment_start) = fragment_start {
         format!(
             "{}#{}",
             &masked[..fragment_start],
-            mask_param_pairs(&masked[fragment_start + 1..])
+            mask_param_pairs(&masked[fragment_start + 1..], depth)
         )
     } else {
         masked
@@ -727,7 +752,15 @@ fn save_to_path(path: Option<PathBuf>, cache: &SyncCache) -> Result<(), std::io:
 /// derived from the personal API key's `client_id` (`user.<uuid>`), which is
 /// the trusted account identifier available on a failed-sync path; a plain
 /// `client_id` without that prefix fails closed. [`validate`] applies the same
-/// two comparisons to a cache the caller already holds.
+/// comparisons to a cache the caller already holds.
+///
+/// After parsing, the body's `Profile.Id` is compared with the envelope
+/// `user_id` as well: a hand-edited cache whose envelope claims one account
+/// while its body belongs to another is refused with
+/// [`SyncCacheError::UserMismatch`]. The envelope alone is not proof of
+/// ownership. A body without that field fails closed too — either its parse
+/// fails or the resulting id cannot match a non-empty envelope.
+///
 /// Key material is never taken from the cache — its
 /// `profile.key` / `privateKey` are stripped by [`SyncCache::from_body`] and
 /// the live `Session` supplies the protected key at unlock time. A key change
@@ -761,7 +794,11 @@ pub fn cached_sync_for_detailed(
     if is_cache_expired(cache.created_at, now) {
         return Err(SyncCacheError::CacheExpired);
     }
-    cache.sync()
+    let sync = cache.sync()?;
+    if sync.user_id() != cache.user_id.as_str() {
+        return Err(SyncCacheError::UserMismatch);
+    }
+    Ok(sync)
 }
 
 /// Best-effort wrapper around [`cached_sync_for_detailed`] for callers that
@@ -773,7 +810,8 @@ pub fn cached_sync_for(server_url: &str, user_id: &str) -> Option<openwarden::Sy
 
 /// Validate the parts of a cache that do not need a filesystem read.
 ///
-/// Both the server URL and `user_id` are compared with the stored values,
+/// Both the server URL and `user_id` are compared with the stored values, and
+/// the parsed body's `Profile.Id` is checked against the envelope `user_id`,
 /// matching [`cached_sync_for_detailed`] so a caller that already holds a
 /// cache cannot accept another account's entry by skipping the restore path.
 /// The auth layer supplies the id derived from the personal API key's
@@ -800,7 +838,10 @@ pub fn validate(cache: &SyncCache, user_id: &str, server_url: &str) -> Result<()
     if cache.user_id != user_id {
         return Err(SyncCacheError::UserMismatch);
     }
-    cache.sync()?;
+    let sync = cache.sync()?;
+    if sync.user_id() != cache.user_id.as_str() {
+        return Err(SyncCacheError::UserMismatch);
+    }
     Ok(())
 }
 

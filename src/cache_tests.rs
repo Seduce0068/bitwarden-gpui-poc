@@ -1496,11 +1496,11 @@ fn value_less_parameters_survive_masking_verbatim() {
     // value, so it takes the `else` branch and must be copied verbatim rather
     // than dropped or rewritten.
     assert_eq!(
-        super::mask_param_pairs("flag&token=TOPSECRET&state=ok&bare"),
+        super::mask_param_pairs("flag&token=TOPSECRET&state=ok&bare", 0),
         "flag&token=[redacted]&state=ok&bare"
     );
-    assert_eq!(super::mask_param_pairs("bare"), "bare");
-    assert_eq!(super::mask_param_pairs("a&b&c"), "a&b&c");
+    assert_eq!(super::mask_param_pairs("bare", 0), "bare");
+    assert_eq!(super::mask_param_pairs("a&b&c", 0), "a&b&c");
 
     // The same branch is reached from a query and from a fragment.
     let masked = super::mask_url_secrets("https://vault.example.com/p?flag&token=SECRET#bare");
@@ -2024,4 +2024,143 @@ fn host_with_optional_port_ok_rejects_non_ascii_digit_ports() {
     assert!(!super::host_with_optional_port_ok(
         "vault.example.com:84４3"
     ));
+}
+
+#[test]
+fn deeply_nested_urls_stop_at_the_mask_depth_limit() {
+    // cache.rs:279-345: a harmless parameter whose value is another URL is
+    // masked recursively, but the recursion is capped so a hostile URL cannot
+    // exhaust the stack. Legitimate one- and two-level nesting keeps working.
+    assert_eq!(super::MAX_MASK_DEPTH, 8);
+
+    let shallow =
+        "https://outer.example.com/next?next=https://cb.example.com/done?token=SHALLOW_SECRET";
+    let shallow_masked = super::mask_url_secrets(shallow);
+    assert!(
+        shallow_masked.contains("token=[redacted]"),
+        "{shallow_masked}"
+    );
+    assert!(
+        !shallow_masked.contains("SHALLOW_SECRET"),
+        "{shallow_masked}"
+    );
+
+    // Sixteen levels: the first eight are rendered, the rest is replaced by a
+    // single `[redacted]` rather than descended into (so the call returns
+    // instead of recursing without bound).
+    let mut nested = "https://deep.example.com/cb?token=DEEPEST_SECRET".to_string();
+    for layer in 0..16 {
+        nested = format!("https://layer{layer}.example.com/next?next={nested}");
+    }
+    let masked = super::mask_url_secrets(&nested);
+    assert!(masked.contains("next=[redacted]"), "{masked}");
+    assert!(masked.contains("layer15.example.com"), "{masked}");
+    assert!(masked.contains("layer7.example.com"), "{masked}");
+    for unreachable in ["layer6", "layer0", "deep.example.com", "DEEPEST_SECRET"] {
+        assert!(
+            !masked.contains(unreachable),
+            "leaked {unreachable} beyond the depth cap: {masked}"
+        );
+    }
+}
+
+#[test]
+fn username_only_userinfo_keeps_the_query_at_sign_via_host_complete() {
+    // cache.rs:135-149: with no `user:password` marker, `has_userinfo_colon`
+    // alone would classify the query '@' as the userinfo separator. The
+    // `host_complete` rescue recognizes the clean host after the real '@'.
+    let scan = "user@host?email=a@b";
+    let userinfo_at = scan.find('@').expect("userinfo '@'");
+    let query_at = scan.rfind('@').expect("query '@'");
+    assert!(!super::at_is_in_query(scan, userinfo_at));
+    assert!(
+        super::at_is_in_query(scan, query_at),
+        "host_complete must classify the query '@' as in-query"
+    );
+
+    let url = "https://user@host?email=a@b";
+    assert_eq!(
+        super::mask_url_userinfo(url),
+        "https://[redacted]@host?email=a@b"
+    );
+    assert_eq!(
+        super::mask_url_userinfo("https://user@host:8443?email=a@b"),
+        "https://[redacted]@host:8443?email=a@b"
+    );
+
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(rendered.contains("[redacted]@host?email=a@b"), "{rendered}");
+    assert!(!rendered.contains("[redacted]@b"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn validate_rejects_a_body_user_id_that_disagrees_with_the_envelope() {
+    // cache.rs:834-846: matching the envelope is not enough; the parsed body's
+    // `Profile.Id` must name the same account. A hand-edited envelope can claim
+    // a different id while the encrypted body still belongs to another user.
+    let body = br#"{
+        "profile": {"id": "user-in-body"},
+        "folders": [{"id": "f1", "name": "2.work"}],
+        "ciphers": []
+    }"#;
+    let cache = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-in-envelope".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: body.to_vec(),
+        created_at: None,
+    };
+    assert!(cache.sync().is_ok(), "the body itself must be parseable");
+
+    assert_eq!(
+        validate(&cache, "user-in-envelope", "https://vault.example.com"),
+        Err(SyncCacheError::UserMismatch)
+    );
+    // Matching the body id does not help: the envelope check still wins.
+    assert_eq!(
+        validate(&cache, "user-in-body", "https://vault.example.com"),
+        Err(SyncCacheError::UserMismatch)
+    );
+
+    // A cache whose envelope and body agree remains valid.
+    let consistent = SyncCache {
+        user_id: "user-in-body".to_string(),
+        ..cache
+    };
+    assert!(validate(&consistent, "user-in-body", "https://vault.example.com").is_ok());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cached_sync_for_detailed_rejects_a_body_user_id_that_disagrees_with_the_envelope() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+
+    let body = br#"{
+        "profile": {"id": "user-in-body"},
+        "folders": [{"id": "f1", "name": "2.work"}],
+        "ciphers": []
+    }"#;
+    let cache = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-in-envelope".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: body.to_vec(),
+        created_at: None,
+    };
+    save_default(&cache).unwrap();
+
+    // Server, envelope id and freshness all check out; only the body disagrees.
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", "user-in-envelope"),
+        Err(SyncCacheError::UserMismatch)
+    ));
+    assert!(
+        cached_sync_for("https://vault.example.com", "user-in-envelope").is_none(),
+        "the best-effort wrapper must collapse the classified mismatch"
+    );
 }
