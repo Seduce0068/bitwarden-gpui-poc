@@ -14,7 +14,7 @@ status: "approved"
 verified:
   by: "dsh-agent (lead)"
   at: "2026-11-21T04:49:12+09:00"
-stale_after: "2027-05-18T21:28:00+09:00"
+stale_after: "2027-05-21T04:49:12+09:00"
 ---
 
 ## Context

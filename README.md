@@ -201,7 +201,7 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 
 | JSON パス | 型 | 既定値 | 範囲・説明 |
 | --- | --- | --- | --- |
-| `schema_version` | number | `1` | 将来版（>1）は破棄。欠落・型違反は legacy（0）として保存時に昇格 |
+| `schema_version` | number | `1` | 将来版は破棄。欠落は legacy(0) |
 | `server_url` | string | `https://vault.bitwarden.com` | 最大 2048 文字 |
 | `email` | string | `""` | 最大 254 文字 |
 | `device_id` | string | `""` | UUID v4。初回ログイン時に生成・永続化 |
@@ -220,6 +220,9 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 | `idle_lock_seconds` | number | `300` | 60〜3600（1〜60 分） |
 | `login_timeout_seconds` | number | `30` | 1〜3600 |
 | `clipboard_restore_seconds` | number | `30` | 1〜3600 |
+
+`schema_version` は文字列や整数浮動小数の将来版も拒否します。欠落や不正な
+型は legacy(0) として扱い、保存時に現行版へ昇格します。
 
 数値は型として表現できる範囲外の値がクランプされ、負数・小数など型として
 表現できない値は既定値へ置き換えられます。`server_url` / `email` の上限は

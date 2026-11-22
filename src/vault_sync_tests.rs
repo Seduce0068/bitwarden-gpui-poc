@@ -633,6 +633,43 @@ fn undecryptable_uri_becomes_a_marker_and_is_audited_as_uninspectable() {
 }
 
 #[test]
+fn undecryptable_uri_marker_and_real_match_types_are_distinguished() {
+    assert!(is_undecryptable_uri(UNDECRYPTABLE_URI));
+    assert!(!is_undecryptable_uri("https://example.com"));
+    assert!(!is_undecryptable_uri(UNDECRYPTABLE_PASSWORD));
+    assert!(!is_undecryptable_uri(""));
+    // Only the exact NUL-prefixed marker counts; a lookalike does not.
+    assert!(!is_undecryptable_uri("\0openwarden:uri-undecryptable-x"));
+    assert_eq!(UNDECRYPTABLE_URI, "\u{0}openwarden:uri-undecryptable");
+
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string()
+    };
+    let mut with_matches = encrypted_login("uri-matches", REAL_PASSWORD, REAL_TOTP);
+    with_matches["login"]["uris"] = serde_json::json!([
+        { "uri": enc(b"https://one.example.com"), "match": 1 },
+        { "uri": enc(b"https://two.example.com"), "match": 3 },
+        { "uri": enc(b"https://three.example.com"), "match": 5 },
+        { "uri": enc(b"https://four.example.com"), "match": null }
+    ]);
+    let vault = unlocked_vault(&[with_matches]);
+    let model = import_logins(&vault).expect("import should succeed");
+    let uris = model.item("uri-matches").unwrap().uris();
+    assert_eq!(uris.len(), 4);
+    // `to_wire()` numbers survive the real sync -> openwarden -> model path.
+    assert_eq!(uris[0].match_type, Some(1));
+    assert_eq!(uris[1].match_type, Some(3));
+    assert_eq!(uris[2].match_type, Some(5));
+    assert_eq!(uris[3].match_type, None);
+    for uri in uris {
+        assert!(!is_undecryptable_uri(&uri.uri));
+    }
+}
+
+#[test]
 fn pascal_case_sync_body_is_normalized_for_openwarden() {
     let body = br#"{
         "Profile": {"Id": "user-1", "Key": "2.encrypted"},

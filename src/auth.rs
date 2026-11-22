@@ -368,8 +368,9 @@ pub fn clamp_auth_config(config: &mut AuthConfig) {
 }
 
 /// A minimal structural check: at most `MAX_EMAIL_LEN` characters, exactly
-/// one `@`, no whitespace/control/format characters, and a dotted domain.
-/// Regex-level RFC 5322 validation is out of scope for the PoC.
+/// one `@`, no whitespace/control/format characters, no leading/trailing or
+/// consecutive dots in either the local part or the domain, and a dotted
+/// domain. Regex-level RFC 5322 validation is out of scope for the PoC.
 pub fn valid_email(value: &str) -> bool {
     let value = value.trim();
     if value.is_empty()
@@ -391,6 +392,9 @@ pub fn valid_email(value: &str) -> bool {
         return false;
     };
     !local.is_empty()
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains("..")
         && !domain.is_empty()
         && domain.contains('.')
         && !domain.starts_with('.')

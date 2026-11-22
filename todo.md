@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第60弾で 15 件すべてを完了）。
+なし（第61弾で 10 件すべてを完了）。
 
 ## 完了
 
+- [x] 第61弾（16 担当・5 回目）の指摘 10 件を完結（2026-11-22）
+  - email 共有欄の Cf 入力フィルタ、キャッシュ redact の再帰化、
+    `valid_email` の local part ドット規則を修正。
+  - 矢印キー案内、TOTP 境界、設定クランプ、cache マスキング、
+    URI match_type、base64 padding、mask_uri、matches_page の
+    残りテストを追加。
+  - CHANGELOG / README / ADR の残矛盾を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（466 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第60弾（16 担当・4 回目）の指摘 15 件を完結（2026-11-22）
   - 編集モードの矢印キー委譲を明記、生成 +/- の同時変更を表示、
     自動ロック時の復帰案内、監査 status の行名更新、finish_search の

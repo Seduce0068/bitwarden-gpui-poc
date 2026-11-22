@@ -197,6 +197,67 @@ mod tests {
     }
 
     #[test]
+    fn warning_boundary_includes_exactly_five_seconds_remaining() {
+        assert_eq!(EXPIRY_WARNING_SECONDS, 5);
+
+        // A 30-second period leaves exactly 5 seconds at t=25. The warning
+        // includes the boundary (`expires_within` uses `<=`), but not t=24.
+        let mut state = TotpState::new();
+        let at_boundary = state.display(SECRET, 25);
+        assert!(
+            at_boundary.contains("あと5秒"),
+            "expected exactly 5 seconds left, got: {at_boundary}"
+        );
+        assert!(
+            at_boundary.contains("まもなく期限切れ"),
+            "exactly 5 seconds left must warn, got: {at_boundary}"
+        );
+        assert_eq!(
+            state
+                .tick
+                .as_ref()
+                .and_then(|tick| tick.code.as_ref())
+                .map(|code| code.remaining()),
+            Some(5)
+        );
+
+        // One second earlier there are 6 seconds left: no warning yet.
+        let mut state = TotpState::new();
+        let before_boundary = state.display(SECRET, 24);
+        assert!(
+            before_boundary.contains("あと6秒"),
+            "expected 6 seconds left, got: {before_boundary}"
+        );
+        assert!(
+            !before_boundary.contains("まもなく期限切れ"),
+            "6 seconds left must not warn, got: {before_boundary}"
+        );
+    }
+
+    #[test]
+    fn invalidate_clears_the_cached_error_message() {
+        let mut state = TotpState::new();
+        let invalid = "not base32!";
+        assert_eq!(state.display(invalid, 0), "コード生成失敗");
+        assert!(
+            state.error_message().is_some(),
+            "a failed sample must cache its reason for the copy path"
+        );
+
+        state.invalidate();
+        assert_eq!(
+            state.error_message(),
+            None,
+            "invalidate drops the cached error along with the tick"
+        );
+        assert_eq!(state.current_code(), None);
+
+        // A fresh sample can populate the error cache again.
+        assert_eq!(state.display(invalid, 1), "コード生成失敗");
+        assert!(state.error_message().is_some());
+    }
+
+    #[test]
     fn display_resamples_when_the_period_boundary_is_crossed() {
         let mut state = TotpState::new();
         let before = state.display(SECRET, 29);

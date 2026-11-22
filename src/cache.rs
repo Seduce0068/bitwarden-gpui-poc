@@ -113,11 +113,13 @@ impl SyncCache {
 
     /// Build a cache entry from a sync response body.
     ///
-    /// The `profile.key` and `profile.private_key` fields are stripped before
-    /// storage: keeping the protected key on disk would allow an offline
-    /// master-password guess. `apply_sync` tolerates their absence because
-    /// the live `Session` supplies the protected key at unlock time. Both
-    /// camelCase (`privateKey`) and PascalCase / snake_case spellings are
+    /// All `key` / `private_key` fields are stripped before storage, including
+    /// nested per-item keys on ciphers and folders: keeping any protected key
+    /// on disk would allow an offline master-password guess. `apply_sync`
+    /// tolerates the absence of profile keys because the live `Session`
+    /// supplies the protected key at unlock time; a cipher whose own key was
+    /// stripped cannot be decrypted offline and is reported as uninspectable.
+    /// Both camelCase (`privateKey`) and PascalCase / snake_case spellings are
     /// removed, since this runs on the *raw* body before normalization (see
     /// `redact_profile_keys`).
     ///
@@ -171,14 +173,15 @@ pub(crate) fn is_cache_expired(created_at: Option<i64>, now: i64) -> bool {
     }
 }
 
-/// Whether a profile field name denotes protected or private key material,
-/// regardless of the casing/separator convention the server used.
+/// Whether a field name denotes protected or private key material, regardless
+/// of the casing/separator convention the server used.
 ///
 /// `normalize_sync_keys` (in [`crate::vault_sync`]) only lowercases the first
 /// character, so a raw PascalCase `Key` / `PrivateKey` would survive a literal
 /// `remove("key")`/`remove("privateKey")` pair. Comparing a separator-free,
 /// ASCII-lowercased form closes that gap without touching fields such as
-/// `keyId` that are not themselves secrets.
+/// `keyId` that are not themselves secrets. The same fold is used for nested
+/// per-item keys (`ciphers[].key`, `attachments[].key`, …).
 fn is_secret_profile_key(key: &str) -> bool {
     let folded: String = key
         .chars()
@@ -188,33 +191,43 @@ fn is_secret_profile_key(key: &str) -> bool {
     matches!(folded.as_str(), "key" | "privatekey")
 }
 
+/// Recursively remove secret key fields from a JSON value.
+///
+/// Only object members are removed; arrays and all other structure stay
+/// intact, so the cached body remains a valid sync response. Traversing every
+/// object covers profile keys, per-item keys (`ciphers[].key`), attachment keys
+/// and any other nested container without maintaining a list of container
+/// names (which a server-side rename could bypass).
+fn redact_secret_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.retain(|key, _| !is_secret_profile_key(key));
+            for child in object.values_mut() {
+                redact_secret_keys(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_secret_keys(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Remove key material from a raw sync body, keeping the rest of the
 /// encrypted ciphers and folders intact.
 ///
-/// The `profile` object itself is also matched case-insensitively: a
-/// Vaultwarden body that uses `Profile` must not smuggle a `Key` past the
-/// redactor just because its container is spelled differently.
+/// The walk is recursive and case-insensitive: a Vaultwarden body that uses
+/// `Profile` / `Key`, a second crafted `profile` object, and per-item keys on
+/// ciphers or folders must not smuggle key material past the redactor and onto
+/// disk. Once an item's key is gone, offline decryption of that specific item
+/// fails (the health layer reports it as uninspectable), which is the intended
+/// trade-off: the live `Session` supplies the protected key at unlock time.
 fn redact_profile_keys(body: &[u8]) -> Result<Vec<u8>, SyncCacheError> {
     let mut value: serde_json::Value = serde_json::from_slice(body)
         .map_err(|error| SyncCacheError::CacheRedact(crate::error::BoxedCause::new(error)))?;
-    if let Some(root) = value.as_object_mut() {
-        // Redact every spelling in the body. Picking only the first match
-        // would let a crafted second `profile` object smuggle key material
-        // past the redactor and onto disk.
-        let profile_keys: Vec<String> = root
-            .keys()
-            .filter(|key| key.eq_ignore_ascii_case("profile"))
-            .cloned()
-            .collect();
-        for profile_key in profile_keys {
-            if let Some(profile) = root
-                .get_mut(&profile_key)
-                .and_then(|entry| entry.as_object_mut())
-            {
-                profile.retain(|key, _| !is_secret_profile_key(key));
-            }
-        }
-    }
+    redact_secret_keys(&mut value);
     serde_json::to_vec(&value)
         .map_err(|error| SyncCacheError::CacheSerialize(crate::error::BoxedCause::new(error)))
 }

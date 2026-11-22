@@ -191,7 +191,7 @@ pub struct CardData {
 
 /// Identity details.
 ///
-/// `Debug` masks personal fields.
+/// `Debug` masks every personal field, including the company name.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdentityData {
     /// Given name.
@@ -280,12 +280,13 @@ mod ssh_fingerprint {
         let mut out = Vec::with_capacity(input.len() / 4 * 3);
         let mut acc = 0u32;
         let mut leftover_bits = 0u32;
-        let mut saw_padding = false;
+        let mut padding_count = 0usize;
         for &byte in input {
             if byte == b'=' {
-                saw_padding = true;
+                padding_count += 1;
                 continue;
             }
+            let saw_padding = padding_count > 0;
             if saw_padding {
                 return None;
             }
@@ -313,6 +314,18 @@ mod ssh_fingerprint {
         // silently decoding to a different byte string.
         let unused_mask = (1u32 << leftover_bits) - 1;
         if leftover_bits >= 6 || out.is_empty() || acc & unused_mask != 0 {
+            return None;
+        }
+        // Padding is optional, but when present its count must match the
+        // encoded byte count: `AQ==` (1 byte) is canonical, `A===` has one
+        // extra `=` and must be rejected. Without this check distinct inputs
+        // would decode to one blob, defeating fingerprint comparison.
+        let expected_padding = match out.len() % 3 {
+            1 => 2,
+            2 => 1,
+            _ => 0,
+        };
+        if padding_count != 0 && padding_count != expected_padding {
             return None;
         }
         Some(out)
@@ -379,7 +392,7 @@ impl core::fmt::Debug for IdentityData {
             .field("email", &"[redacted]")
             .field("phone", &"[redacted]")
             .field("address", &"[redacted]")
-            .field("company", &self.company)
+            .field("company", &"[redacted]")
             .finish()
     }
 }

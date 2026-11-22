@@ -74,7 +74,20 @@ fn arrow_keys_in_text_editing_are_delegated_to_gpui() {
     // meaning, so no new binding was introduced by this delegation.
     assert_eq!(classify_key(&ctx("up")), UiAction::MoveSelection(-1));
     assert_eq!(classify_key(&ctx("down")), UiAction::MoveSelection(1));
+
+    // The hint must not promise caret movement: classification only delegates
+    // to GPUI's text input via `UiAction::None`, so native caret behaviour is
+    // not guaranteed by this module.
     assert!(TEXT_EDIT_ARROW_KEYS_HINT.contains("矢印キー"));
+    assert!(TEXT_EDIT_ARROW_KEYS_HINT.contains("GPUI"));
+    assert!(
+        TEXT_EDIT_ARROW_KEYS_HINT.contains("保証"),
+        "the hint must state that caret movement is not guaranteed, got: {TEXT_EDIT_ARROW_KEYS_HINT}"
+    );
+    assert!(
+        !TEXT_EDIT_ARROW_KEYS_HINT.contains("（キャレット移動）"),
+        "the old unconditional caret-movement promise must be gone"
+    );
 }
 
 #[test]

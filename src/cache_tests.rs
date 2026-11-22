@@ -241,6 +241,99 @@ fn every_profile_spelling_is_stripped_before_storage() {
 }
 
 #[test]
+fn nested_per_item_keys_are_stripped_before_storage() {
+    // Per-item keys are just as sensitive as the profile key: leaving one on
+    // disk would let an attacker decrypt that item offline. The walk must be
+    // recursive over objects and arrays while keeping the JSON shape intact.
+    let body = serde_json::json!({
+        "profile": {
+            "id": "user-1",
+            "key": "PROFILE_KEY",
+            "privateKey": "PROFILE_PRIVATE_KEY",
+            "keyId": "keep-profile-key-id"
+        },
+        "folders": [
+            { "id": "f1", "name": "2.work", "Key": "FOLDER_KEY" }
+        ],
+        "ciphers": [{
+            "id": "c1",
+            "type": 1,
+            "name": null,
+            "revisionDate": "2024-01-01T00:00:00Z",
+            "key": "CIPHER_ITEM_KEY",
+            "login": {
+                "uris": [{ "uri": null, "match": null }],
+                "attachments": [{ "id": "a1", "key": "ATTACHMENT_KEY" }],
+                "keyId": "keep-login-key-id"
+            }
+        }],
+        "object": "sync"
+    });
+    let cache = SyncCache::from_body(body.to_string().into_bytes(), "https://vault.example.com")
+        .expect("a keyless copy of the body must still be valid sync JSON");
+    let stored = String::from_utf8(cache.body.clone()).unwrap();
+    for secret in [
+        "PROFILE_KEY",
+        "PROFILE_PRIVATE_KEY",
+        "FOLDER_KEY",
+        "CIPHER_ITEM_KEY",
+        "ATTACHMENT_KEY",
+    ] {
+        assert!(!stored.contains(secret), "leaked {secret}: {stored}");
+    }
+    // Non-secret fields, arrays and object nesting must survive the redactor.
+    assert!(stored.contains("keep-profile-key-id"), "{stored}");
+    assert!(stored.contains("keep-login-key-id"), "{stored}");
+    assert!(stored.contains("\"ciphers\""), "{stored}");
+    assert!(stored.contains("\"folders\""), "{stored}");
+    assert!(stored.contains("\"attachments\""), "{stored}");
+    assert!(stored.contains("\"name\":null"), "{stored}");
+    let parsed: serde_json::Value = serde_json::from_slice(&cache.body).unwrap();
+    assert_eq!(parsed["ciphers"][0]["id"], "c1");
+    assert_eq!(parsed["folders"][0]["id"], "f1");
+    assert!(cache.sync().is_ok());
+}
+
+#[test]
+fn mask_url_userinfo_handles_missing_userinfo_scheme_and_query_at_signs() {
+    // No userinfo: unchanged (cache.rs:82-96).
+    assert_eq!(
+        super::mask_url_userinfo("https://vault.example.com/path"),
+        "https://vault.example.com/path"
+    );
+    // No scheme: the whole prefix before the first `/` is the authority, so
+    // an `@` there is still userinfo and must be masked.
+    assert_eq!(
+        super::mask_url_userinfo("user:SECRET@vault.example.com/path"),
+        "[redacted]@vault.example.com/path"
+    );
+    // An `@` outside the authority (query/fragment) is not userinfo and must
+    // not be rewritten: doing so would corrupt the diagnostic URL.
+    assert_eq!(
+        super::mask_url_userinfo("https://vault.example.com/login?email=a@b.example#f@x"),
+        "https://vault.example.com/login?email=a@b.example#f@x"
+    );
+    // Only the last `@` in a real authority separates userinfo from host.
+    assert_eq!(
+        super::mask_url_userinfo("https://u:p@host@vault.example.com/x"),
+        "https://[redacted]@vault.example.com/x"
+    );
+}
+
+#[test]
+fn restore_status_distinguishes_missing_and_user_mismatch() {
+    // A missing cache is the normal first-launch case: no status text.
+    assert_eq!(super::cache_restore_status(SyncCacheError::NotFound), None);
+    // A cache from another account is an explicit failure with its own text.
+    assert_eq!(
+        super::cache_restore_status(SyncCacheError::UserMismatch),
+        Some("同期に失敗しました（キャッシュが別のアカウントのものです）")
+    );
+    assert_eq!(REASON_MISSING, "キャッシュがありません");
+    assert_eq!(REASON_USER_MISMATCH, "キャッシュが別のアカウントのものです");
+}
+
+#[test]
 fn invalid_body_is_rejected() {
     assert_eq!(
         SyncCache::from_body(b"not json".to_vec(), "https://vault.example.com"),

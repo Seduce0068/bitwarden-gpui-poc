@@ -56,10 +56,9 @@ pub const MAX_STALE_DAYS: i64 = 3650;
 /// lookalike addresses or change how an address is rendered, so they are
 /// rejected explicitly instead of being silently tolerated by the structural
 /// check below. The list is the `Cf` category of Unicode 16.0.
-pub(crate) fn has_format_character(value: &str) -> bool {
-    value.chars().any(|ch| {
-        matches!(
-            ch,
+pub(crate) fn is_format_character(ch: char) -> bool {
+    matches!(
+        ch,
             '\u{ad}'
                 | '\u{600}'..='\u{605}'
                 | '\u{61c}'
@@ -81,8 +80,12 @@ pub(crate) fn has_format_character(value: &str) -> bool {
                 | '\u{1d173}'..='\u{1d17a}'
                 | '\u{e0001}'
                 | '\u{e0020}'..='\u{e007f}'
-        )
-    })
+    )
+}
+
+/// Whether `value` contains a Unicode `Cf` (format) character.
+pub(crate) fn has_format_character(value: &str) -> bool {
+    value.chars().any(is_format_character)
 }
 
 /// Byte offset just past `limit` characters, or `None` when `value` fits.

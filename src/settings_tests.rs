@@ -664,6 +664,87 @@ fn shared_field_edits_respect_the_auth_caps() {
 }
 
 #[test]
+fn format_characters_are_dropped_from_pushed_email_text() {
+    use crate::settings::SharedSettingsField;
+
+    let mut settings = Settings::default();
+    settings.email.clear();
+    settings.push_shared_text(SharedSettingsField::Email, "alice");
+    // Zero-width space (Cf) between the local part and the domain: accepting
+    // it would persist an address that `valid_email` later rejects.
+    settings.push_shared_text(SharedSettingsField::Email, "\u{200b}@example.com");
+    assert_eq!(settings.email, "alice@example.com");
+    assert!(!crate::limits::has_format_character(&settings.email));
+    assert!(crate::auth::valid_email(&settings.email));
+
+    // Bidi override and soft hyphen are Cf too; a whole pasted chunk is
+    // rejected as one input, and later clean input still works.
+    settings.push_shared_text(SharedSettingsField::Email, "\u{202e}evil");
+    settings.push_shared_text(SharedSettingsField::Email, "\u{ad}");
+    assert_eq!(settings.email, "alice@example.com");
+    settings.push_shared_text(SharedSettingsField::Email, "+tag");
+    assert_eq!(settings.email, "alice@example.com+tag");
+
+    // The URL field keeps the legacy behaviour: only the length cap applies.
+    settings.server_url.clear();
+    settings.push_shared_text(
+        SharedSettingsField::ServerUrl,
+        "https://ex\u{200b}ample.com",
+    );
+    assert!(settings.server_url.contains('\u{200b}'));
+}
+
+#[test]
+fn sanitized_clamps_length_and_words_at_both_ends() {
+    use crate::limits::{MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH};
+
+    let settings = Settings {
+        password_generator: crate::generator::PasswordSettings {
+            length: 0,
+            ..Default::default()
+        },
+        passphrase_generator: crate::generator::PassphraseSettings {
+            words: 0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let safe = settings.sanitized();
+    assert_eq!(safe.password_generator.length, MIN_PASSWORD_LENGTH);
+    assert_eq!(safe.passphrase_generator.words, MIN_PASSPHRASE_WORDS);
+    // The original remains untouched (regression guard for the clone-based
+    // implementation).
+    assert_eq!(settings.password_generator.length, 0);
+    assert_eq!(settings.passphrase_generator.words, 0);
+}
+
+#[test]
+fn infinite_and_huge_schema_markers_are_future_versions() {
+    // `version_from_float` maps positive infinity to u64::MAX so a crafted
+    // marker cannot be mistaken for a legacy/current schema; negative
+    // infinity stays on the legacy side (settings.rs:323-331).
+    assert_eq!(super::version_from_float(f64::INFINITY), Some(u64::MAX));
+    assert_eq!(super::version_from_float(f64::NEG_INFINITY), None);
+    assert_eq!(super::version_from_float(f64::NAN), None);
+    assert_eq!(super::version_from_float(2.0), Some(2));
+    assert_eq!(super::version_from_float(2.5), None);
+
+    for raw in [
+        serde_json::json!(f64::INFINITY),
+        serde_json::json!(f64::NEG_INFINITY),
+    ] {
+        // serde_json serializes non-finite floats as null, so exercise the
+        // float helper directly above; numeric strings still reach it via the
+        // string branch of `schema_version_of` when they parse as floats.
+        assert_eq!(super::schema_version_of(Some(&raw)), None, "{raw}");
+    }
+    assert_eq!(
+        super::schema_version_of(Some(&serde_json::json!("18446744073709551616"))),
+        Some(u64::MAX)
+    );
+}
+
+#[test]
 fn sanitized_clamps_shared_text_fields() {
     use crate::limits::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
 

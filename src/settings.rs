@@ -24,11 +24,12 @@ use crate::error::{AppError, BoxedCause};
 use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::health::Thresholds;
 use crate::limits::{
-    truncate_to_limit, DEFAULT_CLIPBOARD_RESTORE_SECONDS, DEFAULT_IDLE_LOCK_SECONDS,
-    MAX_CLIPBOARD_RESTORE_SECONDS, MAX_EMAIL_LEN, MAX_IDLE_LOCK_SECONDS, MAX_LOGIN_TIMEOUT_SECONDS,
-    MAX_PASSPHRASE_WORDS, MAX_PASSWORD_LENGTH, MAX_SERVER_URL_LEN, MAX_STALE_DAYS, MAX_WEAK_BITS,
-    MIN_CLIPBOARD_RESTORE_SECONDS, MIN_IDLE_LOCK_SECONDS, MIN_LOGIN_TIMEOUT_SECONDS,
-    MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH, MIN_STALE_DAYS, MIN_WEAK_BITS,
+    has_format_character, truncate_to_limit, DEFAULT_CLIPBOARD_RESTORE_SECONDS,
+    DEFAULT_IDLE_LOCK_SECONDS, MAX_CLIPBOARD_RESTORE_SECONDS, MAX_EMAIL_LEN, MAX_IDLE_LOCK_SECONDS,
+    MAX_LOGIN_TIMEOUT_SECONDS, MAX_PASSPHRASE_WORDS, MAX_PASSWORD_LENGTH, MAX_SERVER_URL_LEN,
+    MAX_STALE_DAYS, MAX_WEAK_BITS, MIN_CLIPBOARD_RESTORE_SECONDS, MIN_IDLE_LOCK_SECONDS,
+    MIN_LOGIN_TIMEOUT_SECONDS, MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH, MIN_STALE_DAYS,
+    MIN_WEAK_BITS,
 };
 
 /// Maximum accepted size of `settings.json` (1 MiB). Anything larger is
@@ -119,6 +120,15 @@ impl Settings {
     /// here, so a large paste cannot grow a stored field past its limit. Like
     /// `AuthState::push_text`, excess input is dropped rather than reported as
     /// an error, and truncation happens on a UTF-8 character boundary.
+    ///
+    /// Email input additionally drops Unicode `Cf` (format) characters from the
+    /// appended text. `valid_email` rejects them at login time, so accepting
+    /// them here would persist an address that can never pass validation — a
+    /// silent mismatch between the stored settings and the login form. Keeping
+    /// the filter at the input source (rather than only in `valid_email`) also
+    /// covers IME/paste paths that type invisible zero-width or bidi controls.
+    /// Other fields are unaffected: format characters in a server URL are not
+    /// subject to the email structural check.
     pub fn push_shared_text(&mut self, field: SharedSettingsField, text: &str) {
         match field {
             SharedSettingsField::ServerUrl => {
@@ -126,7 +136,26 @@ impl Settings {
                 truncate_to_limit(&mut self.server_url, MAX_SERVER_URL_LEN);
             }
             SharedSettingsField::Email => {
-                self.email.push_str(text);
+                // A single leading zero-width character is common when pasting
+                // from a web form: strip it and keep the rest of the address.
+                // Any other chunk containing Cf is rejected wholesale so a
+                // bidi override cannot silently reverse the visible address.
+                let filtered: String = text
+                    .chars()
+                    .filter(|ch| !crate::limits::is_format_character(*ch))
+                    .collect();
+                // Only U+200B..U+200F at the very beginning of a pasted chunk
+                // is tolerated (and stripped). Other format characters,
+                // including bidi overrides and soft hyphen anywhere in the
+                // chunk, reject the whole input.
+                let only_leading_zero_width = text.starts_with('\u{200b}')
+                    && text
+                        .chars()
+                        .skip_while(|ch| matches!(ch, '\u{200b}'..='\u{200f}'))
+                        .all(|ch| !crate::limits::is_format_character(ch));
+                if !has_format_character(text) || only_leading_zero_width {
+                    self.email.push_str(&filtered);
+                }
                 truncate_to_limit(&mut self.email, MAX_EMAIL_LEN);
             }
         }

@@ -18,15 +18,17 @@ pub(super) enum GeneratorOption {
     Separator,
 }
 
-/// Help text stating who owns cursor movement while editing text.
+/// Help text describing arrow-key handling while editing text.
 ///
-/// Editing modes deliberately do not define a `UiAction` for arrow keys: the
-/// GPUI text field handles them natively (caret movement, Home/End, selection
-/// with Shift). Routing them through `UiAction::None` keeps that native
-/// behaviour intact; adding a `MoveSelection` binding here would conflict with
-/// the list-navigation meaning of Up/Down outside editing modes.
+/// Editing modes deliberately do not define a `UiAction` for arrow keys: they
+/// are routed through `UiAction::None` so the GPUI text field can handle them
+/// natively. This only delegates the keys; it does **not** guarantee caret
+/// movement (or Home/End/Shift-selection) because that behaviour belongs to
+/// GPUI's text input, not to this classifier. Adding a `MoveSelection` binding
+/// here would also conflict with the list-navigation meaning of Up/Down
+/// outside editing modes.
 pub(super) const TEXT_EDIT_ARROW_KEYS_HINT: &str =
-    "入力中: 矢印キーは GPUI のテキスト入力に任せています（キャレット移動）";
+    "入力中: 矢印キーは GPUI のテキスト入力に任せています（キャレット移動を保証するものではありません）";
 
 /// Apply a generator option to its settings.
 ///

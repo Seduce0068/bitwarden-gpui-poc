@@ -135,6 +135,13 @@ fn email_validation_rejects_malformed_addresses() {
     assert!(!valid_email("alice@ex..ample.com"));
     assert!(!valid_email("alice@example."));
     assert!(!valid_email("alice@.example.com"));
+    // The local part follows the same dot rules as the domain: dot-atom
+    // cannot start, end, or contain consecutive dots.
+    assert!(!valid_email(".alice@example.com"));
+    assert!(!valid_email("alice.@example.com"));
+    assert!(!valid_email("al..ice@example.com"));
+    assert!(!valid_email(".alice.@example.com"));
+    assert!(valid_email("al.ice@example.com"));
 
     let mut value = config();
     value.email = "not-an-email".into();

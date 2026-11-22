@@ -71,6 +71,18 @@ fn mask_uri_handles_ipv6_and_credentials() {
 }
 
 #[test]
+fn mask_uri_handles_schemes_without_a_host() {
+    // `url::Url::parse` accepts opaque, non-hierarchical URLs with no host.
+    // The masker must keep the scheme and return an empty authority rather
+    // than fabricating a host from the path (model.rs:75-85).
+    assert_eq!(mask_uri("mailto:alice@example.com"), "mailto://");
+    assert_eq!(mask_uri("data:text/plain,hello"), "data://");
+    assert_eq!(mask_uri("about:blank"), "about://");
+    // A real host still wins when a `//` authority is present.
+    assert_eq!(mask_uri("custom://host/path"), "custom://host");
+}
+
+#[test]
 fn mask_uri_nul_sentinel_is_not_read_as_a_scheme() {
     use crate::vault_sync::UNDECRYPTABLE_URI;
 
@@ -246,6 +258,47 @@ fn page_matching_uses_bitwarden_rules() {
 }
 
 #[test]
+fn page_matching_orders_multiple_hits_by_favorite_then_revision_then_name() {
+    let mut vault = Vault::new();
+    let page = "https://example.com/settings";
+    let mut plain_old = login("plain-old", "Zeta", "u", "p", page);
+    plain_old.revision_date = 10;
+    let mut plain_new = login("plain-new", "Alpha", "u", "p", page);
+    plain_new.revision_date = 20;
+    let mut favorite_old = login("fav-old", "Beta", "u", "p", page);
+    favorite_old.favorite = true;
+    favorite_old.revision_date = 5;
+    let mut favorite_new = login("fav-new", "Omega", "u", "p", page);
+    favorite_new.favorite = true;
+    favorite_new.revision_date = 30;
+    // Same favorite/revision pair: the name is the final tiebreak.
+    let mut favorite_tie_a = login("fav-tie-a", "Gamma", "u", "p", page);
+    favorite_tie_a.favorite = true;
+    favorite_tie_a.revision_date = 30;
+    // A non-matching item must never enter the result.
+    let other = login("other", "Other", "u", "p", "https://elsewhere.example.net");
+    vault.items = vec![
+        plain_old,
+        plain_new,
+        favorite_old,
+        favorite_new,
+        favorite_tie_a,
+        other,
+    ];
+
+    let opts = openwarden::MatchOptions::default();
+    let hits: Vec<&str> = vault
+        .matches_page(page, &opts)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(
+        hits,
+        vec!["fav-tie-a", "fav-new", "fav-old", "plain-new", "plain-old"]
+    );
+}
+
+#[test]
 fn debug_masks_identity_and_uri_details() {
     let identity = VaultItem::new(
         "1",
@@ -266,10 +319,11 @@ fn debug_masks_identity_and_uri_details() {
         "alice@example.com",
         "090-1234-5678",
         "1 Main St",
+        "Acme",
     ] {
         assert!(!debug.contains(secret), "{debug}");
     }
-    assert!(debug.contains("Acme"), "{debug}");
+    assert!(debug.contains("[redacted]"), "{debug}");
 
     let login = VaultItem::new(
         "2",
@@ -737,6 +791,34 @@ fn ssh_fingerprint_ignores_comment_and_extra_whitespace() {
         REFERENCE_FINGERPRINT,
     );
     assert_eq!(key.verify_fingerprint(), FingerprintVerify::Match);
+}
+
+#[test]
+fn ssh_fingerprint_rejects_extra_base64_padding() {
+    // Padding is optional, but a surplus `=` must not decode to the same blob:
+    // otherwise distinct public-key lines would share one fingerprint
+    // (model.rs:278-320).
+    let canonical = super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ== fp");
+    assert!(canonical.is_some());
+    for extra in [
+        "ssh-ed25519 A=== fp",
+        "ssh-ed25519 AQ=== fp",
+        "ssh-ed25519 AQI== fp",
+        "ssh-ed25519 AQID= fp",
+        "ssh-ed25519 =AQ== fp",
+        "ssh-ed25519 A=Q= fp",
+    ] {
+        assert_eq!(
+            super::ssh_fingerprint::sha256_fingerprint(extra),
+            None,
+            "{extra}"
+        );
+    }
+    // Unpadded and correctly padded forms of the same blob still agree.
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQI fp"),
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQI= fp")
+    );
 }
 
 #[test]
