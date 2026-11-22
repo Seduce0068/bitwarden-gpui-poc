@@ -1,5 +1,7 @@
 //! Pure key classification and generator key handling, free of GPUI types.
 
+use std::borrow::Cow;
+
 use crate::settings::Settings;
 use crate::ui::state::{AuthField, Panel, Screen, SettingsField};
 
@@ -238,14 +240,34 @@ fn typed_text<'a>(ctx: &KeyContext<'a>) -> Option<&'a str> {
     (ctx.key.chars().count() == 1).then_some(ctx.key)
 }
 
-/// The key name to use for command matching.
+/// The single-character glyph a keystroke reports, before any case folding.
 ///
-/// On Linux GPUI lowercases `key` and keeps Shift characters in `key_char`,
-/// so `Shift+Y` must be matched through `key_char` or `Y` never fires.
-fn command_key<'a>(ctx: &KeyContext<'a>) -> &'a str {
+/// `key_char` carries the typed glyph (including Shift and Caps Lock results);
+/// `key` is GPUI's ASCII/physical equivalent. Kept separate from
+/// `command_key` because the generator's `y`/`Y` pair is deliberately
+/// case-sensitive: uppercase `Y` means "copy passphrase".
+fn raw_command_key<'a>(ctx: &KeyContext<'a>) -> &'a str {
     ctx.key_char
         .filter(|text| text.chars().count() == 1)
         .unwrap_or(ctx.key)
+}
+
+/// The key name to use for command matching.
+///
+/// On Linux GPUI lowercases `key` and keeps Shift characters in `key_char`,
+/// so `Shift+Y` must be matched through `key_char` or `Y` never fires. Caps
+/// Lock puts the same uppercase glyph in `key_char` for a plain letter press,
+/// which would otherwise disable every lowercase binding; folding ASCII case
+/// here keeps those bindings working. The one case-sensitive binding is
+/// resolved from [`raw_command_key`] before this fold, so
+/// `CopyPassword`/`CopyPassphrase` stay distinct.
+fn command_key<'a>(ctx: &KeyContext<'a>) -> Cow<'a, str> {
+    let raw = raw_command_key(ctx);
+    if raw.bytes().all(|byte| !byte.is_ascii_uppercase()) {
+        Cow::Borrowed(raw)
+    } else {
+        Cow::Owned(raw.to_ascii_lowercase())
+    }
 }
 
 fn text_action(text: &str, action: fn(String) -> UiAction) -> UiAction {
@@ -297,7 +319,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
     if ctx.modifiers.alt && !(editing_text && typed_text(ctx).is_some()) {
         return UiAction::None;
     }
-    let key = command_key(ctx);
+    let raw_key = raw_command_key(ctx);
+    let command = command_key(ctx);
+    let key = command.as_ref();
 
     if ctx.screen == Screen::Locked {
         if ctx.editing_auth {
@@ -362,6 +386,15 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             if ctx.editing_settings {
                 return UiAction::None;
             }
+            // The one deliberately case-sensitive binding: `Y` copies the
+            // passphrase while `y` copies the password. `command_key` folds
+            // ASCII case so Caps Lock cannot disable the other letter
+            // commands, so settle this pair from the un-folded glyph first.
+            // Both spellings stay reachable (Caps Lock inverts which physical
+            // press produces `Y`).
+            if raw_key == "Y" {
+                return UiAction::CopyPassphrase;
+            }
             match key {
                 "escape" => UiAction::quit_or_warn(),
                 "n" => UiAction::SetPanel(Panel::Vault),
@@ -369,6 +402,8 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 "p" => UiAction::GeneratePassword,
                 "h" => UiAction::GeneratePassphrase,
                 "y" => UiAction::CopyPassword,
+                // Fallback if case folding is ever removed: the raw uppercase
+                // glyph above already covers it today.
                 "Y" => UiAction::CopyPassphrase,
                 "1" => UiAction::Generator(GeneratorOption::Lowercase),
                 "2" => UiAction::Generator(GeneratorOption::Uppercase),

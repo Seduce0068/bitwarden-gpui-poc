@@ -69,6 +69,20 @@ fn status_bar_text(status: &str, screen: Screen, panel: Panel) -> String {
     }
 }
 
+/// Status shown when the audit tab is clicked before any report exists.
+///
+/// The tab stays visible for discoverability, but clicking it must not drop
+/// the persistent unsaved-settings marker: the user may have edited settings
+/// and then returned to the header. Routing through `status_with_unsaved`
+/// keeps that warning. Kept pure so the contract can be tested without a GPUI
+/// window.
+fn audit_unavailable_status(dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved(
+        "監査レポートがありません（ログイン後に生成されます）",
+        dirty,
+    )
+}
+
 /// Text for the vault list's detail row, when it should be drawn.
 ///
 /// With zero visible items the list body already renders
@@ -409,10 +423,10 @@ impl Render for BitwardenApp {
                                 );
                             } else {
                                 // The button stays visible for discoverability,
-                                // but explains why it cannot open a panel.
-                                this.status =
-                                    "監査レポートがありません（ログイン後に生成されます）"
-                                        .to_string();
+                                // but explains why it cannot open a panel. Keep
+                                // the unsaved-settings marker (Z13).
+                                let dirty = this.settings_dirty;
+                                this.status = audit_unavailable_status(dirty);
                                 cx.notify();
                             }
                         },
@@ -621,6 +635,22 @@ mod tests {
             status_bar_text(&idle, Screen::Locked, Panel::Vault),
             "無操作のため自動ロックしました（300秒）（Enter: ログイン / m: モック） | [未保存の設定変更があります]"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_tab_without_report_keeps_the_unsaved_marker() {
+        let base = "監査レポートがありません（ログイン後に生成されます）";
+        assert_eq!(audit_unavailable_status(false), base);
+
+        let dirty = audit_unavailable_status(true);
+        assert_eq!(dirty, crate::ui::app::status_with_unsaved(base, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+
+        // The status bar adds its fallback F1 hint on the vault panel without
+        // swallowing the marker appended above.
+        let shown = status_bar_text(&dirty, Screen::Unlocked, Panel::Vault);
+        assert!(shown.contains(base), "{shown}");
+        assert!(shown.contains("[未保存の設定変更があります]"), "{shown}");
     }
 
     #[::core::prelude::v1::test]

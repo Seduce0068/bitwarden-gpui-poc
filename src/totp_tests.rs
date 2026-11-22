@@ -284,9 +284,40 @@ fn tick_is_fresh_uses_the_codes_own_period() {
 #[test]
 fn now_unix_is_plausible() {
     let now = now_unix();
-    // 2020-01-01 .. 2100-01-01
-    assert!(now > 1_577_836_800, "{now}");
-    assert!(now < 4_102_444_800, "{now}");
+    // 2020-01-01 .. 2028-01-01 (UTC). The old 2100 ceiling accepted a clock
+    // set decades in the future; this bound tracks the current era while
+    // leaving a little over a year of headroom for a legitimate clock.
+    const LOWER: u64 = 1_577_836_800;
+    const UPPER: u64 = 1_830_297_600;
+    assert!(now > LOWER, "{now}");
+    assert!(now < UPPER, "{now}");
+}
+
+#[test]
+fn current_code_after_a_period_boundary_matches_the_newly_computed_code() {
+    // The UI's `current_code()` reads a `Tick` snapshot and must resample once
+    // the TOTP window rolls over. Pin that contract here: at the 30s boundary
+    // the old snapshot is stale, and a fresh snapshot exposes exactly the code
+    // computed for the new window.
+    const PERIOD: u64 = 30;
+    let before = Tick::sample(RFC_SECRET, 29);
+    let old_code = before
+        .code
+        .as_ref()
+        .map(Code::code)
+        .map(ToString::to_string);
+    assert_eq!(before.remaining(), Some(1));
+    assert!(before.is_fresh(29));
+    assert!(!before.is_fresh(PERIOD), "the first window just ended");
+
+    let after = Tick::sample(RFC_SECRET, PERIOD);
+    assert!(after.is_fresh(PERIOD));
+    assert!(!after.is_fresh(29), "a forward jump is not reversible");
+    assert_eq!(after.remaining(), Some(PERIOD));
+    let current = after.code.as_ref().map(Code::code).map(ToString::to_string);
+    let freshly_computed = code_at(RFC_SECRET, PERIOD).unwrap().code().to_string();
+    assert_eq!(current, Some(freshly_computed));
+    assert_ne!(current, old_code, "the boundary must produce a new code");
 }
 
 #[test]

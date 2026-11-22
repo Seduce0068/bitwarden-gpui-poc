@@ -2371,3 +2371,70 @@ fn sync_fallback_strips_the_sync_prefix_from_a_generic_cache_other() {
         "同期に失敗しました（未分類の失敗（no-source reason））"
     );
 }
+
+#[test]
+fn plain_auth_errors_convert_forward_to_the_matching_app_error_variant() {
+    use crate::error::AppError;
+
+    // `AppError`'s PartialEq compares message + detail only, so equality alone
+    // cannot distinguish a wrong plain variant that shares its family text.
+    // Discriminants pin the exact arm of the forward conversion
+    // (auth.rs:173-202); source() must stay absent because plain variants carry
+    // no typed cause.
+    let cases: Vec<(&str, AuthError, AppError)> = vec![
+        (
+            "missing_field",
+            AuthError::MissingField("client_id"),
+            AppError::MissingField("client_id"),
+        ),
+        (
+            "invalid_server_url",
+            AuthError::InvalidServerUrl,
+            AppError::InvalidServerUrl,
+        ),
+        (
+            "blocked_server_url",
+            AuthError::BlockedServerUrl,
+            AppError::BlockedServerUrl,
+        ),
+        (
+            "invalid_email",
+            AuthError::InvalidEmail,
+            AppError::InvalidEmail,
+        ),
+        (
+            "client_setup",
+            AuthError::ClientSetup,
+            AppError::ClientSetup,
+        ),
+        ("prelogin", AuthError::Prelogin, AppError::Prelogin),
+        ("login", AuthError::Login, AppError::Login),
+        ("sync", AuthError::Sync, AppError::Sync),
+        (
+            "kdf_rejected",
+            AuthError::KdfRejected,
+            AppError::KdfRejected,
+        ),
+        ("timeout", AuthError::Timeout, AppError::Timeout),
+        (
+            "other",
+            AuthError::Other("canary"),
+            AppError::Other("canary".to_string()),
+        ),
+    ];
+    assert_eq!(cases.len(), 11);
+
+    for (name, auth, expected) in cases {
+        let family_message = auth.message().to_string();
+        let converted: AppError = auth.into();
+        assert_eq!(
+            std::mem::discriminant(&converted),
+            std::mem::discriminant(&expected),
+            "{name}: wrong AppError variant"
+        );
+        assert_eq!(converted, expected, "{name}");
+        assert_eq!(converted.message(), family_message.as_str(), "{name}");
+        assert_eq!(converted.to_string(), family_message, "{name}");
+        assert!(std::error::Error::source(&converted).is_none(), "{name}");
+    }
+}

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 全体改善（第81弾 / 2026-11-23）
+
+- 検索終了時に監査パネルへ移る際の status を実際の選択行と整合
+- プロトコル相対 URL のマスク、混在 URI のリスト置換、
+  NotFound/CacheParse、ZeroizingText Deref/AsRef、
+  upsert/remove の重複 id をテスト
+
 ### 全体改善（第79〜80弾 / 2026-11-23）
 
 - Separator 未知値、TOTP 空欄切替、期限飽和、非 ASCII ポート、

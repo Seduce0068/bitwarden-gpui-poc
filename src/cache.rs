@@ -210,6 +210,31 @@ fn host_with_optional_port_ok(host: &str) -> bool {
     port.is_none_or(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+/// Whether a decoded value looks like a nested authority carrying userinfo.
+///
+/// A nested URL is normally detected by `?`, `#` or `//` (see
+/// [`mask_param_pairs`]). A scheme-less authority such as
+/// `user:secret@host/path` has none of those, so its `@` with a `user:password`
+/// marker before it and a plausible host after it is the signal here. The
+/// check stays narrow on purpose: a harmless `state=a@b` has no userinfo colon
+/// and is left verbatim in the diagnostic URL.
+fn nested_authority_with_userinfo(value: &str) -> bool {
+    value.match_indices('@').any(|(at, _)| {
+        let before = &value[..at];
+        let after = &value[at + 1..];
+        let has_userinfo = before
+            .split(&['?', '#'][..])
+            .next_back()
+            .is_some_and(|part| {
+                part.split_once(':').is_some_and(|(_, secret)| {
+                    !secret.is_empty() && !secret.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            });
+        let host = after.split(&['/', '?', '#'][..]).next().unwrap_or("");
+        has_userinfo && host_with_optional_port_ok(host)
+    })
+}
+
 /// Whether a query/fragment parameter name denotes a credential.
 ///
 /// The match is a case-insensitive substring so common variants such as
@@ -251,11 +276,12 @@ fn hex_value(byte: u8) -> Option<u8> {
 
 /// Percent-decode the `%XX` escapes of a value before inspecting it.
 ///
-/// Only ASCII escapes are decoded: a raw non-ASCII byte produced by a
-/// sequence such as `%E3%81%82` is kept as its original escape so the
-/// rendered diagnostic stays valid UTF-8. Malformed escapes stay literal as
-/// well; a crafted value must not change the structure of the URL merely by
-/// being decoded.
+/// Only printable ASCII escapes are decoded: a raw non-ASCII byte produced by
+/// a sequence such as `%E3%81%82` is kept as its original escape so the
+/// rendered diagnostic stays valid UTF-8. Control escapes (`%00`-`%1F`,
+/// `%7F`) stay literal too: decoding them would inject a newline or NUL into
+/// a log line. Malformed escapes stay literal as well; a crafted value must
+/// not change the structure of the URL merely by being decoded.
 fn percent_decode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut rest = value;
@@ -265,7 +291,7 @@ fn percent_decode(value: &str) -> String {
             if bytes.len() >= 3 {
                 if let (Some(high), Some(low)) = (hex_value(bytes[1]), hex_value(bytes[2])) {
                     let decoded = (high << 4) | low;
-                    if decoded.is_ascii() {
+                    if decoded.is_ascii() && !decoded.is_ascii_control() {
                         out.push(char::from(decoded));
                         rest = &rest[3..];
                         continue;
@@ -293,19 +319,33 @@ pub(crate) const MAX_MASK_DEPTH: usize = 8;
 /// A harmless key whose *value* is itself a URL is masked recursively: a
 /// nested `?token=...` or `#code=...` would otherwise survive the top-level
 /// key check and reach a diagnostic log verbatim. The nested URL may be
-/// percent-encoded (`%3F`, `%3A%2F%2F`) or protocol-relative
-/// (`//user:SECRET@host/p`); decoding first keeps credentials from hiding.
-/// When found, the decoded masked form is rendered; plain values are copied
-/// unchanged. Recursion is capped by [`MAX_MASK_DEPTH`]; `depth` counts
-/// already-entered nested URLs.
+/// percent-encoded (`%3F`, `%3A%2F%2F`), protocol-relative
+/// (`//user:SECRET@host/p`) or a bare authority (`user:SECRET@host/p`);
+/// decoding first keeps credentials from hiding. Both `&` and `;` are query
+/// separators, so neither may shield a following secret. When found, the
+/// decoded masked form is rendered; plain values are copied unchanged.
+/// Recursion is capped by [`MAX_MASK_DEPTH`]; `depth` counts already-entered
+/// nested URLs.
 fn mask_param_pairs(pairs: &str, depth: usize) -> String {
     let mut out = String::with_capacity(pairs.len());
-    let mut first = true;
-    for pair in pairs.split('&') {
-        if !first {
-            out.push('&');
+    // Split on either separator but keep the original delimiter in the
+    // diagnostic output; a trailing separator leaves an empty final pair.
+    let mut segments: Vec<&str> = Vec::new();
+    let mut separators: Vec<char> = Vec::new();
+    let mut start = 0;
+    for (index, ch) in pairs.char_indices() {
+        if ch == '&' || ch == ';' {
+            segments.push(&pairs[start..index]);
+            separators.push(ch);
+            start = index + ch.len_utf8();
         }
-        first = false;
+    }
+    segments.push(&pairs[start..]);
+
+    for (index, &pair) in segments.iter().enumerate() {
+        if index > 0 {
+            out.push(separators[index - 1]);
+        }
         if let Some((key, value)) = pair.split_once('=') {
             // A key can hide a credential name behind percent escapes
             // (`%74oken` is `token`), or behind two rounds of them
@@ -317,28 +357,32 @@ fn mask_param_pairs(pairs: &str, depth: usize) -> String {
             if is_sensitive_param_key(&decoded_key) {
                 out.push_str(key);
                 out.push_str("=[redacted]");
-            } else {
-                // Decode *twice* before the nested-URL check: a doubly encoded
-                // delimiter such as `%253F` becomes `%3F` after one pass and
-                // `?` only after the second. `//` matches nested URLs both with
-                // (`://`) and without (`//user:SECRET@host/p`) a scheme. A value
-                // that is not a nested URL is discarded, leaving the
-                // original pair verbatim.
-                let decoded = percent_decode(&percent_decode(value));
-                if decoded.contains('?') || decoded.contains('#') || decoded.contains("//") {
-                    out.push_str(key);
-                    out.push('=');
-                    if depth >= MAX_MASK_DEPTH {
-                        // Stop the descent before the stack grows further. The
-                        // whole tail is replaced, so nothing behind the cap is
-                        // rendered into the diagnostic URL.
-                        out.push_str("[redacted]");
-                    } else {
-                        out.push_str(&mask_url_secrets_inner(&decoded, depth + 1));
-                    }
+                continue;
+            }
+            // Decode *twice* before the nested-URL check: a doubly encoded
+            // delimiter such as `%253F` becomes `%3F` after one pass and
+            // `?` only after the second. `//` matches nested URLs both with
+            // (`://`) and without (`//user:SECRET@host/p`) a scheme; the
+            // authority helper covers the scheme-less form. A value that is
+            // not a nested URL is left verbatim.
+            let decoded = percent_decode(&percent_decode(value));
+            if decoded.contains('?')
+                || decoded.contains('#')
+                || decoded.contains("//")
+                || nested_authority_with_userinfo(&decoded)
+            {
+                out.push_str(key);
+                out.push('=');
+                if depth >= MAX_MASK_DEPTH {
+                    // Stop the descent before the stack grows further. The
+                    // whole tail is replaced, so nothing behind the cap is
+                    // rendered into the diagnostic URL.
+                    out.push_str("[redacted]");
                 } else {
-                    out.push_str(pair);
+                    out.push_str(&mask_url_secrets_inner(&decoded, depth + 1));
                 }
+            } else {
+                out.push_str(pair);
             }
         } else {
             out.push_str(pair);

@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第81弾で 7 件すべてを完了）。
+なし（第82弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第82弾（16 担当・26 回目）の指摘 8 件を完結（2026-11-23）
+  - Caps Lock 時のキーコマンドを ASCII 大小折り上げで維持し、
+    y/Y のコピー先区別を raw glyph で保持。
+  - 監査未生成タブ、AuthError 順方向、恒真アサーション、
+    スキーム無し authority、';' 区切り、制御文字エスケープ、
+    mask_uri フラグメント、複数 URI 監査を修正・テスト。
+  - TOTP の 2100 年上限を是正し、期間境界のコピー整合を検証。
+  - CHANGELOG に第81弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（771 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第81弾（16 担当・25 回目）の指摘 7 件を完結（2026-11-23）
   - 検索→監査遷移の status を実際の選択行と整合させた。
   - プロトコル相対 URL のマスク、NotFound/CacheParse、

@@ -1902,3 +1902,64 @@ fn non_ascii_digit_only_passwords_keep_the_wide_pool_constraint() {
     assert_eq!(mixed, entropy_bits(100, 4).round() as u32);
     assert!(mixed > ascii_pin, "{mixed} vs {ascii_pin}");
 }
+
+#[test]
+fn mixed_uri_lists_are_audited_per_uri_without_leaking_any() {
+    use crate::vault_sync::UNDECRYPTABLE_URI;
+
+    // A single login can hold secure, insecure and undecryptable URIs at once.
+    // The loop in `audit_item` (health.rs:703-725) must inspect every entry,
+    // keep only scheme + host for each insecure one, and preserve the separate
+    // decryption finding instead of reporting a missing URI.
+    let mut item = VaultItem::new(
+        "mixed",
+        "Mixed",
+        ItemData::Login {
+            username: "u".into(),
+            password: Zeroizing::new("vT7#kQm2!zR9wP4$xL8@".into()),
+            totp: Zeroizing::new("GEZDGNBVGY3TQOJQ".into()),
+            uris: vec![
+                LoginUri::new("https://secure.example.com/login"),
+                LoginUri::new(
+                    "http://user:URI_SECRET@plain.example.com:8080/path?key=URI_KEY#frag",
+                ),
+                LoginUri::new(UNDECRYPTABLE_URI),
+                LoginUri::new("HTTP://second.example.com/other"),
+            ],
+        },
+    );
+    item.revision_date = NOW;
+    let report = report_of(vec![item]);
+    let findings = &report.items[0].findings;
+
+    let insecure: Vec<&str> = findings
+        .iter()
+        .filter_map(|finding| match finding {
+            Finding::InsecureUri { uri } => Some(uri.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        insecure,
+        vec!["http://plain.example.com:8080", "http://second.example.com"]
+    );
+    assert!(findings.contains(&Finding::UriUninspectable));
+    assert!(!findings.contains(&Finding::NoUri));
+    assert_eq!(findings.len(), 3, "{findings:?}");
+
+    for rendered in [
+        format!("{report:?}"),
+        serde_json::to_string(&report).unwrap(),
+    ] {
+        for secret in [
+            "URI_SECRET",
+            "URI_KEY",
+            "user:URI_SECRET",
+            "/path",
+            "#frag",
+            "secure.example.com",
+        ] {
+            assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        }
+    }
+}

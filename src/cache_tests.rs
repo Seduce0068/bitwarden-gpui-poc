@@ -2255,3 +2255,103 @@ fn sync_cache_sync_reports_cache_parse_for_an_invalid_body() {
     assert!(!source.to_string().is_empty());
     assert_eq!(cache_error_message(error), REASON_CORRUPT);
 }
+
+#[test]
+fn nested_scheme_less_authorities_and_semicolon_separators_are_masked() {
+    // A nested value without a scheme (`user:SECRET@host`) has neither `?`,
+    // `#` nor `//`, so the old recursion trigger never fired and the password
+    // reached Debug verbatim. The authority helper closes that gap.
+    let plain =
+        "https://vault.example.com/login?next=user:NESTED_NO_SCHEME_SECRET@cb.example.com/done";
+    let masked = super::mask_url_secrets(plain);
+    assert!(!masked.contains("NESTED_NO_SCHEME_SECRET"), "{masked}");
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+
+    // Percent-encoded delimiters are decoded before the same authority check.
+    let encoded =
+        "https://vault.example.com/login?next=user%3ANESTED_ENC_SECRET%40cb.example.com%2Fdone";
+    let masked = super::mask_url_secrets(encoded);
+    assert!(!masked.contains("NESTED_ENC_SECRET"), "{masked}");
+    assert!(
+        masked.contains("[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+
+    // A harmless '@' without a userinfo colon stays untouched.
+    let harmless = "https://vault.example.com/p?state=a@b&note=ok";
+    assert_eq!(super::mask_url_secrets(harmless), harmless);
+
+    // ';' is a query separator too; a secret behind it must not survive.
+    let semicolon = "https://vault.example.com/sync?token=SEMI_TOKEN;state=ok;api_key=SEMI_KEY";
+    let masked = super::mask_url_secrets(semicolon);
+    assert!(!masked.contains("SEMI_TOKEN"), "{masked}");
+    assert!(!masked.contains("SEMI_KEY"), "{masked}");
+    assert!(
+        masked.contains("token=[redacted];state=ok;api_key=[redacted]"),
+        "{masked}"
+    );
+
+    // Both fixes reach Debug through the cache's stored server_url.
+    let url = "https://vault.example.com/login?next=user:DEBUG_NESTED_SECRET@cb.example.com/done;token=DEBUG_SEMI_SECRET";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("DEBUG_NESTED_SECRET"), "{rendered}");
+    assert!(!rendered.contains("DEBUG_SEMI_SECRET"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn debug_pins_the_stored_body_byte_count() {
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    let stored = String::from_utf8(cache.body.clone()).expect("the cached JSON body is UTF-8");
+    let rendered = format!("{cache:?}");
+
+    // Debug reports the exact byte length of the *stored* body, not of the
+    // caller's raw input (from_body strips keys and re-serializes compactly).
+    let expected = format!("body: \"<{} bytes redacted>\"", stored.len());
+    assert!(rendered.contains(&expected), "{rendered}");
+    assert_eq!(cache.body.len(), stored.len());
+    assert!(!rendered.contains(&stored), "{rendered}");
+    assert!(
+        stored.len() < body().len(),
+        "redaction must shrink the body"
+    );
+
+    // A different body size produces a different pinned count.
+    let mut bigger_body = cache.body.clone();
+    bigger_body.extend_from_slice(&[b' '; 10]);
+    let bigger = SyncCache {
+        body: bigger_body,
+        ..cache
+    };
+    let bigger_rendered = format!("{bigger:?}");
+    assert!(
+        bigger_rendered.contains(&format!("body: \"<{} bytes redacted>\"", bigger.body.len())),
+        "{bigger_rendered}"
+    );
+}
+
+#[test]
+fn percent_decode_keeps_control_character_escapes_literal() {
+    // Decoding `%0A`/`%00` would inject a newline or NUL into a Debug line;
+    // percent_decode (cache.rs:277-305) only decodes printable ASCII.
+    for escape in ["%00", "%01", "%09", "%0A", "%0D", "%1F", "%7F"] {
+        assert_eq!(super::percent_decode(escape), escape, "{escape}");
+        let byte = u8::from_str_radix(&escape[1..], 16).unwrap();
+        assert!(byte.is_ascii_control(), "{escape} must be a control byte");
+    }
+
+    // Printable escapes in the same value are still decoded and recognized.
+    assert_eq!(
+        super::percent_decode("%74%6F%6B%65%6E%3D%0A%53%45%43%52%45%54"),
+        "token=%0ASECRET"
+    );
+    let url = "https://vault.example.com/p?to%6B%65n%0A=SECRET_VALUE";
+    let masked = super::mask_url_secrets(url);
+    assert!(masked.contains("to%6B%65n%0A=[redacted]"), "{masked}");
+    assert!(!masked.contains("SECRET_VALUE"), "{masked}");
+    assert!(!masked.contains('\n'), "{masked}");
+}

@@ -2386,7 +2386,11 @@ fn push_shared_text_truncates_multibyte_input_on_a_utf8_boundary() {
     settings.push_shared_text(SharedSettingsField::Email, &"あ".repeat(MAX_EMAIL_LEN + 3));
     assert_eq!(settings.email.chars().count(), MAX_EMAIL_LEN);
     assert_eq!(settings.email, "あ".repeat(MAX_EMAIL_LEN));
-    assert!(std::str::from_utf8(settings.email.as_bytes()).is_ok());
+    // `String::as_bytes()` is valid UTF-8 by construction, so re-decoding it
+    // proves nothing. The meaningful check is that truncation dropped whole
+    // characters: three bytes per 'あ' leaves no half scalar at the cap.
+    assert_eq!(settings.email.len(), MAX_EMAIL_LEN * 'あ'.len_utf8());
+    assert!(settings.email.chars().all(|ch| ch == 'あ'));
 
     settings.server_url.clear();
     settings.push_shared_text(
@@ -2395,7 +2399,12 @@ fn push_shared_text_truncates_multibyte_input_on_a_utf8_boundary() {
     );
     assert_eq!(settings.server_url.chars().count(), MAX_SERVER_URL_LEN);
     assert_eq!(settings.server_url, "あ".repeat(MAX_SERVER_URL_LEN));
-    assert!(std::str::from_utf8(settings.server_url.as_bytes()).is_ok());
+    // Same whole-character check as the email field above.
+    assert_eq!(
+        settings.server_url.len(),
+        MAX_SERVER_URL_LEN * 'あ'.len_utf8()
+    );
+    assert!(settings.server_url.chars().all(|ch| ch == 'あ'));
 
     // Crossing the boundary on a later append keeps the already-stored text
     // and admits only the characters that still fit.

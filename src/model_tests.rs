@@ -2236,3 +2236,72 @@ fn upsert_replaces_only_the_first_duplicate_id_but_remove_deletes_them_all() {
     assert!(vault.item("dup").is_none());
     assert!(!vault.remove("dup"), "a second removal reports no match");
 }
+
+#[test]
+fn mask_uri_drops_fragment_tokens() {
+    // `mask_uri` (model.rs:86-112) keeps only scheme + host + port, so an
+    // OAuth token in the fragment cannot reach a report or a Debug line.
+    assert_eq!(
+        mask_uri("https://example.com/cb#access_token=FRAGMENT_TOKEN&state=ok"),
+        "https://example.com"
+    );
+    assert_eq!(
+        mask_uri("https://example.com:8443/cb#code=FRAGMENT_CODE"),
+        "https://example.com:8443"
+    );
+    // A '?' after '#' belongs to the fragment, not to a query.
+    assert_eq!(
+        mask_uri("https://user:secret@example.com/cb#next=1?token=FRAG_LATE_TOKEN"),
+        "https://example.com"
+    );
+
+    // Only presentation is masked: the raw URI stays in the search haystack.
+    let item = login(
+        "1",
+        "CB",
+        "u",
+        "p",
+        "https://example.com/cb#token=RAW_FRAGMENT_TOKEN",
+    );
+    assert!(item.matches_query("RAW_FRAGMENT_TOKEN"));
+    assert!(!format!("{item:?}").contains("RAW_FRAGMENT_TOKEN"));
+}
+
+#[test]
+fn vault_item_kind_follows_the_data_payload() {
+    // `VaultItem::kind` (model.rs:702-705) delegates to `ItemData::kind`
+    // (model.rs:634-645); both must agree for every payload variant.
+    let cases = [
+        (
+            login("1", "Login", "u", "p", "https://example.com"),
+            ItemKind::Login,
+        ),
+        (
+            VaultItem::new(
+                "2",
+                "Note",
+                ItemData::SecureNote {
+                    text: "body".into(),
+                },
+            ),
+            ItemKind::SecureNote,
+        ),
+        (
+            VaultItem::new("3", "Card", ItemData::Card(CardData::default())),
+            ItemKind::Card,
+        ),
+        (
+            VaultItem::new("4", "Id", ItemData::Identity(IdentityData::default())),
+            ItemKind::Identity,
+        ),
+        (
+            VaultItem::new("5", "SSH", ItemData::SshKey(SshKeyData::default())),
+            ItemKind::SshKey,
+        ),
+    ];
+    assert_eq!(cases.len(), 5);
+    for (item, expected) in cases {
+        assert_eq!(item.kind(), expected, "{}", item.id);
+        assert_eq!(item.data.kind(), expected, "{}", item.id);
+    }
+}

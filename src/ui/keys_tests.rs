@@ -1065,3 +1065,126 @@ fn space_key_inserts_a_space_in_all_editing_modes() {
         UiAction::InsertSettingsText(" ".into())
     );
 }
+
+#[test]
+fn caps_lock_glyphs_keep_lowercase_vault_and_lock_commands_bound() {
+    // GPUI lowercases `key` but reports the typed glyph in `key_char`. With
+    // Caps Lock a plain letter press reports an uppercase glyph, which must
+    // not disable the lowercase command bindings.
+    for (glyph, expected) in [
+        ("L", UiAction::Lock),
+        ("T", UiAction::CycleFilter),
+        ("S", UiAction::CycleSort),
+        ("F", UiAction::ToggleFavorite),
+        ("P", UiAction::CopySelectedPassword),
+        ("U", UiAction::CopySelectedUsername),
+        ("G", UiAction::OpenAudit),
+        ("N", UiAction::SetPanel(Panel::Generator)),
+        ("C", UiAction::SetPanel(Panel::Settings)),
+        ("Y", UiAction::CopyTotp),
+    ] {
+        let mut value = ctx("y");
+        value.key_char = Some(glyph);
+        assert_eq!(classify_key(&value), expected, "vault/{glyph}");
+    }
+
+    // The physical key spelling is folded too, for platforms that leave the
+    // uppercase letter in `key` when no glyph is reported.
+    let mut value = ctx("M");
+    value.screen = Screen::Locked;
+    assert_eq!(classify_key(&value), UiAction::OpenDemoVault);
+    value.key = "R";
+    value.login_failed = true;
+    assert_eq!(classify_key(&value), UiAction::RetryLogin);
+}
+
+#[test]
+fn caps_lock_glyphs_keep_generator_and_settings_commands_bound() {
+    let mut value = ctx("y");
+    value.panel = Panel::Generator;
+    for (glyph, expected) in [
+        ("N", UiAction::SetPanel(Panel::Vault)),
+        ("L", UiAction::Lock),
+        ("P", UiAction::GeneratePassword),
+        ("H", UiAction::GeneratePassphrase),
+        ("W", UiAction::SaveSettings),
+        ("D", UiAction::DiscardSettings),
+    ] {
+        value.key_char = Some(glyph);
+        assert_eq!(classify_key(&value), expected, "generator/{glyph}");
+    }
+    // Shifted symbols are not letters; their existing aliases stay intact.
+    value.key_char = Some("+");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::Generator(GeneratorOption::LengthUp)
+    );
+    value.key_char = Some("_");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::Generator(GeneratorOption::LengthDown)
+    );
+
+    value.panel = Panel::Settings;
+    for (glyph, expected) in [
+        ("C", UiAction::SetPanel(Panel::Vault)),
+        ("L", UiAction::Lock),
+        ("D", UiAction::DiscardSettings),
+        ("W", UiAction::SaveSettings),
+        ("I", UiAction::AdjustIdleLock(1)),
+        ("U", UiAction::AdjustIdleLock(-1)),
+    ] {
+        value.key_char = Some(glyph);
+        assert_eq!(classify_key(&value), expected, "settings/{glyph}");
+    }
+
+    value.panel = Panel::Audit;
+    for (glyph, expected) in [
+        ("G", UiAction::SetPanel(Panel::Vault)),
+        ("L", UiAction::Lock),
+    ] {
+        value.key_char = Some(glyph);
+        assert_eq!(classify_key(&value), expected, "audit/{glyph}");
+    }
+}
+
+#[test]
+fn case_folding_preserves_copy_password_and_copy_passphrase() {
+    let mut value = ctx("y");
+    value.panel = Panel::Generator;
+
+    // Plain lowercase `y` still copies the password.
+    assert_eq!(classify_key(&value), UiAction::CopyPassword);
+
+    // Uppercase from `key_char` (Shift+Y, or a Caps Lock press) keeps its
+    // distinct passphrase binding instead of collapsing into CopyPassword.
+    value.key_char = Some("Y");
+    assert_eq!(classify_key(&value), UiAction::CopyPassphrase);
+
+    // Uppercase carried by `key` alone keeps the same distinction.
+    value.key_char = None;
+    value.key = "Y";
+    assert_eq!(classify_key(&value), UiAction::CopyPassphrase);
+
+    // Under Caps Lock, Shift+Y produces a lowercase glyph; that still selects
+    // CopyPassword, so both copy bindings remain reachable.
+    value.key = "y";
+    value.key_char = Some("y");
+    assert_eq!(classify_key(&value), UiAction::CopyPassword);
+}
+
+#[test]
+fn case_folding_does_not_rewrite_non_ascii_or_multi_character_glyphs() {
+    // `ß` has no ASCII uppercase form and IME text is multi-character; both
+    // must keep their existing edit-mode behaviour after the ASCII-only fold.
+    let mut value = ctx("s");
+    value.key_char = Some("ß");
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText("ß".into()));
+
+    value.key_char = Some("日本語");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertSearchText("日本語".into())
+    );
+}
