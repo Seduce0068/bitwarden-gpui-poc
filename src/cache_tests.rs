@@ -2164,3 +2164,94 @@ fn cached_sync_for_detailed_rejects_a_body_user_id_that_disagrees_with_the_envel
         "the best-effort wrapper must collapse the classified mismatch"
     );
 }
+
+#[test]
+fn protocol_relative_nested_urls_are_masked_within_the_depth_limit() {
+    // cache.rs:94-119 and 288-345: a protocol-relative URL has no `://`, so it
+    // needs its own nested-URL detection and its own authority scan. Without
+    // both, `//user:SECRET@host/p` would be copied verbatim into a log line.
+    assert_eq!(
+        super::mask_url_secrets("//user:SECRET@host.example.com/p"),
+        "//[redacted]@host.example.com/p"
+    );
+
+    for (url, expected) in [
+        (
+            "https://vault.example.com/login?next=//user:NESTED_SECRET@cb.example.com/done",
+            "next=//[redacted]@cb.example.com/done",
+        ),
+        (
+            "https://vault.example.com/cb#next=//u:FRAG_SECRET@cb.example.com/done",
+            "#next=//[redacted]@cb.example.com/done",
+        ),
+        (
+            "https://vault.example.com/login?next=%2F%2Fu%3AENC_SECRET%40cb.example.com%2Fdone",
+            "next=//[redacted]@cb.example.com/done",
+        ),
+    ] {
+        let masked = super::mask_url_secrets(url);
+        assert!(masked.contains(expected), "{url} -> {masked}");
+        for secret in ["NESTED_SECRET", "FRAG_SECRET", "ENC_SECRET"] {
+            assert!(!masked.contains(secret), "leaked {secret}: {masked}");
+        }
+    }
+
+    // The same recursion cap applies to protocol-relative nesting: layers down
+    // to `layer7` are rendered, the deeper tail is a single `[redacted]`.
+    assert_eq!(super::MAX_MASK_DEPTH, 8);
+    let mut nested = "//deep.example.com/cb?token=DEEPEST_SECRET".to_string();
+    for layer in 0..16 {
+        nested = format!("//layer{layer}.example.com/next?next={nested}");
+    }
+    let masked = super::mask_url_secrets(&nested);
+    assert!(masked.contains("next=[redacted]"), "{masked}");
+    assert!(masked.contains("layer15.example.com"), "{masked}");
+    assert!(masked.contains("layer7.example.com"), "{masked}");
+    for unreachable in ["layer6", "layer0", "deep.example.com", "DEEPEST_SECRET"] {
+        assert!(
+            !masked.contains(unreachable),
+            "leaked {unreachable} beyond the depth cap: {masked}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cached_sync_for_detailed_reports_not_found_with_no_cache_file() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+
+    assert!(!default_path().expect("a cache directory").exists());
+    assert!(!legacy_path().expect("a config directory").exists());
+
+    // load_default() tries the cache path and then the read-only legacy path;
+    // both miss, so the restore path keeps the classified NotFound reason
+    // instead of silently turning it into a ServerMismatch or a parse failure.
+    let error = cached_sync_for_detailed("https://vault.example.com", "user-1").unwrap_err();
+    assert!(matches!(&error, SyncCacheError::NotFound), "{error:?}");
+    assert_eq!(cache_error_message(error.clone()), REASON_MISSING);
+    assert!(cache_restore_status(error).is_none());
+    assert!(cached_sync_for("https://vault.example.com", "user-1").is_none());
+}
+
+#[test]
+fn sync_cache_sync_reports_cache_parse_for_an_invalid_body() {
+    // `SyncCache::sync()` (cache.rs:451-454) is the body-only parse used by the
+    // restore and validate paths. A corrupt body must be a CacheParse with the
+    // underlying parse error still reachable through Error::source(), not an
+    // envelope-level ParseFailedCause.
+    let cache = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: b"not json".to_vec(),
+        created_at: Some(0),
+    };
+    let error = cache.sync().unwrap_err();
+    assert!(matches!(&error, SyncCacheError::CacheParse(_)), "{error:?}");
+    let source = std::error::Error::source(&error).expect("the parse error must stay reachable");
+    assert!(!source.to_string().is_empty());
+    assert_eq!(cache_error_message(error), REASON_CORRUPT);
+}

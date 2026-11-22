@@ -40,9 +40,9 @@ use crate::model::{Folder, ItemData, LoginUri, Vault, VaultItem};
 /// password is still redacted by `ItemData`'s manual `Debug` implementation.
 pub const UNDECRYPTABLE_PASSWORD: &str = "\u{0}openwarden:undecryptable";
 
-/// Marker used in place of a login's URI list when the field could not be
-/// decrypted. Without it the audit would mistake a decryption failure for a
-/// genuinely missing URI and report `NoUri`.
+/// Marker replacing the login's **entire URI list** when any entry fails to
+/// decrypt: one bad ciphertext discards the valid siblings too. Without it the
+/// audit would mistake the failure for a genuinely missing URI and report `NoUri`.
 pub const UNDECRYPTABLE_URI: &str = "\u{0}openwarden:uri-undecryptable";
 
 /// Whether a model URI is the undecryptable status marker.
@@ -269,9 +269,9 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
 /// buffers so the audit and the TOTP copy action work on real values. A field
 /// that fails to decrypt never discards the rest of the vault: the password is
 /// replaced with the [`UNDECRYPTABLE_PASSWORD`] status marker (which the health
-/// audit excludes from password checks), a URI field whose ciphertext cannot
-/// be opened becomes [`UNDECRYPTABLE_URI`] (reported as
-/// `Finding::UriUninspectable` rather than `NoUri`), and a TOTP field that
+/// audit excludes from password checks), a URI list that fails to decrypt is
+/// replaced in full by [`UNDECRYPTABLE_URI`] even when only one entry is bad
+/// (reported as `Finding::UriUninspectable` rather than `NoUri`), and a TOTP field that
 /// exists but cannot be decrypted becomes [`UNDECRYPTABLE_TOTP`] (reported as
 /// `Finding::TotpUninspectable` rather than `NoTotp`). A genuinely absent TOTP
 /// field stays empty and is reported as `NoTotp`.
@@ -317,8 +317,8 @@ fn login_item(vault: &OpenVault, info: &LoginInfo) -> VaultItem {
                 match_type: uri.match_type.map(|kind| kind.to_wire()),
             })
             .collect(),
-        // Decryption failed: keep a marker so the audit distinguishes this
-        // from a login that genuinely has no URI.
+        // The whole list failed (one bad entry is enough): one marker replaces
+        // every entry so the audit does not report a genuinely missing URI.
         Err(_) => vec![LoginUri {
             uri: UNDECRYPTABLE_URI.to_string(),
             match_type: None,

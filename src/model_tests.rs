@@ -2161,3 +2161,78 @@ fn ssh_key_debug_keeps_the_public_key_and_fingerprint() {
     assert!(debug.contains("private_key: \"[redacted]\""), "{debug}");
     assert!(!debug.contains("PRIVATE-KEY-CANARY"), "{debug}");
 }
+
+#[test]
+fn zeroizing_text_derefs_and_borrows_as_str() {
+    // model.rs:231-243: `Deref<Target = str>` and `AsRef<str>` are the two
+    // read paths a caller gets for free; only `Debug` is masked. Pinning them
+    // keeps generic helpers that accept `AsRef<str>` working on secret fields.
+    let text = ZeroizingText::new("abcあ");
+    let via_deref: &str = &text;
+    assert_eq!(via_deref, "abcあ");
+    assert_eq!(text.chars().count(), 4, "str methods work through Deref");
+    assert_eq!(text.len(), 6, "str::len is byte length, not char count");
+    let via_as_ref: &str = AsRef::<str>::as_ref(&text);
+    assert_eq!(via_as_ref, text.as_str());
+
+    fn char_count<T: AsRef<str>>(value: &T) -> usize {
+        value.as_ref().chars().count()
+    }
+    assert_eq!(char_count(&text), 4);
+    assert_eq!(format!("{}", text), text.as_str());
+    assert_eq!(format!("{:?}", text), "[redacted]");
+
+    // The same contract holds for the empty default and for `From<String>`.
+    let empty = ZeroizingText::default();
+    assert_eq!(&*empty, "");
+    assert_eq!(AsRef::<str>::as_ref(&empty), "");
+    let owned = ZeroizingText::from(String::from("owned"));
+    assert_eq!(&*owned, "owned");
+    assert_eq!(char_count(&owned), 5);
+}
+
+#[test]
+fn upsert_replaces_only_the_first_duplicate_id_but_remove_deletes_them_all() {
+    // model.rs:1032-1058: `upsert` uses `iter_mut().find(...)`, while `remove`
+    // uses `retain(...)`. Pre-existing duplicate ids (possible when a caller
+    // pushes directly into `items`) therefore behave asymmetrically.
+    let mut vault = Vault::new();
+    let first = login("dup", "First", "u", "p1", "https://one.example");
+    let mut second = login("dup", "Second", "u", "p2", "https://two.example");
+    second.revision_date = 7;
+    vault.items.push(first);
+    vault.items.push(second);
+    assert_eq!(vault.len(), 2);
+    assert_eq!(vault.item("dup").unwrap().name, "First");
+
+    let mut replacement = login("dup", "Replacement", "u", "p3", "https://three.example");
+    replacement.revision_date = 9;
+    vault.upsert(replacement);
+    assert_eq!(
+        vault.len(),
+        2,
+        "upsert must not collapse existing duplicates"
+    );
+    assert_eq!(vault.item("dup").unwrap().name, "Replacement");
+    let names: Vec<&str> = vault.items.iter().map(|item| item.name.as_str()).collect();
+    assert_eq!(names, vec!["Replacement", "Second"]);
+    assert_eq!(vault.items[0].revision_date, 9);
+    assert_eq!(
+        vault.items[1].revision_date, 7,
+        "the second row is untouched"
+    );
+
+    // A zero revision on the replacement still keeps the first row's revision,
+    // and the duplicate row is still present afterwards.
+    let mut metadata_only = login("dup", "Metadata", "u", "p4", "https://four.example");
+    metadata_only.revision_date = UNKNOWN_REVISION;
+    vault.upsert(metadata_only);
+    assert_eq!(vault.items[0].revision_date, 9);
+    assert_eq!(vault.len(), 2);
+
+    // `remove` is id-based and removes every matching row in one call.
+    assert!(vault.remove("dup"));
+    assert!(vault.items.is_empty());
+    assert!(vault.item("dup").is_none());
+    assert!(!vault.remove("dup"), "a second removal reports no match");
+}

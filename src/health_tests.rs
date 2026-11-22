@@ -1877,3 +1877,28 @@ fn all_thirty_eight_common_dictionary_entries_are_detected() {
         );
     }
 }
+
+#[test]
+fn non_ascii_digit_only_passwords_keep_the_wide_pool_constraint() {
+    // health.rs:327,331,336,349-350: `has_digit` uses `is_ascii_digit`, so
+    // fullwidth / Arabic-Indic / Devanagari digits only set `has_wide` and add
+    // WIDE_POOL (100) to the pool. The PIN short-circuit at health.rs:359-362
+    // is ASCII-only too, so they are not charged the 10-digit pool. Pin this
+    // known overestimate instead of claiming PIN-equivalent scoring.
+    let ascii_pin = estimate_entropy("1234");
+    assert_eq!(ascii_pin, entropy_bits(10, 4).round() as u32);
+    for password in ["１２３４", "١٢٣٤", "१२३४"] {
+        let wide = estimate_entropy(password);
+        assert_eq!(
+            wide,
+            entropy_bits(100, password.chars().count()).round() as u32,
+            "{password}"
+        );
+        assert!(wide > ascii_pin, "{password}: {wide} vs {ascii_pin}");
+    }
+    // A mix of ASCII and non-ASCII digits stays on the wide-pool path: the
+    // presence of one ASCII digit does not trigger the all-digits PIN rule.
+    let mixed = estimate_entropy("12３４");
+    assert_eq!(mixed, entropy_bits(100, 4).round() as u32);
+    assert!(mixed > ascii_pin, "{mixed} vs {ascii_pin}");
+}

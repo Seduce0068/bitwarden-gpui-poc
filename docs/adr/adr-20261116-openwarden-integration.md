@@ -151,7 +151,9 @@ body を読み出し、サーバー URL と client_id 由来のアカウント i
 
 オフライン復元のアカウント照合: 同期失敗時に fresh な profile id は得られない
 ため、personal API key の `client_id`（`user.<uuid>`）からアカウント id を
-抽出してキャッシュと照合する。prefix がない場合や id が空の場合は
+抽出してキャッシュのエンベロープと照合する。さらに復元時にパースした本文の
+`Profile.Id` もエンベロープの `user_id` と照合し、不一致なら
+`UserMismatch` で拒否する。prefix がない場合や id が空の場合は
 fail-closed で復元しない。同一サーバーの別アカウントのキャッシュは
 `UserMismatch` として拒否される。
 キャッシュには取得時刻（Unix 秒）と 7 日間の有効期限を設けた。期限切れは

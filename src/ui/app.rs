@@ -132,7 +132,9 @@ pub(super) enum ExitedEditMode {
 /// from the mode that was actually exited: leaving a settings/auth field keeps
 /// *its* confirmation guidance even when the destination is the vault panel.
 /// The destination panel only refines the search case (audit row state on the
-/// audit panel, settings feedback on a settings-owning panel).
+/// audit panel, settings feedback on a settings-owning panel). For that audit
+/// case the report and the still-highlighted row are passed in so the status
+/// describes the actual selection instead of always claiming none.
 /// [`ExitedEditMode::None`] means the caller must keep its current status (a
 /// login notice, an audit-focus message, ...). Kept pure so the contract can
 /// be tested without a GPUI window (this crate does not enable gpui's
@@ -142,6 +144,8 @@ pub(super) fn panel_transition_status_after_edit(
     exited: ExitedEditMode,
     visible_count: usize,
     dirty: bool,
+    audit_report: Option<&crate::health::Report>,
+    audit_selection: Option<usize>,
 ) -> Option<String> {
     match exited {
         ExitedEditMode::None => None,
@@ -150,7 +154,7 @@ pub(super) fn panel_transition_status_after_edit(
             Some(crate::ui::input::settings_edit_finished_status(dirty))
         }
         ExitedEditMode::Search => Some(match panel {
-            Panel::Audit => audit_no_selection_status(dirty),
+            Panel::Audit => audit_search_exit_status(audit_report, audit_selection, dirty),
             Panel::Settings | Panel::Generator => {
                 crate::ui::input::settings_edit_finished_status(dirty)
             }
@@ -215,6 +219,34 @@ pub(super) fn audit_no_selection_status(dirty: bool) -> String {
         "監査行が選択されていません（↑↓で行を選択してください）",
         dirty,
     )
+}
+
+/// Status shown when a search is finished onto the audit panel.
+///
+/// Finishing a search does **not** clear [`BitwardenApp::audit_row_selection`]:
+/// the user may already have highlighted a finding before starting the search.
+/// Reporting "no row selected" unconditionally therefore contradicted the
+/// highlight still drawn on screen. A highlighted row is described with the
+/// same wording as the keyboard move and refresh paths (and its name is always
+/// re-read from the current report); when there is no row to describe, the
+/// "no selection" guidance is shown. Kept pure so the contract can be tested
+/// without a GPUI window (this crate does not enable gpui's `test-support`
+/// feature).
+pub(super) fn audit_search_exit_status(
+    report: Option<&crate::health::Report>,
+    selection: Option<usize>,
+    dirty: bool,
+) -> String {
+    let len = report.map_or(0, |report| report.items.len());
+    match clamp_audit_row(selection, len) {
+        Some(index) => {
+            let name = report
+                .and_then(|report| report.items.get(index))
+                .map(|item| item.name.clone());
+            audit_refresh_status(Some(index), len, name.as_deref(), dirty)
+        }
+        None => audit_no_selection_status(dirty),
+    }
 }
 
 /// Detail-line text for a login's TOTP field, keeping the failure reason.
@@ -709,6 +741,8 @@ impl BitwardenApp {
             exited_edit_mode,
             self.view.visible_items().len(),
             self.settings_dirty,
+            self.view.audit_report.as_ref(),
+            self.audit_row_selection,
         ) {
             self.status = status;
         }
@@ -1678,7 +1712,14 @@ mod tests {
             Panel::Settings,
         ] {
             assert_eq!(
-                panel_transition_status_after_edit(panel, ExitedEditMode::None, 3, false),
+                panel_transition_status_after_edit(
+                    panel,
+                    ExitedEditMode::None,
+                    3,
+                    false,
+                    None,
+                    None,
+                ),
                 None,
                 "{panel:?} without an edit mode must not overwrite the status"
             );
@@ -1687,32 +1728,56 @@ mod tests {
         for dirty in [false, true] {
             // Leaving a search keeps the count-aware vault message (or the
             // audit message when the audit panel is the destination).
-            let vault =
-                panel_transition_status_after_edit(Panel::Vault, ExitedEditMode::Search, 3, dirty)
-                    .unwrap();
+            let vault = panel_transition_status_after_edit(
+                Panel::Vault,
+                ExitedEditMode::Search,
+                3,
+                dirty,
+                None,
+                None,
+            )
+            .unwrap();
             assert_eq!(vault, crate::ui::input::search_finished_status(3, dirty));
             assert!(!vault.contains("入力中"), "{vault}");
 
-            let audit =
-                panel_transition_status_after_edit(Panel::Audit, ExitedEditMode::Search, 3, dirty)
-                    .unwrap();
+            let audit = panel_transition_status_after_edit(
+                Panel::Audit,
+                ExitedEditMode::Search,
+                3,
+                dirty,
+                None,
+                None,
+            )
+            .unwrap();
             assert_eq!(audit, audit_no_selection_status(dirty));
             assert!(!audit.contains("入力中"), "{audit}");
 
             // A confirmed search with no visible row gets the dedicated
             // message, not a prompt to select a non-existent row.
-            let empty =
-                panel_transition_status_after_edit(Panel::Vault, ExitedEditMode::Search, 0, dirty)
-                    .unwrap();
+            let empty = panel_transition_status_after_edit(
+                Panel::Vault,
+                ExitedEditMode::Search,
+                0,
+                dirty,
+                None,
+                None,
+            )
+            .unwrap();
             assert_eq!(empty, crate::ui::input::search_finished_status(0, dirty));
             assert!(empty.contains("0件"), "{empty}");
 
             // A search left for a settings-owning panel keeps the settings
             // feedback (the destination still owns `w`/`d`).
             for panel in [Panel::Settings, Panel::Generator] {
-                let status =
-                    panel_transition_status_after_edit(panel, ExitedEditMode::Search, 3, dirty)
-                        .unwrap();
+                let status = panel_transition_status_after_edit(
+                    panel,
+                    ExitedEditMode::Search,
+                    3,
+                    dirty,
+                    None,
+                    None,
+                )
+                .unwrap();
                 assert_eq!(
                     status,
                     crate::ui::input::settings_edit_finished_status(dirty),
@@ -1733,6 +1798,8 @@ mod tests {
                     ExitedEditMode::SettingsField,
                     3,
                     dirty,
+                    None,
+                    None,
                 )
                 .unwrap();
                 assert_eq!(
@@ -1749,6 +1816,8 @@ mod tests {
                 ExitedEditMode::AuthField,
                 3,
                 dirty,
+                None,
+                None,
             )
             .unwrap();
             assert_eq!(auth, crate::ui::input::auth_edit_finished_status(dirty));
@@ -1761,19 +1830,33 @@ mod tests {
         // The old `was_editing: bool` made every edit mode landing on the
         // vault panel report a finished search, hiding the settings save
         // hint. The three modes must now produce three different statuses.
-        let search =
-            panel_transition_status_after_edit(Panel::Vault, ExitedEditMode::Search, 3, false)
-                .unwrap();
+        let search = panel_transition_status_after_edit(
+            Panel::Vault,
+            ExitedEditMode::Search,
+            3,
+            false,
+            None,
+            None,
+        )
+        .unwrap();
         let settings = panel_transition_status_after_edit(
             Panel::Vault,
             ExitedEditMode::SettingsField,
             3,
             false,
+            None,
+            None,
         )
         .unwrap();
-        let auth =
-            panel_transition_status_after_edit(Panel::Vault, ExitedEditMode::AuthField, 3, false)
-                .unwrap();
+        let auth = panel_transition_status_after_edit(
+            Panel::Vault,
+            ExitedEditMode::AuthField,
+            3,
+            false,
+            None,
+            None,
+        )
+        .unwrap();
         assert_ne!(search, settings);
         assert_ne!(search, auth);
         assert_ne!(settings, auth);
@@ -1793,11 +1876,123 @@ mod tests {
             ExitedEditMode::SettingsField,
             ExitedEditMode::AuthField,
         ] {
-            let clean = panel_transition_status_after_edit(Panel::Vault, mode, 3, false).unwrap();
-            let dirty = panel_transition_status_after_edit(Panel::Vault, mode, 3, true).unwrap();
+            let clean =
+                panel_transition_status_after_edit(Panel::Vault, mode, 3, false, None, None)
+                    .unwrap();
+            let dirty = panel_transition_status_after_edit(Panel::Vault, mode, 3, true, None, None)
+                .unwrap();
             assert_eq!(dirty, status_with_unsaved(&clean, true), "{mode:?}");
             assert!(dirty.contains("[未保存の設定変更があります]"), "{mode:?}");
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_search_exit_status_describes_the_highlighted_row() {
+        use crate::health::ItemReport;
+        use crate::model::ItemKind;
+
+        fn report() -> Report {
+            Report {
+                items: vec![
+                    ItemReport {
+                        id: "item-1".into(),
+                        name: "First finding".into(),
+                        kind: ItemKind::Login,
+                        findings: Vec::new(),
+                    },
+                    ItemReport {
+                        id: "item-2".into(),
+                        name: "Second finding".into(),
+                        kind: ItemKind::Login,
+                        findings: Vec::new(),
+                    },
+                ],
+                examined: 2,
+                with_totp: 0,
+                logins: 2,
+            }
+        }
+
+        let report = report();
+
+        // A row highlighted before the search must still be described; the old
+        // unconditional "no selection" status denied a visible highlight.
+        let selected = audit_search_exit_status(Some(&report), Some(1), false);
+        assert_eq!(
+            selected,
+            format!(
+                "監査行 2/2: Second finding（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）"
+            )
+        );
+        assert!(!selected.contains("選択されていません"), "{selected}");
+
+        let selected_dirty = audit_search_exit_status(Some(&report), Some(1), true);
+        assert_eq!(selected_dirty, status_with_unsaved(&selected, true));
+        assert!(selected_dirty.contains("[未保存の設定変更があります]"));
+
+        // A stale index is clamped to the last row instead of losing the row.
+        let clamped = audit_search_exit_status(Some(&report), Some(9), false);
+        assert!(clamped.contains("2/2: Second finding"), "{clamped}");
+
+        // With no highlight the "no selection" guidance is restored.
+        for dirty in [false, true] {
+            let none = audit_search_exit_status(Some(&report), None, dirty);
+            assert_eq!(none, audit_no_selection_status(dirty));
+        }
+
+        // No report at all is a no-selection case too.
+        assert_eq!(
+            audit_search_exit_status(None, Some(0), false),
+            audit_no_selection_status(false)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn search_exit_onto_audit_uses_the_selection_in_the_transition_status() {
+        use crate::health::ItemReport;
+        use crate::model::ItemKind;
+
+        let report = Report {
+            items: vec![ItemReport {
+                id: "item-1".into(),
+                name: "Example".into(),
+                kind: ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 0,
+            logins: 1,
+        };
+
+        // The audit branch of a Search exit must consult the passed-in state.
+        let selected = panel_transition_status_after_edit(
+            Panel::Audit,
+            ExitedEditMode::Search,
+            3,
+            false,
+            Some(&report),
+            Some(0),
+        )
+        .unwrap();
+        assert_eq!(
+            selected,
+            audit_search_exit_status(Some(&report), Some(0), false)
+        );
+        assert!(selected.contains("監査行 1/1: Example"), "{selected}");
+        assert!(!selected.contains("入力中"), "{selected}");
+
+        // Without a highlight the same branch still reports no selection.
+        let none = panel_transition_status_after_edit(
+            Panel::Audit,
+            ExitedEditMode::Search,
+            3,
+            false,
+            Some(&report),
+            None,
+        )
+        .unwrap();
+        assert_eq!(none, audit_no_selection_status(false));
+        assert_ne!(selected, none);
     }
 
     #[::core::prelude::v1::test]

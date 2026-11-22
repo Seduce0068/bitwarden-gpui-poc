@@ -439,3 +439,41 @@ fn steam_code_that_is_all_digits_is_grouped_as_a_number() {
     assert_ne!(code.grouped(), raw);
     assert_eq!(code.grouped().matches(' ').count(), 1);
 }
+
+#[test]
+fn openwarden_rejections_keep_their_source_in_invalid_cause() {
+    // totp.rs:117-119: an openwarden parse failure is mapped to
+    // `InvalidCause(BoxedCause::text(...))`. AppError's PartialEq deliberately
+    // treats a cause as diagnostic context, so equality alone cannot prove the
+    // source survived; check `Error::source()` explicitly.
+    for secret in ["not base32!", "otpauth://totp/x"] {
+        let error = code_at(secret, 0).unwrap_err();
+        assert!(
+            matches!(&error, TotpError::InvalidCause(_)),
+            "{secret}: {error:?}"
+        );
+        assert_eq!(error, TotpError::Invalid, "{secret}");
+        let source = std::error::Error::source(&error)
+            .expect("an openwarden rejection must keep its typed source")
+            .to_string();
+        assert!(!source.is_empty(), "{secret}");
+        assert!(
+            !source.contains("TOTP シークレットを解釈できません"),
+            "the family message belongs in message(), not in the source: {source}"
+        );
+
+        // The snapshot path stores the same AppError, so the cause survives it.
+        let tick = Tick::sample(secret, 0);
+        let tick_error = tick.error.expect("the sample must keep the error");
+        let tick_source = std::error::Error::source(&tick_error)
+            .expect("the Tick must keep the same source")
+            .to_string();
+        assert_eq!(tick_source, source);
+    }
+
+    // Contrast: the early non-ASCII guard (totp.rs:110-115) returns plain
+    // `Invalid` with no source. The two paths must stay distinguishable.
+    let early = code_at("あ", 0).unwrap_err();
+    assert!(matches!(&early, TotpError::Invalid), "{early:?}");
+    assert!(std::error::Error::source(&early).is_none());
+}

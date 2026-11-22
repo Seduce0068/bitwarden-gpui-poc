@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第80弾で 6 件すべてを完了）。
+なし（第81弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第81弾（16 担当・25 回目）の指摘 7 件を完結（2026-11-23）
+  - 検索→監査遷移の status を実際の選択行と整合させた。
+  - プロトコル相対 URL のマスク、NotFound/CacheParse、
+    混在 URI のリスト置換、ZeroizingText Deref/AsRef、
+    upsert/remove の重複 id、非 ASCII 数字 PIN、InvalidCause source
+    をテスト。
+  - 行参照、UNDECRYPTABLE_URI の doc、CHANGELOG 第79〜80弾、
+    ADR 本文 Profile.Id 照合を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（758 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第80弾（16 担当・24 回目）の指摘 6 件を完結（2026-11-23）
   - URL マスクに深さ上限を追加し、本文 Profile.Id との照合を実装。
   - sync_fallback の汎用合成、UTF-8 境界、device_id サニタイズ、

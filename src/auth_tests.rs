@@ -639,7 +639,7 @@ fn cache_too_large_message_reaches_the_status_bar() {
 fn user_mismatch_cache_error_reaches_the_status_bar() {
     // The cache layer's `UserMismatch` reason must not collapse into the plain
     // Sync status: `cache_restore_failure` wraps it in `AuthError::Other`
-    // (auth.rs:834-844).
+    // (auth.rs:876-886).
     let error = cache_restore_failure(AppError::UserMismatch);
     assert!(matches!(&error, AuthError::Other(text) if text.contains("別のアカウント")));
     assert_eq!(
@@ -1879,7 +1879,7 @@ fn validate_config_reports_the_first_invalid_field_in_a_fixed_order() {
 fn plain_invalid_login_uses_the_same_sync_detail_arm_as_the_cause_variant() {
     use crate::error::BoxedCause;
 
-    // auth.rs:231 matches both `AppError::InvalidLogin` and
+    // auth.rs:233 matches both `AppError::InvalidLogin` and
     // `AppError::InvalidLoginCause` in one arm. The plain form must keep the
     // parse detail and classify as a retryable Sync failure, exactly like its
     // cause-carrying sibling.

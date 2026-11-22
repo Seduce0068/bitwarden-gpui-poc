@@ -1768,3 +1768,49 @@ fn uri_wire_matches_zero_two_four_survive_the_sync_to_model_round_trip() {
     let restored: Vec<crate::model::LoginUri> = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.as_slice(), uris);
 }
+
+#[test]
+fn one_undecryptable_uri_replaces_the_whole_list_with_the_marker() {
+    // vault_sync.rs:312-326: `Vault::uris` decrypts the list as one operation.
+    // A single bad ciphertext makes that call fail, so `login_item` substitutes
+    // one marker for the *entire* list. Valid siblings are not kept.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        serde_json::json!(openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string())
+    };
+    let mut mixed = encrypted_login("uri-mixed", REAL_PASSWORD, REAL_TOTP);
+    mixed["login"]["uris"] = serde_json::json!([
+        { "uri": enc(b"https://valid.example.com"), "match": 1 },
+        { "uri": "NEVER_IN_THE_MODEL_URI" },
+        { "uri": enc(b"https://also-valid.example.com"), "match": 3 },
+    ]);
+    let vault = unlocked_vault(&[mixed]);
+    let model = import_logins(&vault).expect("one bad URI must not abort the import");
+    let uris = model.item("uri-mixed").expect("the login survives").uris();
+    assert_eq!(uris.len(), 1, "the whole list is replaced, not one field");
+    assert_eq!(uris[0].uri, UNDECRYPTABLE_URI);
+    assert_eq!(uris[0].match_type, None);
+
+    let rendered = format!("{model:?} {}", serde_json::to_string(&model.items).unwrap());
+    for leaked in [
+        "https://valid.example.com",
+        "https://also-valid.example.com",
+        "NEVER_IN_THE_MODEL_URI",
+    ] {
+        assert!(!rendered.contains(leaked), "leaked {leaked}: {rendered}");
+    }
+
+    let report = crate::health::audit(
+        &model,
+        crate::health::Thresholds::default(),
+        i64::try_from(TOTP_AT).unwrap(),
+    );
+    assert!(report.items[0]
+        .findings
+        .contains(&crate::health::Finding::UriUninspectable));
+    assert!(!report.items[0]
+        .findings
+        .contains(&crate::health::Finding::NoUri));
+}

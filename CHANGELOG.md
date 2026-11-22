@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 全体改善（第79〜80弾 / 2026-11-23）
+
+- Separator 未知値、TOTP 空欄切替、期限飽和、非 ASCII ポート、
+  favorite/notes 既定値、base64 剰余をテスト
+- URL マスクに深さ上限、本文 Profile.Id 照合を追加
+- sync_fallback の汎用合成、UTF-8 境界、device_id サニタイズ、
+  非オブジェクト同期本体、fingerprint 伝播をテスト
+- VaultItem::new doc、model_tests 行参照、review-report の
+  stale_after、ADR verified を修正
+
 ### 全体改善（第77〜78弾 / 2026-11-23）
 
 - 生成パネルの F1 重複とロック status の区切り残存を修正し、

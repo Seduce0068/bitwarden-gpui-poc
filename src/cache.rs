@@ -83,8 +83,8 @@ pub struct SyncCache {
 /// A URL such as `https://user:pass@vault.example.com` must not leak the
 /// credentials through a log line. The userinfo before the userinfo delimiter
 /// is replaced by `[redacted]`; the host/path that follows is kept so
-/// diagnostics remain useful. URLs without an `@` in the authority are rendered
-/// unchanged, which is safe because they carry no userinfo.
+/// diagnostics remain useful. A protocol-relative `//user:pass@host/p` skips
+/// its two leading bytes so the authority scan still sees the userinfo.
 ///
 /// The delimiter is the last `@` **of the authority**, not the last `@` of the
 /// whole pre-path text: a password may contain `@`, but an `@` in a query or
@@ -92,7 +92,10 @@ pub struct SyncCache {
 /// delimiter can be an unescaped character in the password, so it does not by
 /// itself terminate the authority ([`at_is_in_query`] decides).
 fn mask_url_userinfo(url: &str) -> String {
-    let scheme_end = url.find("://").map(|at| at + 3).unwrap_or(0);
+    let scheme_end = url
+        .find("://")
+        .map(|i| i + 3)
+        .unwrap_or(url.starts_with("//") as usize * 2);
     // A path separator always closes the authority. '?'/'#' are *not* used as
     // the boundary here: an unescaped one inside a password would hide the real
     // delimiter and leave the credential in the diagnostic URL.
@@ -290,11 +293,11 @@ pub(crate) const MAX_MASK_DEPTH: usize = 8;
 /// A harmless key whose *value* is itself a URL is masked recursively: a
 /// nested `?token=...` or `#code=...` would otherwise survive the top-level
 /// key check and reach a diagnostic log verbatim. The nested URL may be
-/// percent-encoded (`%3F`, `%23`, `%3A%2F%2F`): it is decoded first so an
-/// encoded credential cannot hide behind escapes. When a nested URL is found
-/// the decoded, masked form is rendered; plain values are copied unchanged so
-/// the URL stays useful for debugging. Recursion is capped by
-/// [`MAX_MASK_DEPTH`]; `depth` is the number of nested URLs already entered.
+/// percent-encoded (`%3F`, `%3A%2F%2F`) or protocol-relative
+/// (`//user:SECRET@host/p`); decoding first keeps credentials from hiding.
+/// When found, the decoded masked form is rendered; plain values are copied
+/// unchanged. Recursion is capped by [`MAX_MASK_DEPTH`]; `depth` counts
+/// already-entered nested URLs.
 fn mask_param_pairs(pairs: &str, depth: usize) -> String {
     let mut out = String::with_capacity(pairs.len());
     let mut first = true;
@@ -317,12 +320,12 @@ fn mask_param_pairs(pairs: &str, depth: usize) -> String {
             } else {
                 // Decode *twice* before the nested-URL check: a doubly encoded
                 // delimiter such as `%253F` becomes `%3F` after one pass and
-                // `?` only after the second. A single pass would let a
-                // double-encoded `?token=...` evade the recursive masker. A
-                // decoded value that is not a nested URL is discarded,
-                // leaving the original pair verbatim.
+                // `?` only after the second. `//` matches nested URLs both with
+                // (`://`) and without (`//user:SECRET@host/p`) a scheme. A value
+                // that is not a nested URL is discarded, leaving the
+                // original pair verbatim.
                 let decoded = percent_decode(&percent_decode(value));
-                if decoded.contains('?') || decoded.contains('#') || decoded.contains("://") {
+                if decoded.contains('?') || decoded.contains('#') || decoded.contains("//") {
                     out.push_str(key);
                     out.push('=');
                     if depth >= MAX_MASK_DEPTH {
