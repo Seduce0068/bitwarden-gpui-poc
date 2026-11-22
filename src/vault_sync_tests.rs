@@ -738,6 +738,56 @@ fn dedup_counts_missing_and_invalid_revisions_as_unknown_and_keeps_first_on_ties
 }
 
 #[test]
+fn dedup_skips_rows_without_a_string_id() {
+    // Rows whose `id` is missing, null or a number are left untouched rather
+    // than being keyed under a fabricated id or aborting the dedup pass
+    // (vault_sync.rs:180-183). Valid duplicate ids still collapse normally.
+    let mut value = serde_json::json!({
+        "ciphers": [
+            {"name": "no-id"},
+            {"id": null, "name": "null-id"},
+            {"id": 42, "name": "numeric-id"},
+            {"id": "dup", "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "dup", "revisionDate": "2024-02-01T00:00:00Z"},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 4, "only the older duplicate is dropped");
+    assert_eq!(kept[0]["name"], "no-id");
+    assert_eq!(kept[1]["name"], "null-id");
+    assert_eq!(kept[2]["name"], "numeric-id");
+    assert_eq!(kept[3]["id"], "dup");
+    assert_eq!(
+        kept[3]["revisionDate"], "2024-02-01T00:00:00Z",
+        "the newest revision of the valid id wins"
+    );
+}
+
+#[test]
+fn key_conflicts_inside_array_objects_are_rejected() {
+    // `normalize_sync_keys` recurses into arrays (vault_sync.rs:148-151): a
+    // collision between `Key` and `key` inside any array element must be
+    // reported, not silently overwritten by whichever key iterates last.
+    let mut value = serde_json::json!({
+        "ciphers": [
+            {"id": "ok", "login": {"Username": "u"}},
+            {"Id": "bad", "Key": "2.a", "key": "2.b"}
+        ]
+    });
+    let error = super::normalize_sync_keys(&mut value).unwrap_err();
+    assert!(error.contains("conflicting keys"), "{error}");
+    assert!(error.contains("key"), "{error}");
+
+    // A single spelling per object remains valid.
+    let mut clean = serde_json::json!({
+        "ciphers": [{"Id": "ok", "Key": "2.a"}]
+    });
+    assert!(super::normalize_sync_keys(&mut clean).is_ok());
+    assert_eq!(clean["ciphers"][0]["id"], "ok");
+}
+
+#[test]
 fn plain_import_discards_the_audit_the_with_audit_variant_exposes() {
     let id = "audit-discard";
     let vault = unlocked_vault_raw(&[

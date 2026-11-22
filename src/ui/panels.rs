@@ -7,12 +7,36 @@ use gpui_kit::*;
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
 use crate::health::{has_totp_field, has_usable_totp, Report, Severity};
 use crate::settings::Settings;
+use crate::ui::keys::TEXT_EDIT_ARROW_KEYS_HINT;
 use crate::ui::logic::{settings_hint, unsaved_marker};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
 use crate::vault_sync::is_undecryptable_totp;
 
 /// Number of header rows rendered before the first audit item.
 pub(super) const AUDIT_HEADER_ROWS: usize = 3;
+
+/// Labels for the two `+/-` rows in the generator panel.
+///
+/// Both labels explicitly say that the same key changes the *other* generator
+/// setting too; `apply_generator_key` truly mutates both values at once.
+pub(super) fn generator_length_labels(
+    password_len: usize,
+    words: usize,
+    pw_bits: f64,
+    pp_bits: f64,
+    separator: &str,
+) -> (String, String) {
+    let password_label = format!(
+        "+/-  長さ: {password_len}（パスフレーズ語数も同時に変更）  |  強度: {} ({pw_bits:.0} bit)",
+        Strength::from_bits(pw_bits).label()
+    );
+    let passphrase_label = format!(
+        "+/-  単語数: {words}（パスワード長も同時に変更）  |  ,  区切り: {}  |  強度: {} ({pp_bits:.0} bit)",
+        separator_label(separator),
+        Strength::from_bits(pp_bits).label()
+    );
+    (password_label, passphrase_label)
+}
 
 /// Colour for a finding's severity on an unselected audit row.
 fn severity_color(severity: Severity) -> u32 {
@@ -261,6 +285,13 @@ pub(super) fn generator_panel<'a>(
     let passphrase = &settings.passphrase_generator;
     let pw_bits = password_entropy(password);
     let pp_bits = passphrase_entropy(passphrase);
+    let (password_label, passphrase_label) = generator_length_labels(
+        password.length,
+        passphrase.words,
+        pw_bits,
+        pp_bits,
+        &passphrase.separator,
+    );
     div()
         .id("generator-panel-scroll")
         .flex()
@@ -281,12 +312,12 @@ pub(super) fn generator_panel<'a>(
         .child(setting_row("3  数字 0-9", password.digits))
         .child(setting_row("4  記号 !@#$%^&*", password.symbols))
         .child(setting_row("5  曖昧文字を除外", password.avoid_ambiguous))
-        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "+/-  長さ: {}  |  強度: {} ({:.0} bit)",
-            password.length,
-            Strength::from_bits(pw_bits).label(),
-            pw_bits
-        )))
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(0xa6adc8))
+                .child(password_label),
+        )
         .child(result_row(
             "p  生成",
             state.last_password.as_ref().map(|value| value.as_str()),
@@ -300,13 +331,12 @@ pub(super) fn generator_panel<'a>(
         )
         .child(setting_row("6  先頭を大文字に", passphrase.capitalize))
         .child(setting_row("7  数字を追加", passphrase.include_number))
-        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "+/-  単語数: {}  |  ,  区切り: {}  |  強度: {} ({:.0} bit)",
-            passphrase.words,
-            separator_label(&passphrase.separator),
-            Strength::from_bits(pp_bits).label(),
-            pp_bits
-        )))
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(0xa6adc8))
+                .child(passphrase_label),
+        )
         .child(result_row(
             "h  生成",
             state.last_passphrase.as_ref().map(|value| value.as_str()),
@@ -448,6 +478,12 @@ pub(super) fn settings_panel<'a>(
                 .text_color(rgb(0xa6adc8))
                 .child(settings_hint(editing.is_some())),
         )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0xa6adc8))
+                .child(TEXT_EDIT_ARROW_KEYS_HINT),
+        )
 }
 
 /// Label shown on a header tab, with a non-colour marker when it is active.
@@ -561,6 +597,21 @@ mod tests {
         let bg = relative_luminance(background);
         let (light, dark) = if fg > bg { (fg, bg) } else { (bg, fg) };
         (light + 0.05) / (dark + 0.05)
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_length_labels_state_both_values_change_together() {
+        let (password, passphrase) = generator_length_labels(20, 4, 100.0, 40.0, "-");
+        assert!(
+            password.contains("パスフレーズ語数も同時に変更"),
+            "{password}"
+        );
+        assert!(
+            passphrase.contains("パスワード長も同時に変更"),
+            "{passphrase}"
+        );
+        assert!(password.contains("長さ: 20"), "{password}");
+        assert!(passphrase.contains("単語数: 4"), "{passphrase}");
     }
 
     #[::core::prelude::v1::test]

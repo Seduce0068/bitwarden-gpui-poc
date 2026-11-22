@@ -571,6 +571,63 @@ fn unrelated_errors_are_not_relabeled_as_domain_failures() {
 }
 
 #[test]
+fn auth_error_other_keeps_its_text_until_the_ui_boundary() {
+    // `AuthError::Other` is the honest fallback for failures this small enum
+    // cannot describe. Its text is the Display/message/status value and is
+    // kept when converting to `AppError`. The reverse conversion cannot keep
+    // an owned String because `AuthError::Other` holds `&'static str`, so it
+    // falls back to the generic message rather than mislabelling the failure
+    // as a known family (auth.rs:198, 239).
+    let error = AuthError::Other("unexpected OS RNG failure");
+    assert_eq!(error.message(), "unexpected OS RNG failure");
+    assert_eq!(error.to_string(), "unexpected OS RNG failure");
+    assert_eq!(error.status_message(), "unexpected OS RNG failure");
+    assert_eq!(error, AuthError::Other("unexpected OS RNG failure"));
+    assert_ne!(error, AuthError::Other("different text"));
+    assert_ne!(error, AuthError::Sync);
+
+    let app = AppError::from(error.clone());
+    assert!(matches!(&app, AppError::Other(text) if text == "unexpected OS RNG failure"));
+    let restored = AuthError::from(app);
+    assert_eq!(
+        restored,
+        AuthError::Other(crate::error::OTHER_ERROR_MESSAGE)
+    );
+    assert_ne!(restored, AuthError::Sync);
+}
+
+#[test]
+fn unlock_detail_does_not_add_a_second_prefix_when_text_has_no_suffix() {
+    // `unlock_detail` strips prefix+suffix as a pair (auth.rs:250-255). A
+    // legacy message that carries the prefix but was truncated before the
+    // closing `）` must be kept verbatim: splitting the two operations would
+    // strip the prefix alone and then re-add it, producing a doubled prefix.
+    for text in [
+        "復号キーを取得できません（truncated detail",
+        "同期データを取り込めません（truncated detail",
+        "vault 変換に失敗しました（truncated detail",
+    ] {
+        let small = UnlockError::from(AppError::ImportFailed(text.to_string()));
+        assert_eq!(
+            small,
+            UnlockError::ImportFailed(text.to_string()),
+            "prefix-only text must not be rewritten: {small:?}"
+        );
+        let restored = AppError::from(small);
+        assert_eq!(
+            restored.message(),
+            AppError::import_failed(text).message(),
+            "the status bar must not show a doubled prefix: {restored:?}"
+        );
+    }
+    // A fully decorated legacy message is still reduced to its raw detail.
+    let decorated = UnlockError::from(AppError::ImportFailed(
+        "vault 変換に失敗しました（raw detail）".into(),
+    ));
+    assert_eq!(decorated, UnlockError::ImportFailed("raw detail".into()));
+}
+
+#[test]
 fn missing_field_status_message_names_the_offending_field() {
     for field in [
         "server_url",

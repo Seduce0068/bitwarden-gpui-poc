@@ -24,10 +24,24 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第59弾で 13 件すべてを完了）。
+なし（第60弾で 15 件すべてを完了）。
 
 ## 完了
 
+- [x] 第60弾（16 担当・4 回目）の指摘 15 件を完結（2026-11-22）
+  - 編集モードの矢印キー委譲を明記、生成 +/- の同時変更を表示、
+    自動ロック時の復帰案内、監査 status の行名更新、finish_search の
+    巻き戻し統一、無効 TOTP secret の ticker 契約をテストで固定。
+  - AuthError::Other の境界、設定読み取りの共通化、既定値の limits 集約、
+    cache URL の Debug マスク、同期の不正 id/キー衝突、base64 残余ビット、
+    notes 検索、upsert revision、8 桁 TOTP、混在セパレータを処理。
+  - CHANGELOG に第59弾を反映。Betterleaks の既知プレースホルダを
+    リテラル限定で allowlist に追加。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（454 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第59弾（16 担当・3 回目）の指摘 13 件を完結（2026-11-22）
   - お気に入り status の未保存マーカー、監査再計算時の status、
     F1 二重表示、区切り表示、TOTP 期間境界と CycleSort のテストを修正。

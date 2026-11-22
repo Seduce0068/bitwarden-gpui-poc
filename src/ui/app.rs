@@ -119,8 +119,17 @@ pub(super) fn audit_focus_status(id: &str, found: bool, dirty: bool) -> String {
 /// but the ticker then replaces it to explain *why* the vault locked. Without
 /// re-applying the marker here an idle lock silently drops that warning.
 pub(super) fn auto_lock_status(idle_lock_seconds: u64, dirty: bool) -> String {
+    // Keep both pieces of information: the persistent unsaved marker *and*
+    // the concrete recovery guidance that `lock()` showed before the ticker
+    // replaced its status. Without the guidance the user only sees a marker
+    // and has no way to learn that a re-login is required to save.
+    let guidance = if dirty {
+        "（未保存の設定変更があります / 再ログイン後に保存してください）"
+    } else {
+        ""
+    };
     status_with_unsaved(
-        &format!("無操作のため自動ロックしました（{idle_lock_seconds}秒）"),
+        &format!("無操作のため自動ロックしました（{idle_lock_seconds}秒）{guidance}"),
         dirty,
     )
 }
@@ -212,6 +221,32 @@ pub(super) fn audit_refresh_status(
             dirty,
         ),
     }
+}
+
+/// Status for the highlighted audit row after a report refresh.
+///
+/// The selected *index* can survive a refresh while the row at that index is
+/// replaced by a different finding (for example a threshold change reorders
+/// the report). Callers must therefore derive the row name from the **new**
+/// report every time, not only when the index itself was clamped. Returns
+/// `None` when there is no row to describe (a non-empty report without a
+/// selection keeps whatever status the user was reading).
+pub(super) fn audit_refresh_status_for(
+    report: Option<&crate::health::Report>,
+    selection: Option<usize>,
+    dirty: bool,
+) -> Option<String> {
+    let len = report.map_or(0, |report| report.items.len());
+    let clamped = clamp_audit_row(selection, len);
+    if clamped.is_none() && len > 0 {
+        return None;
+    }
+    let name = clamped.and_then(|index| {
+        report
+            .and_then(|report| report.items.get(index))
+            .map(|item| item.name.clone())
+    });
+    Some(audit_refresh_status(clamped, len, name.as_deref(), dirty))
 }
 
 impl BitwardenApp {
@@ -695,21 +730,15 @@ impl BitwardenApp {
             .audit_report
             .as_ref()
             .map_or(0, |report| report.items.len());
-        let clamped = clamp_audit_row(self.audit_row_selection, len);
-        if clamped != self.audit_row_selection {
-            self.audit_row_selection = clamped;
-            // The highlighted finding changed under the user (for example a
-            // threshold edit removed rows). Describe the new position instead
-            // of leaving a status that names a row that is no longer selected.
-            let name = clamped
-                .and_then(|index| {
-                    self.view
-                        .audit_report
-                        .as_ref()
-                        .and_then(|report| report.items.get(index))
-                })
-                .map(|item| item.name.clone());
-            self.status = audit_refresh_status(clamped, len, name.as_deref(), self.settings_dirty);
+        self.audit_row_selection = clamp_audit_row(self.audit_row_selection, len);
+        // Always re-read the row name from the freshly computed report: the
+        // index can stay the same while a different finding occupies it.
+        if let Some(status) = audit_refresh_status_for(
+            self.view.audit_report.as_ref(),
+            self.audit_row_selection,
+            self.settings_dirty,
+        ) {
+            self.status = status;
         }
     }
 }
@@ -806,6 +835,51 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn audit_refresh_status_always_uses_the_latest_report_name() {
+        use crate::health::ItemReport;
+        use crate::model::ItemKind;
+
+        fn report(name: &str) -> Report {
+            Report {
+                items: vec![ItemReport {
+                    id: "item-1".into(),
+                    name: name.into(),
+                    kind: ItemKind::Login,
+                    findings: Vec::new(),
+                }],
+                examined: 1,
+                with_totp: 0,
+                logins: 1,
+            }
+        }
+
+        // The index stays at 0 in both reports, but the row's name changes.
+        let first = report("Old name");
+        let second = report("New name");
+        let before = audit_refresh_status_for(Some(&first), Some(0), false);
+        let after = audit_refresh_status_for(Some(&second), Some(0), false);
+        assert!(before
+            .as_ref()
+            .is_some_and(|status| status.contains("Old name")));
+        assert!(
+            after
+                .as_ref()
+                .is_some_and(|status| status.contains("New name")),
+            "a refresh with an unchanged index must still re-read the row name"
+        );
+        assert_ne!(before, after);
+
+        // A shorter report still clamps the stale index and names the new row.
+        let clamped = audit_refresh_status_for(Some(&second), Some(5), false);
+        assert!(clamped.is_some_and(|status| status.contains("New name")));
+        // An empty report has no row to name.
+        let empty = audit_refresh_status_for(Some(&Report::default()), Some(0), true);
+        assert!(empty.is_some_and(|status| status.contains("監査する問題がありません")));
+        // A non-empty report with no selection leaves the previous status alone.
+        assert_eq!(audit_refresh_status_for(Some(&second), None, false), None);
+    }
+
+    #[::core::prelude::v1::test]
     fn auto_lock_status_keeps_the_unsaved_marker() {
         let clean = auto_lock_status(300, false);
         assert_eq!(clean, "無操作のため自動ロックしました（300秒）");
@@ -814,7 +888,17 @@ mod tests {
         let dirty = auto_lock_status(300, true);
         assert!(dirty.starts_with(&clean));
         assert!(dirty.contains("[未保存の設定変更があります]"));
-        assert_eq!(dirty, status_with_unsaved(&clean, true));
+        assert!(
+            dirty.contains("再ログイン後に保存してください"),
+            "the auto-lock status must keep the recovery guidance too: {dirty}"
+        );
+        assert_eq!(
+            dirty,
+            status_with_unsaved(
+                "無操作のため自動ロックしました（300秒）（未保存の設定変更があります / 再ログイン後に保存してください）",
+                true
+            )
+        );
     }
     use crate::ui::state::AuthField;
     use std::time::{Duration, Instant};

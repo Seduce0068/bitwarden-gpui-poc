@@ -123,6 +123,49 @@ fn debug_never_reveals_the_body() {
 }
 
 #[test]
+fn debug_masks_url_embedded_credentials_but_keeps_the_host() {
+    // A server URL may carry userinfo (`https://user:pass@host`). `Debug` must
+    // drop that part while leaving enough host information for diagnostics
+    // (cache.rs:68-77). The stored field itself stays verbatim for the
+    // byte-for-byte mismatch check, which is documented as a known constraint.
+    let url = "https://user:SECRET-PASS@vault.example.com:8443/path?x=1";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    assert_eq!(cache.server_url, url, "storage keeps the exact URL");
+
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("SECRET-PASS"), "{rendered}");
+    assert!(!rendered.contains("user:"), "{rendered}");
+    assert!(rendered.contains("vault.example.com:8443"), "{rendered}");
+    assert!(rendered.contains("[redacted]"), "{rendered}");
+}
+
+#[test]
+fn validate_reports_a_parse_failure_and_a_detailed_server_mismatch() {
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+
+    // A cache whose body no longer parses is classified as a parse failure by
+    // validate(), not silently accepted because the server matched.
+    let mut corrupt = cache.clone();
+    corrupt.body = b"not json".to_vec();
+    assert!(matches!(
+        validate(&corrupt, "user-1", "https://vault.example.com"),
+        Err(SyncCacheError::CacheParse(_))
+    ));
+
+    // A matching server but a different account stays accepted by design; the
+    // mismatch check is strictly about the server URL (cache.rs:449-468).
+    assert!(validate(&cache, "other", "https://vault.example.com").is_ok());
+    assert_eq!(
+        validate(&cache, "user-1", "https://other.example.com"),
+        Err(SyncCacheError::ServerMismatch)
+    );
+    assert_eq!(
+        cache_error_message(SyncCacheError::ServerMismatch),
+        "キャッシュが別のサーバーのものです"
+    );
+}
+
+#[test]
 fn profile_keys_are_stripped_before_storage() {
     let body = br#"{
         "profile": {

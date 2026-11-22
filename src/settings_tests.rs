@@ -7,9 +7,15 @@ fn defaults_are_sensible() {
     let settings = Settings::default();
     assert!(settings.server_url.contains("bitwarden"));
     assert!(settings.email.is_empty());
-    assert_eq!(settings.idle_lock_seconds, 300);
-    assert_eq!(settings.login_timeout_seconds, 30);
-    assert_eq!(settings.clipboard_restore_seconds, 30);
+    assert_eq!(settings.idle_lock_seconds, DEFAULT_IDLE_LOCK_SECONDS);
+    assert_eq!(
+        settings.login_timeout_seconds,
+        crate::limits::DEFAULT_LOGIN_TIMEOUT.as_secs()
+    );
+    assert_eq!(
+        settings.clipboard_restore_seconds,
+        DEFAULT_CLIPBOARD_RESTORE_SECONDS
+    );
 }
 
 #[test]
@@ -461,6 +467,36 @@ fn generated_device_id_is_a_canonical_v4_uuid() {
         assert!(matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
     }
     assert_ne!(first, second, "two independent draws must not collide");
+}
+
+#[test]
+fn uppercase_hex_device_ids_are_accepted() {
+    // `is_valid_device_id` is case-insensitive for hex digits and for the
+    // RFC 4122 variant nibble (8/9/a/b), while the version nibble stays `4`.
+    // A canonical lowercase id from the CSPRNG is not the only accepted form:
+    // an operator-supplied uppercase UUID must be reused instead of replaced.
+    let valid = generate_device_id().unwrap();
+    let uppercase = valid.to_ascii_uppercase();
+    assert!(is_valid_device_id(&uppercase), "{uppercase}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        format!(r#"{{"device_id":"{uppercase}"}}"#).as_bytes(),
+    )
+    .unwrap();
+    let loaded = Settings::load(&path);
+    assert_eq!(
+        loaded.device_id, uppercase,
+        "uppercase id must survive load"
+    );
+
+    let mut wrong_version = uppercase.clone().into_bytes();
+    wrong_version[14] = b'5';
+    assert!(!is_valid_device_id(
+        std::str::from_utf8(&wrong_version).unwrap()
+    ));
 }
 
 #[test]

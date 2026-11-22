@@ -24,11 +24,11 @@ use crate::error::{AppError, BoxedCause};
 use crate::generator::{PassphraseSettings, PasswordSettings};
 use crate::health::Thresholds;
 use crate::limits::{
-    truncate_to_limit, MAX_CLIPBOARD_RESTORE_SECONDS, MAX_EMAIL_LEN, MAX_IDLE_LOCK_SECONDS,
-    MAX_LOGIN_TIMEOUT_SECONDS, MAX_PASSPHRASE_WORDS, MAX_PASSWORD_LENGTH, MAX_SERVER_URL_LEN,
-    MAX_STALE_DAYS, MAX_WEAK_BITS, MIN_CLIPBOARD_RESTORE_SECONDS, MIN_IDLE_LOCK_SECONDS,
-    MIN_LOGIN_TIMEOUT_SECONDS, MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH, MIN_STALE_DAYS,
-    MIN_WEAK_BITS,
+    truncate_to_limit, DEFAULT_CLIPBOARD_RESTORE_SECONDS, DEFAULT_IDLE_LOCK_SECONDS,
+    MAX_CLIPBOARD_RESTORE_SECONDS, MAX_EMAIL_LEN, MAX_IDLE_LOCK_SECONDS, MAX_LOGIN_TIMEOUT_SECONDS,
+    MAX_PASSPHRASE_WORDS, MAX_PASSWORD_LENGTH, MAX_SERVER_URL_LEN, MAX_STALE_DAYS, MAX_WEAK_BITS,
+    MIN_CLIPBOARD_RESTORE_SECONDS, MIN_IDLE_LOCK_SECONDS, MIN_LOGIN_TIMEOUT_SECONDS,
+    MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH, MIN_STALE_DAYS, MIN_WEAK_BITS,
 };
 
 /// Maximum accepted size of `settings.json` (1 MiB). Anything larger is
@@ -96,9 +96,9 @@ impl Default for Settings {
             password_generator: PasswordSettings::default(),
             passphrase_generator: PassphraseSettings::default(),
             thresholds: Thresholds::default(),
-            idle_lock_seconds: 300,
+            idle_lock_seconds: DEFAULT_IDLE_LOCK_SECONDS,
             login_timeout_seconds: crate::limits::DEFAULT_LOGIN_TIMEOUT.as_secs(),
-            clipboard_restore_seconds: 30,
+            clipboard_restore_seconds: DEFAULT_CLIPBOARD_RESTORE_SECONDS,
         }
     }
 }
@@ -235,27 +235,23 @@ impl core::fmt::Debug for Settings {
     }
 }
 
-/// Warnings for a file that parsed, but whose metadata cannot be fully
-/// trusted: a future schema marker or unknown keys. These are advisory only;
-/// `load_detailed` still applies the documented fallback.
-/// Only top-level keys are inspected; nested fields are validated by
-/// `load_detailed`'s per-field tolerance. Files above `MAX_SETTINGS_BYTES` are
-/// skipped because `load_detailed` already reports them as too large.
-pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
-    let Ok(file) = std::fs::File::open(path) else {
-        return Vec::new();
-    };
+/// Read a settings file under the shared size cap and parse it as JSON.
+///
+/// Both `load_advisories` (top-level key inspection) and `file_schema_version`
+/// (write-path guard) need the same bounded read. A plain `metadata()` followed
+/// by `read_to_string()` was a TOCTOU: a file that grew in between, or a hostile
+/// file whose metadata lies, would be loaded in full just to inspect one
+/// marker. Reading one byte past the cap and rejecting that case keeps every
+/// advisory/marker pass bounded. Unreadable, oversized and malformed files are
+/// reported as `None`, which both callers treat as "no metadata".
+fn read_settings_json(path: &std::path::Path) -> Option<Value> {
+    let file = std::fs::File::open(path).ok()?;
     if !file
         .metadata()
         .is_ok_and(|meta| meta.len() <= MAX_SETTINGS_BYTES)
     {
-        return Vec::new();
+        return None;
     }
-    // Read through the same cap as `file_schema_version` / `load_detailed`.
-    // A plain `metadata()` followed by `read_to_string()` was a TOCTOU: a file
-    // that grew in between (or a hostile file whose metadata lies) would be
-    // loaded in full just to inspect one marker. Reading one byte past the cap
-    // and rejecting that case keeps the advisory pass bounded.
     let mut contents = String::new();
     if file
         .take(MAX_SETTINGS_BYTES.saturating_add(1))
@@ -263,9 +259,21 @@ pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
         .is_err()
         || contents.len() as u64 > MAX_SETTINGS_BYTES
     {
-        return Vec::new();
+        return None;
     }
-    let Ok(value) = serde_json::from_str::<Value>(&contents) else {
+    serde_json::from_str::<Value>(&contents).ok()
+}
+
+/// Warnings for a file that parsed, but whose metadata cannot be fully
+/// trusted: a future schema marker or unknown keys. These are advisory only;
+/// `load_detailed` still applies the documented fallback.
+/// Only top-level keys are inspected; nested fields are validated by
+/// `load_detailed`'s per-field tolerance. Files above `MAX_SETTINGS_BYTES` are
+/// skipped because `load_detailed` already reports them as too large.
+pub fn load_advisories(path: &std::path::Path) -> Vec<String> {
+    // Both advisory and marker reads share `read_settings_json`, so the cap
+    // and TOCTOU handling cannot drift between them.
+    let Some(value) = read_settings_json(path) else {
         return Vec::new();
     };
     let Some(object) = value.as_object() else {
@@ -356,20 +364,7 @@ fn schema_version_of(value: Option<&Value>) -> Option<u64> {
 /// file returns `None` rather than being loaded into memory just to inspect a
 /// marker. Unreadable and malformed files are likewise treated as "no marker".
 fn file_schema_version(path: &std::path::Path) -> Option<u64> {
-    let file = std::fs::File::open(path).ok()?;
-    if file.metadata().ok()?.len() > MAX_SETTINGS_BYTES {
-        return None;
-    }
-    // Read at most one byte past the limit so a file that grew between the
-    // metadata call and the read is not parsed or loaded without bound.
-    let mut contents = String::new();
-    file.take(MAX_SETTINGS_BYTES.saturating_add(1))
-        .read_to_string(&mut contents)
-        .ok()?;
-    if contents.len() as u64 > MAX_SETTINGS_BYTES {
-        return None;
-    }
-    let value: Value = serde_json::from_str(&contents).ok()?;
+    let value = read_settings_json(path)?;
     schema_version_of(value.get("schema_version"))
 }
 

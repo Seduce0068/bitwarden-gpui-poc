@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 全体改善（第59弾 / 2026-11-22）
+
+- お気に入り／監査再計算時の未保存マーカー保持、F1 案内の一本化、
+  生成パネルの区切り表示を修正
+- `client_secret` の trim、設定クランプ定数の `limits` 集約、
+  cache `load_default` の4分岐、vault_sync Updated 経路、
+  model の並び順／mask_uri のテストを追加
+- RUSTSEC-2026-0592（url 2.5.8 のスタックオーバーフロー）を
+  url 2.5.9 / form_urlencoded 1.2.3 への更新で解消
+
 ### 全体改善（第58弾 / 2026-11-22）
 
 - 監査選択行の severity コントラストと非色マーカー、cache の

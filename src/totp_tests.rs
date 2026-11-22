@@ -141,6 +141,16 @@ fn grouping_splits_digits_and_leaves_steam_alone() {
     assert_eq!(code_at(RFC_SECRET, 59).unwrap().grouped(), "287 082");
     let steam = code_at("steam://GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 59).unwrap();
     assert_eq!(steam.grouped(), steam.code());
+
+    // Eight digits split 4+4 (totp.rs:72-82); the split is by character count,
+    // not by a fixed 3+3 shape.
+    let eight = code_at(
+        "otpauth://totp/RFC?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&digits=8&period=30",
+        59,
+    )
+    .unwrap();
+    assert_eq!(eight.code(), "94287082");
+    assert_eq!(eight.grouped(), "9428 7082");
 }
 
 #[test]

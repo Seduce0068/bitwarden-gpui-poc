@@ -152,6 +152,39 @@ mod tests {
     }
 
     #[test]
+    fn invalid_secret_still_owns_the_secret_and_keeps_the_ticker_running() {
+        let mut state = TotpState::new();
+        let invalid = "not base32!";
+        assert_eq!(state.display(invalid, 0), "コード生成失敗");
+        assert!(
+            state.has_secret(),
+            "the invalid string is still the displayed secret, so has_secret is true"
+        );
+        assert!(state.matches_secret(invalid));
+        assert_eq!(state.current_code(), None);
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(0));
+
+        // A failing snapshot is considered fresh forever (there is no period
+        // to advance), so re-rendering every second keeps showing the failure
+        // while the ticker itself continues to run: `has_secret()` stays true
+        // and `evaluate_tick` keeps requesting invalidation each second.
+        assert_eq!(state.display(invalid, 1), "コード生成失敗");
+        assert_eq!(
+            state.tick.as_ref().map(|tick| tick.at),
+            Some(0),
+            "the failed snapshot is intentionally never re-parsed on its own"
+        );
+        assert!(state.has_secret());
+        state.invalidate();
+        assert_eq!(state.display(invalid, 1), "コード生成失敗");
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(1));
+
+        // Only clearing (lock/selection change) drops the ownership.
+        state.clear();
+        assert!(!state.has_secret());
+    }
+
+    #[test]
     fn display_warns_shortly_before_expiry() {
         let mut state = TotpState::new();
         // A 30-second period leaves 4 seconds at t=26 and 20 at t=40.

@@ -18,7 +18,21 @@ pub(super) enum GeneratorOption {
     Separator,
 }
 
+/// Help text stating who owns cursor movement while editing text.
+///
+/// Editing modes deliberately do not define a `UiAction` for arrow keys: the
+/// GPUI text field handles them natively (caret movement, Home/End, selection
+/// with Shift). Routing them through `UiAction::None` keeps that native
+/// behaviour intact; adding a `MoveSelection` binding here would conflict with
+/// the list-navigation meaning of Up/Down outside editing modes.
+pub(super) const TEXT_EDIT_ARROW_KEYS_HINT: &str =
+    "入力中: 矢印キーは GPUI のテキスト入力に任せています（キャレット移動）";
+
 /// Apply a generator option to its settings.
+///
+/// `LengthUp`/`LengthDown` change **both** the password length and the
+/// passphrase word count at the same time; the UI copy must say so (see
+/// `ui::panels::generator_panel`).
 pub(super) fn apply_generator_key(settings: &mut Settings, option: GeneratorOption) {
     use GeneratorOption::*;
     match option {
@@ -212,6 +226,28 @@ fn text_action(text: &str, action: fn(String) -> UiAction) -> UiAction {
     action(text.to_string())
 }
 
+/// Cursor-movement key names handled natively by the GPUI text field.
+///
+/// Matching them explicitly in each editing mode documents the intent and
+/// guarantees `UiAction::None` even if a name becomes single-character in a
+/// future GPUI version (which would otherwise make `typed_text` insert it).
+fn is_text_cursor_key(key: &str) -> bool {
+    matches!(
+        key,
+        "up" | "down"
+            | "left"
+            | "right"
+            | "arrowup"
+            | "arrowdown"
+            | "arrowleft"
+            | "arrowright"
+            | "home"
+            | "end"
+            | "pageup"
+            | "pagedown"
+    )
+}
+
 /// Map a keystroke to a UI intent.
 ///
 /// Editing modes take priority so that typing `l` into a password field does
@@ -235,6 +271,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             return match key {
                 "escape" | "enter" => UiAction::FinishAuthEdit,
                 "backspace" => UiAction::BackspaceAuth,
+                // Arrow/Home/End stay with the GPUI text field (see
+                // TEXT_EDIT_ARROW_KEYS_HINT): no new list-movement binding here.
+                _ if is_text_cursor_key(key) => UiAction::None,
                 _ => typed_text(ctx).map_or(UiAction::None, |text| {
                     text_action(text, UiAction::InsertAuthText)
                 }),
@@ -258,6 +297,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
         return match key {
             "escape" | "enter" => UiAction::FinishSearch,
             "backspace" => UiAction::BackspaceSearch,
+            // Let GPUI move the caret in the search field; Up/Down still mean
+            // MoveSelection only outside this editing mode.
+            _ if is_text_cursor_key(key) => UiAction::None,
             _ => typed_text(ctx).map_or(UiAction::None, |text| {
                 text_action(text, UiAction::InsertSearchText)
             }),
@@ -313,6 +355,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 return match key {
                     "escape" | "enter" => UiAction::FinishSettingsEdit,
                     "backspace" => UiAction::BackspaceSettings,
+                    // Same contract as auth/search editing: native caret
+                    // movement, no vault-list navigation while typing.
+                    _ if is_text_cursor_key(key) => UiAction::None,
                     _ => typed_text(ctx).map_or(UiAction::None, |text| {
                         text_action(text, UiAction::InsertSettingsText)
                     }),

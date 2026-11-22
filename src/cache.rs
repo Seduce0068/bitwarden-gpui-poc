@@ -54,6 +54,13 @@ pub struct SyncCache {
     /// The account the response belongs to.
     pub user_id: String,
     /// Server URL the response came from.
+    ///
+    /// Known constraint: this value is stored verbatim and may contain URL-embedded
+    /// credentials (for example `https://user:pass@host`). `from_body` does not
+    /// strip userinfo from the URL because the offline-mismatch check compares
+    /// the stored value byte-for-byte with the URL used at restore time, and no
+    /// production writer currently feeds this path. Treat the field as sensitive:
+    /// `Debug` masks it, and callers must not log or persist it via another route.
     pub server_url: String,
     /// Raw `/api/sync` JSON body.
     pub body: Vec<u8>,
@@ -65,12 +72,36 @@ pub struct SyncCache {
     pub created_at: Option<i64>,
 }
 
+/// Render a server URL for `Debug`, dropping any URL-embedded userinfo.
+///
+/// A URL such as `https://user:pass@vault.example.com` must not leak the
+/// credentials through a log line. The userinfo before the last `@` in the
+/// authority is replaced by `[redacted]`; the host/path that follows is kept
+/// so diagnostics remain useful. URLs without an `@` are rendered unchanged,
+/// which is safe because they carry no userinfo.
+fn mask_url_userinfo(url: &str) -> String {
+    let scheme_end = url.find("://").map(|at| at + 3).unwrap_or(0);
+    let authority_end = url[scheme_end..]
+        .find(&['/', '?', '#'][..])
+        .map(|at| scheme_end + at)
+        .unwrap_or(url.len());
+    let authority = &url[scheme_end..authority_end];
+    if let Some(at) = authority.rfind('@') {
+        // Everything before the last `@` in the authority is userinfo.
+        let host_start = scheme_end + at + 1;
+        format!("{}[redacted]@{}", &url[..scheme_end], &url[host_start..])
+    } else {
+        url.to_string()
+    }
+}
+
 impl core::fmt::Debug for SyncCache {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncCache")
             .field("version", &self.version)
             .field("user_id", &self.user_id)
-            .field("server_url", &self.server_url)
+            // The URL may carry userinfo credentials; never render it verbatim.
+            .field("server_url", &mask_url_userinfo(&self.server_url))
             .field("body", &format!("<{} bytes redacted>", self.body.len()))
             .finish()
     }

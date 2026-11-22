@@ -179,8 +179,13 @@ impl VaultViewState {
     }
 
     /// Finish search or settings editing.
+    ///
+    /// Confirming the query leaves no valid selection behind: use the shared
+    /// deselection path so the list rewinds exactly like every other query
+    /// edit (start, push, pop) and filter/sort changes do.
     pub(super) fn finish_search(&mut self) {
         self.searching = false;
+        self.deselect_and_rewind();
     }
 
     /// Append a character to the search query.
@@ -308,6 +313,7 @@ mod tests {
             }),
             ("cycle_filter", |state| state.cycle_filter()),
             ("start_search", |state| state.start_search()),
+            ("finish_search", |state| state.finish_search()),
             ("push_query", |state| state.push_query("B")),
             ("pop_query", |state| state.pop_query()),
         ];
@@ -409,7 +415,14 @@ mod tests {
         assert_eq!(state.visible_items().len(), 1);
         state.pop_query();
         assert_eq!(state.query, "B");
+        let before = state.rewind_calls;
         state.finish_search();
         assert!(!state.searching);
+        assert_eq!(state.query, "B", "confirming must keep the query");
+        assert_eq!(
+            state.rewind_calls,
+            before + 1,
+            "confirming search rewinds through deselect_and_rewind"
+        );
     }
 }

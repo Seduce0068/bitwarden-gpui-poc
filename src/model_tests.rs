@@ -740,6 +740,40 @@ fn ssh_fingerprint_ignores_comment_and_extra_whitespace() {
 }
 
 #[test]
+fn ssh_fingerprint_rejects_non_canonical_base64_padding_bits() {
+    // The decoder must verify the unused low bits of the final base64
+    // character (model.rs:300-311). `AQ==` is canonical for byte 0x01, while
+    // `AR==` decodes to the same 0x01 only if those low bits are ignored.
+    // Accepting it would let two different fingerprints map to one key blob.
+    let canonical = "ssh-ed25519 AQ== fp";
+    let noncanonical = "ssh-ed25519 AR== fp";
+
+    let expected = super::ssh_fingerprint::sha256_fingerprint(canonical);
+    assert!(
+        expected.is_some(),
+        "a one-byte blob is a valid base64 string"
+    );
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint(noncanonical),
+        None,
+        "a nonzero unused bit must be rejected"
+    );
+
+    // Two leftover bits: `AQI=` (bytes 01 02) is canonical; the third
+    // character's low two bits must be zero, so `AQJ=` is rejected.
+    assert!(super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQI= fp").is_some());
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQJ= fp"),
+        None
+    );
+
+    // Four leftover bits with no `=` padding are impossible; the two-character
+    // form above covers that case. A full three-byte group leaves zero bits and
+    // must continue to decode normally.
+    assert!(super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQID fp").is_some());
+}
+
+#[test]
 fn ssh_fingerprint_rejects_unparsable_public_keys() {
     for public_key in [
         "",
@@ -810,6 +844,62 @@ fn name_sort_uses_the_same_nfkd_key_as_search() {
     let sorted = vault.view(&Filter::All, "", SortKey::NameAsc);
     let ids: Vec<&str> = sorted.iter().map(|item| item.id.as_str()).collect();
     assert_eq!(ids, vec!["a-full", "a-decomposed", "b-plain"]);
+}
+
+#[test]
+fn notes_are_searchable_even_for_non_login_items() {
+    // `haystacks` always includes `notes` (model.rs:582-587), so a free-form
+    // note is findable regardless of the item's kind, including text that is
+    // absent from the name and kind-specific fields.
+    let mut item = VaultItem::new(
+        "n-1",
+        "Unrelated title",
+        ItemData::SecureNote {
+            text: "different body".into(),
+        },
+    );
+    item.notes = "recovery-code-7X".into();
+    assert!(item.matches_query("recovery-code"));
+    assert!(item.matches_query("7X"));
+    assert!(!item.matches_query("not-in-this-item"));
+
+    // NFKD/case normalization applies to notes just like other fields.
+    assert!(item.matches_query("RECOVERY-CODE"));
+}
+
+#[test]
+fn upsert_honors_an_explicit_revision_but_preserves_zero() {
+    let mut vault = Vault::new();
+    let mut original = VaultItem::new(
+        "u-1",
+        "Original",
+        ItemData::SecureNote { text: "old".into() },
+    );
+    original.revision_date = 1_700_000_000;
+    vault.upsert(original.clone());
+
+    let mut explicit = original.clone();
+    explicit.name = "Renewed".into();
+    explicit.revision_date = 1_800_000_000;
+    vault.upsert(explicit);
+    assert_eq!(vault.item("u-1").unwrap().name, "Renewed");
+    assert_eq!(
+        vault.item("u-1").unwrap().revision_date,
+        1_800_000_000,
+        "an explicit revision overwrites the stored one"
+    );
+
+    // A caller that leaves the revision at UNKNOWN_REVISION keeps the old one.
+    let mut implicit = original.clone();
+    implicit.name = "Metadata only".into();
+    implicit.revision_date = UNKNOWN_REVISION;
+    vault.upsert(implicit);
+    assert_eq!(vault.item("u-1").unwrap().name, "Metadata only");
+    assert_eq!(
+        vault.item("u-1").unwrap().revision_date,
+        1_800_000_000,
+        "zero revision must not rewind an explicit one"
+    );
 }
 
 #[test]

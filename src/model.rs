@@ -306,8 +306,13 @@ mod ssh_fingerprint {
             }
         }
         // Six leftover bits mean a single trailing base64 character, which is
-        // not a valid encoding. An empty blob cannot be a key either.
-        if leftover_bits >= 6 || out.is_empty() {
+        // not a valid encoding. An empty blob cannot be a key either. With
+        // 2 or 4 leftover bits, the unused low bits of the accumulator must
+        // be zero. A nonzero value means a non-canonical trailing character
+        // (e.g. `AR==` instead of `AQ==`), so it must be rejected rather than
+        // silently decoding to a different byte string.
+        let unused_mask = (1u32 << leftover_bits) - 1;
+        if leftover_bits >= 6 || out.is_empty() || acc & unused_mask != 0 {
             return None;
         }
         Some(out)

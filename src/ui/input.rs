@@ -4,7 +4,9 @@
 //! only applies the resulting action to the app state.
 
 use crate::ui::app::BitwardenApp;
-use crate::ui::keys::{classify_key, KeyContext, KeyModifiers, UiAction};
+use crate::ui::keys::{
+    classify_key, KeyContext, KeyModifiers, UiAction, TEXT_EDIT_ARROW_KEYS_HINT,
+};
 use crate::ui::state::Panel;
 use gpui_kit::*;
 
@@ -33,6 +35,16 @@ pub(super) fn is_focus_recovery_key(key: &str) -> bool {
 pub(super) fn cycle_sort(view: &mut crate::ui::vault_view::VaultViewState) {
     view.sort = view.sort.next();
     view.deselect_and_rewind();
+}
+
+/// Status shown when a text-editing mode begins.
+///
+/// The inline help in `ui::logic` cannot be changed from this module, so the
+/// arrow-key ownership is also announced here for all three editing modes
+/// (auth, search, settings). Keeping it in one pure helper makes the wording
+/// testable without a GPUI window.
+pub(super) fn text_edit_start_status() -> String {
+    format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
 }
 
 impl BitwardenApp {
@@ -92,10 +104,12 @@ impl BitwardenApp {
                 // Changing credentials invalidates any in-flight attempt.
                 self.login_generation.invalidate();
                 self.auth.set_field(Some(field));
+                self.status = text_edit_start_status();
                 cx.notify();
             }
             UiAction::EditSettingsField(field) => {
                 self.editing = Some(field);
+                self.status = text_edit_start_status();
                 cx.notify();
             }
             UiAction::FinishAuthEdit => {
@@ -181,6 +195,7 @@ impl BitwardenApp {
                 self.view.query.clear();
                 self.view.deselect_and_rewind();
                 self.sync_totp_to_selection();
+                self.status = text_edit_start_status();
                 cx.notify();
             }
             UiAction::SaveSettings => self.save_settings(cx),
@@ -290,6 +305,17 @@ mod tests {
             view.rewind_calls,
             before_rewind + 1,
             "a sort change rewinds like filter and search changes"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn text_edit_start_status_explains_arrow_key_ownership() {
+        let status = text_edit_start_status();
+        assert!(status.contains("矢印キー"), "{status}");
+        assert!(status.contains("GPUI"), "{status}");
+        assert_eq!(
+            status,
+            format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
         );
     }
 

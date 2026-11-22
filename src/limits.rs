@@ -12,6 +12,10 @@ pub const MAX_EMAIL_LEN: usize = 254;
 pub const MAX_SERVER_URL_LEN: usize = 2048;
 /// Default time budget for the whole login sequence.
 pub const DEFAULT_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Default inactivity before auto-lock, in seconds.
+pub const DEFAULT_IDLE_LOCK_SECONDS: u64 = 300;
+/// Default clipboard restore delay, in seconds.
+pub const DEFAULT_CLIPBOARD_RESTORE_SECONDS: u64 = 30;
 
 // Bounds applied by `Settings::sanitized` before a settings value is persisted
 // or used. They live here, next to the text caps, so the stored value and the

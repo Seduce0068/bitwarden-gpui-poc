@@ -52,6 +52,56 @@ fn text_editing_actions_are_mode_specific() {
 }
 
 #[test]
+fn arrow_keys_in_text_editing_are_delegated_to_gpui() {
+    // Auth, search and settings editing deliberately do not add a movement
+    // action: GPUI's text field owns the caret, so classification is `None`.
+    for key in ["up", "down", "left", "right", "arrowleft", "home", "end"] {
+        let mut value = ctx(key);
+        value.searching = true;
+        assert_eq!(classify_key(&value), UiAction::None, "search/{key}");
+
+        value.searching = false;
+        value.panel = Panel::Settings;
+        value.editing_settings = true;
+        assert_eq!(classify_key(&value), UiAction::None, "settings/{key}");
+
+        value.screen = Screen::Locked;
+        value.editing_auth = true;
+        assert_eq!(classify_key(&value), UiAction::None, "auth/{key}");
+    }
+
+    // Outside editing modes the same key keeps the existing list-navigation
+    // meaning, so no new binding was introduced by this delegation.
+    assert_eq!(classify_key(&ctx("up")), UiAction::MoveSelection(-1));
+    assert_eq!(classify_key(&ctx("down")), UiAction::MoveSelection(1));
+    assert!(TEXT_EDIT_ARROW_KEYS_HINT.contains("矢印キー"));
+}
+
+#[test]
+fn generator_plus_minus_change_length_and_word_count_together() {
+    let mut value = ctx("+");
+    value.panel = Panel::Generator;
+    let action = classify_key(&value);
+    assert_eq!(action, UiAction::Generator(GeneratorOption::LengthUp));
+
+    let mut settings = Settings::default();
+    let before_length = settings.password_generator.length;
+    let before_words = settings.passphrase_generator.words;
+    apply_generator_key(&mut settings, GeneratorOption::LengthUp);
+    assert_eq!(settings.password_generator.length, before_length + 1);
+    assert_eq!(settings.passphrase_generator.words, before_words + 1);
+
+    value.key = "-";
+    assert_eq!(
+        classify_key(&value),
+        UiAction::Generator(GeneratorOption::LengthDown)
+    );
+    apply_generator_key(&mut settings, GeneratorOption::LengthDown);
+    assert_eq!(settings.password_generator.length, before_length);
+    assert_eq!(settings.passphrase_generator.words, before_words);
+}
+
+#[test]
 fn finish_actions_are_mode_specific() {
     let mut value = ctx("enter");
     value.searching = true;

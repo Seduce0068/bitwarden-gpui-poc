@@ -1145,3 +1145,26 @@ fn empty_separator_passphrases_are_scored_with_the_word_list() {
     assert!(super::passphrase_estimate(WORDS[0]).is_none());
     assert!(super::passphrase_estimate("abcdefghij").is_none());
 }
+
+#[test]
+fn passphrase_estimate_rejects_mixed_separators() {
+    // The generator emits one repeated non-alphanumeric separator (or none).
+    // A phrase joining list words with different separators is not a possible
+    // generator output, so the recognizer must return None and let the caller
+    // fall back to the character-pool estimate (health.rs:399-406).
+    let repeated = format!("{}-{}-{}", WORDS[0], WORDS[1], WORDS[2]);
+    let mixed = format!("{}-{}_{}", WORDS[0], WORDS[1], WORDS[2]);
+    assert!(
+        super::passphrase_estimate(&repeated).is_some(),
+        "{repeated}"
+    );
+    assert_eq!(super::passphrase_estimate(&mixed), None, "{mixed}");
+    assert_eq!(
+        super::passphrase_estimate(&format!("{mixed}7")),
+        None,
+        "a trailing number must not hide a mixed separator"
+    );
+    // A single separator that is not `-` is still accepted.
+    let underscored = format!("{}_{}", WORDS[0], WORDS[1]);
+    assert!(super::passphrase_estimate(&underscored).is_some());
+}

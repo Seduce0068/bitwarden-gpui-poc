@@ -234,8 +234,11 @@ impl From<AppError> for AuthError {
             AppError::KdfRejected => AuthError::KdfRejected,
             AppError::KdfRejectedCause(cause) => AuthError::KdfRejectedDetail(cause.to_string()),
             AppError::Timeout => AuthError::Timeout,
-            // An honest generic message is better than silently reporting an
-            // unrelated domain failure for an error this enum cannot describe.
+            // `AuthError::Other` holds a `&'static str`, so an owned
+            // `AppError::Other(String)` cannot survive this boundary. The
+            // generic message is used instead of mislabelling it as a known
+            // family; the original text remains in `AppError` before the
+            // conversion.
             _ => AuthError::Other(crate::error::OTHER_ERROR_MESSAGE),
         }
     }
