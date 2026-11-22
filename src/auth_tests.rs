@@ -426,6 +426,34 @@ fn email_validation_enforces_the_254_character_ceiling() {
 }
 
 #[test]
+fn email_length_ceiling_is_applied_after_trimming() {
+    // `valid_email` trims before counting characters (auth.rs:372-375), and
+    // `validate_config` delegates to it with the raw field (auth.rs:592).
+    // Padding must therefore be ignored at the MAX_EMAIL_LEN boundary, not
+    // counted as part of the address.
+    let suffix = "@example.com";
+    let local_len = MAX_EMAIL_LEN - suffix.len();
+    let at_limit = format!("{}{suffix}", "a".repeat(local_len));
+
+    let padded_at_limit = format!(" \t{at_limit}\n");
+    assert_eq!(padded_at_limit.trim().chars().count(), MAX_EMAIL_LEN);
+    assert!(valid_email(&padded_at_limit));
+    let mut accepted = config();
+    accepted.email = padded_at_limit;
+    assert_eq!(validate_config(&accepted), Ok(()));
+
+    // One character past the ceiling after trimming is still rejected, even
+    // when the raw field is much longer because of the surrounding padding.
+    let too_long = format!("{}{suffix}", "a".repeat(local_len + 1));
+    let padded_too_long = format!("\u{3000}{too_long}  ");
+    assert_eq!(padded_too_long.trim().chars().count(), MAX_EMAIL_LEN + 1);
+    assert!(!valid_email(&padded_too_long));
+    let mut rejected = config();
+    rejected.email = padded_too_long;
+    assert_eq!(validate_config(&rejected), Err(AuthError::InvalidEmail));
+}
+
+#[test]
 fn clamp_caps_every_field_without_reporting_an_error() {
     let mut value = AuthConfig {
         server_url: format!(
@@ -1811,9 +1839,12 @@ fn timeout_error_round_trips_through_app_error() {
 
 #[test]
 fn validate_config_reports_the_first_invalid_field_in_a_fixed_order() {
-    // The missing-field pass runs in server_url, client_id, client_secret,
-    // email, master_password order; the structural email/URL checks come after
-    // it, with BlockedServerUrl ahead of the URL parser (auth.rs:581-606).
+    // Actual order (auth.rs:579-605): the four MissingField checks for the
+    // Settings-backed text fields run first, then the structural `valid_email`
+    // check, then the master_password MissingField check, then
+    // BlockedServerUrl, and finally the URL parser. In particular the
+    // master-password check is *after* the email check, not part of the same
+    // first pass, and both field checks precede both URL checks.
     let mut all_bad = config();
     all_bad.server_url = "  ".into();
     all_bad.client_id = "  ".into();
@@ -1843,16 +1874,15 @@ fn validate_config_reports_the_first_invalid_field_in_a_fixed_order() {
     without_secret.email = String::new();
     cases.push((without_secret.clone(), AuthError::MissingField("email")));
 
-    // With a non-empty malformed email the structural check fires before the
-    // later empty-master-password check.
+    // A non-empty malformed email fires the structural check before the later
+    // empty-master-password check. Keep master_password empty here so this case
+    // really distinguishes the two orders instead of sidestepping the contest.
     let mut malformed_email = without_secret.clone();
     malformed_email.email = "not-an-email".into();
-    malformed_email.master_password = SecretString::from("pw".to_string());
     cases.push((malformed_email, AuthError::InvalidEmail));
 
-    // An empty master password wins over both URL-level failures.
-    // `without_secret` still carries an empty email, so the structural email
-    // check fires before the later empty-master-password check.
+    // Once the email is valid, the empty master password is the next failure;
+    // it still wins over both URL-level checks below.
     let mut valid_email = without_secret.clone();
     valid_email.email = "alice@example.com".into();
     cases.push((
@@ -1860,6 +1890,8 @@ fn validate_config_reports_the_first_invalid_field_in_a_fixed_order() {
         AuthError::MissingField("master_password"),
     ));
 
+    // Only after every field passes do the URL checks run, with the link-local
+    // classifier ahead of the URL parser.
     let mut blocked = valid_email.clone();
     blocked.master_password = SecretString::from("pw".to_string());
     blocked.server_url = "http://169.254.169.254".into();

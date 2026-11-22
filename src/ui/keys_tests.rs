@@ -416,20 +416,48 @@ fn space_key_name_inserts_a_space() {
 }
 
 #[test]
-fn audit_shortcut_requires_an_available_report() {
+fn audit_shortcut_reports_missing_report_with_a_dedicated_action() {
     let mut value = ctx("g");
     assert_eq!(classify_key(&value), UiAction::OpenAudit);
 
     value.has_audit_report = false;
     assert_eq!(
         classify_key(&value),
+        UiAction::AuditUnavailable,
+        "'g' must still respond when no report exists"
+    );
+    assert_ne!(
+        classify_key(&value),
         UiAction::None,
-        "'g' must not open the audit panel when no report exists"
+        "an inert key is the bug this fallback fixes"
     );
 
-    // The guard is local to that shortcut; other vault keys stay available.
+    // The fallback is local to that shortcut; other vault keys stay available.
     value.key = "y";
     assert_eq!(classify_key(&value), UiAction::CopyTotp);
+}
+
+#[test]
+fn audit_unavailable_shortcut_is_case_insensitive_and_panel_scoped() {
+    let mut value = ctx("g");
+    value.has_audit_report = false;
+
+    // Shift / Caps Lock spellings fold to the same `g` binding.
+    for (key, key_char) in [("G", None), ("g", Some("G"))] {
+        value.key = key;
+        value.key_char = key_char;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::AuditUnavailable,
+            "{key}/{key_char:?}"
+        );
+    }
+
+    // The fallback belongs to the vault panel only; the audit panel keeps its
+    // own `g` binding back to the vault regardless of report availability.
+    value.key_char = None;
+    value.panel = Panel::Audit;
+    assert_eq!(classify_key(&value), UiAction::SetPanel(Panel::Vault));
 }
 
 #[test]

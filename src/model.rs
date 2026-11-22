@@ -79,8 +79,13 @@ pub(crate) use unicode_normalize::comparison_key;
 /// (1970-01-01T00:00:00Z) is indistinguishable from this sentinel in v1.
 pub const UNKNOWN_REVISION: i64 = 0;
 
-/// Reduce a URI to scheme and host so embedded credentials or tokens in the
-/// path/query are never shown in the UI or copied into reports.
+/// Reduce a URI to scheme, host and port so embedded credentials or tokens in
+/// the path/query are never shown in the UI or copied into reports.
+///
+/// An explicitly non-default port is kept (for example
+/// `https://example.com:8443`); `url::Url::port()` drops a scheme-default port,
+/// so `https://example.com:443` renders as `https://example.com`. A host-less
+/// URL keeps only its scheme.
 ///
 /// Falls back to `"(不正な URI)"` when the value cannot be parsed.
 pub fn mask_uri(value: &str) -> String {

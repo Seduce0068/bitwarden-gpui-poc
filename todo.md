@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第83弾で 8 件すべてを完了）。
+なし（第84弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第84弾（16 担当・28 回目）の指摘 6 件を完結（2026-11-23）
+  - 監査未生成時の g キーに理由 status を表示。
+  - '&' を含む nested userinfo、pair_start==0、復元のエラー分類、
+    folders 早期リターン、"(名前なし)"、trim 後 email 上限、
+    空 email Debug を修正・テスト。
+  - mask_uri doc、CHANGELOG 第82〜83弾、ADR エラー分類を更新。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（795 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第83弾（16 担当・27 回目）の指摘 8 件を完結（2026-11-23）
   - 大文字スキームとクエリ内 `://` の URL マスク、除外行が重複で
     勝つ問題、folders の重複 id を修正。

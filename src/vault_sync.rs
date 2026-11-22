@@ -280,6 +280,28 @@ fn dedup_folders_by_id(value: &mut serde_json::Value) {
     });
 }
 
+/// Name text for one result of `OpenVault::folder_name`.
+///
+/// Keeping the three-way match in a small private helper makes the defensive
+/// `Ok(None)` arm testable directly. openwarden 0.1.1 returns `Ok(None)` only
+/// for a folder id that is *not* in the vault, while `folders()` yields ids
+/// from that same list, so `folders_from` cannot reach that arm through the
+/// public API today. The reachable branches are `Ok(Some(_))` and `Err(_)`.
+fn folder_name_text(name: Result<Option<openwarden::SecretString>, openwarden::Error>) -> String {
+    match name {
+        Ok(Some(value)) => value.expose_secret().to_string(),
+        // A missing name is not an error: keep the folder with a placeholder
+        // rather than dropping it. This arm is exercised through this helper
+        // because the public `Vault` API cannot produce it.
+        Ok(None) => "(名前なし)".to_string(),
+        // Partial decryption failure: keep the folder with a placeholder
+        // instead of aborting the whole import. The internal folder id is
+        // deliberately not shown in the user-facing name; it remains in
+        // `Folder::id` where callers need it for filtering and lookup.
+        Err(_) => "(復号できませんでした)".to_string(),
+    }
+}
+
 /// Folder id and decrypted name from an unlocked `openwarden` vault.
 ///
 /// A folder whose name cannot be decrypted keeps its id and gets a
@@ -290,21 +312,9 @@ pub fn folders_from(vault: &OpenVault) -> Result<Vec<Folder>, SyncError> {
     }
     let mut folders = Vec::new();
     for id in vault.folders() {
-        let name = match vault.folder_name(&id) {
-            Ok(Some(value)) => value.expose_secret().to_string(),
-            // Known constraint: openwarden 0.1.1 returns `Ok(None)` only for a
-            // folder id that is *not* in the vault. `folders()` yields ids from
-            // that same list, so this branch is unreachable through the public
-            // API today and is kept defensively (with a placeholder rather than
-            // dropping the folder). The reachable failure is `Err(_)`, handled
-            // below. Tests cover the success and `Err(_)` branches.
-            Ok(None) => "(名前なし)".to_string(),
-            // Partial decryption failure: keep the folder with a placeholder
-            // instead of aborting the whole import. The internal folder id is
-            // deliberately not shown in the user-facing name; it remains in
-            // `Folder::id` where callers need it for filtering and lookup.
-            Err(_) => "(復号できませんでした)".to_string(),
-        };
+        // The `Ok(None)` arm is defensive today; `folder_name_text` documents
+        // why and makes it directly testable.
+        let name = folder_name_text(vault.folder_name(&id));
         folders.push(Folder {
             id: id.as_str().to_string(),
             name,

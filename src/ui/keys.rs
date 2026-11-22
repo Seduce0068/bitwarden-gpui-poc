@@ -146,6 +146,12 @@ pub(super) enum UiAction {
     SelectRow(usize),
     ToggleFavorite,
     OpenAudit,
+    /// `g` was pressed in the vault panel while no report exists yet.
+    ///
+    /// The mouse audit tab resolves the same case locally in `ui::render`;
+    /// this intent lets the keyboard path emit the identical status through
+    /// `ui::input` instead of silently doing nothing.
+    AuditUnavailable,
     GeneratePassword,
     GeneratePassphrase,
     CopyPassword,
@@ -476,6 +482,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             "p" => UiAction::CopySelectedPassword,
             "u" => UiAction::CopySelectedUsername,
             "g" if ctx.has_audit_report => UiAction::OpenAudit,
+            // No report yet: still answer the key with the same explanation
+            // the mouse audit tab gives, instead of an inert `UiAction::None`.
+            "g" => UiAction::AuditUnavailable,
             "n" => UiAction::SetPanel(Panel::Generator),
             "c" => UiAction::SetPanel(Panel::Settings),
             "/" => UiAction::StartSearch,

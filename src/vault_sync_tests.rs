@@ -614,6 +614,68 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
 }
 
 #[test]
+fn folder_name_text_covers_ok_none_placeholder_and_the_reachable_branches() {
+    // `folder_name_text` (vault_sync.rs:283-302) maps the otherwise unreachable
+    // `Ok(None)` result to the "(名前なし)" placeholder. The helper exists so
+    // this defensive arm can be pinned without a fake `openwarden::Vault`.
+    assert_eq!(
+        super::folder_name_text(Ok(None)),
+        "(名前なし)",
+        "a missing folder name must not be reported as a decryption failure"
+    );
+    assert_eq!(
+        super::folder_name_text(Err(openwarden::Error::MalformedEncString)),
+        "(復号できませんでした)"
+    );
+    let decrypted = openwarden::SecretString::from("Work".to_string());
+    assert_eq!(super::folder_name_text(Ok(Some(decrypted))), "Work");
+
+    // None of the placeholders may expose the internal folder id.
+    for placeholder in ["(名前なし)", "(復号できませんでした)"] {
+        assert!(!placeholder.contains("f-bad"), "{placeholder}");
+    }
+}
+
+#[test]
+fn dedup_folders_returns_early_when_folders_are_missing_or_not_an_array() {
+    // `dedup_folders_by_id` (vault_sync.rs:267-273) is a no-op when the key is
+    // absent or the value is not an array; openwarden's parser, not the dedup
+    // pass, is responsible for rejecting such a sync body.
+    let mut missing = serde_json::json!({"ciphers": []});
+    let before = missing.clone();
+    super::dedup_folders_by_id(&mut missing);
+    assert_eq!(missing, before);
+
+    let mut object = serde_json::json!({"folders": {"id": "f1"}});
+    let before = object.clone();
+    super::dedup_folders_by_id(&mut object);
+    assert_eq!(object, before);
+
+    let mut scalar = serde_json::json!({"folders": 7});
+    let before = scalar.clone();
+    super::dedup_folders_by_id(&mut scalar);
+    assert_eq!(scalar, before);
+
+    // Control: a real array still dedups by string id (first row wins), while
+    // rows without one are left for openwarden to handle as usual. Without
+    // this, the three assertions above would pass for a stub that does nothing.
+    let mut array = serde_json::json!({
+        "folders": [
+            {"id": "f1", "name": "first"},
+            {"id": "f1", "name": "second"},
+            {"name": "no-id"},
+            {"id": 42}
+        ]
+    });
+    super::dedup_folders_by_id(&mut array);
+    let kept = array["folders"].as_array().unwrap();
+    assert_eq!(kept.len(), 3);
+    assert_eq!(kept[0]["name"], "first");
+    assert_eq!(kept[1]["name"], "no-id");
+    assert_eq!(kept[2]["id"], serde_json::json!(42));
+}
+
+#[test]
 fn undecryptable_login_name_is_placeholdered_without_the_internal_id() {
     // G07: the login-name fallback must not expose the internal cipher id;
     // the id stays on `VaultItem::id` for lookup and filtering

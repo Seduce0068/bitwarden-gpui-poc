@@ -358,24 +358,26 @@ pub(crate) const MAX_MASK_DEPTH: usize = 8;
 
 /// Mask userinfo in nested URLs before `&`/`;` pair separators are applied.
 ///
-/// `mask_param_pairs` treats `;` as a query separator, but `;` is also a legal
-/// character inside a password. A nested value such as
-/// `next=https://user:p;a=s@host/p` would be cut into two pairs, so the
+/// `mask_param_pairs` treats both `&` and `;` as query separators, but either
+/// is also a legal character inside a password. A nested value such as
+/// `next=https://user:p;a&b=s@host/p` would be cut into several pairs, so the
 /// recursive masker would never see the whole authority and the password would
-/// reach a log line. Rewrite only userinfo that actually contains a `;` and
-/// looks like `user:secret@plausible-host`: harmless `state=a@b` values and
-/// values without `;` stay verbatim, and the surrounding key/scheme is kept so
-/// the diagnostic URL remains traceable.
+/// reach a log line. Rewrite only userinfo that contains one of those
+/// separators and looks like `user:secret@plausible-host`: harmless `state=a@b`
+/// values and values without a pair separator stay verbatim, and the
+/// surrounding key/scheme is kept so the diagnostic URL remains traceable.
 fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
     let mut out = String::with_capacity(pairs.len());
     let mut rest = pairs;
     while let Some(relative_at) = rest.find('@') {
         let before = &rest[..relative_at];
-        // Pair/query/path boundaries cannot be part of userinfo. `;` and every
-        // '=' after the first are deliberately *not* boundaries: both may be
-        // part of a password.
+        // '?', '#' and '/' close the enclosing path/query and cannot be part
+        // of a nested authority. '&' is deliberately *not* a boundary here:
+        // like ';', it is a legal password character, and treating it as a
+        // pair boundary would cut the authority before it can be masked. Every
+        // '=' after the first is not a boundary either, for the same reason.
         let pair_start = before
-            .rfind(&['&', '?', '#', '/'][..])
+            .rfind(&['?', '#', '/'][..])
             .map(|index| index + 1)
             .unwrap_or(0);
         // Everything after the last path/query delimiter is the authority
@@ -396,7 +398,11 @@ fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
         let has_secret = candidate.split_once(':').is_some_and(|(_, secret)| {
             !secret.is_empty() && !secret.bytes().all(|byte| byte.is_ascii_digit())
         });
-        if candidate.contains(';') && has_secret && host_with_optional_port_ok(host) {
+        // Both separators must be checked in the *candidate*: the pair splitter
+        // below would otherwise cut a password containing either one before
+        // the recursive masker ever sees the authority.
+        let has_pair_separator = candidate.contains(';') || candidate.contains('&');
+        if has_pair_separator && has_secret && host_with_optional_port_ok(host) {
             out.push_str(&before[..prefix_end]);
             out.push_str("[redacted]");
             out.push('@');

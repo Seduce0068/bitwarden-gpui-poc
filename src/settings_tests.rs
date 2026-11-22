@@ -56,6 +56,20 @@ fn debug_masks_email_and_server_url() {
     assert!(debug.contains("server_url: \"[redacted]\""), "{debug}");
     // Non-secret fields stay diagnostic: the device id is an identifier.
     assert!(debug.contains("device_id:"), "{debug}");
+
+    // An empty email is rendered as an empty string, not as the redaction
+    // marker: the guard in `Settings`'s Debug is on `email.is_empty()`
+    // (settings.rs:329-336), matching the empty-URL branch above.
+    let empty_email = Settings {
+        email: String::new(),
+        ..Default::default()
+    };
+    let empty_debug = format!("{empty_email:?}");
+    assert!(empty_debug.contains("email: \"\""), "{empty_debug}");
+    assert!(
+        !empty_debug.contains("email: \"[redacted]\""),
+        "{empty_debug}"
+    );
 }
 
 #[test]

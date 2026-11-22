@@ -2454,6 +2454,63 @@ fn semicolon_in_nested_userinfo_is_masked_before_pair_splitting() {
 }
 
 #[test]
+fn amp_in_nested_userinfo_password_is_masked_before_pair_splitting() {
+    // '&' is a pair separator but also a legal password character. The
+    // pre-pass must see the whole authority before `mask_param_pairs` splits on
+    // '&', otherwise the credential survives in the diagnostic URL
+    // (cache.rs:359-412).
+    let with_scheme =
+        "https://vault.example.com/login?next=https://user:P&SS@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(with_scheme);
+    assert!(!masked.contains("P&SS"), "{masked}");
+    assert!(
+        masked.contains("next=https://[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // A scheme-less nested authority has no '/', '?' or '#' before the '@', so
+    // it takes the `pair_start == 0` branch: the `key=` prefix is kept and the
+    // first '=' is the pair separator (cache.rs:385-393).
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs("next=user:P&SS@cb.example.com/done"),
+        "next=[redacted]@cb.example.com/done"
+    );
+    let no_scheme = "https://vault.example.com/login?next=user:P&SS@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(no_scheme);
+    assert!(!masked.contains("P&SS"), "{masked}");
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // A harmless '@' without a `user:secret` marker is not rewritten by the
+    // pre-pass, so the pair separator still applies normally after it.
+    let harmless = "https://vault.example.com/p?state=a@b&token=AMP_AFTER_AT";
+    let masked = super::mask_url_secrets(harmless);
+    assert!(!masked.contains("AMP_AFTER_AT"), "{masked}");
+    assert!(masked.contains("state=a@b&token=[redacted]"), "{masked}");
+
+    // Percent-encoded '&' reaches the recursive masker through the nested
+    // authority check, which decodes before inspecting the candidate.
+    let encoded = "https://vault.example.com/login?next=user:P%26SS@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(encoded);
+    assert!(!masked.contains("P%26SS"), "{masked}");
+    assert!(
+        masked.contains("[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // Debug reaches the same path through the stored server URL.
+    let cache = SyncCache::from_body(body(), with_scheme).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("P&SS"), "{rendered}");
+    assert_eq!(cache.server_url, with_scheme);
+}
+
+#[test]
 fn non_ascii_percent_escaped_keys_are_a_documented_masking_limit() {
     // `percent_decode` keeps non-ASCII escapes as `%XX`, so an ASCII key name
     // split by such an escape never matches the sensitive-name list. This is a
@@ -2470,4 +2527,64 @@ fn non_ascii_percent_escaped_keys_are_a_documented_masking_limit() {
     let masked = super::mask_url_secrets(ascii);
     assert!(!masked.contains("NON_ASCII_KEY_SECRET"), "{masked}");
     assert!(masked.contains("token=[redacted]"), "{masked}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cached_sync_for_detailed_classifies_version_size_and_read_failures() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+    let url = "https://vault.example.com";
+    let path = default_path().expect("a cache directory from XDG_CACHE_HOME");
+
+    // VersionMismatch: load_detailed rejects the envelope before the restore
+    // path compares server, account or freshness (cache.rs:836-838).
+    let mut outdated = SyncCache::from_body(body(), url).unwrap();
+    outdated.version = SyncCache::VERSION + 1;
+    save_default(&outdated).unwrap();
+    assert!(matches!(
+        cached_sync_for_detailed(url, "user-1"),
+        Err(SyncCacheError::VersionMismatch)
+    ));
+    assert!(cached_sync_for(url, "user-1").is_none());
+
+    // CacheTooLarge: the size gate runs before parsing and the private-file
+    // permission check (cache.rs:809-811).
+    write_fixture(&path, &vec![b'x'; (MAX_CACHE_BYTES + 1) as usize]);
+    assert!(matches!(
+        cached_sync_for_detailed(url, "user-1"),
+        Err(SyncCacheError::CacheTooLarge)
+    ));
+    assert_eq!(
+        cache_error_message(SyncCacheError::CacheTooLarge),
+        REASON_TOO_LARGE
+    );
+
+    // ReadFailedCause: a valid envelope left group-readable is refused by the
+    // private-file policy, and the io/permission cause stays reachable
+    // (cache.rs:816-827).
+    let valid = SyncCache::from_body(body(), url).unwrap();
+    save_default(&valid).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let error = cached_sync_for_detailed(url, "user-1").unwrap_err();
+    assert!(
+        matches!(&error, SyncCacheError::ReadFailedCause(_)),
+        "{error:?}"
+    );
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(cache_error_message(error), REASON_UNREADABLE);
+
+    // A matching, owner-only cache still restores, so the three classifications
+    // above are about the specific failures rather than a broken fixture.
+    save_default(&valid).unwrap();
+    assert_eq!(
+        cached_sync_for_detailed(url, "user-1").unwrap().user_id(),
+        "user-1"
+    );
 }

@@ -89,6 +89,24 @@ pub(super) fn settings_edit_finished_status(dirty: bool) -> String {
     crate::ui::app::status_with_unsaved("入力を確定しました（w: 保存 / d: 破棄）", dirty)
 }
 
+/// Base text of the status shown when the audit panel is requested before a
+/// report exists.
+///
+/// The mouse audit tab (`ui::render::audit_unavailable_status`) uses the exact
+/// same wording. That module is outside this task's edit scope, so it keeps its
+/// own literal; both copies must stay byte-identical.
+pub(super) const AUDIT_UNAVAILABLE_MESSAGE: &str =
+    "監査レポートがありません（ログイン後に生成されます）";
+
+/// Status for [`UiAction::AuditUnavailable`], preserving the unsaved marker.
+///
+/// Mirrors the mouse tab's status composition, including the persistent
+/// unsaved-settings warning. Kept pure so the contract can be tested without
+/// a GPUI window.
+pub(super) fn audit_unavailable_status(dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved(AUDIT_UNAVAILABLE_MESSAGE, dirty)
+}
+
 /// Shared composer for the status restored when a text-editing mode ends.
 ///
 /// `EditAuthField`, `EditSettingsField` and `StartSearch` all replace the
@@ -362,6 +380,13 @@ impl BitwardenApp {
             UiAction::MoveSelectionToEdge(edge) => self.move_selection_to_edge(edge, cx),
             UiAction::ToggleFavorite => self.toggle_favorite(cx),
             UiAction::OpenAudit => self.set_panel(Panel::Audit, cx),
+            UiAction::AuditUnavailable => {
+                // No report to show: explain why instead of silently doing
+                // nothing. Same text and unsaved-marker handling as a click
+                // on the mouse audit tab (see `audit_unavailable_status`).
+                self.status = audit_unavailable_status(self.settings_dirty);
+                cx.notify();
+            }
             UiAction::GeneratePassword => self.generate_password(cx),
             UiAction::GeneratePassphrase => self.generate_passphrase(cx),
             UiAction::CopyPassword => {
@@ -593,6 +618,34 @@ mod tests {
             dirty.contains("[未保存の設定変更があります]"),
             "confirming a field is not a save: {dirty}"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_unavailable_status_matches_the_mouse_audit_tab_wording() {
+        // The base text must stay byte-identical to the literal used by the
+        // mouse audit tab in `ui::render::audit_unavailable_status`.
+        let base = AUDIT_UNAVAILABLE_MESSAGE;
+        assert_eq!(base, "監査レポートがありません（ログイン後に生成されます）");
+
+        let clean = audit_unavailable_status(false);
+        assert_eq!(clean, base);
+        assert!(!clean.contains("[未保存"), "{clean}");
+
+        // A keyboard request must not drop the persistent warning either.
+        let dirty = audit_unavailable_status(true);
+        assert_eq!(dirty, crate::ui::app::status_with_unsaved(base, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_g_without_report_routes_to_the_unavailable_status() {
+        let mut value = context(Screen::Unlocked, Panel::Vault, "g");
+        value.has_audit_report = false;
+        let action = classify_key(&value);
+
+        assert_eq!(action, UiAction::AuditUnavailable);
+        assert_ne!(action, UiAction::None, "a bare `g` must never be inert");
+        assert_eq!(audit_unavailable_status(false), AUDIT_UNAVAILABLE_MESSAGE);
     }
 
     #[::core::prelude::v1::test]

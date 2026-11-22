@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第82〜83弾 / 2026-11-23）
+
+- Caps Lock 時のキーコマンドを ASCII 大小折り上げで維持
+- 大文字スキームとクエリ内 `://` の URL マスク、除外行の dedup、
+  folders の重複排除、';' を含む userinfo を修正
+- AuthError 逆変換、MissingProtectedKey、非 ASCII ポート、
+  複数 URI、KNOWN 一覧の本番定数集約をテスト
+
 ### 全体改善（第81弾 / 2026-11-23）
 
 - 検索終了時に監査パネルへ移る際の status を実際の選択行と整合
