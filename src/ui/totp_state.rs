@@ -641,12 +641,28 @@ mod tests {
         assert_eq!(state.current_code(), Some("94287082"));
         assert_eq!(state.error_message(), None);
         assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(119));
+        // `display` caches the exact string it was given, so the whole URI is
+        // the secret identity used by `matches_secret`, not just its `secret=`
+        // parameter. The stale-secret check in the app compares against the
+        // same string it displays, so a URI must not look like a bare secret.
+        assert!(
+            state.has_secret(),
+            "the displayed URI is an owned secret: {uri}"
+        );
+        assert!(state.matches_secret(&uri));
+        assert!(
+            !state.matches_secret(SECRET),
+            "the bare secret is no longer the cached value once a URI is shown"
+        );
 
         // A bare secret keeps the defaults (30 seconds, 6 digits), which shows
         // that the URI really changed both parameters, not just the label.
         let plain = state.display(SECRET, 40);
         assert_eq!(plain, "287 082 (あと20秒)", "{plain}");
         assert_eq!(state.current_code(), Some("287082"));
+        assert!(state.has_secret());
+        assert!(state.matches_secret(SECRET));
+        assert!(!state.matches_secret(&uri));
 
         // The custom period also drives freshness: t=120 starts a new
         // 60-second window, so the cached snapshot is resampled and reports
@@ -658,6 +674,9 @@ mod tests {
         );
         assert!(!custom.contains("まもなく期限切れ"), "{custom}");
         assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(120));
+        assert!(state.has_secret());
+        assert!(state.matches_secret(&uri));
+        assert!(!state.matches_secret(SECRET));
         let code = state
             .current_code()
             .expect("the otpauth URI must still produce a code");

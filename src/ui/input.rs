@@ -156,15 +156,48 @@ pub(super) fn auth_edit_finished_status(dirty: bool) -> String {
 /// The query is *kept*, and the vault panel still binds `Backspace` and typed
 /// text to re-edit it, so the status also names those keys (see
 /// [`crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT`]).
+///
+/// This count-only form keeps the hinted wording for callers that cannot see
+/// the query (for example `ui::app::panel_transition_status_after_edit`).
+/// Callers that own a `VaultViewState` must use
+/// [`search_finished_status_for_view`] so an emptied query does not keep
+/// pointing at re-edit keys that are no longer bound to it.
 pub(super) fn search_finished_status(result_count: usize, dirty: bool) -> String {
-    text_edit_finished_status(
-        &format!(
-            "{} / {}",
-            crate::ui::logic::no_selection_status_for_count(result_count),
-            crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
-        ),
-        dirty,
-    )
+    search_finished_status_with_query(true, result_count, dirty)
+}
+
+/// Query-aware form of [`search_finished_status`].
+///
+/// The re-edit hint is only meaningful while a confirmed query exists. Once
+/// Backspace removes its last character, typed characters return to their
+/// normal vault commands and there is nothing left to re-edit; keeping the
+/// hint on screen would name keys that no longer edit a query. The
+/// count-dependent base message and the unsaved marker are unchanged in both
+/// branches.
+pub(super) fn search_finished_status_with_query(
+    query_nonempty: bool,
+    result_count: usize,
+    dirty: bool,
+) -> String {
+    let base = crate::ui::logic::no_selection_status_for_count(result_count);
+    let text = if query_nonempty {
+        format!("{base} / {}", crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT)
+    } else {
+        base
+    };
+    text_edit_finished_status(&text, dirty)
+}
+
+/// Compose the confirmed-search status from a view's live query and result set.
+///
+/// Every query edit goes through a `VaultViewState`, so deriving both inputs
+/// here prevents one path from forgetting to re-check whether the query is
+/// still non-empty.
+pub(super) fn search_finished_status_for_view(
+    view: &crate::ui::vault_view::VaultViewState,
+    dirty: bool,
+) -> String {
+    search_finished_status_with_query(!view.query.is_empty(), view.visible_items().len(), dirty)
 }
 
 /// Confirm an active search because a row was clicked, and return its status.
@@ -179,7 +212,7 @@ pub(super) fn finish_search_from_row_click(
     dirty: bool,
 ) -> String {
     view.finish_search();
-    search_finished_status(view.visible_items().len(), dirty)
+    search_finished_status_for_view(view, dirty)
 }
 
 /// Status naming the vault row that is currently selected.
@@ -224,8 +257,7 @@ pub(super) fn selected_row_click_status(
     view: &crate::ui::vault_view::VaultViewState,
     dirty: bool,
 ) -> String {
-    selected_row_status(view, dirty)
-        .unwrap_or_else(|| search_finished_status(view.visible_items().len(), dirty))
+    selected_row_status(view, dirty).unwrap_or_else(|| search_finished_status_for_view(view, dirty))
 }
 
 /// Status the `SelectRow` action leaves on screen.
@@ -261,7 +293,9 @@ pub(super) fn backspace_confirmed_query(
     dirty: bool,
 ) -> String {
     view.pop_query();
-    search_finished_status(view.visible_items().len(), dirty)
+    // After the last character is removed there is no confirmed query left to
+    // re-edit, so the re-edit keys must disappear from the status as well.
+    search_finished_status_for_view(view, dirty)
 }
 
 /// Append text to an already-confirmed query and return the new status.
@@ -277,7 +311,7 @@ pub(super) fn insert_confirmed_query(
     dirty: bool,
 ) -> String {
     view.push_query(text);
-    search_finished_status(view.visible_items().len(), dirty)
+    search_finished_status_for_view(view, dirty)
 }
 
 /// Status after a settings time field is adjusted with `i`/`u`, `3`/`4` or
@@ -680,13 +714,11 @@ impl BitwardenApp {
             }
             UiAction::FinishSearch => {
                 self.view.finish_search();
-                // `finish_search` keeps the query, so the visible count is the
-                // confirmed search's result count. It lets the status report
-                // "no matches" instead of asking for a non-existent row.
-                let result_count = self.view.visible_items().len();
                 // Same contract as the auth field: confirmation is not still
-                // an editing session, so restore the normal vault status.
-                self.status = search_finished_status(result_count, self.settings_dirty);
+                // an editing session, so restore the normal vault status. The
+                // view still owns the query, so derive both the "no matches"
+                // wording and the re-edit hint from it (no hint when empty).
+                self.status = search_finished_status_for_view(&self.view, self.settings_dirty);
                 cx.notify();
             }
             UiAction::FinishSettingsEdit => {
@@ -1350,6 +1382,102 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn confirmed_status_hints_only_while_a_query_exists() {
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+        for count in [0, 2] {
+            for dirty in [false, true] {
+                let base = crate::ui::logic::no_selection_status_for_count(count);
+                let with_query = search_finished_status_with_query(true, count, dirty);
+                assert_eq!(
+                    with_query,
+                    crate::ui::app::status_with_unsaved(&format!("{base} / {hint}"), dirty)
+                );
+
+                let without_query = search_finished_status_with_query(false, count, dirty);
+                assert_eq!(
+                    without_query,
+                    crate::ui::app::status_with_unsaved(&base, dirty)
+                );
+                assert!(!without_query.contains(hint), "{without_query}");
+                assert_eq!(
+                    without_query.contains("[未保存の設定変更があります]"),
+                    dirty,
+                    "{without_query}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn reedit_hint_follows_the_confirmed_query_through_edits() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        let mut view = VaultViewState::new();
+        for id in ["a", "b"] {
+            view.vault.items.push(VaultItem::new(
+                id,
+                id,
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            ));
+        }
+        view.start_search();
+        view.push_query("Zq");
+        assert_eq!(view.visible_items().len(), 0, "precondition: no match");
+
+        let confirmed = finish_search_from_row_click(&mut view, false);
+        assert!(
+            confirmed.contains(crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT),
+            "{confirmed}"
+        );
+
+        // One character left: still a query, so the hint stays.
+        let one_left = backspace_confirmed_query(&mut view, false);
+        assert_eq!(view.query, "Z");
+        assert!(
+            one_left.contains(crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT),
+            "{one_left}"
+        );
+
+        // Removing the last character must drop the hint with the query.
+        let empty = backspace_confirmed_query(&mut view, false);
+        assert_eq!(view.query, "");
+        assert_eq!(view.visible_items().len(), 2);
+        assert_eq!(
+            empty,
+            crate::ui::app::status_with_unsaved(crate::ui::logic::no_selection_status(), false)
+        );
+        assert!(
+            !empty.contains(crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT),
+            "{empty}"
+        );
+
+        // Confirming the now-empty query, and a missed click that falls back
+        // to the same view-derived status, must not resurrect the hint.
+        let reconfirmed = finish_search_from_row_click(&mut view, false);
+        assert!(
+            !reconfirmed.contains(crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT),
+            "{reconfirmed}"
+        );
+        let click_fallback = selected_row_click_status(&view, false);
+        assert!(
+            !click_fallback.contains(crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT),
+            "{click_fallback}"
+        );
+
+        // Adding a character again restores the hint and keeps the marker.
+        let refined = insert_confirmed_query(&mut view, "A", true);
+        assert_eq!(view.query, "A");
+        assert!(
+            refined.contains(crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT),
+            "{refined}"
+        );
+        assert!(refined.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
     fn row_click_during_search_confirms_search_and_restores_status() {
         use crate::model::{ItemData, VaultItem};
         use crate::ui::vault_view::VaultViewState;
@@ -1727,23 +1855,21 @@ mod tests {
         assert_eq!(view.rewind_calls, before + 1, "each backspace rewinds");
 
         // The next backspace empties the query: the generic selection prompt
-        // replaces the zero-match message.
+        // replaces the zero-match message, and the re-edit hint goes away with
+        // the query it described.
         let status = backspace_confirmed_query(&mut view, false);
         assert_eq!(view.query, "");
         assert_eq!(view.visible_items().len(), 2);
-        assert_eq!(status, search_finished_status(2, false));
+        assert_eq!(status, search_finished_status_with_query(false, 2, false));
         assert_eq!(
             status,
-            crate::ui::app::status_with_unsaved(
-                &format!(
-                    "{} / {}",
-                    crate::ui::logic::no_selection_status(),
-                    crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
-                ),
-                false
-            )
+            crate::ui::app::status_with_unsaved(crate::ui::logic::no_selection_status(), false)
         );
         assert!(!status.contains("0件"), "{status}");
+        assert!(
+            !status.contains(crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT),
+            "an empty query must not advertise re-edit keys: {status}"
+        );
 
         // The unsaved marker is preserved in both count branches.
         view.push_query("Zq");
@@ -1751,8 +1877,12 @@ mod tests {
         assert_eq!(dirty_empty, search_finished_status(0, true));
         assert!(dirty_empty.contains("[未保存の設定変更があります]"));
         let dirty_found = backspace_confirmed_query(&mut view, true);
-        assert_eq!(dirty_found, search_finished_status(2, true));
+        assert_eq!(
+            dirty_found,
+            search_finished_status_with_query(false, 2, true)
+        );
         assert!(dirty_found.contains("[未保存の設定変更があります]"));
+        assert!(!dirty_found.contains(crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT));
     }
 
     #[::core::prelude::v1::test]

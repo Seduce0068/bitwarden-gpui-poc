@@ -71,6 +71,12 @@ mod unicode_normalize {
     /// search query miss an otherwise identical name. Dropping them here keeps
     /// search, duplicate detection and sorting on the same normalized value.
     ///
+    /// Leading/trailing whitespace is trimmed here too, on the shared-key
+    /// side: the padded and bare spellings of a name must fold to one key on
+    /// every path (duplicate detection, `view` sorting and `matches_page`
+    /// ordering). A caller-local trim in `duplicate_names` alone used to make
+    /// that path disagree with the two sort paths.
+    ///
     /// Lowercasing a decomposed string can surface a code point that NFKD
     /// would decompose again (for example U+01C4 LATIN CAPITAL LETTER DZ WITH
     /// CARON decomposes to `D` + U+017E; lowercasing leaves U+017E intact until
@@ -84,6 +90,7 @@ mod unicode_normalize {
     /// normalized needle back through this function. The loop bound is
     /// defensive: two passes suffice for the mappings above.
     pub(crate) fn comparison_key(input: &str) -> String {
+        let input = input.trim();
         let mut key = fold_once(input);
         for _ in 0..3 {
             let next = fold_once(&key);
@@ -1182,7 +1189,9 @@ impl Vault {
     pub fn duplicate_names(&self) -> Vec<(String, Vec<String>)> {
         let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for item in &self.items {
-            let key = comparison_key(item.name.trim());
+            // Trim lives in `comparison_key`, shared with `compare` (sort) and
+            // `matches_page`, so all three paths fold the same padded name.
+            let key = comparison_key(&item.name);
             // Whitespace between marks renders nothing either, so a mark-only
             // name with internal spaces is still decoration, not a name. The
             // shared helper keeps this rule identical to the query paths.

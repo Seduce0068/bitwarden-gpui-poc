@@ -2468,9 +2468,10 @@ fn item_data_rejects_an_unknown_or_missing_type_tag() {
 
 #[test]
 fn duplicate_names_ignore_surrounding_whitespace_differences() {
-    // `duplicate_names` compares `comparison_key(item.name.trim())`
-    // (model.rs:1156-1180), so padding a name with ASCII or Unicode whitespace
-    // must not split it into a separate group.
+    // `duplicate_names` uses the shared `comparison_key(&item.name)`, which
+    // trims leading/trailing whitespace itself (model.rs:92-103), so padding a
+    // name with ASCII or Unicode whitespace must not split it into a separate
+    // group -- sort and page order fold the same key.
     let mut vault = Vault::new();
     vault
         .items
@@ -2493,6 +2494,65 @@ fn duplicate_names_ignore_surrounding_whitespace_differences() {
         groups[0].1,
         vec!["1".to_string(), "2".to_string(), "3".to_string()]
     );
+}
+
+#[test]
+fn padded_names_share_one_key_in_duplicates_sort_and_page_order() {
+    // The trim now lives in `comparison_key` (model.rs:86), the single key
+    // shared by duplicate detection, `view` sorting and `matches_page`
+    // ordering. Previously only `duplicate_names` trimmed, so those paths
+    // disagreed about a padded name's key ("github" vs " github ").
+    assert_eq!(comparison_key("  GitHub  "), comparison_key("GitHub"));
+    assert_eq!(
+        comparison_key("\u{3000}github\u{3000}"),
+        comparison_key("GitHub")
+    );
+
+    let page = "https://example.com/settings";
+    let mut padded = Vault::new();
+    padded
+        .items
+        .push(login("padded", "  GitHub  ", "u", "p", page));
+    padded.items.push(login("bare", "GitHub", "u", "p", page));
+
+    // Duplicate detection groups them under the trimmed key.
+    let groups = padded.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "github");
+    assert_eq!(groups[0].1, vec!["padded".to_string(), "bare".to_string()]);
+
+    // A completely bare vault must order identically: equal keys fall back to
+    // the id tiebreak, not to the surrounding whitespace.
+    let mut bare = Vault::new();
+    bare.items.push(login("padded", "GitHub", "u", "p", page));
+    bare.items.push(login("bare", "GitHub", "u", "p", page));
+
+    let padded_sort: Vec<&str> = padded
+        .view(&Filter::All, "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    let bare_sort: Vec<&str> = bare
+        .view(&Filter::All, "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(padded_sort, vec!["bare", "padded"]);
+    assert_eq!(padded_sort, bare_sort);
+
+    let opts = openwarden::MatchOptions::default();
+    let padded_page: Vec<&str> = padded
+        .matches_page(page, &opts)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    let bare_page: Vec<&str> = bare
+        .matches_page(page, &opts)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(padded_page, vec!["bare", "padded"]);
+    assert_eq!(padded_page, bare_page);
 }
 
 #[test]

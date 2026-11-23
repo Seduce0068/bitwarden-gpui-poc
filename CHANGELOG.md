@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第113〜114弾 / 2026-11-24）
+
+- AuthError catch-all 代表ファミリ、at_is_in_query 恒真式、
+  comparison_key の Cc 除去、mark-only 内部空白を修正
+- 不可視 email の分類、恒真境界、監査ログ実経路、
+  mark-only クエリの可視性ルールを修正
+- hex デコード、parse_sync 空ボディ、全角数字、
+  Cc の TOTP／Unnamed 経路をテスト
+
 ### 全体改善（第112弾 / 2026-11-23）
 
 - UI Cc 判定、選択解除時 TOTP クリア、カード番号の不可視判定、

@@ -4444,6 +4444,67 @@ fn argon2id_kdf_rejection_paths_are_reported_by_the_real_derive() {
 }
 
 #[test]
+fn kdf_upper_limit_guards_are_enforced_by_the_real_derive() {
+    use crate::error::{AppError, BoxedCause};
+
+    // The mirror image of the weak-KDF tests above: a hostile server can also
+    // *inflate* the parameters to exhaust CPU/memory. `KdfPolicy::check`
+    // (openwarden-0.1.1/src/kdf.rs:119-155) runs before any derivation, so each
+    // case is refused immediately and cheaply. The default policy caps PBKDF2
+    // at 10,000,000 iterations and Argon2id at 20 iterations / 1024 MiB.
+    let policy = KdfPolicy::default();
+    let password = SecretString::from("correct horse".to_string());
+    let email = "alice@example.com";
+    for (kdf, reason) in [
+        (
+            Kdf::Pbkdf2 {
+                iterations: policy.pbkdf2_max_iterations + 1,
+            },
+            "pbkdf2 iterations above the maximum",
+        ),
+        (
+            Kdf::Argon2id {
+                iterations: policy.argon2_max_iterations + 1,
+                memory_mib: 64,
+                parallelism: 4,
+            },
+            "argon2id iterations above the maximum",
+        ),
+        (
+            Kdf::Argon2id {
+                iterations: 3,
+                memory_mib: policy.argon2_max_memory_mib + 1,
+                parallelism: 4,
+            },
+            "argon2id memory above the maximum",
+        ),
+    ] {
+        // Pin the guard directly: it must name the specific upper bound.
+        let guard_error = policy
+            .check(&kdf)
+            .expect_err("an inflated KDF must be refused");
+        assert_eq!(
+            guard_error.to_string(),
+            format!("KDF parameters rejected: {reason}")
+        );
+
+        // Pin the production path (auth.rs:1194): `MasterKey::derive` calls the
+        // same guard first, so the heavy work is never reached.
+        let error = MasterKey::derive(&password, email, &kdf, &policy)
+            .expect_err("the derive path must refuse the same inflated KDF");
+        assert_eq!(error.to_string(), guard_error.to_string());
+
+        let small = AuthError::from(AppError::KdfRejectedCause(BoxedCause::new(error)));
+        assert!(
+            matches!(&small, AuthError::KdfRejectedDetail(text) if text.contains(reason)),
+            "the real upper-limit reason must survive: {small:?}"
+        );
+        assert_eq!(small.message(), "KDF 設定がポリシーで拒否されました");
+        assert!(small.status_message().contains(reason));
+    }
+}
+
+#[test]
 fn invisible_only_email_is_an_invalid_email_not_a_missing_field() {
     // Symmetric with `invisible_only_server_url_is_an_invalid_url_not_a_missing_field`
     // above: `validate_config` uses `email.trim().is_empty()` first (auth.rs:738),

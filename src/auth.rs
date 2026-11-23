@@ -16,6 +16,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 
+use zeroize::Zeroizing;
+
 use openwarden::{
     ApiKey, Client, Device, ExposeSecret as _, Kdf, KdfPolicy, MasterKey, SecretString, ServerUrls,
     Session, SyncData,
@@ -411,11 +413,15 @@ pub fn clamp_auth_config(config: &mut AuthConfig) {
     // stays idempotent.
     config.client_id = config.client_id.trim().to_string();
     truncate_to_limit(&mut config.client_id, MAX_CLIENT_ID_LEN);
-    let trimmed_secret = config.client_secret.expose_secret().trim().to_string();
+    // A plain `String` here dropped an un-zeroized copy of the secret on the
+    // common no-trim path. Keep the one-off copy in a `Zeroizing<String>` so it
+    // is wiped on every path; the fresh `String` passed to `SecretString` is a
+    // separate buffer that the secret container zeroizes in turn.
+    let trimmed_secret = Zeroizing::new(config.client_secret.expose_secret().trim().to_string());
     if trimmed_secret.len() != config.client_secret.expose_secret().len() {
         // Replace the buffer (and zeroize the padded original) only when a
         // trim is actually needed; an in-bounds secret keeps its allocation.
-        config.client_secret = SecretString::from(trimmed_secret);
+        config.client_secret = SecretString::from(trimmed_secret.as_str().to_string());
     }
     truncate_secret_to_limit(&mut config.client_secret, MAX_CLIENT_SECRET_LEN);
     truncate_secret_to_limit(&mut config.master_password, MAX_MASTER_PASSWORD_LEN);

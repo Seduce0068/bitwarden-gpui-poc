@@ -863,6 +863,27 @@ mod tests {
     }
 
     #[test]
+    fn revalidate_selection_signals_only_when_it_drops_the_selection() {
+        let mut state = state_with_items();
+        state.selected_id = Some("a".into());
+
+        assert!(state.revalidate_selection());
+        assert_eq!(state.selected_id.as_deref(), Some("a"));
+        assert!(
+            !state.take_totp_stale(),
+            "a still-valid selection must not invalidate the cached TOTP"
+        );
+
+        // Filtering "a" out forces the invalid branch; that deselection must
+        // raise the same one-shot signal as every other path.
+        state.query = "Beta".into();
+        assert!(!state.revalidate_selection());
+        assert_eq!(state.selected_id, None);
+        assert!(state.take_totp_stale());
+        assert!(!state.take_totp_stale());
+    }
+
+    #[test]
     fn cycling_from_a_folder_or_nofolder_returns_to_all() {
         let mut state = state_with_items();
         state.filter = Filter::Folder("f1".into());
@@ -1020,6 +1041,13 @@ mod tests {
             ("push_query", |state| state.push_query("B")),
             ("pop_query", |state| state.pop_query()),
             ("cycle_filter", |state| state.cycle_filter()),
+            ("revalidate_selection", |state| {
+                // "a" drops out of the visible set, so revalidation must take
+                // the deselecting branch that raises the signal.
+                state.query = "Beta".into();
+                assert!(!state.revalidate_selection());
+            }),
+            ("reset", |state| state.reset()),
             ("deselect_and_rewind", |state| state.deselect_and_rewind()),
         ];
 
