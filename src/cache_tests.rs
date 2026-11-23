@@ -4989,3 +4989,60 @@ fn minimum_i64_capture_time_is_expired() {
     assert_eq!(loaded.created_at, Some(i64::MIN));
     assert!(is_cache_expired(loaded.created_at, now));
 }
+
+#[test]
+fn scheme_less_userinfo_without_key_prefix_is_masked_in_query_and_fragment() {
+    // `mask_param_pairs` copies pairs without '=' verbatim, so a scheme-less
+    // `user:secret@host` needs the pre-pass in
+    // `mask_nested_userinfo_in_pairs` (cache.rs:555-625). With no `key=` prefix
+    // the candidate starts at byte zero -- the `pair_start == 0` branch -- and
+    // the userinfo itself must be replaced, not a value after '='.
+    let query = "https://vault.example.com/cb?user:P&SS@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(query);
+    assert!(!masked.contains("P&SS"), "{masked}");
+    assert!(
+        masked.contains("?[redacted]@cb.example.com/done&state=ok"),
+        "{masked}"
+    );
+
+    // A ';' in the password is both a legal credential character and a pair
+    // separator. In a fragment it must not cut the authority in two either.
+    let fragment = "https://vault.example.com/cb#user:P;SS@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(fragment);
+    assert!(!masked.contains("P;SS"), "{masked}");
+    assert!(
+        masked.contains("#[redacted]@cb.example.com/done&state=ok"),
+        "{masked}"
+    );
+
+    // Direct check of the no-'=' branch: there is no `key=` prefix to keep.
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs("user:P&SS@cb.example.com/done"),
+        "[redacted]@cb.example.com/done"
+    );
+    // A harmless '@' without a `user:secret` marker stays untouched.
+    let harmless = "a@b;state=ok";
+    assert_eq!(super::mask_nested_userinfo_in_pairs(harmless), harmless);
+
+    // Debug reaches the same redactor through the stored server URL; the
+    // stored value itself remains byte-for-byte the one used for comparisons.
+    let cache = SyncCache::from_body(body(), query).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("P&SS"), "{rendered}");
+    assert_eq!(cache.server_url, query);
+}
+
+#[test]
+fn scheme_less_userinfo_without_an_assignment_is_masked() {
+    for url in [
+        "https://vault.example.com/cb?user:SECRET@cb.example.com",
+        "https://vault.example.com/cb#user:SECRET@cb.example.com",
+    ] {
+        let masked = super::mask_url_secrets(url);
+        assert!(!masked.contains("SECRET"), "{url} -> {masked}");
+        assert!(masked.contains("[redacted]@cb.example.com"), "{masked}");
+    }
+    // A harmless `key@host` value with no colon is left alone.
+    let plain = "https://vault.example.com/cb?state=ok@cb.example.com";
+    assert_eq!(super::mask_url_secrets(plain), plain);
+}

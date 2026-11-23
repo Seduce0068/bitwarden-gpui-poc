@@ -296,6 +296,16 @@ fn join_detail_fields(base: &str, fields: &[String]) -> String {
     parts.join(" | ")
 }
 
+/// Base text of the status shown when the audit panel is requested before a
+/// report exists.
+///
+/// The mouse audit tab (`ui::render::audit_unavailable_status`) and the
+/// keyboard `g` path (`ui::input::audit_unavailable_status`) used to carry this
+/// literal twice. Keeping the wording here gives both entry points one source
+/// of truth; their local helpers still compose the unsaved marker.
+pub(super) const AUDIT_UNAVAILABLE_MESSAGE: &str =
+    "監査レポートがありません（ログイン後に生成されます）";
+
 /// Status shown after successfully following an audit finding.
 ///
 /// `name` is the finding's display name from the current report (the same text
@@ -768,13 +778,44 @@ pub(super) fn align_audit_focus(
     Some(name.to_string())
 }
 
+/// Status describing a highlighted audit row.
+///
+/// Shared by the refresh path ([`audit_refresh_status`]) and the keyboard move
+/// path (`BitwardenApp::move_audit_selection`), which used to build the same
+/// format string independently. The name goes through [`item_name_text`],
+/// matching the vault list/detail rows: an invisible-only (`Cf`) finding name
+/// must show the shared placeholder rather than leaving a blank after
+/// "監査行 n/m: ". Kept pure so both callers' wording can be tested without a
+/// GPUI window (this crate does not enable gpui's `test-support` feature).
+pub(super) fn audit_row_status(index: usize, len: usize, name: &str, dirty: bool) -> String {
+    status_with_unsaved(
+        &format!(
+            "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）",
+            index + 1,
+            len,
+            item_name_text(name)
+        ),
+        dirty,
+    )
+}
+
+/// Status when an audit report has no finding to highlight.
+///
+/// Shared by the refresh path ([`audit_refresh_status`]) and the keyboard move
+/// path (`BitwardenApp::move_audit_selection`), which used to repeat this
+/// literal. The "press ↑↓" guidance is only used when there is no row at all;
+/// a non-empty report without a highlight keeps
+/// [`audit_no_selection_status`] instead. Kept pure so the contract can be
+/// tested without a GPUI window.
+pub(super) fn audit_no_findings_status(dirty: bool) -> String {
+    status_with_unsaved("監査する問題がありません（↑↓で行を選択できません）", dirty)
+}
+
 /// Status describing the audit row left highlighted after a refresh.
 ///
-/// Uses the same wording as the keyboard move status, so a threshold edit
+/// Uses the same wording as the keyboard move status through
+/// [`audit_row_status`] and [`audit_no_findings_status`], so a threshold edit
 /// cannot leave the status bar naming a row that is no longer highlighted.
-/// The name goes through [`item_name_text`], matching the vault list/detail
-/// rows: an invisible-only (`Cf`) finding name must show the shared placeholder
-/// rather than leaving a blank after "監査行 n/m: ".
 pub(super) fn audit_refresh_status(
     index: Option<usize>,
     len: usize,
@@ -782,19 +823,8 @@ pub(super) fn audit_refresh_status(
     dirty: bool,
 ) -> String {
     match (index, name) {
-        (Some(index), Some(name)) => status_with_unsaved(
-            &format!(
-                "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）",
-                index + 1,
-                len,
-                item_name_text(name)
-            ),
-            dirty,
-        ),
-        _ => status_with_unsaved(
-            "監査する問題がありません（↑↓で行を選択できません）",
-            dirty,
-        ),
+        (Some(index), Some(name)) => audit_row_status(index, len, name, dirty),
+        _ => audit_no_findings_status(dirty),
     }
 }
 
@@ -1244,10 +1274,7 @@ impl BitwardenApp {
             self.audit_scroll_handle.scroll_to_item(scroll_index);
         }
         let Some(index) = next else {
-            self.status = status_with_unsaved(
-                "監査する問題がありません（↑↓で行を選択できません）",
-                self.settings_dirty,
-            );
+            self.status = audit_no_findings_status(self.settings_dirty);
             cx.notify();
             return;
         };
@@ -1257,13 +1284,9 @@ impl BitwardenApp {
             .as_ref()
             .and_then(|report| report.items.get(index))
         {
-            let base = format!(
-                "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）",
-                index + 1,
-                len,
-                item_name_text(&item.name)
-            );
-            self.status = status_with_unsaved(&base, self.settings_dirty);
+            // Same composer as the refresh path: the status must describe the
+            // row that is actually highlighted after this key press.
+            self.status = audit_row_status(index, len, &item.name, self.settings_dirty);
         }
         cx.notify();
     }
@@ -1446,6 +1469,70 @@ mod tests {
         let base = "監査行 1/2: example";
         assert!(!status_with_unsaved(base, false).contains("[未保存"));
         assert!(status_with_unsaved(base, true).contains("[未保存"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_row_status_is_shared_by_refresh_and_keyboard_paths() {
+        // The refresh path and the keyboard move path used to format this
+        // string independently. Both now call the same pure helper, so pin the
+        // exact wording and the placeholder/marker contract in one place.
+        let row = audit_row_status(0, 2, "example", false);
+        assert_eq!(
+            row,
+            format!(
+                "監査行 1/2: example（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）"
+            )
+        );
+        assert_eq!(
+            row,
+            audit_refresh_status(Some(0), 2, Some("example"), false),
+            "the refresh path must delegate to the shared row composer"
+        );
+        let dirty_row = audit_row_status(0, 2, "example", true);
+        assert_eq!(dirty_row, status_with_unsaved(&row, true));
+        assert!(
+            dirty_row.contains("[未保存の設定変更があります]"),
+            "{dirty_row}"
+        );
+
+        // An invisible-only finding name uses the same placeholder as the list
+        // and detail rows, whichever path builds the status.
+        let cf = "\u{200b}\u{feff}";
+        assert!(audit_row_status(0, 1, cf, false).contains(ITEM_NAME_PLACEHOLDER));
+        assert_eq!(
+            audit_row_status(0, 1, cf, false),
+            audit_refresh_status(Some(0), 1, Some(cf), false)
+        );
+        assert!(!audit_row_status(0, 1, cf, false).contains(cf));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_no_findings_status_keeps_the_unsaved_marker() {
+        let clean = audit_no_findings_status(false);
+        assert_eq!(clean, "監査する問題がありません（↑↓で行を選択できません）");
+        assert!(!clean.contains("[未保存"));
+        let dirty = audit_no_findings_status(true);
+        assert_eq!(dirty, status_with_unsaved(&clean, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
+
+        // Both the refresh path and the empty-report focus path route through
+        // this same helper, so their no-row wording cannot drift apart.
+        assert_eq!(dirty, audit_refresh_status(None, 0, None, true));
+        assert_eq!(
+            dirty,
+            audit_focus_no_selection_status(Some(&Report::default()), true)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_unavailable_message_has_one_source_of_truth() {
+        let base = "監査レポートがありません（ログイン後に生成されます）";
+        assert_eq!(AUDIT_UNAVAILABLE_MESSAGE, base);
+        assert_eq!(crate::ui::input::audit_unavailable_status(false), base);
+        assert_eq!(
+            crate::ui::input::audit_unavailable_status(true),
+            status_with_unsaved(base, true)
+        );
     }
 
     #[::core::prelude::v1::test]

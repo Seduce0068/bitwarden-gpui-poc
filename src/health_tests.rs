@@ -3734,3 +3734,110 @@ fn passphrase_estimate_accepts_a_non_ascii_single_separator() {
     let alphanumeric_join = format!("{first}あ{second}");
     assert_eq!(super::passphrase_estimate(&alphanumeric_join), None);
 }
+
+#[test]
+fn passphrase_estimate_folds_invisible_characters_inside_words() {
+    use crate::generator::{passphrase_entropy, PassphraseSettings};
+    use crate::words::WORDS;
+
+    let first = WORDS[0]; // "able"
+    let second = WORDS[1]; // "above"
+    let base = PassphraseSettings {
+        words: 2,
+        separator: "-".into(),
+        capitalize: false,
+        include_number: false,
+    };
+    let plain = format!("{first}-{second}");
+    let expected = passphrase_entropy(&base).round() as u32;
+
+    // A ZWSP inside a word used to be picked up as the separator, leaving two
+    // parts that are not word-list entries; a Cc or bidi control did the same.
+    // All of them must fold away before the word-list check, giving the same
+    // ~22-bit score as the plain two-word passphrase instead of the much higher
+    // character-pool estimate.
+    for padded in [
+        format!("a\u{200b}ble-{second}"),
+        format!("{first}-\u{202e}{second}"),
+        format!("ab\u{0}ove-{first}"),
+        format!("{first}-\u{9f}{second}"),
+        format!("\u{feff}{first}-{second}\u{200d}"),
+    ] {
+        assert_eq!(
+            super::passphrase_estimate(&padded),
+            Some(expected),
+            "{padded:?}"
+        );
+        assert_eq!(estimate_entropy(&padded), expected, "{padded:?}");
+    }
+    assert_eq!(super::passphrase_estimate(&plain), Some(expected));
+    assert_eq!(estimate_entropy(&plain), expected);
+
+    // The same folding applies to the separator-free recognizer: the prefix-
+    // free word list must parse the word boundaries after the ZWSP is removed.
+    let joined_base = PassphraseSettings {
+        separator: String::new(),
+        ..base.clone()
+    };
+    let joined_expected = passphrase_entropy(&joined_base).round() as u32;
+    assert_eq!(
+        joined_expected, expected,
+        "the separator carries no entropy"
+    );
+    for padded in [
+        format!("a\u{200b}ble{second}"),
+        format!("{first}ab\u{0}ove"),
+    ] {
+        assert_eq!(
+            super::passphrase_estimate(&padded),
+            Some(joined_expected),
+            "{padded:?}"
+        );
+        assert_eq!(estimate_entropy(&padded), joined_expected, "{padded:?}");
+    }
+
+    // Folding keeps the case, so the generator's capitalization and trailing-
+    // digit bonuses still apply and are still credited to the word-list model.
+    let numbered = format!("a\u{200b}ble-{second}7");
+    assert_eq!(
+        super::passphrase_estimate(&numbered),
+        Some(
+            passphrase_entropy(&PassphraseSettings {
+                include_number: true,
+                ..base.clone()
+            })
+            .round() as u32
+        ),
+        "{numbered:?}"
+    );
+    let capitalized = format!("A\u{200b}ble-{second}");
+    assert_eq!(
+        super::passphrase_estimate(&capitalized),
+        Some(
+            passphrase_entropy(&PassphraseSettings {
+                capitalize: true,
+                ..base
+            })
+            .round() as u32
+        ),
+        "{capitalized:?}"
+    );
+
+    // End to end: the folded 2-word value is weak and reaches the report with
+    // the word-list bit count, not a character-pool score.
+    let padded = format!("a\u{200b}ble-{second}");
+    let bits = estimate_entropy(&padded);
+    let report = report_of(vec![login(
+        "cf-passphrase",
+        "CfPassphrase",
+        &padded,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}

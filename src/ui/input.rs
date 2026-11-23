@@ -137,11 +137,10 @@ pub(super) fn settings_edit_finished_status(dirty: bool) -> String {
 /// Base text of the status shown when the audit panel is requested before a
 /// report exists.
 ///
-/// The mouse audit tab (`ui::render::audit_unavailable_status`) uses the exact
-/// same wording. That module is outside this task's edit scope, so it keeps its
-/// own literal; both copies must stay byte-identical.
-pub(super) const AUDIT_UNAVAILABLE_MESSAGE: &str =
-    "監査レポートがありません（ログイン後に生成されます）";
+/// The wording lives in `crate::ui::app::AUDIT_UNAVAILABLE_MESSAGE` so the
+/// keyboard `g` path and the mouse audit tab in `ui::render` share one literal.
+/// This alias keeps the existing `ui::input` name without a second copy.
+pub(super) const AUDIT_UNAVAILABLE_MESSAGE: &str = crate::ui::app::AUDIT_UNAVAILABLE_MESSAGE;
 
 /// Status for [`UiAction::AuditUnavailable`], preserving the unsaved marker.
 ///
@@ -1177,9 +1176,10 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn audit_unavailable_status_matches_the_mouse_audit_tab_wording() {
-        // The base text must stay byte-identical to the literal used by the
-        // mouse audit tab in `ui::render::audit_unavailable_status`.
+        // The base text is the single shared constant also used by the mouse
+        // audit tab in `ui::render::audit_unavailable_status`.
         let base = AUDIT_UNAVAILABLE_MESSAGE;
+        assert_eq!(base, crate::ui::app::AUDIT_UNAVAILABLE_MESSAGE);
         assert_eq!(base, "監査レポートがありません（ログイン後に生成されます）");
 
         let clean = audit_unavailable_status(false);

@@ -700,7 +700,18 @@ fn mask_param_pairs(pairs: &str, depth: usize) -> String {
                 out.push_str(pair);
             }
         } else {
-            out.push_str(pair);
+            // A query/fragment value without an `=` can still be a bare
+            // `user:secret@host` authority. The pre-pass above only accepts
+            // candidates carrying `;`/`&`, so handle the plain form here.
+            if pair
+                .split_once(':')
+                .is_some_and(|(_, tail)| tail.contains('@'))
+                && nested_authority_with_userinfo(pair)
+            {
+                out.push_str(&mask_url_userinfo(pair));
+            } else {
+                out.push_str(pair);
+            }
         }
     }
     out

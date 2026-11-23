@@ -3547,3 +3547,62 @@ fn non_object_profile_is_classified_as_invalid_login() {
         .expect("an object profile should parse");
     assert_eq!(ok.user_id(), "u");
 }
+
+#[test]
+fn lowercase_profile_key_folders_only_vault_imports_through_both_entry_points() {
+    // openwarden reads the lowercase wire spelling `profile.key` into
+    // `SyncData::protected_key` (vault_sync.rs:214-244 leaves lowercase keys
+    // untouched). A folders-only sync carrying that field must apply without
+    // the KeyChanged lock when the session has the same protected key, and both
+    // import entry points must keep the folders while returning no items and
+    // no audit rows.
+    let protected_key = "2.encrypted";
+    let symmetric = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).unwrap();
+    let work = openwarden::EncString::encrypt(&symmetric, b"Work")
+        .unwrap()
+        .to_string();
+    let personal = openwarden::EncString::encrypt(&symmetric, b"Personal")
+        .unwrap()
+        .to_string();
+    let body = serde_json::json!({
+        "profile": { "id": "user-folders", "key": protected_key },
+        "folders": [
+            { "id": "f-work", "name": work },
+            { "id": "f-personal", "name": personal },
+        ],
+        "ciphers": [],
+    })
+    .to_string();
+    let sync = parse_sync(body.as_bytes()).expect("lowercase profile.key must parse");
+    assert_eq!(sync.user_id(), "user-folders");
+    assert_eq!(sync.protected_key(), Some(protected_key));
+
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: protected_key.to_string(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    vault
+        .apply_sync(sync)
+        .expect("matching lowercase profile.key must not lock");
+    assert!(!vault.is_locked());
+
+    let model = import_logins(&vault).expect("folders-only vault must import");
+    assert!(model.items.is_empty());
+    assert_eq!(model.len(), 0);
+    assert_eq!(model.folders.len(), 2);
+    for (id, name) in [("f-work", "Work"), ("f-personal", "Personal")] {
+        let folder = model.folders.iter().find(|folder| folder.id == id).unwrap();
+        assert_eq!(folder.name, name);
+    }
+
+    let (audited, audit) = import_logins_with_audit(&vault).expect("the audited import must agree");
+    assert!(audited.items.is_empty());
+    assert_eq!(audited.folders, model.folders);
+    assert!(
+        audit.is_empty(),
+        "no ciphers means no import decisions: {audit:?}"
+    );
+    assert_eq!(folders_from(&vault).unwrap(), model.folders);
+}

@@ -3,9 +3,22 @@
 //! Keeping these here prevents the pure settings module from depending on the
 //! network-oriented auth module just to validate two text fields.
 
-/// Maximum length of an email address, in characters. RFC 5321 caps the local
-/// part at 64 octets and the domain at 255; 254 is the practical ceiling mail
-/// servers enforce, so longer addresses cannot be real deliverable addresses.
+/// Maximum length of an email address, in Unicode characters (not octets).
+///
+/// The *number* comes from RFC 5321's octet limits: §4.5.3.1.1 caps the local
+/// part at 64 octets, §4.5.3.1.2 caps the domain at 255 octets, and
+/// §4.5.3.1.3 caps the whole forward/reverse path at 256 octets including
+/// punctuation; removing the angle brackets leaves the familiar 254-octet
+/// practical ceiling. See <https://www.rfc-editor.org/rfc/rfc5321#section-4.5.3.1>.
+///
+/// The *unit* deliberately does not match that basis. [`truncate_to_limit`]
+/// counts `str::chars()`, and the login field check in `crate::auth` does the
+/// same, so 254 multi-byte characters (762 UTF-8 bytes for a run of `あ`)
+/// pass here even though they exceed every octet budget above. No separate
+/// local-part/domain split is enforced either. This cap is a UI/storage bound
+/// against unbounded input and its allocations, not a promise of SMTP
+/// deliverability: a server may reject an address that fits in 254 characters
+/// when its local part or its UTF-8 encoding exceeds the wire limits.
 pub const MAX_EMAIL_LEN: usize = 254;
 /// Maximum length of a server URL, in characters. Well above a normal
 /// self-hosted URL, but below the ~2 KiB limit many HTTP stacks apply.
@@ -141,6 +154,25 @@ mod tests {
         let mut ascii = "abcdef".to_string();
         truncate_to_limit(&mut ascii, 2);
         assert_eq!(ascii, "ab");
+    }
+
+    #[test]
+    fn email_cap_counts_characters_not_rfc_octets() {
+        // Pin the documented mismatch: the 254 is an RFC 5321 octet ceiling,
+        // but the implementation counts Unicode scalar values. A multi-byte
+        // address can therefore fill the cap and still be far over the wire
+        // budget; switching to byte counting is an explicit, reviewed change.
+        let multibyte = "あ".repeat(MAX_EMAIL_LEN);
+        assert_eq!(multibyte.chars().count(), MAX_EMAIL_LEN);
+        assert_eq!(multibyte.len(), MAX_EMAIL_LEN * 'あ'.len_utf8());
+        assert!(multibyte.len() > MAX_EMAIL_LEN);
+
+        let mut at_cap = multibyte.clone();
+        truncate_to_limit(&mut at_cap, MAX_EMAIL_LEN);
+        assert_eq!(at_cap, multibyte);
+        let mut over_cap = format!("{multibyte}あ");
+        truncate_to_limit(&mut over_cap, MAX_EMAIL_LEN);
+        assert_eq!(over_cap, multibyte);
     }
 
     #[test]

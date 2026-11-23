@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 全体改善（第129〜131弾 / 2026-11-24）
+
+- お気に入り解除 status、不可視桁数、F1 固定フッタ、
+  非ASCII区切り redaction、旧キャッシュ version を修正
+- catch-all ParseFailedCause、サブドメイン、protected key、
+  メタデータ host、負リビジョン Clipped をテスト
+
 ### 全体改善（第127〜128弾 / 2026-11-24）
 
 - comparison_key の trim 順序、adjust_idle_lock の端数保持、

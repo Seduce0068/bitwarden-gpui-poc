@@ -428,7 +428,11 @@ pub fn estimate_entropy(password: &str) -> u32 {
 /// same [`word_capitalization`] rule: a word is either all lowercase or has
 /// just its first ASCII letter capitalized. All-caps and mid-word capitals
 /// are rejected even when a separator is present. Anything else falls back to
-/// the character-pool estimate in [`estimate_entropy`].
+/// the character-pool estimate in [`estimate_entropy`]. Invisible `Cf`/`Cc`
+/// characters are removed before recognition, matching the pattern path in
+/// [`estimate_entropy`]: a zero-width space inside a word must not become a
+/// separator and let a generated passphrase masquerade as a high-entropy
+/// character-pool string.
 ///
 /// The empty separator matters: the word list is prefix-free, so the generator
 /// happily emits `ableabove` for a two-word passphrase. Scoring that as a plain
@@ -436,6 +440,15 @@ pub fn estimate_entropy(password: &str) -> u32 {
 /// while the generator knows it is only a two-word draw (~22 bit). The audit
 /// must not overestimate such a passphrase.
 fn passphrase_estimate(value: &str) -> Option<u32> {
+    // The character-pool path folds away invisible `Cf`/`Cc` characters before
+    // its pattern checks ([`visible_lowercase`]); this path used to parse the
+    // raw value. A ZWSP inside a word was then picked up as the "separator",
+    // leaving parts that are not word-list entries, and the passphrase escaped
+    // to the much stronger character-pool estimate. Fold the same characters
+    // here, *before* the digit/separator/word checks, while keeping the case
+    // that the capitalization bonus below depends on.
+    let visible = visible_chars(value);
+    let value = visible.as_str();
     let (body, with_number) = match value.as_bytes().last() {
         Some(byte) if byte.is_ascii_digit() => (&value[..value.len() - 1], true),
         _ => (value, false),
@@ -537,11 +550,18 @@ fn word_capitalization(word: &str, lower: &str) -> Option<bool> {
 /// characters are deliberately kept so the wide-pool allowance and the
 /// non-ASCII suffix rules still see them.
 fn visible_lowercase(value: &str) -> String {
+    visible_chars(value).to_lowercase()
+}
+
+/// The same invisible-character filter as [`visible_lowercase`], with the
+/// original casing preserved. [`passphrase_estimate`] needs the unlowered
+/// spelling to award the generator's capitalization bonus, so it shares only
+/// this step and performs its own case-insensitive word matching.
+fn visible_chars(value: &str) -> String {
     value
         .chars()
         .filter(|ch| !ch.is_control() && !crate::limits::is_format_character(*ch))
         .collect::<String>()
-        .to_lowercase()
 }
 
 fn strip_trailing_digits(value: &str) -> Option<&str> {

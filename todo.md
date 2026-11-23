@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第131弾で 7 件すべてを完了）。
+なし（第132弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第132弾（16 担当・76 回目）の指摘 7 件を完結（2026-11-24）
+  - passphrase 不可視文字、監査 status 重複、
+    クエリ内 scheme-less ユーザー情報を修正。
+  - 設定上限 doc、Debug リダクタ、小文字 protected_key、
+    フォルダのみのボルトをテスト。
+  - CHANGELOG 第129〜131弾、ADR redact 行参照を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1205 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第131弾（16 担当・75 回目）の指摘 7 件を完結（2026-11-24）
   - protected key の Zeroizing 化、SecureNote 桁数、
     監査 F1 固定フッタ、README ゲート順序を修正。
