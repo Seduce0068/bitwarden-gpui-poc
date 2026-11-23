@@ -201,6 +201,19 @@ fn grouping_handles_three_four_seven_and_nine_digit_codes() {
 }
 
 #[test]
+fn grouping_handles_ten_digit_codes() {
+    // `Code::grouped` (totp.rs:71-82) splits by character count in half, so
+    // the ten-digit maximum yields a 5+5 shape, not 6+4 or a fixed 3+3 shape.
+    let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&digits=10&period=30");
+    let code = code_at(&uri, 59).unwrap();
+    let raw = code.code();
+    assert_eq!(raw.len(), 10, "{raw}");
+    assert!(raw.chars().all(|ch| ch.is_ascii_digit()), "{raw}");
+    assert_eq!(code.grouped(), format!("{} {}", &raw[..5], &raw[5..]));
+    assert_eq!(code.grouped().matches(' ').count(), 1, "{raw}");
+}
+
+#[test]
 fn debug_never_reveals_the_code() {
     let code = code_at(RFC_SECRET, 59).unwrap();
     let rendered = format!("{code:?}");

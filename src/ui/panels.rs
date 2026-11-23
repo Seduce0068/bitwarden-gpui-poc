@@ -54,20 +54,37 @@ fn row_navigation_keys_hint(selectable_rows: usize) -> String {
     }
 }
 
-/// Row keys for the vault list: navigation only, with no `Enter` promise.
+/// Main vault commands shown next to the row keys in the list header.
+///
+/// `ui::keys::classify_key` binds all of these in `Panel::Vault`: `/` starts a
+/// search, `t`/`s` cycle filter and sort, `f` toggles a favorite, `y`/`p`/`u`
+/// copy the TOTP code, password and username, `g` opens the audit report,
+/// `n`/`c` switch panels, `l` locks the vault and `Esc` quits. The header used
+/// to advertise row movement only, leaving none of these discoverable on the
+/// vault screen. Kept as a constant so the wording can be pinned by tests
+/// without rendering a GPUI window.
+pub(super) const VAULT_MAIN_KEYS_HINT: &str = "/: 検索 / t: フィルタ / s: 並び替え / f: お気に入り / y: TOTP をコピー / p: パスワードをコピー / u: ユーザー名をコピー / g: 監査 / n: 生成 / c: 設定 / l: ロック / Esc: 終了";
+
+/// Row and command keys for the vault list, with no `Enter` promise.
 ///
 /// `Enter` is bound only in the audit panel, so the vault header must not
-/// advertise it. The navigation wording is byte-for-byte the audit variant's
-/// prefix; only the trailing `Enter` segment is omitted. `searching` is the
-/// vault's text-edit mode: while it is active `ui::keys::classify_key` routes
-/// Up/Down/PageUp/PageDown/Home/End nowhere (or inserts them as text), so the
-/// header must not promise row movement. Kept pure so the wording can be
-/// pinned by tests without rendering a GPUI window.
+/// advertise it. The navigation portion is byte-for-byte the audit variant's
+/// prefix; the vault-only command list is appended after it. `searching` is
+/// the vault's text-edit mode: while it is active `ui::keys::classify_key`
+/// routes Up/Down/PageUp/PageDown/Home/End nowhere (or inserts them as text)
+/// and the command letters become search text, so the header must not promise
+/// either path. Kept pure so the wording can be pinned by tests without
+/// rendering a GPUI window.
 pub(super) fn vault_row_keys_hint(selectable_rows: usize, searching: bool) -> String {
     if searching {
         String::new()
     } else {
-        row_navigation_keys_hint(selectable_rows)
+        let navigation = row_navigation_keys_hint(selectable_rows);
+        if navigation.is_empty() {
+            navigation
+        } else {
+            format!("{navigation} / {VAULT_MAIN_KEYS_HINT}")
+        }
     }
 }
 
@@ -1123,11 +1140,12 @@ mod tests {
             assert!(hint.contains(key), "missing {key} in {hint}");
         }
 
-        // The audit variant keeps the legacy wording verbatim: the vault hint
-        // is its prefix and the `Enter` segment is the only difference.
+        // The audit variant keeps the legacy navigation wording and its own
+        // `Enter` segment; it must not inherit vault-only command keys such as
+        // `t`/`y`/`p`, which are inert on that panel.
         let audit = row_selection_keys_hint(2);
-        assert!(audit.starts_with(hint.as_str()), "{audit} vs {hint}");
-        assert_eq!(audit, format!("{hint} / Enter: 対象を選択"));
+        assert!(audit.contains("Enter: 対象を選択"), "{audit}");
+        assert!(!audit.contains(VAULT_MAIN_KEYS_HINT), "{audit}");
     }
 
     #[::core::prelude::v1::test]
@@ -1145,9 +1163,40 @@ mod tests {
         // Outside the search field the very same rows still advertise the
         // navigation keys, including the shared page/edge wording.
         let idle = vault_row_keys_hint(2, false);
-        assert_eq!(idle, row_navigation_keys_hint(2));
+        assert_eq!(
+            idle,
+            format!("{} / {VAULT_MAIN_KEYS_HINT}", row_navigation_keys_hint(2))
+        );
         assert!(idle.contains("↑↓: 行を選択"), "{idle}");
         assert!(idle.contains(LIST_PAGE_AND_EDGE_HINT), "{idle}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_row_keys_hint_advertises_the_main_command_keys() {
+        let hint = vault_row_keys_hint(2, false);
+        for token in [
+            "/: 検索",
+            "t: フィルタ",
+            "s: 並び替え",
+            "f: お気に入り",
+            "y: TOTP をコピー",
+            "p: パスワードをコピー",
+            "u: ユーザー名をコピー",
+            "g: 監査",
+            "n: 生成",
+            "c: 設定",
+            "l: ロック",
+            "Esc: 終了",
+        ] {
+            assert!(hint.contains(token), "missing {token} in {hint}");
+        }
+        assert!(!hint.contains("Enter"), "{hint}");
+
+        // Search mode and an empty list keep hiding every key hint: command
+        // letters are search text while editing, and there is no row to move
+        // to when the list is empty.
+        assert_eq!(vault_row_keys_hint(2, true), "");
+        assert_eq!(vault_row_keys_hint(0, false), "");
     }
 
     #[::core::prelude::v1::test]

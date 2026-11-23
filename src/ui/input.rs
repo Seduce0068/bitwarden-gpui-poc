@@ -174,6 +174,29 @@ pub(super) fn finish_search_from_row_click(
     search_finished_status(view.visible_items().len(), dirty)
 }
 
+/// Status naming the vault row that is currently selected.
+///
+/// Both the mouse click path and the keyboard move path must report the same
+/// row name; keeping the lookup in one pure helper prevents them from drifting.
+/// Returns `None` when nothing is selected (for example an empty list), so the
+/// caller keeps its current status instead of claiming a selection that did
+/// not happen.
+pub(super) fn selected_row_status(
+    view: &crate::ui::vault_view::VaultViewState,
+    dirty: bool,
+) -> Option<String> {
+    let visible = view.visible_items();
+    view.selected_id
+        .as_deref()
+        .and_then(|id| visible.iter().find(|item| item.id == id))
+        .map(|item| {
+            crate::ui::app::status_with_unsaved(
+                &format!("項目を選択しました: {}", item.name),
+                dirty,
+            )
+        })
+}
+
 /// Status for a row click that actually selected a row while confirming search.
 ///
 /// [`finish_search_from_row_click`] runs before `select_index`, so its
@@ -186,18 +209,8 @@ pub(super) fn selected_row_click_status(
     view: &crate::ui::vault_view::VaultViewState,
     dirty: bool,
 ) -> String {
-    let visible = view.visible_items();
-    let selected = view
-        .selected_id
-        .as_deref()
-        .and_then(|id| visible.iter().find(|item| item.id == id));
-    match selected {
-        Some(item) => {
-            let name = &item.name;
-            crate::ui::app::status_with_unsaved(&format!("項目を選択しました: {name}"), dirty)
-        }
-        None => search_finished_status(visible.len(), dirty),
-    }
+    selected_row_status(view, dirty)
+        .unwrap_or_else(|| search_finished_status(view.visible_items().len(), dirty))
 }
 
 /// Status the `SelectRow` action leaves on screen.
@@ -352,6 +365,27 @@ impl BitwardenApp {
             };
         if let Some(delta) = delta {
             self.move_selection(delta, cx);
+            self.report_keyboard_selection(cx);
+        }
+    }
+
+    /// Announce the row chosen by an Up/Down/Page/Home/End key.
+    ///
+    /// `BitwardenApp::move_selection` owns the selection and the scroll, but
+    /// the vault branch never wrote to the status bar, so keyboard users had
+    /// no on-screen confirmation of which row was highlighted while a mouse
+    /// click already reported its name. Only the vault branch is handled here:
+    /// on the audit panel `move_selection` delegates to `move_audit_selection`,
+    /// which installs its own row description and must not be overwritten.
+    fn report_keyboard_selection(&mut self, cx: &mut Context<Self>) {
+        if crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some())
+            == Panel::Audit
+        {
+            return;
+        }
+        if let Some(status) = selected_row_status(&self.view, self.settings_dirty) {
+            self.status = status;
+            cx.notify();
         }
     }
 
@@ -488,11 +522,15 @@ impl BitwardenApp {
             }
             UiAction::SetPanel(panel) => self.set_panel(panel, cx),
             UiAction::Lock => self.lock(cx),
-            UiAction::MoveSelection(delta) => self.move_selection(delta, cx),
+            UiAction::MoveSelection(delta) => {
+                self.move_selection(delta, cx);
+                self.report_keyboard_selection(cx);
+            }
             UiAction::MoveSelectionPage(direction) => {
                 // Direction comes from the classifier as -1/+1; saturating
                 // multiplication keeps an extreme value from overflowing.
-                self.move_selection(direction.saturating_mul(PAGE_MOVE_ROWS), cx)
+                self.move_selection(direction.saturating_mul(PAGE_MOVE_ROWS), cx);
+                self.report_keyboard_selection(cx);
             }
             UiAction::MoveSelectionToEdge(edge) => self.move_selection_to_edge(edge, cx),
             UiAction::ToggleFavorite => self.toggle_favorite(cx),
@@ -1155,6 +1193,57 @@ mod tests {
             row_click_status(&view, false, confirmed.clone(), false),
             confirmed
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn keyboard_row_selection_reports_the_selected_name() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        fn item(id: &str, name: &str) -> VaultItem {
+            VaultItem::new(
+                id,
+                name,
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            )
+        }
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(item("a", "Alpha"));
+        view.vault.items.push(item("b", "Beta"));
+
+        // An empty selection has no row to name, so the caller keeps its
+        // existing status instead of inventing one.
+        assert_eq!(selected_row_status(&view, false), None);
+
+        // With no selection, a positive delta starts at the first visible row
+        // (the same rule the real `move_selection` path uses), then a second
+        // positive step reaches the second row.
+        let next = {
+            let visible = view.visible_items();
+            view.next_index_in(&visible, 1)
+        }
+        .expect("precondition: two visible rows");
+        view.selected_id = Some(view.visible_items()[next].id.clone());
+        assert_eq!(view.selected_id.as_deref(), Some("a"));
+        let second = {
+            let visible = view.visible_items();
+            view.next_index_in(&visible, 1)
+        }
+        .expect("second row");
+        view.selected_id = Some(view.visible_items()[second].id.clone());
+        let status = selected_row_status(&view, false);
+        assert_eq!(status.as_deref(), Some("項目を選択しました: Beta"));
+        assert_eq!(view.selected_id.as_deref(), Some("b"));
+
+        // The unsaved marker survives on the keyboard path too, and the
+        // wording matches the mouse click path exactly.
+        let dirty = selected_row_status(&view, true);
+        let click = selected_row_click_status(&view, true);
+        assert_eq!(dirty.as_deref(), Some(click.as_str()));
+        assert!(dirty.is_some_and(|text| text.contains("[未保存の設定変更があります]")));
     }
 
     #[::core::prelude::v1::test]

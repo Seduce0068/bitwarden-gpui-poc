@@ -430,7 +430,44 @@ fn tolerance_stops_at_syntax_and_root_shape() {
         Settings::load_detailed(&path).err(),
         Some(SettingsLoadError::ParseFailed)
     );
+    // Every scalar root fails the same shape check (not only arrays).
+    for scalar in [b"42".as_slice(), b"\"settings\"", b"true", b"null"] {
+        std::fs::write(&path, scalar).unwrap();
+        assert!(
+            matches!(
+                Settings::load_detailed(&path).err(),
+                Some(SettingsLoadError::ParseFailed)
+            ),
+            "scalar root {scalar:?} must be rejected by shape"
+        );
+    }
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn current_schema_drops_non_string_device_ids_per_field() {
+    const A1B2C3D4: &str = "A1B2C3D4-1234-4ABC-8DEF-0123456789AB";
+    // A current-schema file uses per-field tolerance instead of the future
+    // rescue path: a non-string `device_id` is dropped while siblings survive.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    for device_id in [
+        serde_json::json!(42),
+        serde_json::json!([A1B2C3D4]),
+        serde_json::json!({ "uuid": A1B2C3D4 }),
+        serde_json::json!(true),
+    ] {
+        let body = serde_json::json!({
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "email": "keep@example.com",
+            "device_id": device_id,
+        });
+        std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+        let loaded = Settings::load_detailed(&path).unwrap();
+        assert_eq!(loaded.device_id, "");
+        assert_eq!(loaded.email, "keep@example.com");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    }
 }
 
 // --- Schema version regressions: current marker, legacy files, future rejection ---

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第103弾 / 2026-11-23）
+
+- email の trim→クランプ、InvalidServerUrl の二重括弧、
+  非 link-local メタデータ IP を修正
+- Windows 権限制約／created_at 契約、folder_name_text doc を記録
+- 空名プレースホルダ、複数 URI 選択、検索中ヒント、
+  Mn/Me 空名、SSH public_key haystack を修正・テスト
+
 ### 全体改善（第101〜102弾 / 2026-11-23）
 
 - all-same の前後装飾、数字 userinfo マスク、Cf-only 重複名を修正

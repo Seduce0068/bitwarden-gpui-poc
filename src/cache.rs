@@ -19,10 +19,11 @@
 //! the classified reason (corrupt / unreadable / outdated / mismatched).
 //!
 //! Known constraint (Windows): [`load_detailed`] only checks Unix mode bits,
-//! behind `#[cfg(unix)]`. On Windows a cache file whose ACLs grant other users
-//! access is therefore accepted as-is; `crate::private_file::write_private`
-//! is the only writer and applies a restrictive ACL there. Do not treat the
-//! read-side permission check as a cross-platform guarantee.
+//! behind `#[cfg(unix)]`. `crate::private_file::write_private`, the only
+//! writer, likewise has no Windows-specific code: it grants no restrictive
+//! ACL there. A cache file on Windows is therefore accepted as-is regardless
+//! of its ACL. Do not treat the read-side permission check as a cross-platform
+//! guarantee.
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -927,8 +928,9 @@ fn read_bounded<R: Read>(reader: &mut R, limit: u64) -> Result<Vec<u8>, CacheLoa
 /// the encrypted body must stay owner-only, matching the `private_file` policy
 /// that every write applies. The size cap is checked first so an oversized
 /// file keeps its `CacheTooLarge` classification. Known constraint: this
-/// permission gate is `#[cfg(unix)]`; Windows has no equivalent check here and
-/// relies on the writer's ACL (see the module docs).
+/// permission gate is `#[cfg(unix)]`; Windows has no equivalent read-side
+/// check, and the writer grants no restrictive Windows ACL either (see the
+/// module docs).
 ///
 /// # Errors
 ///

@@ -2126,7 +2126,7 @@ fn unrepresentable_deadline_takes_the_relative_timer_fallback() {
 
     // Both watchdog arms still report Timeout when their timer fires. The
     // relative form is built directly with ZERO so the assertion does not
-    // wait out the sentinel duration (auth.rs:844-859).
+    // wait out the sentinel duration (auth.rs:917-927).
     assert_eq!(
         smol::block_on(login_watchdog(LoginDeadline::Relative(Duration::ZERO))).err(),
         Some(AuthError::Timeout)
@@ -3579,4 +3579,90 @@ fn invalid_server_url_detail_replaces_the_hint_instead_of_doubling_parentheses()
     assert_eq!(empty.status_message(), family);
     assert!(!empty.status_message().contains("（）"));
     assert_eq!(empty, AuthError::InvalidServerUrl);
+}
+
+#[test]
+fn ipv4_mapped_non_link_local_metadata_ip_is_blocked() {
+    // The Alibaba endpoint is outside link-local ranges, so only the explicit
+    // BLOCKED_METADATA_IPS entry can reject it. Its IPv4-mapped IPv6 spelling
+    // must be unwrapped to IPv4 before that lookup: `is_link_local_ip` alone
+    // does not cover a non-link-local address, and an `IpAddr::V6` never
+    // compares equal to the IPv4 entry in the list.
+    let mapped: IpAddr = "::ffff:100.100.100.200".parse().unwrap();
+    assert!(!is_link_local_ip(mapped), "premise: not link-local");
+    assert!(super::is_blocked_metadata_ip(mapped));
+
+    for value in [
+        "http://[::ffff:100.100.100.200]",
+        "https://[::ffff:100.100.100.200]/latest/meta-data",
+    ] {
+        assert!(is_blocked_server_url_without_dns(value), "{value}");
+        assert!(is_blocked_server_url(value), "{value}");
+        let mut invalid = config();
+        invalid.server_url = value.into();
+        assert_eq!(
+            validate_config(&invalid),
+            Err(AuthError::BlockedServerUrl),
+            "{value}"
+        );
+    }
+    // A DNS answer in mapped form is rejected as a whole too.
+    assert!(is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| vec![mapped]
+    ));
+    // A neighbouring mapped address is not metadata and stays allowed.
+    let neighbour: IpAddr = "::ffff:100.100.100.201".parse().unwrap();
+    assert!(!super::is_blocked_metadata_ip(neighbour));
+    assert!(!is_blocked_server_url_without_dns(
+        "http://[::ffff:100.100.100.201]"
+    ));
+}
+
+#[test]
+fn detail_variants_convert_forward_to_their_cause_app_error_arms() {
+    use crate::error::{AppError, BoxedCause};
+
+    // `From<AuthError> for AppError` (auth.rs:209-223) keeps the rendered
+    // detail as the typed cause for the URL, client-setup and login families.
+    // Equality alone cannot distinguish the arms because `AppError`'s
+    // PartialEq compares rendered messages, so pin the exact discriminant and
+    // the cause reachable through `Error::source()`.
+    let cases: Vec<(&str, AuthError, AppError, &str, &str)> = vec![
+        (
+            "invalid_server_url",
+            AuthError::InvalidServerUrlDetail("parser rejected the scheme".into()),
+            AppError::InvalidServerUrlCause(BoxedCause::text("parser rejected the scheme")),
+            "parser rejected the scheme",
+            "サーバー URL が不正です（HTTPS または loopback の HTTP）",
+        ),
+        (
+            "client_setup",
+            AuthError::ClientSetupDetail("client id rejected".into()),
+            AppError::ClientSetupCause(BoxedCause::text("client id rejected")),
+            "client id rejected",
+            "クライアントを初期化できませんでした",
+        ),
+        (
+            "login",
+            AuthError::LoginDetail("HTTP 400 invalid_client".into()),
+            AppError::LoginCause(BoxedCause::text("HTTP 400 invalid_client")),
+            "HTTP 400 invalid_client",
+            "ログインに失敗しました",
+        ),
+    ];
+    assert_eq!(cases.len(), 3);
+
+    for (name, auth, expected, detail, family) in cases {
+        let converted: AppError = auth.into();
+        assert_eq!(
+            std::mem::discriminant(&converted),
+            std::mem::discriminant(&expected),
+            "{name}: wrong AppError variant"
+        );
+        assert_eq!(converted, expected, "{name}");
+        assert_eq!(converted.message(), family, "{name}");
+        let source = std::error::Error::source(&converted).map(ToString::to_string);
+        assert_eq!(source.as_deref(), Some(detail), "{name}");
+    }
 }

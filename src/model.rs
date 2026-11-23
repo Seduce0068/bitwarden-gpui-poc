@@ -60,9 +60,13 @@ mod unicode_normalize {
     /// duplicate-name detection and sorting.
     ///
     /// Lowercasing a decomposed string can surface a code point that NFKD
-    /// would decompose again (for example U+0345 COMBINING GREEK YPOGEGRAMMENI
-    /// lowercases to U+03B9), so a single pass is not guaranteed to be a fixed
-    /// point. Repeating the pass until the text stops changing makes
+    /// would decompose again (for example U+01C4 LATIN CAPITAL LETTER DZ WITH
+    /// CARON decomposes to `D` + U+017E; lowercasing leaves U+017E intact until
+    /// the next NFKD pass splits it into `z` + U+030C), so a single pass is not
+    /// guaranteed to be a fixed point. U+0345 COMBINING GREEK YPOGEGRAMMENI is
+    /// *not* such a case: `char::to_lowercase` leaves it unchanged and NFKD
+    /// keeps it as a mark (only case folding maps it to U+03B9). Repeating the
+    /// pass until the text stops changing makes
     /// `comparison_key(comparison_key(x)) == comparison_key(x)` for every
     /// input, which is what the search and sort paths rely on when they feed a
     /// normalized needle back through this function. The loop bound is
@@ -1008,7 +1012,7 @@ impl Vault {
             b.favorite
                 .cmp(&a.favorite)
                 .then_with(|| b.revision_date.cmp(&a.revision_date))
-                // Use the same folded name key as `compare` (model.rs:1092-1102)
+                // Use the same folded name key as `compare` (model.rs:1114-1124)
                 // and fall back to the id so equal names order deterministically
                 // instead of depending on the input order.
                 .then_with(|| {

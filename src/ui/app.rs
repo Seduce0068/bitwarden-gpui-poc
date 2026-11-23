@@ -280,10 +280,13 @@ pub(super) fn audit_no_selection_status(dirty: bool) -> String {
 /// Reporting "no row selected" unconditionally therefore contradicted the
 /// highlight still drawn on screen. A highlighted row is described with the
 /// same wording as the keyboard move and refresh paths (and its name is always
-/// re-read from the current report); when there is no row to describe, the
-/// "no selection" guidance is shown. Kept pure so the contract can be tested
-/// without a GPUI window (this crate does not enable gpui's `test-support`
-/// feature).
+/// re-read from the current report). An *empty* report has no row at all, so it
+/// reuses [`audit_refresh_status`]'s "監査する問題がありません" wording instead
+/// of asking the user to select a non-existent row with ↑↓. The remaining
+/// no-selection cases (a non-empty report with no highlight, or no report at
+/// all) keep [`audit_no_selection_status`]. Kept pure so the contract can be
+/// tested without a GPUI window (this crate does not enable gpui's
+/// `test-support` feature).
 pub(super) fn audit_search_exit_status(
     report: Option<&crate::health::Report>,
     selection: Option<usize>,
@@ -296,6 +299,9 @@ pub(super) fn audit_search_exit_status(
                 .and_then(|report| report.items.get(index))
                 .map(|item| item.name.clone());
             audit_refresh_status(Some(index), len, name.as_deref(), dirty)
+        }
+        None if report.is_some_and(|report| report.items.is_empty()) => {
+            audit_refresh_status(None, 0, None, dirty)
         }
         None => audit_no_selection_status(dirty),
     }
@@ -325,15 +331,21 @@ pub(super) fn totp_detail_text(secret: &str, generated: String, error: Option<St
 /// it to code generation would show `コード生成失敗` instead of the "なし"
 /// placeholder. `generate` stays lazy so generation is skipped for absent
 /// secrets and the branch can be tested without a GPUI-backed `TotpState`.
+///
+/// `generate` returns both the display code and the cached failure reason,
+/// read *after* the re-sample. Reading the reason before calling `generate`
+/// showed the previous selection's reason for one frame: `TotpState::display`
+/// replaces the cached tick inside the closure, so a pre-read `error_message`
+/// was always one sample behind the code on screen.
 pub(super) fn totp_code_text(
     secret: &str,
-    generate: impl FnOnce(&str) -> String,
-    error: Option<String>,
+    generate: impl FnOnce(&str) -> (String, Option<String>),
 ) -> String {
     if is_visually_empty(secret) {
         "なし".to_string()
     } else {
-        totp_detail_text(secret, generate(secret), error)
+        let (generated, error) = generate(secret);
+        totp_detail_text(secret, generated, error)
     }
 }
 
@@ -1126,8 +1138,15 @@ impl BitwardenApp {
                 totp: secret,
                 uris,
             } => {
-                let error = self.totp.error_message();
-                let code = totp_code_text(&secret, |secret| self.totp_text(secret), error);
+                // `totp_text` re-samples `TotpState` when the secret or the
+                // period changed, so the cached reason must be read *after*
+                // it. Reading it first made the detail line lag one sample
+                // behind the code when the selection moved to a bad secret.
+                let code = totp_code_text(&secret, |secret| {
+                    let generated = self.totp_text(secret);
+                    let error = self.totp.error_message();
+                    (generated, error)
+                });
                 let password_label = if crate::vault_sync::is_undecryptable_password(&password) {
                     "復号不可".to_string()
                 } else {
@@ -2252,6 +2271,37 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn audit_search_exit_status_does_not_ask_for_a_row_in_an_empty_report() {
+        // A confirmed search onto an empty audit report used to fall through
+        // to `audit_no_selection_status`, which tells the user to press ↑↓
+        // even though there is no finding to highlight.
+        let empty = audit_search_exit_status(Some(&Report::default()), Some(0), false);
+        assert_eq!(empty, "監査する問題がありません（↑↓で行を選択できません）");
+        assert!(!empty.contains("選択されていません"), "{empty}");
+
+        let dirty = audit_search_exit_status(Some(&Report::default()), Some(3), true);
+        assert_eq!(dirty, status_with_unsaved(&empty, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+
+        // A stale selection is irrelevant: an empty report has no rows to
+        // clamp onto, so the wording stays count-aware for every input.
+        for selection in [None, Some(0), Some(usize::MAX)] {
+            assert_eq!(
+                audit_search_exit_status(Some(&Report::default()), selection, false),
+                empty,
+                "selection {selection:?}"
+            );
+        }
+
+        // The two other branches keep their wording: a non-empty report with
+        // no highlight is a "no selection" case, and so is no report at all.
+        assert_eq!(
+            audit_search_exit_status(None, Some(0), false),
+            audit_no_selection_status(false)
+        );
+    }
+
+    #[::core::prelude::v1::test]
     fn search_exit_onto_audit_uses_the_selection_in_the_transition_status() {
         use crate::health::ItemReport;
         use crate::model::ItemKind;
@@ -2430,29 +2480,60 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn totp_code_text_treats_cf_only_secret_as_absent() {
-        fn generated(_secret: &str) -> String {
-            "123456".to_string()
+        fn generated(_secret: &str) -> (String, Option<String>) {
+            ("123456".to_string(), None)
         }
 
         // A blank secret used to be caught by `trim()`; a Cf-only one was not
         // and reached code generation. Both must now render the placeholder.
-        // A failure reason is supplied to prove it is not consulted either.
-        let error = Some("理由".to_string());
-        assert_eq!(totp_code_text("", generated, error.clone()), "なし");
-        assert_eq!(totp_code_text("  \t ", generated, error.clone()), "なし");
-        assert_eq!(
-            totp_code_text("\u{200b}\u{feff}\u{202e}", generated, error),
-            "なし"
-        );
+        // The generator must not even be called, so a failure reason cannot
+        // leak into the placeholder.
+        for absent in ["", "  \t ", "\u{200b}\u{feff}\u{202e}"] {
+            let mut called = false;
+            let text = totp_code_text(absent, |secret| {
+                called = true;
+                generated(secret)
+            });
+            assert_eq!(text, "なし", "secret {absent:?}");
+            assert!(!called, "no generation for an absent secret {absent:?}");
+        }
 
         // A real secret still generates a code and still reports failures.
+        assert_eq!(totp_code_text("JBSWY3DPEHPK3PXP", generated), "123456");
         assert_eq!(
-            totp_code_text("JBSWY3DPEHPK3PXP", generated, None),
-            "123456"
-        );
-        assert_eq!(
-            totp_code_text("JBSWY3DPEHPK3PXP", generated, Some("理由".into())),
+            totp_code_text("JBSWY3DPEHPK3PXP", |_| {
+                ("コード生成失敗".to_string(), Some("理由".into()))
+            }),
             "コード生成失敗（不正な TOTP secret: 理由）"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn totp_code_text_uses_the_error_sampled_after_generation() {
+        // The detail row used to read `error_message()` before calling
+        // `totp_text`, which re-samples the cached tick. A direct switch from
+        // a valid code to a malformed secret therefore showed the previous
+        // selection's (empty) reason for one frame.
+        let valid = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        let mut state = TotpState::new();
+        assert!(state.display(valid, 40).starts_with("287 082"));
+        let stale = state.error_message();
+        assert_eq!(stale, None, "precondition: no cached failure yet");
+
+        let broken = "not base32!";
+        let text = totp_code_text(broken, |secret| {
+            let generated = state.display(secret, 40);
+            let error = state.error_message();
+            assert_ne!(error, stale, "the re-sample must replace the old reason");
+            (generated, error)
+        });
+        assert!(
+            text.contains("コード生成失敗（不正な TOTP secret"),
+            "{text}"
+        );
+        assert!(
+            text.contains("解釈できません"),
+            "the new sample's reason must be shown: {text}"
         );
     }
 

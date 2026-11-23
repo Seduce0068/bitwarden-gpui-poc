@@ -854,7 +854,7 @@ fn search_absorbs_unicode_form_differences() {
 fn comparison_key_folds_the_documented_cases_and_is_idempotent() {
     // `to_lowercase` alone leaves these pairs distinct; the search, duplicate
     // and sort paths all go through this one key so they agree. The doc does
-    // not claim a complete Unicode full case fold (model.rs:24-34): only the
+    // not claim a complete Unicode full case fold (model.rs:35-45): only the
     // explicitly listed mappings are guaranteed.
     assert_eq!(comparison_key("Straße"), comparison_key("STRASSE"));
     assert_eq!(comparison_key("ß"), comparison_key("ss"));
@@ -875,7 +875,7 @@ fn comparison_key_folds_the_documented_cases_and_is_idempotent() {
 fn comparison_key_is_idempotent_for_titlecase_dz_variants() {
     // U+01C4/01C5/01C6 (capital / titlecase / small DZ with caron) all NFKD to
     // D or d + z + combining caron once lowercasing is applied. The fixed-point
-    // loop (model.rs:59-69) must leave the folded key unchanged on a second
+    // loop (model.rs:74-84) must leave the folded key unchanged on a second
     // pass; otherwise a normalized needle would drift on the `view()` path.
     let title = comparison_key("\u{01c5}");
     let small = comparison_key("\u{01c6}");

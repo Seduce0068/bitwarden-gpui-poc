@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第103弾で 7 件すべてを完了）。
+なし（第104弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第104弾（16 担当・48 回目）の指摘 8 件を完結（2026-11-23）
+  - IPv4-mapped メタデータ IP、Windows ACL 主張、TOTP 理由遅延、
+    空監査 status、キーボード選択 status、Vault キー一覧を修正。
+  - Detail 前方変換、現行/将来 device_id、スカラー root、
+    EISDIR、期限切れ primary、オフセット短縮形、
+    U+0345 doc、空白名プレースホルダ、10桁 grouped をテスト。
+  - CHANGELOG に第103弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1006 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第103弾（16 担当・47 回目）の指摘 7 件を完結（2026-11-23）
   - email の trim→クランプ、二重括弧、非 link-local メタデータ IP、
     Windows 権限制約、created_at 契約を修正・記録。

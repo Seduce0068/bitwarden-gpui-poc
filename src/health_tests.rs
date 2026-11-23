@@ -336,7 +336,9 @@ fn unnamed_items_are_reported() {
         "S",
     )]);
     assert!(report.items[0].findings.contains(&Finding::Unnamed));
-    assert_eq!(report.items[0].name, "  ");
+    // The report must show the same placeholder it uses for a truly empty
+    // name: an invisible whitespace-only value is still an unnamed item.
+    assert_eq!(report.items[0].name, "(名称未設定)");
 }
 
 #[test]
@@ -1392,26 +1394,31 @@ fn whitespace_only_card_numbers_are_flagged_as_no_card_number() {
 
 #[test]
 fn empty_names_use_a_placeholder_in_the_report() {
-    // The placeholder branch only covers a truly empty name; whitespace-only
-    // names keep their raw value (see `unnamed_items_are_reported`).
-    let mut item = login(
-        "1",
-        "",
-        "vT7#kQm2!zR9wP4$xL8@",
-        "https://a.example",
-        "GEZDGNBVGY3TQOJQ",
-    );
-    item.revision_date = NOW;
-    let report = report_of(vec![item]);
+    // The placeholder covers every name whose `trim()` is empty, including
+    // whitespace-only ones (see `unnamed_items_are_reported`).
+    for name in ["", "  ", "\t\n", "\u{3000}"] {
+        let mut item = login(
+            "1",
+            name,
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            "GEZDGNBVGY3TQOJQ",
+        );
+        item.revision_date = NOW;
+        let report = report_of(vec![item]);
 
-    let reported = report
-        .items
-        .iter()
-        .find(|entry| entry.id == "1")
-        .expect("the unnamed item must be reported");
-    assert_eq!(reported.name, "(名称未設定)");
-    assert!(reported.findings.contains(&Finding::Unnamed));
-    assert!(report.to_text().contains("(名称未設定)"));
+        let reported = report
+            .items
+            .iter()
+            .find(|entry| entry.id == "1")
+            .expect("the unnamed item must be reported");
+        assert_eq!(reported.name, "(名称未設定)", "name={name:?}");
+        assert!(
+            reported.findings.contains(&Finding::Unnamed),
+            "name={name:?}"
+        );
+        assert!(report.to_text().contains("(名称未設定)"), "name={name:?}");
+    }
 }
 
 #[test]

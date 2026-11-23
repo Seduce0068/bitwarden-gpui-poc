@@ -178,6 +178,27 @@ fn revision_dates_reject_malformed_timestamps() {
 }
 
 #[test]
+fn revision_dates_reject_shorthand_numeric_offsets() {
+    // RFC 3339 requires the full `±HH:MM` form. `parse_revision` reads exactly
+    // two hour digits, expects ':' at offset+3 and two minute digits, so a
+    // shorthand offset is rejected at that check instead of being padded.
+    let utc = parse_revision(Some("2023-11-14T22:13:20Z")).unwrap();
+    for value in [
+        "2023-11-14T22:13:20+09",     // hour only
+        "2023-11-14T22:13:20-05",     // hour only, negative sign
+        "2023-11-14T22:13:20+0900",   // no colon
+        "2023-11-14T22:13:20+9:00",   // one hour digit
+        "2023-11-14T22:13:20+09:0",   // one minute digit
+        "2023-11-14T22:13:20+09:000", // extra minute digit
+    ] {
+        assert_eq!(parse_revision(Some(value)), None, "{value}");
+    }
+    // The full spelling of the same instant is still accepted, so the
+    // assertions above are about shorthand rather than a disabled parser.
+    assert_eq!(parse_revision(Some("2023-11-15T07:13:20+09:00")), Some(utc));
+}
+
+#[test]
 fn revision_dates_accept_the_maximum_numeric_utc_offsets() {
     // parse_revision validates the offset with `offset_hour > 23` and
     // `offset_minute > 59` (vault_sync.rs:528-535), so +23:59 and -23:59 are
@@ -676,6 +697,18 @@ fn dedup_folders_returns_early_when_folders_are_missing_or_not_an_array() {
         let before = value.clone();
         super::dedup_folders_by_id(&mut value);
         assert_eq!(value, before, "{boolean}");
+    }
+
+    // JSON null and a string are likewise not arrays: `as_array_mut()` fails
+    // and the helper returns before inspecting any row.
+    for other in [
+        serde_json::json!(null),
+        serde_json::json!("folders-as-string"),
+    ] {
+        let mut value = serde_json::json!({"folders": other.clone()});
+        let before = value.clone();
+        super::dedup_folders_by_id(&mut value);
+        assert_eq!(value, before, "{other}");
     }
 
     // Control: a real array still dedups by string id (first row wins), while

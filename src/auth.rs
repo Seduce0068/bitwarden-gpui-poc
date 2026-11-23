@@ -473,6 +473,15 @@ const BLOCKED_METADATA_IPS: &[IpAddr] = &[IpAddr::V4(Ipv4Addr::new(100, 100, 100
 /// Distinct from [`is_link_local_ip`] so the existing classifier tests keep
 /// pinning the link-local rule alone; this wrapper is what the URL guard uses.
 fn is_blocked_metadata_ip(ip: IpAddr) -> bool {
+    // IPv4-mapped IPv6 spellings (`::ffff:a.b.c.d`) must be checked against
+    // the same IPv4 metadata list. `is_link_local_ip` already unwraps them for
+    // the link-local rule, but the explicit Alibaba entry is an IPv4 literal
+    // and an `IpAddr::V6` never compares equal to it, so the mapped spelling
+    // `::ffff:100.100.100.200` previously slipped past both halves.
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        IpAddr::V4(_) => ip,
+    };
     is_link_local_ip(ip) || BLOCKED_METADATA_IPS.contains(&ip)
 }
 
@@ -904,7 +913,7 @@ fn login_deadline(now: std::time::Instant, timeout: std::time::Duration) -> Logi
 ///
 /// Both arms report the same [`AuthError::Timeout`]; the relative form is the
 /// fallback chosen by `login_deadline` for an unrepresentable absolute deadline
-/// (auth.rs:837-842).
+/// (auth.rs:905-910).
 async fn login_watchdog(deadline: LoginDeadline) -> Result<AuthenticatedVault, AuthError> {
     match deadline {
         LoginDeadline::At(at) => {
@@ -950,7 +959,7 @@ pub async fn authenticate_with_timeout(
     // fires on the first poll, which the zero-duration test seam relies on.
     // An unrepresentable deadline is not a reason to skip the watchdog:
     // `login_deadline` selects smol's relative timer with the original
-    // duration in that case (auth.rs:837-842).
+    // duration in that case (auth.rs:905-910).
     let deadline = login_deadline(std::time::Instant::now(), timeout);
     let timer = login_watchdog(deadline);
     smol::future::race(login, timer).await

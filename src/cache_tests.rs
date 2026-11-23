@@ -69,9 +69,17 @@ fn load_detailed_distinguishes_failure_modes() {
         Some(CacheLoadError::ParseFailedCause(_))
     ));
 
-    // Reading a directory as a file fails (EISDIR on Unix).
+    // Reading a directory as a file fails (EISDIR on Unix). Set owner-only
+    // mode first: with the default 0755 the private-file permission gate would
+    // reject the directory before `read_to_end`, so the assertion would pass
+    // for the wrong reason. 0700 lets the read happen and pins EISDIR itself.
     let directory = dir.path().join("detailed-dir");
     std::fs::create_dir_all(&directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     assert!(matches!(
         load_detailed(&directory).err(),
         Some(CacheLoadError::ReadFailedCause(_))
@@ -1437,6 +1445,45 @@ fn unreadable_or_outdated_primary_never_falls_back_to_legacy() {
     // The legacy file was not touched by either failed load.
     assert_eq!(std::fs::read(&old).unwrap(), legacy_bytes);
     assert_eq!(load_detailed(&old).unwrap(), legacy);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn expired_primary_is_not_replaced_by_a_fresh_legacy_cache() {
+    // Both locations hold a usable-looking cache, but only the primary is
+    // expired. `load_default` falls back solely on NotFound, so the fresh
+    // legacy file must not revive the offline restore: the caller sees the
+    // primary's CacheExpired and the legacy file stays untouched.
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let cache_home = root.path().join("xdg-cache-home");
+    let config_home = root.path().join("xdg-config-home");
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
+
+    let stale = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: body(),
+        created_at: Some(1),
+    };
+    save_default(&stale).unwrap();
+
+    let fresh = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    let legacy = legacy_path().expect("a config directory from XDG_CONFIG_HOME");
+    assert_ne!(default_path().unwrap(), legacy, "premise: distinct paths");
+    save(&legacy, &fresh).unwrap();
+    let legacy_bytes = std::fs::read(&legacy).unwrap();
+
+    assert_eq!(
+        cached_sync_for_detailed("https://vault.example.com", "user-1").err(),
+        Some(SyncCacheError::CacheExpired)
+    );
+    assert!(cached_sync_for("https://vault.example.com", "user-1").is_none());
+    // The legacy cache is still present and readable; it was merely ignored.
+    assert_eq!(std::fs::read(&legacy).unwrap(), legacy_bytes);
+    assert_eq!(load_detailed(&legacy).unwrap(), fresh);
 }
 
 #[cfg(unix)]

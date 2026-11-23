@@ -757,7 +757,10 @@ pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
             findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity()));
             report.items.push(ItemReport {
                 id: item.id.clone(),
-                name: if item.name.is_empty() {
+                // `audit_item` flags a name whose `trim()` is empty, so the
+                // report must show the same placeholder for a whitespace-only
+                // name instead of rendering the invisible raw value.
+                name: if item.name.trim().is_empty() {
                     "(名称未設定)".to_string()
                 } else {
                     item.name.clone()
