@@ -213,7 +213,7 @@ fn reused_passwords_compare_exactly() {
 
 #[test]
 fn a_password_shared_by_three_logins_reports_a_count_of_three() {
-    // `audit_item` reports the whole group size (health.rs:664-666), not a
+    // `audit_item` reports the whole group size (health.rs:827-831), not a
     // fixed "2 件". A strong shared password keeps WeakPassword out of the
     // way so only the reuse finding carries the count.
     const SHARED: &str = "vT7#kQm2!zR9wP4$xL8@";
@@ -478,7 +478,7 @@ fn severity_labels_and_ordering() {
 
 #[test]
 fn findings_within_an_item_are_sorted_by_severity() {
-    // The audit sorts each item's findings worst-first (health.rs:592-594).
+    // The audit sorts each item's findings worst-first (health.rs:766-768).
     // One item collects all three severities: reuse + insecure URI (High),
     // weak password + stale (Medium) and a missing TOTP (Low).
     let mut primary = login("1", "Primary", "1234", "http://a.example", "");
@@ -3257,4 +3257,67 @@ fn cc_only_totp_field_counts_as_unset() {
     );
     assert_eq!(report.logins, 2);
     assert_eq!(report.with_totp, 1);
+}
+
+#[test]
+fn custom_weak_bits_changes_the_audit_not_the_generated_strength() {
+    // Known constraint documented on `password_strength`: the generated bucket
+    // uses the fixed `WEAK_BITS` boundary, while the audit uses the caller's
+    // `Thresholds::weak_bits`. A custom threshold can therefore flag a password
+    // the generator still labels Fair. Pin both halves so they are not silently
+    // collapsed into one scale.
+    const CANDIDATE: &str = "123456789012"; // 12 digits -> exactly 40 bits
+    let bits = estimate_entropy(CANDIDATE);
+    assert_eq!(bits, 40);
+    assert_eq!(Thresholds::default().weak_bits, crate::generator::WEAK_BITS);
+    assert_eq!(password_strength(CANDIDATE), (bits, Strength::Fair));
+
+    let mut item = login(
+        "custom",
+        "Custom",
+        CANDIDATE,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    );
+    item.revision_date = NOW;
+    let vault = Vault {
+        items: vec![item],
+        folders: Vec::new(),
+    };
+
+    // At the default threshold 40 is not *below* 40, so no WeakPassword.
+    let default_report = audit(&vault, Thresholds::default(), NOW);
+    assert!(
+        !default_report.items.iter().any(|item| item
+            .findings
+            .iter()
+            .any(|finding| matches!(finding, Finding::WeakPassword { .. }))),
+        "{default_report:?}"
+    );
+
+    // At a custom threshold of 100 the same estimate fails the audit, but the
+    // generated Strength is unchanged: the two scales are independent.
+    let strict = audit(
+        &vault,
+        Thresholds {
+            weak_bits: 100,
+            ..Thresholds::default()
+        },
+        NOW,
+    );
+    assert!(strict.items[0]
+        .findings
+        .contains(&Finding::WeakPassword { bits }));
+    assert_eq!(password_strength(CANDIDATE).1, Strength::Fair);
+
+    // Equality with the threshold is still accepted (the audit compares `<`).
+    let boundary = audit(
+        &vault,
+        Thresholds {
+            weak_bits: bits,
+            ..Thresholds::default()
+        },
+        NOW,
+    );
+    assert!(boundary.items.is_empty(), "{boundary:?}");
 }

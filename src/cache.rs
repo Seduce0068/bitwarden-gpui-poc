@@ -1173,8 +1173,8 @@ fn save_to_path(path: Option<PathBuf>, cache: &SyncCache) -> Result<(), std::io:
 /// with [`SyncCacheError::UserMismatch`] instead of being restored. The id is
 /// derived from the personal API key's `client_id` (`user.<uuid>`), which is
 /// the trusted account identifier available on a failed-sync path; a plain
-/// `client_id` without that prefix fails closed. [`validate`] applies the same
-/// comparisons to a cache the caller already holds.
+/// `client_id` without that prefix fails closed. An empty id on either side is
+/// likewise rejected. [`validate`] applies the same comparisons to a held cache.
 ///
 /// After parsing, the body's `Profile.Id` is compared with the envelope
 /// `user_id` as well: a hand-edited cache whose envelope claims one account
@@ -1209,7 +1209,7 @@ pub fn cached_sync_for_detailed(
     if cache.server_url != server_url {
         return Err(SyncCacheError::ServerMismatch);
     }
-    if cache.user_id != user_id {
+    if !account_ids_match(&cache.user_id, user_id) {
         return Err(SyncCacheError::UserMismatch);
     }
     let now = i64::try_from(crate::totp::now_unix()).unwrap_or(i64::MAX);
@@ -1217,7 +1217,7 @@ pub fn cached_sync_for_detailed(
         return Err(SyncCacheError::CacheExpired);
     }
     let sync = cache.sync()?;
-    if sync.user_id() != cache.user_id.as_str() {
+    if !account_ids_match(&cache.user_id, sync.user_id()) {
         return Err(SyncCacheError::UserMismatch);
     }
     Ok(sync)
@@ -1237,7 +1237,8 @@ pub fn cached_sync_for(server_url: &str, user_id: &str) -> Option<openwarden::Sy
 /// matching [`cached_sync_for_detailed`] so a caller that already holds a
 /// cache cannot accept another account's entry by skipping the restore path.
 /// The auth layer supplies the id derived from the personal API key's
-/// `client_id`; callers without a trusted id must not use this helper.
+/// `client_id`; callers without a trusted id must not use this helper. Empty
+/// ids are rejected on both sides, so two blanks never match.
 ///
 /// Unlike [`cached_sync_for_detailed`], this helper deliberately does **not**
 /// apply the [`MAX_CACHE_AGE_SECS`] expiry window: it checks an object the
@@ -1257,11 +1258,11 @@ pub fn validate(cache: &SyncCache, user_id: &str, server_url: &str) -> Result<()
     if cache.server_url != server_url {
         return Err(SyncCacheError::ServerMismatch);
     }
-    if cache.user_id != user_id {
+    if !account_ids_match(&cache.user_id, user_id) {
         return Err(SyncCacheError::UserMismatch);
     }
     let sync = cache.sync()?;
-    if sync.user_id() != cache.user_id.as_str() {
+    if !account_ids_match(&cache.user_id, sync.user_id()) {
         return Err(SyncCacheError::UserMismatch);
     }
     Ok(())
@@ -1314,6 +1315,17 @@ pub fn cache_error_message(error: SyncCacheError) -> &'static str {
         // A future variant must never be reported as proven corruption.
         _ => crate::error::OTHER_ERROR_MESSAGE,
     }
+}
+
+/// Whether `cached` and `supplied` name the same, real account.
+///
+/// An empty id is never a valid account id: two empty strings compare equal,
+/// so a cache whose envelope and body both carry an empty id would otherwise
+/// pass the account checks on both the restore and the validate paths
+/// (fail-open). Requiring both sides to be non-empty makes those paths fail
+/// closed when the caller has no trusted account id.
+fn account_ids_match(cached: &str, supplied: &str) -> bool {
+    !cached.is_empty() && !supplied.is_empty() && cached == supplied
 }
 
 #[cfg(test)]

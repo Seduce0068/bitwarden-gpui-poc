@@ -554,6 +554,10 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             match key {
                 "escape" => UiAction::quit_or_warn(),
                 "n" => UiAction::SetPanel(Panel::Vault),
+                // Direct jump using the same `c` spelling as the vault and
+                // audit panels. `n` deliberately keeps its existing
+                // "back to vault" meaning, so no binding is swapped here.
+                "c" => UiAction::SetPanel(Panel::Settings),
                 "l" => UiAction::Lock,
                 "p" => UiAction::GeneratePassword,
                 "h" => UiAction::GeneratePassphrase,
@@ -601,6 +605,10 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             match key {
                 "escape" => UiAction::quit_or_warn(),
                 "c" => UiAction::SetPanel(Panel::Vault),
+                // Direct jump using the same `n` spelling as the vault and
+                // audit panels. `c` deliberately keeps its existing
+                // "back to vault" meaning, so no binding is swapped here.
+                "n" => UiAction::SetPanel(Panel::Generator),
                 "l" => UiAction::Lock,
                 "d" => UiAction::DiscardSettings,
                 "1" => UiAction::EditSettingsField(SettingsField::ServerUrl),
@@ -1282,5 +1290,131 @@ mod r2_ui_110_tests {
         assert_eq!(classify_key(&ctx), UiAction::Lock);
         ctx.key = "/";
         assert_eq!(classify_key(&ctx), UiAction::StartSearch);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod r2_ui_119_tests {
+    use super::*;
+
+    fn panel_ctx(panel: Panel, key: &str) -> KeyContext<'_> {
+        KeyContext {
+            screen: Screen::Unlocked,
+            panel,
+            key,
+            key_char: None,
+            modifiers: KeyModifiers::default(),
+            editing_auth: false,
+            searching: false,
+            editing_settings: false,
+            login_failed: false,
+            has_audit_report: true,
+            query_nonempty: false,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_c_jumps_to_settings_without_shadowing_existing_keys() {
+        assert_eq!(
+            classify_key(&panel_ctx(Panel::Generator, "c")),
+            UiAction::SetPanel(Panel::Settings),
+            "generator/c must open settings directly"
+        );
+
+        // `n` still means "back to vault", and every generator-own command
+        // keeps its existing spelling.
+        for (key, expected) in [
+            ("n", UiAction::SetPanel(Panel::Vault)),
+            ("l", UiAction::Lock),
+            ("p", UiAction::GeneratePassword),
+            ("h", UiAction::GeneratePassphrase),
+            ("y", UiAction::CopyPassword),
+            ("Y", UiAction::CopyPassphrase),
+            ("w", UiAction::SaveSettings),
+            ("d", UiAction::DiscardSettings),
+        ] {
+            assert_eq!(
+                classify_key(&panel_ctx(Panel::Generator, key)),
+                expected,
+                "generator/{key}"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_n_jumps_to_generator_without_shadowing_existing_keys() {
+        assert_eq!(
+            classify_key(&panel_ctx(Panel::Settings, "n")),
+            UiAction::SetPanel(Panel::Generator),
+            "settings/n must open the generator directly"
+        );
+
+        // `c` still means "back to vault", and every settings-own command
+        // keeps its existing spelling.
+        for (key, expected) in [
+            ("c", UiAction::SetPanel(Panel::Vault)),
+            ("l", UiAction::Lock),
+            ("d", UiAction::DiscardSettings),
+            ("w", UiAction::SaveSettings),
+            ("i", UiAction::AdjustIdleLock(1)),
+            ("u", UiAction::AdjustIdleLock(-1)),
+            ("1", UiAction::EditSettingsField(SettingsField::ServerUrl)),
+            ("2", UiAction::EditSettingsField(SettingsField::Email)),
+        ] {
+            assert_eq!(
+                classify_key(&panel_ctx(Panel::Settings, key)),
+                expected,
+                "settings/{key}"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn caps_lock_glyphs_keep_the_new_panel_jumps_bound() {
+        // `command_key` folds ASCII case, so a Caps Lock glyph must not
+        // disable either new jump.
+        let mut ctx = panel_ctx(Panel::Generator, "y");
+        ctx.key_char = Some("C");
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::SetPanel(Panel::Settings),
+            "generator/C"
+        );
+
+        let mut ctx = panel_ctx(Panel::Settings, "y");
+        ctx.key_char = Some("N");
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::SetPanel(Panel::Generator),
+            "settings/N"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn editing_modes_do_not_expose_the_new_panel_jumps() {
+        // The generator's settings-edit guard returns early for every key.
+        let mut ctx = panel_ctx(Panel::Generator, "c");
+        ctx.editing_settings = true;
+        assert_eq!(classify_key(&ctx), UiAction::None, "generator editing/c");
+
+        // While a settings field is focused, `n` is literal text rather than
+        // a panel jump, like every other printable command character.
+        let mut ctx = panel_ctx(Panel::Settings, "n");
+        ctx.editing_settings = true;
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertSettingsText("n".into()),
+            "settings editing/n"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn command_modifiers_still_suppress_the_new_panel_jumps() {
+        for (panel, key) in [(Panel::Generator, "c"), (Panel::Settings, "n")] {
+            let mut ctx = panel_ctx(panel, key);
+            ctx.modifiers.control = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "{panel:?}/ctrl+{key}");
+        }
     }
 }

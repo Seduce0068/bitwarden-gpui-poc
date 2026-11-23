@@ -3646,3 +3646,58 @@ fn ensure_device_id_with_a_valid_id_and_a_path_does_not_create_a_file() {
     assert_eq!(settings.ensure_device_id(Some(&path)).unwrap(), VALID);
     assert!(!path.exists());
 }
+
+#[test]
+fn save_device_id_only_resanitizes_the_fields_it_reads_back() {
+    use crate::limits::{MAX_SERVER_URL_LEN, MAX_STALE_DAYS, MIN_WEAK_BITS};
+
+    // The id-only writer re-reads through `load_detailed`, which applies
+    // `sanitized()` before `device_id` is replaced. Hand-edited values in the
+    // old file are therefore clamped/cleaned on write even though this path
+    // never calls `save` and never mutates a caller's struct.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let original = serde_json::json!({
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "email": "\u{202e}evil@example.com",
+        "server_url": "s".repeat(MAX_SERVER_URL_LEN + 5),
+        "thresholds": {"weak_bits": 0, "stale_days": i64::MAX},
+        "device_id": "legacy-hardcoded-value",
+    });
+    std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+
+    let id = generate_device_id().unwrap();
+    Settings::save_device_id_only(&path, &id).unwrap();
+
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(raw["device_id"], serde_json::json!(id));
+    assert_eq!(
+        raw["schema_version"],
+        serde_json::json!(CURRENT_SCHEMA_VERSION)
+    );
+    // A bidi override is not a leading U+200B..U+200F run, so the whole
+    // hand-edited address is cleared rather than filtered in place.
+    assert_eq!(raw["email"], serde_json::json!(""));
+    assert_eq!(
+        raw["server_url"].as_str().unwrap().chars().count(),
+        MAX_SERVER_URL_LEN
+    );
+    assert_eq!(
+        raw["thresholds"]["weak_bits"],
+        serde_json::json!(MIN_WEAK_BITS)
+    );
+    assert_eq!(
+        raw["thresholds"]["stale_days"],
+        serde_json::json!(MAX_STALE_DAYS)
+    );
+
+    // The reader observes the same sanitized values, and the id is a real one
+    // that survives a reload instead of being regenerated on the next sync.
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.device_id, id);
+    assert!(is_valid_device_id(&loaded.device_id));
+    assert_eq!(loaded.email, "");
+    assert_eq!(loaded.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(loaded.thresholds.weak_bits, MIN_WEAK_BITS);
+    assert_eq!(loaded.thresholds.stale_days, MAX_STALE_DAYS);
+}

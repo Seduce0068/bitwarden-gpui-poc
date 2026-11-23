@@ -4515,3 +4515,68 @@ fn from_body_stores_empty_and_malformed_server_urls_verbatim() {
         );
     }
 }
+
+#[test]
+fn empty_account_ids_fail_closed_on_validate() {
+    let url = "https://vault.example.com";
+    let cache = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: String::new(),
+        server_url: url.to_string(),
+        body: br#"{"profile":{"id":""},"folders":[],"ciphers":[]}"#.to_vec(),
+        created_at: None,
+    };
+    // Premise: an empty id is a present `String`, so parsing succeeds and the
+    // only possible guard is the account comparison (not a parse failure).
+    assert_eq!(cache.sync().unwrap().user_id(), "");
+
+    // Two blanks used to compare equal and let the cache through (fail-open).
+    assert_eq!(validate(&cache, "", url), Err(SyncCacheError::UserMismatch));
+    // A trusted caller cannot unlock an anonymous cache either.
+    assert_eq!(
+        validate(&cache, "user-1", url),
+        Err(SyncCacheError::UserMismatch)
+    );
+
+    // Direct helper contract: empty on either side never matches, even when
+    // both sides are blank. The server is checked before this guard, so a
+    // mismatch there still wins (pinned by the sibling priority tests).
+    assert!(super::account_ids_match("user-1", "user-1"));
+    assert!(!super::account_ids_match("", ""));
+    assert!(!super::account_ids_match("", "user-1"));
+    assert!(!super::account_ids_match("user-1", ""));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn empty_account_ids_fail_closed_on_the_restore_path() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+    let url = "https://vault.example.com";
+
+    save_default(&SyncCache {
+        version: SyncCache::VERSION,
+        user_id: String::new(),
+        server_url: url.to_string(),
+        body: br#"{"profile":{"id":""},"folders":[],"ciphers":[]}"#.to_vec(),
+        created_at: None,
+    })
+    .unwrap();
+
+    assert!(matches!(
+        cached_sync_for_detailed(url, ""),
+        Err(SyncCacheError::UserMismatch)
+    ));
+    assert!(cached_sync_for(url, "").is_none());
+    assert!(matches!(
+        cached_sync_for_detailed(url, "user-1"),
+        Err(SyncCacheError::UserMismatch)
+    ));
+    // The server check still runs first and keeps its own classification.
+    assert!(matches!(
+        cached_sync_for_detailed("https://other.example.com", ""),
+        Err(SyncCacheError::ServerMismatch)
+    ));
+}

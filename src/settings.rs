@@ -72,6 +72,30 @@
 //! or `settings.passphrase_generator`. No seam is injected for either type; the
 //! per-field fallback tests in `settings_tests.rs` pin the current shape rather
 //! than implying a layer boundary that does not exist.
+//!
+//! # Known constraint: two independent reads on the load/advisory path
+//!
+//! [`Settings::load_detailed`] reads and parses the file once, while
+//! `load_advisories` (and `file_schema_version`) re-open and re-read the same
+//! path through `read_settings_json`. Both go through the bounded reader, but
+//! there is no shared snapshot, generation counter or file handle: a writer
+//! that replaces the file in between can make the advisories describe a
+//! different generation than the struct that was loaded. This is accepted in
+//! this single-process PoC, where the UI loads and asks for advisories in the
+//! same user action and no concurrent writer is expected. A caller must not
+//! treat an advisory as a guarantee about its in-memory [`Settings`] instance.
+//!
+//! # Known constraint: check-then-act in the schema guard
+//!
+//! [`Settings::save`] and [`Settings::save_device_id_only`] first call
+//! `file_schema_version` and abort when the file on disk carries a future
+//! marker, then later call `crate::private_file::write_private`. The guard and
+//! the write are separate filesystem operations with no lock or compare-and-
+//! swap, so a concurrent writer can replace the file (even with a future-
+//! schema file) between them and the write uses the stale verdict. No atomic
+//! replacement protocol is in place. This is recorded rather than fixed: the
+//! PoC has one writer process, and the guard protects an unsuspecting file
+//! from this build rather than arbitrating between concurrent writers.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

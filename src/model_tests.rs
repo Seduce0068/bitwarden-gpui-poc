@@ -1603,7 +1603,7 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
 
 #[test]
 fn page_matching_ties_use_the_folded_name_key_then_the_id() {
-    // `matches_page` shares the `compare` tiebreak (model.rs:1067-1087,1174-1184):
+    // `matches_page` shares the `compare` tiebreak (model.rs:1103-1123,1215-1225):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
     let page = "https://example.com/shared";
@@ -3239,7 +3239,7 @@ fn vault_item_metadata_wrong_types_and_missing_fields_are_rejected() {
 #[test]
 fn match_options_allow_regex_reaches_both_matches_page_entry_points() {
     // `LoginUri::matches` already pins `allow_regex`; the two `matches_page`
-    // wrappers (model.rs:750-752 and 990-1010) must forward the same options
+    // wrappers (model.rs:820-823 and 1103-1123) must forward the same options
     // instead of silently using `MatchOptions::default()`.
     let item = VaultItem::new(
         "regex-page",
@@ -4153,4 +4153,79 @@ fn is_visually_empty_and_auth_credential_is_blank_agree_on_real_values() {
             "blank rules disagree for {value:?}"
         );
     }
+}
+
+#[test]
+fn vault_item_new_pins_neutral_metadata_defaults() {
+    // `VaultItem::new` (model.rs:766-776) fills only the caller's three fields;
+    // every other metadata field starts neutral so a fresh item cannot inherit
+    // a folder, a star, notes or a revision date.
+    let item = VaultItem::new(
+        "new-1",
+        "New",
+        ItemData::SecureNote {
+            text: "body".into(),
+        },
+    );
+    assert_eq!(item.id, "new-1");
+    assert_eq!(item.name, "New");
+    assert_eq!(item.kind(), ItemKind::SecureNote);
+    assert_eq!(item.folder_id, None);
+    assert!(!item.favorite);
+    assert_eq!(item.notes.as_str(), "");
+    assert_eq!(item.revision_date, UNKNOWN_REVISION);
+
+    // The defaults agree with the empty-state filters and the audit's unknown
+    // revision sentinel: a new item is "no folder", never a favorite, and has
+    // no revision that could be reported as stale.
+    assert!(Filter::NoFolder.accepts(&item));
+    assert!(!Filter::Favorites.accepts(&item));
+    assert!(!item.matches_query("absent-in-body"));
+    assert!(item.matches_query("body"));
+}
+
+#[test]
+fn empty_folder_id_is_a_present_id_for_filters() {
+    // `Filter::Folder` compares the raw `Option<String>` id (model.rs:932-942),
+    // so `Some("")` is a distinct, present id: it matches only an empty-string
+    // folder filter and never `NoFolder`. `folder_counts` walks declared
+    // folders, so the empty id gets no bucket unless a Folder declares it.
+    let plain = VaultItem::new("plain", "Plain", ItemData::SecureNote { text: "x".into() });
+    let mut emptied = VaultItem::new("empty", "Empty", ItemData::SecureNote { text: "x".into() });
+    emptied.folder_id = Some(String::new());
+
+    assert!(Filter::NoFolder.accepts(&plain));
+    assert!(!Filter::Folder(String::new()).accepts(&plain));
+    assert!(!Filter::NoFolder.accepts(&emptied));
+    assert!(Filter::Folder(String::new()).accepts(&emptied));
+    assert!(!Filter::Folder("f1".into()).accepts(&emptied));
+
+    let mut vault = Vault::new();
+    vault.items = vec![plain, emptied];
+    assert!(vault.folder_counts().is_empty());
+    assert_eq!(
+        Filter::Folder(String::new()).label(&vault.folders),
+        "(不明なフォルダ)"
+    );
+
+    let no_folder: Vec<&str> = vault
+        .view(&Filter::NoFolder, "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    let with_empty: Vec<&str> = vault
+        .view(&Filter::Folder(String::new()), "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(no_folder, vec!["plain"]);
+    assert_eq!(with_empty, vec!["empty"]);
+
+    // A declared folder with the empty id does get a bucket and a real label.
+    vault.folders.push(Folder {
+        id: String::new(),
+        name: "空".into(),
+    });
+    assert_eq!(vault.folder_counts(), vec![(String::new(), 1)]);
+    assert_eq!(Filter::Folder(String::new()).label(&vault.folders), "空");
 }

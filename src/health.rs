@@ -901,6 +901,16 @@ fn audit_item(
 }
 
 /// The strength bucket for a password, as the detail pane shows it.
+///
+/// Known constraint (custom `weak_bits` vs generated [`Strength`]): the bucket
+/// comes from the fixed generator boundary [`WEAK_BITS`], not from the caller's
+/// [`Thresholds::weak_bits`]. Raising the audit threshold (for example to 100)
+/// therefore produces `WeakPassword` findings for passwords this function
+/// still labels `Fair` or `Strong`. The two scales are deliberately independent:
+/// the audit threshold is persisted and adjustable while the generator's
+/// strength meter has a fixed vocabulary, so a user editing settings cannot
+/// move the meter. Callers must not read the generated bucket as evidence that
+/// the audit accepted the password, or vice versa.
 pub fn password_strength(password: &str) -> (u32, Strength) {
     let bits = estimate_entropy(password);
     (bits, Strength::from_bits(f64::from(bits)))
