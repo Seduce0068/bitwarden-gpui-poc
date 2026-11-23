@@ -839,7 +839,10 @@ fn secret_clamp_never_splits_a_utf8_character() {
     let clamped = secret.expose_secret();
     assert_eq!(clamped.chars().count(), MAX_CLIENT_SECRET_LEN);
     assert_eq!(clamped, "あ".repeat(MAX_CLIENT_SECRET_LEN));
-    assert!(clamped.is_char_boundary(clamped.len()));
+    // `s.is_char_boundary(s.len())` is vacuously true; pin the observable
+    // truncation instead: exact byte length and a complete final scalar.
+    assert_eq!(clamped.len(), MAX_CLIENT_SECRET_LEN * 'あ'.len_utf8());
+    assert!(clamped.ends_with('あ'));
     // The caller's original string is untouched by the SecretString clamp.
     assert_eq!(long.chars().count(), MAX_CLIENT_SECRET_LEN + 2);
 
@@ -4437,5 +4440,61 @@ fn argon2id_kdf_rejection_paths_are_reported_by_the_real_derive() {
         );
         assert_eq!(small.message(), "KDF 設定がポリシーで拒否されました");
         assert!(small.status_message().contains(reason));
+    }
+}
+
+#[test]
+fn invisible_only_email_is_an_invalid_email_not_a_missing_field() {
+    // Symmetric with `invisible_only_server_url_is_an_invalid_url_not_a_missing_field`
+    // above: `validate_config` uses `email.trim().is_empty()` first (auth.rs:738),
+    // and `trim()` removes neither Unicode Cf nor Cc controls. A whole address
+    // made only of invisible characters therefore reaches `valid_email` and is
+    // classified as InvalidEmail, never MissingField -- just as the URL field
+    // reaches its parser and reports InvalidServerUrl.
+    for invisible in [
+        "\u{200b}",
+        "\u{feff}",
+        "\u{200d}\u{2060}",
+        "\u{ad}",
+        "\u{0}",
+        "\u{1f}",
+        "\u{7f}",
+        "\u{80}",
+        "\u{9f}",
+        " \u{200b}\u{0}\t",
+    ] {
+        assert!(
+            !invisible.trim().is_empty(),
+            "premise: trim keeps Cf/Cc: {invisible:?}"
+        );
+        assert!(!valid_email(invisible), "{invisible:?}");
+        let mut value = config();
+        value.email = invisible.to_string();
+        assert_eq!(
+            validate_config(&value),
+            Err(AuthError::InvalidEmail),
+            "email={invisible:?}"
+        );
+    }
+
+    // Controls: an embedded invisible character is malformed too, a genuinely
+    // blank address keeps its MissingField classification, and the URL field
+    // takes the symmetric InvalidServerUrl path for the same invisible text.
+    assert!(!valid_email("alice\u{200b}@example.com"));
+    let mut embedded = config();
+    embedded.email = "alice\u{200b}@example.com".into();
+    assert_eq!(validate_config(&embedded), Err(AuthError::InvalidEmail));
+
+    let mut blank = config();
+    blank.email = " \t\n\u{3000}".into();
+    assert_eq!(
+        validate_config(&blank),
+        Err(AuthError::MissingField("email"))
+    );
+
+    for invisible in ["\u{200b}", "\u{0}"] {
+        let mut url = config();
+        url.server_url = invisible.to_string();
+        assert_eq!(validate_config(&url), Err(AuthError::InvalidServerUrl));
     }
 }

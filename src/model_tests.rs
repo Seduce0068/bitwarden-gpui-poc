@@ -3940,3 +3940,62 @@ fn mark_only_names_with_internal_whitespace_are_not_duplicates() {
         vec!["real-1".to_string(), "real-2".to_string()]
     );
 }
+
+#[test]
+fn mark_only_queries_match_nothing_under_the_duplicate_name_rule() {
+    // `duplicate_names` skips mark-only names because bare marks have no
+    // visible identity. Queries now share that rule: a mark-only needle is not
+    // blank, so it must match no item instead of falling through to a
+    // substring match against decomposed accents or to the blank-query path.
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "Caf\u{e9}", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("2", "GitHub", "u", "p", "https://b.example"));
+    // Two mark-only names must not form a duplicate group either.
+    vault
+        .items
+        .push(login("m-1", "\u{0301}", "u", "p", "https://c.example"));
+    vault.items.push(login(
+        "m-2",
+        " \u{0301}\u{0302} ",
+        "u",
+        "p",
+        "https://d.example",
+    ));
+
+    for query in [
+        "\u{0301}",           // a single combining acute accent
+        " \u{0301}\u{0302} ", // marks with internal whitespace
+        "\u{0345}",           // combining Greek ypogegrammeni
+    ] {
+        assert!(has_no_visible_identity(query), "{query:?}");
+        for item in &vault.items {
+            assert!(
+                !item.matches_query(query),
+                "needle {query:?} hit item {}",
+                item.id
+            );
+        }
+        assert!(
+            vault.view(&Filter::All, query, SortKey::NameAsc).is_empty(),
+            "needle {query:?} must not widen the view"
+        );
+    }
+
+    // Controls: blank needles still keep every item visible, a real query
+    // still narrows the result, and the shared rule keeps its boundary.
+    assert_eq!(vault.view(&Filter::All, "", SortKey::NameAsc).len(), 4);
+    assert_eq!(vault.view(&Filter::All, "   ", SortKey::NameAsc).len(), 4);
+    assert_eq!(
+        vault
+            .view(&Filter::All, "cafe\u{301}", SortKey::NameAsc)
+            .len(),
+        1
+    );
+    assert!(has_no_visible_identity("\u{0301}\u{200b}"));
+    assert!(!has_no_visible_identity("Caf\u{e9}"));
+    assert!(vault.duplicate_names().is_empty());
+}

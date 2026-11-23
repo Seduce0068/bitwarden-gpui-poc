@@ -106,11 +106,32 @@ pub(crate) use unicode_normalize::comparison_key;
 /// `crate::auth::credential_is_blank`. This is the same rule the UI uses for
 /// empty-looking text; search, duplicate detection and the TOTP badge share it
 /// so an invisible-only value is not mistaken for a present one (for example a
-/// Cf-only TOTP field or a zero-width-space name).
+/// Cf-only TOTP field or a zero-width-space name). Search and duplicate
+/// detection use `has_no_visible_identity`, which adds the mark-only rule.
 pub(crate) fn is_visually_empty(value: &str) -> bool {
     value
         .chars()
         .all(|ch| ch.is_whitespace() || ch.is_control() || crate::limits::is_format_character(ch))
+}
+
+/// Whether `value` carries no visible identifier at all.
+///
+/// This is the rule already used by [`Vault::duplicate_names`], lifted here so
+/// search cannot disagree with it: besides whitespace, `Cc` and `Cf`, a value
+/// made only of Unicode marks (`Mn`/`Mc`/`Me`, optionally separated by
+/// whitespace) has no base character to decorate and therefore renders as bare
+/// decoration. A mark-only query must not widen the result set the way a blank
+/// query does, and two mark-only names must not form a duplicate group.
+pub(crate) fn has_no_visible_identity(value: &str) -> bool {
+    if is_visually_empty(value) {
+        return true;
+    }
+    // NFKD keeps combining marks; `comparison_key` drops whitespace, `Cc` and
+    // `Cf` only, so a non-blank key left with nothing but marks is decoration.
+    let key = comparison_key(value);
+    key.chars()
+        .filter(|ch| !ch.is_whitespace())
+        .all(unicode_normalize::is_mark)
 }
 
 /// Sentinel for a missing or unparsable revision date.
@@ -848,17 +869,20 @@ impl VaultItem {
     ///
     /// `Vault::view` already trims and normalizes the query, but this is a
     /// public method and callers may pass raw user input, so `needle` is
-    /// checked with the same `is_visually_empty` rule as `view`. A blank
-    /// needle matches every item; one made only of whitespace and invisible
-    /// `Cf` characters matches none, so an invisible paste cannot silently
-    /// widen the result to the whole vault. `comparison_key` is idempotent, so
-    /// the double normalization on the `view()` path cannot change the result.
+    /// checked with the same `has_no_visible_identity` rule as `view` and
+    /// `duplicate_names`. A blank needle matches every item; one made only of
+    /// whitespace, invisible `Cf`/`Cc` characters or bare combining marks
+    /// matches none, so an invisible paste cannot silently widen the result to
+    /// the whole vault. `comparison_key` is idempotent, so the double
+    /// normalization on the `view()` path cannot change the result.
     pub fn matches_query(&self, needle: &str) -> bool {
         let trimmed = needle.trim();
-        // Share the visibility test with `view`: a Cf-only needle with an
-        // internal space still folds to a non-empty key (" "), so checking
-        // only `comparison_key().is_empty()` would let it match every item.
-        if is_visually_empty(needle) {
+        // Share the "no visible identifier" test with `view` and duplicate
+        // detection: a Cf-only needle with an internal space still folds to a
+        // non-empty key (" "), and a mark-only needle keeps its mark, so
+        // checking only `comparison_key().is_empty()` would let either match
+        // more than it should.
+        if has_no_visible_identity(needle) {
             return trimmed.is_empty();
         }
         let key = comparison_key(trimmed);
@@ -1035,9 +1059,11 @@ impl Vault {
     ///
     /// A blank (or whitespace-only) query keeps every filtered item visible.
     /// A non-blank query with no visible content — for example one made only
-    /// of whitespace and Unicode `Cf` format characters — matches nothing
-    /// instead of every item. `is_visually_empty` is the shared rule used by
-    /// search, duplicate detection and the TOTP badge.
+    /// of whitespace and Unicode `Cf` format characters, or one made only of
+    /// bare combining marks — matches nothing instead of every item.
+    /// `has_no_visible_identity` is the shared rule used by search and
+    /// duplicate detection; the TOTP badge uses the narrower
+    /// `is_visually_empty` check.
     pub fn view(&self, filter: &Filter, query: &str, sort: SortKey) -> Vec<&VaultItem> {
         let trimmed = query.trim();
         let needle = comparison_key(trimmed);
@@ -1050,12 +1076,12 @@ impl Vault {
                     // Blank/whitespace-only query: keep the long-standing
                     // "every item is visible" behaviour.
                     true
-                } else if is_visually_empty(query) {
-                    // Non-blank but invisible-only (e.g. U+200B on its own, or
-                    // Cf separated by internal whitespace): this is not a blank
-                    // query and must not fall through to the empty-needle
-                    // branch. The same rule guards `matches_query` and
-                    // `duplicate_names`.
+                } else if has_no_visible_identity(query) {
+                    // Non-blank but no visible identifier (e.g. U+200B on its
+                    // own, Cf separated by internal whitespace, or a mark-only
+                    // decoration): this is not a blank query and must not fall
+                    // through to the empty-needle branch. The same rule guards
+                    // `matches_query` and `duplicate_names`.
                     false
                 } else {
                     item.matches_query(&needle)
@@ -1147,8 +1173,8 @@ impl Vault {
     /// of every other unnamed item. A name made only of invisible Unicode
     /// `Cf` characters (for example a zero-width space) counts as blank too,
     /// including when whitespace sits between the format characters; the
-    /// shared `is_visually_empty` rule decides, so two such items must not
-    /// be reported as duplicates of each other. The same applies to a name
+    /// shared `has_no_visible_identity` rule decides, so two such items must
+    /// not be reported as duplicates of each other. The same applies to a name
     /// made only of Unicode marks (`Mn`/`Me`/`Mc`, such as a combining accent
     /// or an enclosing circle), including when whitespace sits between the
     /// marks: with no base character they render as decoration, not as a name.
@@ -1158,12 +1184,9 @@ impl Vault {
         for item in &self.items {
             let key = comparison_key(item.name.trim());
             // Whitespace between marks renders nothing either, so a mark-only
-            // name with internal spaces is still decoration, not a name.
-            let marks_only = key
-                .chars()
-                .filter(|ch| !ch.is_whitespace())
-                .all(unicode_normalize::is_mark);
-            if is_visually_empty(&item.name) || marks_only {
+            // name with internal spaces is still decoration, not a name. The
+            // shared helper keeps this rule identical to the query paths.
+            if has_no_visible_identity(&item.name) {
                 continue;
             }
             match groups.iter_mut().find(|(name, _)| *name == key) {

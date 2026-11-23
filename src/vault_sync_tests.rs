@@ -632,21 +632,50 @@ fn duplicate_ciphers_use_the_latest_revisions_decrypted_content() {
 fn audit_log_never_contains_secrets() {
     let id = "secret-1";
     let marker = "SHOULD_NOT_APPEAR_IN_AUDIT";
-    let mut secret_cipher = cipher(id, "2024-01-01T00:00:00Z");
-    secret_cipher["name"] = serde_json::json!(marker);
-    secret_cipher["login"]["username"] = serde_json::json!(marker);
-    secret_cipher["login"]["password"] = serde_json::json!(marker);
-    secret_cipher["login"]["totp"] = serde_json::json!(marker);
-    let vault = unlocked_vault_raw(&[secret_cipher, cipher(id, "2024-01-02T00:00:00Z")]);
+    let adopted = parse_revision(Some("2024-01-02T00:00:00Z")).unwrap();
+
+    // Take the real `parse_sync` path instead of the raw-fixture bypass: it
+    // collapses duplicate ids before `apply_sync`, so the NEWER row is the one
+    // whose fields are adopted into the model. The previous version put the
+    // marker only on the discarded older row, so no marked field ever reached
+    // the import. Here the adopted row itself carries the plaintext marker in
+    // every secret field.
+    let mut adopted_row = cipher(id, "2024-01-02T00:00:00Z");
+    adopted_row["name"] = serde_json::json!(marker);
+    adopted_row["login"]["username"] = serde_json::json!(marker);
+    adopted_row["login"]["password"] = serde_json::json!(marker);
+    adopted_row["login"]["totp"] = serde_json::json!(marker);
+    let discarded = cipher(id, "2024-01-01T00:00:00Z");
+    let vault = unlocked_vault(&[discarded, adopted_row]);
     let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
 
+    // The marked row really was adopted: one item, the newer revision, and a
+    // single decision from the real path.
     assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].id, id);
+    assert_eq!(model.items[0].revision_date, adopted);
+    assert_eq!(
+        audit,
+        vec![ImportAudit::Added {
+            id: id.to_string(),
+            revision: adopted,
+        }]
+    );
+
+    // The audit holds only ids and revisions; no field content from the
+    // adopted row may leak into its diagnostic rendering. The model must not
+    // retain the plaintext either (undecryptable fields use status markers).
     let rendered = format!("{audit:?}");
     assert!(
         !rendered.contains(marker),
-        "audit log leaked a secret field"
+        "audit log leaked a secret field: {rendered}"
     );
-    assert!(rendered.contains(id));
+    assert!(rendered.contains(id), "{rendered}");
+    let model_rendered = format!("{model:?}");
+    assert!(
+        !model_rendered.contains(marker),
+        "model leaked a plaintext secret: {model_rendered}"
+    );
 }
 
 #[test]
@@ -3206,4 +3235,28 @@ fn fractional_second_revisions_tie_and_the_first_row_wins_dedup() {
             },
         ]
     );
+}
+
+#[test]
+fn revision_dates_reject_fullwidth_digits() {
+    // `read_digits` (vault_sync.rs:597-607) requires `is_ascii_digit` for every
+    // fixed-width field and for the numeric offset. Full-width U+FF10..U+FF19
+    // digits are three UTF-8 bytes each, so the byte-indexed parser must reject
+    // them instead of reading a truncated prefix as a plausible timestamp.
+    let expected = Some(1_700_000_000);
+    assert_eq!(parse_revision(Some("2023-11-14T22:13:20Z")), expected);
+    for value in [
+        "２０２３-11-14T22:13:20Z",           // full-width year
+        "2023-１２-14T22:13:20Z",             // full-width month
+        "2023-11-１５T22:13:20Z",             // full-width day
+        "2023-11-14T２２:13:20Z",             // full-width hour
+        "2023-11-14T22:１２:20Z",             // full-width minute
+        "2023-11-14T22:13:２０Z",             // full-width second
+        "２０２３-１１-１４T２２:１３:２０Z", // every field full-width
+        "2023-11-14T22:13:20.１２３Z",        // full-width fraction
+        "2023-11-14T22:13:20+０９:00",        // full-width offset hour
+        "2023-11-14T22:13:20+09:００",        // full-width offset minute
+    ] {
+        assert_eq!(parse_revision(Some(value)), None, "{value}");
+    }
 }

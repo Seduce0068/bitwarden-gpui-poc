@@ -3109,7 +3109,18 @@ fn sanitized_truncates_shared_text_fields_on_multibyte_char_boundaries() {
     .sanitized();
     assert_eq!(zero_width.email.chars().count(), MAX_EMAIL_LEN);
     assert!(zero_width.email.starts_with('あ'));
-    assert!(zero_width.email.is_char_boundary(zero_width.email.len()));
+    // `s.is_char_boundary(s.len())` is true for every String, so that
+    // assertion could never fail. Check the observable truncation result
+    // instead: the retained tail is a complete scalar, the byte length is
+    // exactly the leading 3-byte 'あ' plus the remaining full-width 'い'
+    // scalars, and the stripped Cf characters are gone.
+    assert!(zero_width.email.ends_with('い'));
+    assert_eq!(
+        zero_width.email.len(),
+        'あ'.len_utf8() + (MAX_EMAIL_LEN - 1) * 'い'.len_utf8()
+    );
+    assert!(!zero_width.email.contains('\u{200b}'));
+    assert!(!zero_width.email.contains('\u{200d}'));
 
     // sanitized() stays a pure clone-based operation.
     assert_eq!(settings.server_url.chars().count(), MAX_SERVER_URL_LEN + 1);

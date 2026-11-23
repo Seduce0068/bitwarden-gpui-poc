@@ -3120,3 +3120,121 @@ fn single_slash_http_uris_are_detected_as_insecure() {
         );
     }
 }
+
+#[test]
+fn cc_only_names_use_the_unnamed_finding_and_placeholder() {
+    // The Cf-only sibling covers format characters. Cc (NUL, DEL, C1 controls)
+    // is not whitespace either, so `trim()` alone leaves such a name looking
+    // present. `is_visually_empty` also tests `char::is_control`, so these must
+    // take the same Unnamed + placeholder path (health.rs:799, 769).
+    for (index, name) in [
+        "\u{0}",
+        "\u{1f}",
+        "\u{7f}",
+        "\u{80}",
+        "\u{9f}",
+        " \u{0}\t\u{9f} ",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("cc-name-{index}");
+        let mut item = login(
+            &id,
+            name,
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            "GEZDGNBVGY3TQOJQ",
+        );
+        item.revision_date = NOW;
+        let report = report_of(vec![item]);
+        let reported = report
+            .items
+            .iter()
+            .find(|entry| entry.id == id)
+            .expect("the unnamed item must be reported");
+        assert_eq!(reported.name, "(名称未設定)", "name={name:?}");
+        assert!(
+            reported.findings.contains(&Finding::Unnamed),
+            "name={name:?}: {:?}",
+            reported.findings
+        );
+        assert!(report.to_text().contains("(名称未設定)"), "name={name:?}");
+    }
+
+    // Control: a visible character beside a control is a real name and must
+    // not be reported as unnamed (the login is otherwise clean).
+    let mut named = login(
+        "cc-visible-name",
+        "\u{0}GitHub",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    );
+    named.revision_date = NOW;
+    assert!(
+        !report_of(vec![named])
+            .items
+            .iter()
+            .any(|item| item.id == "cc-visible-name"),
+        "a name with visible text is not unnamed"
+    );
+}
+
+#[test]
+fn cc_only_totp_field_counts_as_unset() {
+    // Same Cc coverage for the TOTP badge/finding/counter triad: a field made
+    // only of NUL/DEL/C1 controls has no secret, so `has_totp_field` and
+    // `has_usable_totp` must be false and the audit must emit NoTotp, not
+    // TotpUninspectable (health.rs:727-730, 829-834).
+    for (index, blank) in [
+        "\u{0}",
+        "\u{1f}",
+        "\u{7f}",
+        "\u{80}",
+        "\u{9f}",
+        " \u{0}\t\u{9f} ",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let item = login(
+            &format!("cc-{index}"),
+            "Cc",
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            blank,
+        );
+        assert!(!has_totp_field(&item), "totp={blank:?}");
+        assert!(!has_usable_totp(&item), "totp={blank:?}");
+    }
+
+    let report = report_of(vec![
+        login(
+            "cc-blank",
+            "Cc",
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            "\u{0}\u{9f}",
+        ),
+        login(
+            "good",
+            "Good",
+            "tQ8#wLr1!eZ5vKp3$sM7@",
+            "https://b.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+    ]);
+    let blank = report
+        .items
+        .iter()
+        .find(|item| item.id == "cc-blank")
+        .expect("the Cc-only login must be reported");
+    assert!(blank.findings.contains(&Finding::NoTotp), "{blank:?}");
+    assert!(
+        !blank.findings.contains(&Finding::TotpUninspectable),
+        "{blank:?}"
+    );
+    assert_eq!(report.logins, 2);
+    assert_eq!(report.with_totp, 1);
+}
