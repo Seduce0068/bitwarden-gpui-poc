@@ -1620,6 +1620,29 @@ fn save_still_replaces_current_and_legacy_schema_files() {
     let loaded = Settings::load_detailed(&path).unwrap();
     assert_eq!(loaded.email, "new@example.com");
     assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+
+    // Control: a file already stamped with the *current* schema is replaced
+    // too; only a version newer than this build's marker is refused. Without
+    // this case the legacy assertion above cannot tell an "accepted current
+    // marker" from a "silently ignored marker" on the write path.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        format!(r#"{{"schema_version":{CURRENT_SCHEMA_VERSION},"email":"old@example.com"}}"#),
+    )
+    .unwrap();
+
+    Settings {
+        email: "new@example.com".to_string(),
+        ..Default::default()
+    }
+    .save(&path)
+    .unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "new@example.com");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
 }
 
 #[test]

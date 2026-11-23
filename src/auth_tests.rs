@@ -5,14 +5,14 @@
 //! Three production branches deliberately have no injection seam; these notes
 //! record the limit instead of claiming coverage that the tests cannot give.
 //!
-//! * The DNS re-check in `authenticate_inner` (auth.rs:1065-1074) calls
+//! * The DNS re-check in `authenticate_inner` (auth.rs:1120-1129) calls
 //!   `is_blocked_server_url`, whose resolver is the concrete `resolve_host`.
 //!   The injected resolver of `is_blocked_server_url_with` is exercised by the
 //!   classifier tests below, but `authenticate_inner` does not accept that
 //!   seam, so the production re-check cannot be forced to see a link-local
 //!   answer without a real lookup or a production code change. `localhost` is
 //!   used to touch the real resolver with only the local hosts file.
-//! * The `from_cache = true` assignment (auth.rs:1112-1131) lives after
+//! * The `from_cache = true` assignment (auth.rs:1167-1186) lives after
 //!   `Client::sync_body` in the private async login path; there is no seam to
 //!   force that call to fail. The flag tests below pin the observable data
 //!   contract at the `AuthenticatedVault` boundary only, not the assignment

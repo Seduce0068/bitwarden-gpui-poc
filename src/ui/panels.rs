@@ -137,11 +137,13 @@ pub(super) fn generator_length_labels(
 ///
 /// `F1` is the global focus-recovery key and belongs in every persistent hint
 /// just as it does in `settings_hint`; without it a generator user who loses
-/// focus has no on-screen way to find the way back. Pure so the wording can be
-/// pinned by tests without rendering a GPUI window.
+/// focus has no on-screen way to find the way back. `c` is the direct jump to
+/// `Panel::Settings` (`ui::keys::classify_key`), matching the other panels'
+/// hints, while `n` keeps its generator-local "back to vault" meaning. Pure so
+/// the wording can be pinned by tests without rendering a GPUI window.
 pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String {
     format!(
-        "p/h: 生成 / y: パスワードをコピー / Y: パスフレーズをコピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / n: 一覧に戻る / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT} / {MOUSE_WHEEL_SCROLL_ONLY_HINT}"
+        "p/h: 生成 / y: パスワードをコピー / Y: パスフレーズをコピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / c: 設定 / n: 一覧に戻る / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT} / {MOUSE_WHEEL_SCROLL_ONLY_HINT}"
     )
 }
 
@@ -166,6 +168,21 @@ pub(super) fn settings_panel_key_hint(editing: bool) -> String {
             MOUSE_WHEEL_SCROLL_ONLY_HINT
         )
     }
+}
+
+/// Generator-settings summary line shown in the settings panel.
+///
+/// `ui::keys::classify_key` binds `n` directly to `Panel::Generator` in
+/// `Panel::Settings`, so the guidance must not send the user back to the vault
+/// list first (the old wording did). Pure so the rendered text can be pinned
+/// without a GPUI window.
+pub(super) fn settings_generator_summary_line(
+    password_length: usize,
+    passphrase_words: usize,
+) -> String {
+    format!(
+        "生成設定: パスワード {password_length} 文字 / パスフレーズ {passphrase_words} 語（n: 生成へ）"
+    )
 }
 
 /// Timeout summary line shown in the settings panel.
@@ -635,10 +652,15 @@ pub(super) fn settings_panel<'a>(
             email,
             editing == Some(SettingsField::Email),
         ))
-        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "生成設定: パスワード {} 文字 / パスフレーズ {} 語（一覧で n キー）",
-            settings.password_generator.length, settings.passphrase_generator.words
-        )))
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(0xa6adc8))
+                .child(settings_generator_summary_line(
+                    settings.password_generator.length,
+                    settings.passphrase_generator.words,
+                )),
+        )
         .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
             "監査閾値: 弱パスワード < {} bit / 更新が古い: {} 日以上",
             settings.thresholds.weak_bits, settings.thresholds.stale_days
@@ -826,6 +848,20 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn settings_generator_summary_line_points_to_the_direct_generator_jump() {
+        let line = settings_generator_summary_line(24, 6);
+        assert_eq!(
+            line,
+            "生成設定: パスワード 24 文字 / パスフレーズ 6 語（n: 生成へ）"
+        );
+        // In `Panel::Settings`, `n` jumps straight to `Panel::Generator`
+        // (`ui::keys::classify_key`); the old "go to the list first" wording is
+        // stale and must not come back.
+        assert!(line.contains("n: 生成へ"), "{line}");
+        assert!(!line.contains("一覧"), "{line}");
+    }
+
+    #[::core::prelude::v1::test]
     fn panels_without_a_scroll_handle_advertise_mouse_wheel_only() {
         let generator = generator_panel_key_hint(30);
         assert!(
@@ -858,6 +894,16 @@ mod tests {
         assert!(hint.contains("Y: パスフレーズをコピー"), "{hint}");
         assert!(!hint.contains("y/Y: コピー"), "{hint}");
         assert!(hint.contains("30秒で復元"), "{hint}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_key_hint_advertises_the_direct_settings_jump() {
+        // `ui::keys::classify_key` binds `c` to `Panel::Settings` in the
+        // generator panel, so the on-screen hint must mirror it.
+        let hint = generator_panel_key_hint(30);
+        assert!(hint.contains("c: 設定"), "{hint}");
+        // `n` keeps its generator-local meaning and must stay discoverable.
+        assert!(hint.contains("n: 一覧に戻る"), "{hint}");
     }
 
     #[::core::prelude::v1::test]

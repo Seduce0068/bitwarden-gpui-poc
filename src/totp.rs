@@ -84,8 +84,10 @@ impl Code {
 
 /// Why a code could not be produced.
 ///
-/// Alias of [`AppError`](crate::error::AppError); a secret that `openwarden`
-/// rejects carries the original error in `Error::source()`.
+/// Alias of [`AppError`](crate::error::AppError); for a secret that `openwarden`
+/// rejects, [`code_at`] stores only the failure's rendered text through
+/// [`BoxedCause::text`](crate::error::BoxedCause::text), so `Error::source()`
+/// exposes that text — the typed original error itself is not kept.
 pub type TotpError = crate::error::AppError;
 
 /// Generate the code for a login's `totp` field at `unix_time`.

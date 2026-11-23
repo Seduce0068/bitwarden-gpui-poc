@@ -246,6 +246,14 @@ pub fn entropy_bits(alphabet: usize, length: usize) -> f64 {
 /// Also used by the health audit's default [`crate::health::Thresholds`], so a
 /// password the generator calls `Weak` cannot be scored as acceptable by the
 /// audit (and vice versa).
+///
+/// Known constraint: that agreement holds only for the default threshold.
+/// [`crate::health::Thresholds::weak_bits`] is persisted and user-adjustable,
+/// while this constant is fixed. Raising the audit threshold (for example to
+/// 100) makes the audit report `WeakPassword` for passwords the meter still
+/// labels `Fair` or `Strong`; lowering it accepts passwords the meter calls
+/// `Weak`. The two scales are independent: a generated bucket is not evidence
+/// that the audit accepted the password, or vice versa.
 pub const WEAK_BITS: u32 = 40;
 
 /// A coarse strength bucket derived from entropy.

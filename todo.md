@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第119弾で 7 件すべてを完了）。
+なし（第120弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第120弾（16 担当・64 回目）の指摘 5 件を完結（2026-11-24）
+  - UI キー案内、auth/settings/model 行参照、WEAK_BITS/TotpError doc、
+    CHANGELOG 過去件数、README 直接遷移を修正。
+  - 現行スキーマ陽文ケースをテスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1129 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第119弾（16 担当・63 回目）の指摘 7 件を完結（2026-11-24）
   - 空 user_id 照合 fail-open、設定 TOCTOU 記録、
     行参照、custom weak_bits doc を修正。
