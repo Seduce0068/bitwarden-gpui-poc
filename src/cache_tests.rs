@@ -451,6 +451,52 @@ fn userinfo_is_masked_when_the_authority_contains_question_or_hash() {
 }
 
 #[test]
+fn slash_followed_by_question_or_hash_in_userinfo_password_is_masked() {
+    // An unescaped '/' may be part of the password. A '?'/'#' directly after
+    // that '/' is still password data, not a query/fragment delimiter: cutting
+    // the authority scan there used to hide the real '@' and leave the whole
+    // credential in the diagnostic URL (cache.rs:149-210).
+    for (url, expected, secret) in [
+        (
+            "https://user:p/?@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+            "p/?",
+        ),
+        (
+            "https://user:p/#@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+            "p/#",
+        ),
+        (
+            "https://user:p/ass?word@vault.example.com:8443/path",
+            "https://[redacted]@vault.example.com:8443/path",
+            "p/ass?word",
+        ),
+        (
+            "https://user:p/ass#word@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+            "p/ass#word",
+        ),
+        (
+            "user:p/?@vault.example.com/path",
+            "[redacted]@vault.example.com/path",
+            "p/?",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        assert!(
+            rendered.contains("[redacted]@vault.example.com"),
+            "{rendered}"
+        );
+        // Debug-only masking: the stored URL stays byte-for-byte identical.
+        assert_eq!(cache.server_url, url);
+    }
+}
+
+#[test]
 fn userinfo_separator_is_found_even_with_query_at_signs_and_unescaped_delimiters() {
     // The separator is the last '@' of the authority, not the last '@' of the
     // pre-path text (cache.rs:94-150). A password may itself hold `?`/`#`/`=`
@@ -2510,6 +2556,57 @@ fn amp_in_nested_userinfo_password_is_masked_before_pair_splitting() {
     let cache = SyncCache::from_body(body(), with_scheme).unwrap();
     let rendered = format!("{cache:?}");
     assert!(!rendered.contains("P&SS"), "{rendered}");
+    assert_eq!(cache.server_url, with_scheme);
+}
+
+#[test]
+fn slash_and_amp_in_nested_userinfo_password_are_masked() {
+    // '/' is a legal password character too. When a nested password holds both
+    // '/' and '&', treating that '/' as the end of the enclosing pair used to
+    // cut the authority before the userinfo colon was visible, so the pre-pass
+    // skipped the mask and the pair splitter leaked the credential
+    // (cache.rs:416-482).
+    let with_scheme =
+        "https://vault.example.com/login?next=https://user:P/&SS@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(with_scheme);
+    assert!(!masked.contains("P/&SS"), "{masked}");
+    assert!(
+        masked.contains("next=https://[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    let without_scheme =
+        "https://vault.example.com/login?next=user:P/&SS@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(without_scheme);
+    assert!(!masked.contains("P/&SS"), "{masked}");
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // Pin the pre-pass directly: the whole `user:secret` candidate is
+    // rewritten, not just the tail after the '/'.
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs("next=https://user:P/&SS@cb.example.com/done"),
+        "next=https://[redacted]@cb.example.com/done"
+    );
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs("next=user:P/&SS@cb.example.com/done"),
+        "next=[redacted]@cb.example.com/done"
+    );
+    // A harmless '@' is still copied verbatim by the same pre-pass.
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs("state=a@b&token=AMP_AFTER_AT"),
+        "state=a@b&token=AMP_AFTER_AT"
+    );
+
+    // Debug reaches the same path through the stored server URL; the stored
+    // value itself remains byte-for-byte identical for the mismatch check.
+    let cache = SyncCache::from_body(body(), with_scheme).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("P/&SS"), "{rendered}");
     assert_eq!(cache.server_url, with_scheme);
 }
 

@@ -1310,3 +1310,89 @@ fn case_folding_does_not_rewrite_non_ascii_or_multi_character_glyphs() {
         UiAction::InsertSearchText("日本語".into())
     );
 }
+
+#[test]
+fn function_key_names_are_never_inserted_while_editing() {
+    // A backend may echo the key name into `key_char` (F1 -> "F1"). The single
+    // character text path must reject that multi-character string in every
+    // editing mode, with and without Alt.
+    for (key, key_char) in [
+        ("f1", Some("F1")),
+        ("f1", Some("f1")),
+        ("f1", None),
+        ("F1", Some("F1")),
+        ("f2", Some("F2")),
+        ("f12", Some("F12")),
+        ("f1", Some("\u{f1}")),
+    ] {
+        let mut value = ctx(key);
+        value.key_char = key_char;
+
+        value.screen = Screen::Locked;
+        value.editing_auth = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "auth/{key}/{key_char:?}"
+        );
+
+        value.editing_auth = false;
+        value.screen = Screen::Unlocked;
+        value.searching = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "search/{key}/{key_char:?}"
+        );
+
+        value.searching = false;
+        value.panel = Panel::Settings;
+        value.editing_settings = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "settings/{key}/{key_char:?}"
+        );
+
+        value.modifiers.alt = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "settings/alt/{key}/{key_char:?}"
+        );
+    }
+}
+
+#[test]
+fn multi_character_key_char_still_inserts_genuine_compositions() {
+    // Regression guard for the Alt + multi-character fallback: limiting
+    // `typed_text` to a single glyph must not drop IME commits.
+    for (key, key_char) in [("unknown", "日本語"), ("s", "かな文字")] {
+        let mut value = ctx(key);
+        value.key_char = Some(key_char);
+
+        value.screen = Screen::Locked;
+        value.editing_auth = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertAuthText(key_char.into())
+        );
+
+        value.editing_auth = false;
+        value.screen = Screen::Unlocked;
+        value.searching = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSearchText(key_char.into())
+        );
+
+        value.searching = false;
+        value.panel = Panel::Settings;
+        value.editing_settings = true;
+        value.modifiers.alt = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSettingsText(key_char.into())
+        );
+    }
+}

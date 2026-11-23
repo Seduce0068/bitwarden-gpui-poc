@@ -1954,6 +1954,68 @@ fn parse_sync_keeps_an_item_when_an_excluded_duplicate_is_newer() {
 }
 
 #[test]
+fn dedup_never_lets_a_non_login_type_win_over_a_login() {
+    // openwarden's `Vault::logins()` only yields `type: 1` rows. A note/card
+    // sharing an id with a login must not win the dedup, otherwise openwarden
+    // drops the survivor and the item disappears entirely.
+    let mut value = serde_json::json!({
+        "ciphers": [
+            {"id": "login", "type": 1, "revisionDate": "2024-01-01T00:00:00Z", "name": "login-row"},
+            {"id": "login", "type": 2, "revisionDate": "2024-06-01T00:00:00Z", "name": "note-row"},
+            {"id": "card", "type": 3, "revisionDate": "2024-06-01T00:00:00Z", "name": "card-row"},
+            {"id": "card", "type": 1, "revisionDate": "2024-01-01T00:00:00Z", "name": "login-row"},
+            {"id": "untyped", "revisionDate": "2024-06-01T00:00:00Z", "name": "no-type-row"},
+            {"id": "untyped", "type": 1, "revisionDate": "2024-01-01T00:00:00Z", "name": "login-row"},
+            {"id": "all-notes", "type": 2, "revisionDate": "2024-01-01T00:00:00Z", "name": "first"},
+            {"id": "all-notes", "type": 3, "revisionDate": "2024-02-01T00:00:00Z", "name": "second"},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 4, "one row per id");
+    for (index, id) in ["login", "card", "untyped", "all-notes"].iter().enumerate() {
+        assert_eq!(kept[index]["id"], serde_json::json!(id));
+    }
+    // The eligible type-1 row wins regardless of its older revision, even when
+    // the excluded duplicate has a newer one.
+    for row in kept.iter().take(3) {
+        assert_eq!(row["name"], "login-row");
+        assert_eq!(row["revisionDate"], "2024-01-01T00:00:00Z");
+    }
+    // With every duplicate excluded the ordinary newest-revision rule applies.
+    assert_eq!(kept[3]["name"], "second");
+    assert_eq!(kept[3]["revisionDate"], "2024-02-01T00:00:00Z");
+}
+
+#[test]
+fn parse_sync_keeps_an_item_when_a_non_login_duplicate_is_newer() {
+    // End-to-end regression: a secure note with the same id and a newer
+    // revision used to win the dedup, get dropped by openwarden and leave
+    // `vault.logins()` empty.
+    let body = br#"{
+        "profile": {"id": "user-1"},
+        "folders": [],
+        "ciphers": [
+            {"id": "c1", "type": 1, "name": "Live", "login": {"uris": []},
+             "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "c1", "type": 2, "name": "Note", "notes": "x",
+             "revisionDate": "2024-06-01T00:00:00Z"}
+        ]
+    }"#;
+    let sync = parse_sync(body).expect("the sync body must parse");
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    vault.apply_sync(sync).expect("apply_sync must succeed");
+    let logins = vault.logins();
+    let ids: Vec<&str> = logins.iter().map(|info| info.id.as_str()).collect();
+    assert_eq!(ids, vec!["c1"], "the type-1 row must survive");
+}
+
+#[test]
 fn duplicate_folder_ids_are_collapsed_before_apply_sync() {
     let mut value = serde_json::json!({
         "folders": [
@@ -2262,6 +2324,81 @@ fn updated_audit_records_zero_old_revision_for_an_undated_first_row() {
                 id: id.to_string(),
                 old_revision: crate::model::UNKNOWN_REVISION,
                 new_revision,
+            },
+        ]
+    );
+}
+
+#[test]
+fn clipped_audit_records_zero_old_revision_for_an_undated_first_row() {
+    // Mirror of the `Updated` zero case: an undated first row stores
+    // UNKNOWN_REVISION (0), and a pre-epoch duplicate (negative epoch) is
+    // clipped against it. The audit must report old_revision: 0 rather than a
+    // fabricated timestamp.
+    let id = "unknown-old-revision-clipped";
+    let negative = parse_revision(Some("1969-12-31T23:59:59Z")).unwrap();
+    assert!(negative < crate::model::UNKNOWN_REVISION);
+    let mut undated = cipher(id, "2024-01-01T00:00:00Z");
+    undated
+        .as_object_mut()
+        .expect("cipher fixture must be an object")
+        .remove("revisionDate");
+    let mut regression = cipher(id, "2024-01-01T00:00:00Z");
+    regression["revisionDate"] = serde_json::json!("1969-12-31T23:59:59Z");
+    let vault = unlocked_vault_raw(&[undated, regression]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].revision_date, crate::model::UNKNOWN_REVISION);
+    assert_eq!(crate::model::UNKNOWN_REVISION, 0);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: crate::model::UNKNOWN_REVISION,
+            },
+            ImportAudit::Clipped {
+                id: id.to_string(),
+                old_revision: crate::model::UNKNOWN_REVISION,
+                new_revision: negative,
+            },
+        ]
+    );
+}
+
+#[test]
+fn ignored_audit_records_zero_revision_when_both_duplicates_are_undated() {
+    // `Ignored` has no separate `old_revision`: its `revision` is the accepted
+    // row's revision. Two undated duplicates both map to UNKNOWN_REVISION (0),
+    // so the ignored decision must pin 0 as well.
+    let id = "unknown-revision-ignored";
+    let mut first = cipher(id, "2024-01-01T00:00:00Z");
+    first
+        .as_object_mut()
+        .expect("cipher fixture must be an object")
+        .remove("revisionDate");
+    let mut second = cipher(id, "2024-01-01T00:00:00Z");
+    second
+        .as_object_mut()
+        .expect("cipher fixture must be an object")
+        .remove("revisionDate");
+    let vault = unlocked_vault_raw(&[first, second]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].revision_date, crate::model::UNKNOWN_REVISION);
+    assert_eq!(crate::model::UNKNOWN_REVISION, 0);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: crate::model::UNKNOWN_REVISION,
+            },
+            ImportAudit::Ignored {
+                id: id.to_string(),
+                revision: crate::model::UNKNOWN_REVISION,
             },
         ]
     );

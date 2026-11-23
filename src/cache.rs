@@ -143,8 +143,9 @@ fn has_userinfo_colon(text: &str) -> bool {
 /// itself terminate the authority ([`at_is_in_query`] decides). The same holds
 /// for an unescaped `/` in the password: a `/` preceded by a `user:secret`
 /// marker and followed by an `@` with a plausible host does not close the
-/// authority either. [`authority_start`] keeps `://` confined to a leading
-/// scheme, so a nested URL in a query cannot move the scan into the query.
+/// authority either — even when `?`/`#` follows that `/` immediately.
+/// [`authority_start`] keeps `://` confined to a leading scheme, so a nested
+/// URL in a query cannot move the scan into the query.
 fn mask_url_userinfo(url: &str) -> String {
     let scheme_end = authority_start(url);
     // A path separator normally closes the authority. '?'/'#' are *not* used
@@ -161,21 +162,30 @@ fn mask_url_userinfo(url: &str) -> String {
         if !has_userinfo_colon(&url[scheme_end..path_start]) {
             break;
         }
-        // Only an '@' before a real query/fragment boundary can be the
-        // authority delimiter; one inside `?email=a@b` is data, not userinfo.
+        // Search every '@' after the '/', not only the text before the first
+        // '?'/'#': one directly after the '/' (or later in the password) is an
+        // unescaped password character, so it must not stop the authority scan.
+        // `at_is_in_query` still rejects a genuine query/fragment '@', and the
+        // host check rejects a stray one.
         let tail = &url[path_start..];
-        let boundary = tail.find(&['?', '#'][..]).unwrap_or(tail.len());
-        let Some(relative_at) = tail[..boundary].find('@') else {
+        let mut delimiter = None;
+        for (relative_at, _) in tail.match_indices('@') {
+            let at = path_start + relative_at;
+            if at_is_in_query(&url[scheme_end..=at], at - scheme_end) {
+                continue;
+            }
+            let host = url[at + 1..]
+                .split(&['/', '?', '#'][..])
+                .next()
+                .unwrap_or("");
+            if host_with_optional_port_ok(host) {
+                delimiter = Some(at);
+                break;
+            }
+        }
+        let Some(at) = delimiter else {
             break;
         };
-        let at = path_start + relative_at;
-        let host = url[at + 1..]
-            .split(&['/', '?', '#'][..])
-            .next()
-            .unwrap_or("");
-        if !host_with_optional_port_ok(host) {
-            break;
-        }
         path_start = url[at + 1..]
             .find('/')
             .map(|relative| at + 1 + relative)
@@ -223,9 +233,11 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
                 !value.is_empty() && !value.bytes().all(|byte| byte.is_ascii_digit())
             })
         });
-        let host_complete = head
-            .match_indices('@')
-            .any(|(earlier, _)| host_with_optional_port_ok(&head[earlier + 1..]));
+        let host_complete = head.match_indices('@').any(|(earlier, _)| {
+            let candidate = &head[earlier + 1..];
+            let host = candidate.split(&['/', '?', '#'][..]).next().unwrap_or("");
+            host_with_optional_port_ok(host)
+        });
         !has_userinfo_colon || host_complete
     })
 }
@@ -410,24 +422,40 @@ pub(crate) const MAX_MASK_DEPTH: usize = 8;
 /// separators and looks like `user:secret@plausible-host`: harmless `state=a@b`
 /// values and values without a pair separator stay verbatim, and the
 /// surrounding key/scheme is kept so the diagnostic URL remains traceable.
+/// A '/' inside the password is not a boundary either: the delimiter search
+/// keeps the rightmost split that still yields a whole `user:secret` value.
 fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
     let mut out = String::with_capacity(pairs.len());
     let mut rest = pairs;
+    // This pre-pass only rewrites credentials the pair splitter would cut
+    // apart, so a candidate must carry one of those separators as well as a
+    // `user:secret` marker.
+    let userinfo_with_separator = |candidate: &str| {
+        let has_secret = candidate.split_once(':').is_some_and(|(_, secret)| {
+            !secret.is_empty() && !secret.bytes().all(|byte| byte.is_ascii_digit())
+        });
+        has_secret && (candidate.contains(';') || candidate.contains('&'))
+    };
     while let Some(relative_at) = rest.find('@') {
         let before = &rest[..relative_at];
-        // '?', '#' and '/' close the enclosing path/query and cannot be part
-        // of a nested authority. '&' is deliberately *not* a boundary here:
-        // like ';', it is a legal password character, and treating it as a
-        // pair boundary would cut the authority before it can be masked. Every
-        // '=' after the first is not a boundary either, for the same reason.
-        let pair_start = before
-            .rfind(&['?', '#', '/'][..])
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        // Everything after the last path/query delimiter is the authority
-        // candidate. Do not look for '=' here: a password may itself contain
-        // `a=s`, and treating that as the key/value boundary hid the real
-        // userinfo from this helper.
+        // '?', '#' and '/' normally close the enclosing path/query, but '/' is
+        // also a legal password character. Walk the delimiters from right to
+        // left and keep the rightmost one whose tail is still a whole
+        // `user:secret` value: a password like `p/&ss` must not be cut at the
+        // '/', or the userinfo colon before it becomes invisible. '&' itself is
+        // deliberately never a boundary here, for the same reason.
+        let mut pair_start = 0usize;
+        for (index, _) in before.match_indices(&['?', '#', '/'][..]).rev() {
+            let start = index + 1;
+            if userinfo_with_separator(&before[start..]) {
+                pair_start = start;
+                break;
+            }
+        }
+        // Everything after the chosen delimiter is the authority candidate. Do
+        // not look for '=' here: a password may itself contain `a=s`, and
+        // treating that as the key/value boundary hid the real userinfo from
+        // this helper.
         let (prefix_end, candidate) = if pair_start == 0 {
             // Scheme-less authority: keep the `key=` prefix in the diagnostic
             // output. The first '=' is the pair separator here; later '=' are
@@ -439,14 +467,10 @@ fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
         };
         let after = &rest[relative_at + 1..];
         let host = after.split(&['/', '?', '#'][..]).next().unwrap_or("");
-        let has_secret = candidate.split_once(':').is_some_and(|(_, secret)| {
-            !secret.is_empty() && !secret.bytes().all(|byte| byte.is_ascii_digit())
-        });
         // Both separators must be checked in the *candidate*: the pair splitter
         // below would otherwise cut a password containing either one before
         // the recursive masker ever sees the authority.
-        let has_pair_separator = candidate.contains(';') || candidate.contains('&');
-        if has_pair_separator && has_secret && host_with_optional_port_ok(host) {
+        if userinfo_with_separator(candidate) && host_with_optional_port_ok(host) {
             out.push_str(&before[..prefix_end]);
             out.push_str("[redacted]");
             out.push('@');

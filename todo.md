@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第88弾で 5 件すべてを完了）。
+なし（第89弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第89弾（16 担当・33 回目）の指摘 6 件を完結（2026-11-23）
+  - F1 等のキー名が編集モードで文字挿入される問題を修正し、
+    監査パネルの F1 重複を解消。
+  - dedup の除外判定に type != 1 を追加、URL マスクの
+    '/' + '?'/'#'/'&' を修正。
+  - UnlockError PartialEq 特性、Clipped/Ignored の old_revision=0、
+    README のキャッシュ期限説明を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（846 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第88弾（16 担当・32 回目）の指摘 5 件を完結（2026-11-23）
   - Vault 一覧ヘッダから監査専用の Enter 案内を除去し、
     Alt + 物理キーの契約を doc/テストで整合。

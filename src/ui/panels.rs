@@ -229,7 +229,12 @@ pub(super) fn totp_badge(item: &crate::model::VaultItem) -> TotpBadge {
 /// shows an explicit empty state instead. The non-empty branch uses
 /// [`row_selection_keys_hint`], which keeps `Enter` because the audit panel
 /// binds it; the vault header uses [`vault_row_keys_hint`] instead because
-/// `Enter` is inert there. Both share the navigation wording. Kept pure so the
+/// `Enter` is inert there. Both share the navigation wording.
+///
+/// This line is the audit panel's persistent hint, so it also carries
+/// [`FOCUS_RECOVERY_HINT`] in both branches — just like `settings_hint` and
+/// `generator_panel_key_hint`. Without it a user whose focus moved away from
+/// the view (for example via Tab) has no on-screen way back. Kept pure so the
 /// wording can be tested without rendering a GPUI window.
 pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
     let base = format!(
@@ -241,9 +246,13 @@ pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
     );
     let row_keys = row_selection_keys_hint(report.items.len());
     if row_keys.is_empty() {
-        format!("{base} / 監査する問題はありません / g: 一覧 / l: ロック / Esc: 終了")
+        format!(
+            "{base} / 監査する問題はありません / g: 一覧 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
+        )
     } else {
-        format!("{base} / {row_keys} / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了")
+        format!(
+            "{base} / {row_keys} / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
+        )
     }
 }
 
@@ -970,6 +979,36 @@ mod tests {
         // With no rows there is nothing to page through or jump to.
         let empty = audit_panel_detail_line(&Report::default(), false);
         assert!(!empty.contains(LIST_PAGE_AND_EDGE_HINT), "{empty}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_detail_line_advertises_focus_recovery_once_in_both_states() {
+        let with_rows = Report {
+            items: vec![crate::health::ItemReport {
+                id: "item-1".into(),
+                name: "Example".into(),
+                kind: crate::model::ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 1,
+            logins: 1,
+        };
+        for (label, line) in [
+            ("empty", audit_panel_detail_line(&Report::default(), false)),
+            ("with rows", audit_panel_detail_line(&with_rows, true)),
+        ] {
+            assert!(
+                line.contains(FOCUS_RECOVERY_HINT),
+                "the persistent audit hint must advertise F1 ({label}): {line}"
+            );
+            assert_eq!(
+                line.matches(FOCUS_RECOVERY_HINT).count(),
+                1,
+                "the recovery key must appear exactly once ({label}): {line}"
+            );
+            assert!(line.contains("g: 一覧 / l: ロック / Esc: 終了"), "{line}");
+        }
     }
 
     #[::core::prelude::v1::test]

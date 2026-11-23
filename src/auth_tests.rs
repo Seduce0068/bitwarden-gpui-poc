@@ -2,7 +2,7 @@
 
 //! Test-scope notes for `crate::auth`.
 //!
-//! Two production branches deliberately have no injection seam; these notes
+//! Three production branches deliberately have no injection seam; these notes
 //! record the limit instead of claiming coverage that the tests cannot give.
 //!
 //! * The DNS re-check in `authenticate_inner` (auth.rs:962-971) calls
@@ -2066,6 +2066,53 @@ fn unlock_error_family_messages_are_fixed() {
         "vault 変換に失敗しました（why）"
     );
     assert_eq!(UnlockError::Other("raw".into()).message(), "raw");
+}
+
+#[test]
+fn unlock_error_equality_is_message_only_so_distinct_variants_can_collide() {
+    // `UnlockError::PartialEq` (auth.rs:686-692) compares only `message()`.
+    // Two values of different variants that render the same status text are
+    // therefore equal. This characterization test pins that behaviour so a
+    // future change to variant-aware equality is an explicit, reviewed edit.
+    let missing = UnlockError::MissingProtectedKey;
+    let impersonator = UnlockError::Other(missing.message());
+    assert_ne!(
+        std::mem::discriminant(&missing),
+        std::mem::discriminant(&impersonator),
+        "premise: these are different variants"
+    );
+    assert_eq!(missing.message(), impersonator.message());
+    assert_eq!(missing, impersonator, "equality is message-only today");
+    assert_eq!(impersonator, missing);
+
+    // A crafted `Other` can render exactly the decorated text of a
+    // detail-carrying sibling, so even those variants cross-compare equal.
+    for (detailed, text) in [
+        (
+            UnlockError::UnlockFailed("x".into()),
+            "復号キーを取得できません（x）",
+        ),
+        (
+            UnlockError::ApplySyncFailed("x".into()),
+            "同期データを取り込めません（x）",
+        ),
+        (
+            UnlockError::ImportFailed("x".into()),
+            "vault 変換に失敗しました（x）",
+        ),
+    ] {
+        let crafted = UnlockError::Other(text.to_string());
+        assert_ne!(
+            std::mem::discriminant(&detailed),
+            std::mem::discriminant(&crafted)
+        );
+        assert_eq!(detailed.message(), text);
+        assert_eq!(
+            detailed, crafted,
+            "rendered text is the only identity: {text}"
+        );
+        assert_eq!(crafted, detailed);
+    }
 }
 
 #[test]

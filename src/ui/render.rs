@@ -58,7 +58,7 @@ fn strip_inline_focus_hint(status: &str) -> String {
 fn status_bar_text(status: &str, screen: Screen, panel: Panel) -> String {
     let has_inline_hint = match screen {
         Screen::Locked => true,
-        Screen::Unlocked => matches!(panel, Panel::Settings | Panel::Generator),
+        Screen::Unlocked => matches!(panel, Panel::Settings | Panel::Generator | Panel::Audit),
     };
     if has_inline_hint {
         strip_inline_focus_hint(status)
@@ -576,11 +576,12 @@ mod tests {
             status_bar_text(plain, Screen::Unlocked, Panel::Vault),
             format!("{plain}  |  {FOCUS_RECOVERY_HINT}")
         );
-        // ...and never append it twice when the status already mentions it.
+        // The audit panel now advertises F1 inline, so its status drops it
+        // instead of repeating it (Vault is the remaining fallback case).
         let with_hint = format!("監査行 1/2: example / {FOCUS_RECOVERY_HINT}");
         assert_eq!(
             status_bar_text(&with_hint, Screen::Unlocked, Panel::Audit),
-            with_hint
+            "監査行 1/2: example"
         );
     }
 
@@ -599,9 +600,14 @@ mod tests {
             plain,
             "a plain generator status must not gain a second F1"
         );
-        // Panels without an inline hint keep the fallback behaviour.
+        // The audit panel also carries an inline hint now; only Vault and
+        // other inline-free panels keep the fallback.
         assert_eq!(
             status_bar_text(plain, Screen::Unlocked, Panel::Audit),
+            plain
+        );
+        assert_eq!(
+            status_bar_text(plain, Screen::Unlocked, Panel::Vault),
             format!("{plain}  |  {FOCUS_RECOVERY_HINT}")
         );
     }

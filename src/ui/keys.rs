@@ -230,23 +230,105 @@ pub(super) struct KeyContext<'a> {
     pub(super) query_nonempty: bool,
 }
 
-/// Text produced by a keystroke, if any.
+/// Single-character text produced by a keystroke, if any.
 ///
 /// `key_char` is preferred because it carries IME-composed and layout-specific
-/// characters; `key` is only the ASCII/physical equivalent. When no glyph is
-/// reported, a single-character physical `key` (or the `space` key name) is the
-/// fallback — this is what lets Alt+<letter> insert text with `key_char: None`,
-/// and it is what the Alt guard in `classify_key` actually tests.
+/// characters; `key` is only the ASCII/physical equivalent. A glyph is accepted
+/// **only when it is exactly one character**: some backends echo a key name
+/// such as `F1` into `key_char`, and inserting that multi-character string into
+/// a focused field was a real bug. Genuine multi-character compositions are
+/// handled separately by [`composed_text`], so they are not lost.
+///
+/// When no glyph is reported, a single-character physical `key` (or the `space`
+/// key name) is the fallback — this is what lets Alt+<letter> insert text with
+/// `key_char: None`, and it is what the Alt guard in `classify_key` tests.
 fn typed_text<'a>(ctx: &KeyContext<'a>) -> Option<&'a str> {
     if let Some(text) = ctx.key_char {
-        if !text.is_empty() {
+        let count = text.chars().count();
+        if count == 1 {
             return Some(text);
+        }
+        // An empty `key_char` carries no glyph, so the physical key still
+        // applies. A multi-character glyph is either a composition (handled by
+        // `composed_text`) or an echoed key name; never fall back to the
+        // physical key in that case, or `s` would shadow "日本語".
+        if count > 1 {
+            return None;
         }
     }
     if ctx.key == "space" {
         return Some(" ");
     }
     (ctx.key.chars().count() == 1).then_some(ctx.key)
+}
+
+/// Whether a key name denotes a control/function key that never carries text.
+///
+/// Function keys are the motivating case: F1 can be reported with
+/// `key = "f1"` and `key_char = "F1"`. Control and navigation names are kept in
+/// the same set so a backend echoing any of them cannot insert a key name into
+/// a text field. `space` is deliberately absent: it is a printable key.
+fn is_non_text_key_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let bare = lower.strip_prefix("arrow").unwrap_or(&lower);
+    if is_text_cursor_key(&lower) {
+        return true;
+    }
+    if bare
+        .strip_prefix('f')
+        .is_some_and(|number| (1..=24).contains(&number.parse::<u8>().unwrap_or(0)))
+    {
+        return true;
+    }
+    matches!(
+        bare,
+        "escape"
+            | "esc"
+            | "enter"
+            | "return"
+            | "backspace"
+            | "tab"
+            | "delete"
+            | "del"
+            | "insert"
+            | "ins"
+            | "clear"
+            | "pause"
+            | "print"
+            | "capslock"
+            | "shift"
+            | "control"
+            | "alt"
+            | "platform"
+            | "function"
+    )
+}
+
+/// Multi-character committed text, if any (IME compositions and Alt fallback).
+///
+/// Kept separate from [`typed_text`] so that a multi-character `key_char` which
+/// merely echoes a key name (for example `"F1"`) is never inserted while
+/// editing, while a genuine composition such as `"日本語"` still is — including
+/// the existing Alt + multi-character fallback contract.
+fn composed_text<'a>(ctx: &KeyContext<'a>) -> Option<&'a str> {
+    let text = ctx.key_char?;
+    if text.chars().count() <= 1 || is_non_text_key_name(ctx.key) || is_non_text_key_name(text) {
+        return None;
+    }
+    Some(text)
+}
+
+/// Any text a focused field should receive, from one glyph or a composition.
+///
+/// The editing modes and the Alt guard share this helper so they cannot
+/// disagree about what counts as insertable text.
+fn insertable_text<'a>(ctx: &KeyContext<'a>) -> Option<&'a str> {
+    // A function/control key never carries text, even if a backend echoes a
+    // single character into `key_char` (`F1` -> "ñ" in some layouts).
+    if is_non_text_key_name(ctx.key) || ctx.key_char.is_some_and(is_non_text_key_name) {
+        return None;
+    }
+    typed_text(ctx).or_else(|| composed_text(ctx))
 }
 
 /// The single-character glyph a keystroke reports, before any case folding.
@@ -287,7 +369,7 @@ fn text_action(text: &str, action: fn(String) -> UiAction) -> UiAction {
 ///
 /// Matching them explicitly in each editing mode documents the intent and
 /// guarantees `UiAction::None` even if a name becomes single-character in a
-/// future GPUI version (which would otherwise make `typed_text` insert it).
+/// future GPUI version (which would otherwise make `insertable_text` insert it).
 fn is_text_cursor_key(key: &str) -> bool {
     matches!(
         key,
@@ -323,13 +405,14 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
         return UiAction::None;
     }
     // Alt alone may still produce a printable layout character (e.g. Option+S
-    // -> "ß"), but `typed_text` also falls back to a single-character physical
-    // `key` (and the `space` name) when no glyph is reported. The real contract
-    // is therefore: allow Alt only while editing text and only when there is
-    // insertable text — a bare one-character physical key counts even with
-    // `key_char` absent. Multi-character key names stay inert, and in command
-    // panels every Alt+key stays inert.
-    if ctx.modifiers.alt && !(editing_text && typed_text(ctx).is_some()) {
+    // -> "ß"), but `insertable_text` also falls back to a single-character
+    // physical `key` (and the `space` name) when no glyph is reported. The real
+    // contract is therefore: allow Alt only while editing text and only when
+    // there is insertable text — a bare one-character physical key counts even
+    // with `key_char` absent, and so does a genuine multi-character IME
+    // composition. Multi-character key names (F1 and friends) stay inert, and
+    // in command panels every Alt+key stays inert.
+    if ctx.modifiers.alt && !(editing_text && insertable_text(ctx).is_some()) {
         return UiAction::None;
     }
     let raw_key = raw_command_key(ctx);
@@ -344,7 +427,10 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 // Arrow/Home/End stay with the GPUI text field (see
                 // TEXT_EDIT_ARROW_KEYS_HINT): no new list-movement binding here.
                 _ if is_text_cursor_key(key) => UiAction::None,
-                _ => typed_text(ctx).map_or(UiAction::None, |text| {
+                // A control/function key is never text, whatever `key_char`
+                // reports (including a stray single-character glyph).
+                _ if is_non_text_key_name(key) => UiAction::None,
+                _ => insertable_text(ctx).map_or(UiAction::None, |text| {
                     text_action(text, UiAction::InsertAuthText)
                 }),
             };
@@ -370,7 +456,8 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             // Let GPUI move the caret in the search field; Up/Down still mean
             // MoveSelection only outside this editing mode.
             _ if is_text_cursor_key(key) => UiAction::None,
-            _ => typed_text(ctx).map_or(UiAction::None, |text| {
+            _ if is_non_text_key_name(key) => UiAction::None,
+            _ => insertable_text(ctx).map_or(UiAction::None, |text| {
                 text_action(text, UiAction::InsertSearchText)
             }),
         };
@@ -446,7 +533,8 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                     // Same contract as auth/search editing: native caret
                     // movement, no vault-list navigation while typing.
                     _ if is_text_cursor_key(key) => UiAction::None,
-                    _ => typed_text(ctx).map_or(UiAction::None, |text| {
+                    _ if is_non_text_key_name(key) => UiAction::None,
+                    _ => insertable_text(ctx).map_or(UiAction::None, |text| {
                         text_action(text, UiAction::InsertSettingsText)
                     }),
                 };
@@ -690,8 +778,8 @@ mod cursor_key_tests {
 
     #[::core::prelude::v1::test]
     fn every_cursor_key_stays_unbound_in_all_editing_modes() {
-        // A multi-character key must never fall through to `typed_text`, which
-        // would insert e.g. "arrowup" as literal text in a credentials field.
+        // A multi-character key must never fall through to `insertable_text`,
+        // which would insert e.g. "arrowup" as literal text in a field.
         for key in CURSOR_KEYS {
             let mut ctx = KeyContext {
                 screen: Screen::Locked,
@@ -804,5 +892,143 @@ mod page_navigation_key_tests {
             ctx.editing_auth = true;
             assert_eq!(classify_key(&ctx), UiAction::None, "auth/{key}");
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod single_character_text_tests {
+    use super::*;
+
+    fn editing_ctx<'a>(key: &'a str, key_char: Option<&'a str>) -> KeyContext<'a> {
+        KeyContext {
+            screen: Screen::Locked,
+            panel: Panel::Vault,
+            key,
+            key_char,
+            modifiers: KeyModifiers::default(),
+            editing_auth: true,
+            searching: false,
+            editing_settings: false,
+            login_failed: false,
+            has_audit_report: false,
+            query_nonempty: false,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn typed_text_accepts_only_a_single_character_glyph() {
+        let ctx = editing_ctx("s", Some("ß"));
+        assert_eq!(typed_text(&ctx), Some("ß"));
+
+        // A multi-character `key_char` is never a single glyph: neither an
+        // echoed function-key name nor a genuine IME commit.
+        assert_eq!(typed_text(&editing_ctx("f1", Some("F1"))), None);
+        assert_eq!(typed_text(&editing_ctx("unknown", Some("日本語"))), None);
+
+        // The physical-key and `space` fallbacks are unchanged.
+        assert_eq!(typed_text(&editing_ctx("x", None)), Some("x"));
+        assert_eq!(typed_text(&editing_ctx("space", None)), Some(" "));
+        assert_eq!(typed_text(&editing_ctx("x", Some(""))), Some("x"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn non_text_key_names_cover_function_and_control_keys() {
+        for name in [
+            "f1",
+            "F1",
+            "f2",
+            "F12",
+            "f24",
+            "escape",
+            "Enter",
+            "backspace",
+            "pageup",
+            "arrowleft",
+        ] {
+            assert!(is_non_text_key_name(name), "{name} must carry no text");
+        }
+        for name in ["space", "a", "unknown", "日本語"] {
+            assert!(
+                !is_non_text_key_name(name),
+                "{name} must not be treated as a control key"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn composed_text_keeps_ime_and_alt_text_but_rejects_key_names() {
+        for key in ["unknown", "s"] {
+            let ctx = editing_ctx(key, Some("日本語"));
+            assert_eq!(composed_text(&ctx), Some("日本語"), "key={key}");
+            assert_eq!(insertable_text(&ctx), Some("日本語"), "key={key}");
+        }
+        for (key, key_char) in [
+            ("f1", Some("F1")),
+            ("F1", Some("F1")),
+            ("f12", Some("f12")),
+            ("unknown", Some("F1")),
+            ("f1", None),
+        ] {
+            let ctx = editing_ctx(key, key_char);
+            assert_eq!(composed_text(&ctx), None, "{key}/{key_char:?}");
+            assert_eq!(insertable_text(&ctx), None, "{key}/{key_char:?}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn function_keys_are_inert_in_every_editing_mode() {
+        for (key, key_char) in [
+            ("f1", Some("F1")),
+            ("f1", Some("f1")),
+            ("f1", None),
+            ("F1", Some("F1")),
+            ("f12", Some("F12")),
+            // Even a stray single-character glyph on a function key stays inert.
+            ("f1", Some("\u{f1}")),
+        ] {
+            let mut ctx = editing_ctx(key, key_char);
+            assert_eq!(classify_key(&ctx), UiAction::None, "auth/{key}");
+
+            ctx.editing_auth = false;
+            ctx.screen = Screen::Unlocked;
+            ctx.searching = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "search/{key}");
+
+            ctx.searching = false;
+            ctx.panel = Panel::Settings;
+            ctx.editing_settings = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "settings/{key}");
+
+            // Alt must not revive a function key through the text fallback.
+            ctx.modifiers.alt = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "settings/alt/{key}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn alt_multi_character_text_still_reaches_every_editing_mode() {
+        let mut ctx = editing_ctx("unknown", Some("日本語"));
+        ctx.modifiers.alt = true;
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertAuthText("日本語".into())
+        );
+
+        ctx.editing_auth = false;
+        ctx.screen = Screen::Unlocked;
+        ctx.searching = true;
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertSearchText("日本語".into())
+        );
+
+        ctx.searching = false;
+        ctx.panel = Panel::Settings;
+        ctx.editing_settings = true;
+        assert_eq!(
+            classify_key(&ctx),
+            UiAction::InsertSettingsText("日本語".into())
+        );
     }
 }

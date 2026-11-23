@@ -103,9 +103,9 @@ pub type SyncError = crate::error::AppError;
 /// collapsed to their newest revision and duplicate folder ids are removed
 /// before the `SyncData` is built, so `Vault::apply_sync` never sees two rows
 /// for one id (see `dedup_ciphers_by_revision` and `dedup_folders_by_id`).
-/// A row that openwarden would drop (organization-owned or soft-deleted) can
-/// never win a cipher-id dedup: keeping an eligible personal row is what stops
-/// the whole item from disappearing after parsing.
+/// A row that openwarden would drop (organization-owned, soft-deleted, or not
+/// `type: 1`) can never win a cipher-id dedup: keeping an eligible personal
+/// login is what stops the whole item from disappearing after parsing.
 ///
 /// # Errors
 ///
@@ -188,9 +188,10 @@ fn normalize_sync_keys(value: &mut serde_json::Value) -> Result<(), String> {
 /// The winner is the row with the highest `revisionDate` (missing/unparsable
 /// dates count as [`crate::model::UNKNOWN_REVISION`]); ties keep the first row
 /// so normalization and parsing stay deterministic. A row that
-/// [`cipher_row_is_excluded`] flags is never allowed to win over an eligible
-/// row: openwarden drops those rows while parsing, so choosing one as the
-/// winner would remove the id from the vault entirely.
+/// [`cipher_row_is_excluded`] flags (non-login `type`, organization-owned or
+/// soft-deleted) is never allowed to win over an eligible row: openwarden drops
+/// those rows while parsing, so choosing one as the winner would remove the id
+/// from the vault entirely.
 fn dedup_ciphers_by_revision(value: &mut serde_json::Value) {
     let Some(ciphers) = value
         .get_mut("ciphers")
@@ -245,16 +246,25 @@ fn dedup_ciphers_by_revision(value: &mut serde_json::Value) {
     });
 }
 
-/// Whether openwarden's `StoredCipher::parse` discards this raw row.
+/// Whether openwarden's `StoredCipher::parse` / `info` discards this raw row.
 ///
 /// Organization-owned ciphers (`organizationId`) and soft-deleted ones
 /// (`deletedDate`) are not personal, live logins. A non-null value excludes a
 /// row; `null` and a missing field behave like the absent case. Casing is
 /// normalized before dedup runs, so camelCase keys are the only ones seen here.
+///
+/// Only `type: 1` produces a `LoginInfo`. `type` has no serde default in
+/// openwarden's wire format, so a missing or non-numeric value fails
+/// deserialization and is excluded too. A note/card must not win a cipher-id
+/// dedup: openwarden would drop the survivor and the whole id would vanish.
 fn cipher_row_is_excluded(cipher: &serde_json::Value) -> bool {
-    ["organizationId", "deletedDate"]
-        .iter()
-        .any(|key| cipher.get(*key).is_some_and(|value| !value.is_null()))
+    let is_login = cipher
+        .get("type")
+        .is_some_and(|value| value.as_u64() == Some(1));
+    !is_login
+        || ["organizationId", "deletedDate"]
+            .iter()
+            .any(|key| cipher.get(*key).is_some_and(|value| !value.is_null()))
 }
 
 /// Collapse duplicate folder ids to one row before `Vault::apply_sync`.
