@@ -687,4 +687,101 @@ mod tests {
             "eight digits are grouped as two groups of four: {custom}"
         );
     }
+
+    #[test]
+    fn invalid_otpauth_uri_shows_failure_and_caches_its_error() {
+        // totp_state.rs:73-79: a rejected URI still produces a `Tick`, but with
+        // `code: None` and the failure cached for the copy path. These spellings
+        // are all known openwarden rejections (see totp_tests.rs).
+        let uris = [
+            "otpauth://totp/x".to_string(),
+            format!("otpauth://totp/RFC?secret={SECRET}&algorithm=MD5"),
+            format!("otpauth://totp/RFC?secret={SECRET}&period=0"),
+        ];
+        let invalid_message = crate::totp::TotpError::Invalid.message();
+        for uri in &uris {
+            let mut state = TotpState::new();
+            assert_eq!(state.display(uri, 40), "コード生成失敗", "{uri}");
+            assert_eq!(state.current_code(), None, "{uri}");
+            assert_eq!(
+                state.error_message().as_deref(),
+                Some(invalid_message),
+                "{uri}"
+            );
+            assert!(state.has_secret(), "the invalid URI is still owned: {uri}");
+            assert!(state.matches_secret(uri));
+            assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40), "{uri}");
+
+            // A failure has no period, so a later instant keeps the snapshot:
+            // no re-parse, no changed message, still no code on screen.
+            assert_eq!(state.display(uri, 41), "コード生成失敗", "{uri}");
+            assert_eq!(
+                state.tick.as_ref().map(|tick| tick.at),
+                Some(40),
+                "a failed snapshot stays fresh: {uri}"
+            );
+            assert_eq!(
+                state.error_message().as_deref(),
+                Some(invalid_message),
+                "{uri}"
+            );
+
+            // invalidate() drops only the cached snapshot and its error; the
+            // next display resamples the same URI and repopulates both.
+            state.invalidate();
+            assert_eq!(state.error_message(), None, "{uri}");
+            assert_eq!(state.current_code(), None, "{uri}");
+            assert_eq!(state.display(uri, 41), "コード生成失敗", "{uri}");
+            assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(41), "{uri}");
+            assert_eq!(
+                state.error_message().as_deref(),
+                Some(invalid_message),
+                "{uri}"
+            );
+
+            // clear() is the only path that forgets both the URI and the error.
+            state.clear();
+            assert!(!state.has_secret(), "{uri}");
+            assert_eq!(state.error_message(), None, "{uri}");
+            assert!(state.matches_secret(""));
+        }
+    }
+
+    #[test]
+    fn display_switches_directly_between_valid_and_invalid_otpauth_uris() {
+        let valid =
+            format!("otpauth://totp/example?secret={SECRET}&issuer=Demo&period=60&digits=8");
+        let invalid = "otpauth://totp/x";
+
+        let mut state = TotpState::new();
+        let code = state.display(&valid, 119);
+        assert!(code.starts_with("9428 7082"), "{code}");
+        assert_eq!(state.current_code(), Some("94287082"));
+        assert_eq!(state.error_message(), None);
+        assert!(state.matches_secret(&valid));
+
+        // Same instant, no clear()/invalidate(): only the `secret != ...`
+        // branch can resample, so the valid code and its snapshot must not
+        // survive the switch to a rejected URI.
+        let failed = state.display(invalid, 119);
+        assert_eq!(failed, "コード生成失敗");
+        assert_eq!(state.current_code(), None);
+        assert_eq!(
+            state.error_message().as_deref(),
+            Some(crate::totp::TotpError::Invalid.message())
+        );
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(119));
+        assert!(state.has_secret());
+        assert!(state.matches_secret(invalid));
+        assert!(!state.matches_secret(&valid));
+
+        // And back: the cached failure is replaced by a fresh valid code at
+        // the same instant, leaving no stale error for the copy path.
+        let restored = state.display(&valid, 119);
+        assert_eq!(restored, code);
+        assert_eq!(state.current_code(), Some("94287082"));
+        assert_eq!(state.error_message(), None);
+        assert!(state.matches_secret(&valid));
+        assert!(!state.matches_secret(invalid));
+    }
 }

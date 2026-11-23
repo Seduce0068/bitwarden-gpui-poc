@@ -177,8 +177,9 @@ fn sample() -> Vault {
     vault
 }
 
-/// A vault with one item of each non-note kind whose searchable fields all
-/// contain `alice`, used to pin filter/query intersection and kind counts.
+/// A vault with one Login, one Card and one Identity (no SecureNote or
+/// SshKey), each carrying `alice` in a searchable field, used to pin
+/// filter/query intersection and kind counts.
 fn mixed_kinds() -> Vault {
     let mut vault = Vault::new();
     vault.items = vec![

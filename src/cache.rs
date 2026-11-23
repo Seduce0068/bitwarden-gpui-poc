@@ -704,6 +704,45 @@ fn mask_param_pairs(pairs: &str, depth: usize) -> String {
     out
 }
 
+/// Whether the first `#` of a masked URL is a literal character inside a
+/// nested authority's password rather than the real fragment delimiter.
+///
+/// The re-encode in [`mask_url_secrets_inner`] exists for values such as
+/// `?next=user:p#SECRET@cb.example`: splitting at that `#` first would hand
+/// the tail to `mask_param_pairs` without the `user:secret@` marker, so the
+/// password would survive. It must not fire for a genuine fragment whose text
+/// happens to contain an `@` (`?state=ok#section@docs.example`): rewriting
+/// that delimiter would move the fragment into the query and erase the
+/// boundary. The head must therefore carry a `user:secret` marker in its
+/// query and the tail must close an authority with an `@` followed by a
+/// plausible host. Ambiguous values such as `?next=a:b#frag@x` are treated as
+/// nested credentials (fail closed for redaction).
+fn hash_continues_nested_password(head: &str, tail: &str) -> bool {
+    let Some(query_start) = head.find('?') else {
+        return false;
+    };
+    let query = &head[query_start + 1..];
+    let has_password_prefix = query.split(&['&', ';'][..]).any(|pair| {
+        let candidate = pair.rsplit_once('=').map_or(pair, |(_, value)| value);
+        candidate.split_once(':').is_some_and(|(user, secret)| {
+            !user.is_empty()
+                && !user.contains(&['@', '/', '?'][..])
+                && !secret.is_empty()
+                && !secret.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    });
+    if !has_password_prefix {
+        return false;
+    }
+    tail.match_indices('@').any(|(at, _)| {
+        let host = tail[at + 1..]
+            .split(&['/', '?', '#'][..])
+            .next()
+            .unwrap_or("");
+        host_with_optional_port_ok(host)
+    })
+}
+
 /// Redact secret-bearing values in the userinfo, query **and fragment** while
 /// keeping the URL's structure.
 ///
@@ -728,11 +767,11 @@ fn mask_url_secrets_inner(url: &str, depth: usize) -> String {
     // A nested authority can hide a literal '#' inside its password
     // (`?next=user:p#SECRET@host`). Splitting on that '#' first would hand the
     // fragment tail to `mask_param_pairs` without the `user:pass@` marker, so
-    // the credential survived. Re-encode the delimiter when an '@' follows it
-    // and the head has a colon; the parameter decoder restores it and the
-    // nested-authority masker then redacts the whole credential.
+    // the credential survived. Re-encode only when the '#' is plausibly part
+    // of that password; a real fragment delimiter (for example
+    // `?state=ok#section@docs.example`) must stay byte-for-byte intact.
     let masked = if let Some((head, tail)) = masked.split_once('#') {
-        if tail.contains('@') && head.contains('?') {
+        if hash_continues_nested_password(head, tail) {
             format!("{head}%23{tail}")
         } else {
             masked

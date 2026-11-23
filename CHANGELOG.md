@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 全体改善（第121〜123弾 / 2026-11-24）
+
+- 編集中の生成設定案内、TOTP コピー復号不可判定、
+  不可視クエリ再編集案内を修正
+- UUID variant／0600 権限／created_at 下限／安定ソート／
+  finding 数値／分秒定数導出をテスト
+- 空監査レポート Enter 案内、ネスト URL の '#' マスク、
+  field decryptor doc を修正
+- 調査レポートの検証件数 25→33 を訂正
+
 ### 全体改善（第118〜120弾 / 2026-11-24）
 
 - 空 profile.id／folder_id、folder_name_text 空文字、

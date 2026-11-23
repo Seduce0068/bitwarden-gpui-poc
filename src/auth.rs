@@ -968,7 +968,7 @@ fn login_deadline(now: std::time::Instant, timeout: std::time::Duration) -> Logi
 ///
 /// Both arms report the same [`AuthError::Timeout`]; the relative form is the
 /// fallback chosen by `login_deadline` for an unrepresentable absolute deadline
-/// (auth.rs:905-910).
+/// (auth.rs:960-965).
 async fn login_watchdog(deadline: LoginDeadline) -> Result<AuthenticatedVault, AuthError> {
     match deadline {
         LoginDeadline::At(at) => {
@@ -1014,7 +1014,7 @@ pub async fn authenticate_with_timeout(
     // fires on the first poll, which the zero-duration test seam relies on.
     // An unrepresentable deadline is not a reason to skip the watchdog:
     // `login_deadline` selects smol's relative timer with the original
-    // duration in that case (auth.rs:905-910).
+    // duration in that case (auth.rs:960-965).
     let deadline = login_deadline(std::time::Instant::now(), timeout);
     let timer = login_watchdog(deadline);
     smol::future::race(login, timer).await

@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第123弾で 5 件すべてを完了）。
+なし（第124弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第124弾（16 担当・68 回目）の指摘 7 件を完結（2026-11-24）
+  - 実フラグメント区切りとネスト '#' の判別、不可視 URI の
+    NoUri 判定、auth 行参照を修正。
+  - load_advisories 構文エラー、mixed_kinds doc、
+    監査 arrow ページキー、不正 otpauth URI をテスト。
+  - CHANGELOG に第121〜123弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1156 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第123弾（16 担当・67 回目）の指摘 5 件を完結（2026-11-24）
   - 空監査レポート Enter 案内、ネスト URL の '#' パスワード
     マスク、field decryptor doc を修正。

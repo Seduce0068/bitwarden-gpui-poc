@@ -1444,6 +1444,30 @@ fn load_advisories_is_empty_when_the_file_cannot_be_read() {
 }
 
 #[test]
+fn load_advisories_is_empty_for_syntactically_invalid_json() {
+    // Valid UTF-8 but broken JSON is a ParseFailed for the full loader. The
+    // advisory reader shares `read_settings_json` (settings.rs:433-436), so the
+    // parse error collapses to "no metadata": no future-version or unknown-key
+    // notice may be fabricated from a file that never parsed.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    for body in [
+        br#"{"schema_version":99,"mystery_key":"#.as_slice(),
+        br#"{"schema_version":99,}"#.as_slice(),
+        br#"{"email":"e@example.com" "#.as_slice(),
+    ] {
+        std::fs::write(&path, body).unwrap();
+        assert_eq!(
+            Settings::load_detailed(&path).err(),
+            Some(SettingsLoadError::ParseFailed),
+            "body {body:?} must be classified as a parse failure"
+        );
+        assert!(load_advisories(&path).is_empty(), "body {body:?}");
+        assert_eq!(super::file_schema_version(&path), None, "body {body:?}");
+    }
+}
+
+#[test]
 fn wrong_typed_nested_leaf_recovers_without_a_nested_advisory() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");

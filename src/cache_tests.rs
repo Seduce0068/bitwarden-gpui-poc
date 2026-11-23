@@ -2657,6 +2657,40 @@ fn literal_hash_in_nested_userinfo_password_is_masked() {
 }
 
 #[test]
+fn genuine_fragment_delimiter_is_not_rewritten_as_a_nested_password_hash() {
+    // A real fragment may contain an '@' while the query has a '?'. The old
+    // re-encode condition (`tail.contains('@') && head.contains('?')`) turned
+    // that delimiter into `%23`, erasing the query/fragment boundary. The
+    // refined check requires a `user:secret` marker in the query value, so
+    // these URLs must come back byte-for-byte unchanged.
+    for url in [
+        "https://vault.example.com/cb?state=ok#section@docs.example",
+        "https://vault.example.com/cb?status=OK#frag@example.com",
+        "https://vault.example.com/p?next=done#step@wizard.example",
+    ] {
+        assert_eq!(
+            super::mask_url_secrets(url),
+            url,
+            "fragment must survive: {url}"
+        );
+    }
+
+    // The credential-bearing form still takes the re-encode path: the whole
+    // nested authority is redacted and no password text reaches Debug.
+    let nested =
+        "https://vault.example.com/login?next=user:p#NESTED_HASH_SECRET@cb.example.com/done";
+    let masked = super::mask_url_secrets(nested);
+    assert!(!masked.contains("NESTED_HASH_SECRET"), "{masked}");
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    let cache = SyncCache::from_body(body(), nested).unwrap();
+    assert!(!format!("{cache:?}").contains("NESTED_HASH_SECRET"));
+    assert_eq!(cache.server_url, nested);
+}
+
+#[test]
 fn debug_pins_the_stored_body_byte_count() {
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     let stored = String::from_utf8(cache.body.clone()).expect("the cached JSON body is UTF-8");

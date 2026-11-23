@@ -857,7 +857,16 @@ fn audit_item(
         _ => {}
     }
 
-    let uris = item.uris();
+    // A URI made only of whitespace, Cc controls or Cf format characters
+    // renders nothing, so autofill cannot use it: share the model's
+    // `is_visually_empty` rule with the name/card/TOTP checks above instead of
+    // treating a zero-width-space URI as a present one. An undecryptable URI
+    // still wins when it is the only visible entry.
+    let uris: Vec<_> = item
+        .uris()
+        .iter()
+        .filter(|uri| !is_visually_empty(&uri.uri))
+        .collect();
     if item.kind() == ItemKind::Login && uris.is_empty() {
         findings.push(Finding::NoUri);
     } else if uris

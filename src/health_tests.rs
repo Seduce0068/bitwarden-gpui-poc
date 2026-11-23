@@ -271,6 +271,84 @@ fn insecure_uris_and_missing_totp_and_uri_are_reported() {
 }
 
 #[test]
+fn whitespace_and_format_only_uris_are_reported_as_no_uri() {
+    // A blank-looking URI is no better than an empty list for autofill: the
+    // audit shares the model's `is_visually_empty` rule with the name/card/
+    // TOTP checks, so Cf-only and Cc-only values cannot masquerade as a real
+    // URI (health.rs:860-902).
+    for blank in [
+        "",
+        " ",
+        "  \t  ",
+        "\u{200b}",         // ZERO WIDTH SPACE (Cf)
+        "\u{202e}\u{200b}", // bidi override + ZWSP
+        "\u{00a0}",         // NO-BREAK SPACE
+        "\u{0000}",         // NUL (Cc)
+    ] {
+        let item = VaultItem::new(
+            "blank-uri",
+            "Login",
+            ItemData::Login {
+                username: "u".into(),
+                password: Zeroizing::new("vT7#kQm2!zR9wP4$xL8@".into()),
+                totp: Zeroizing::new("GEZDGNBVGY3TQOJQ".into()),
+                uris: vec![LoginUri::new(blank)],
+            },
+        );
+        let report = report_of(vec![item]);
+        let findings = &report.items[0].findings;
+        assert!(
+            findings.contains(&Finding::NoUri),
+            "uri {blank:?}: {findings:?}"
+        );
+        assert!(
+            !findings.contains(&Finding::UriUninspectable),
+            "uri {blank:?}"
+        );
+        assert_eq!(findings.len(), 1, "uri {blank:?}: {findings:?}");
+    }
+
+    // A blank entry next to a real URI must not hide the real one: the login
+    // stays clean and no NoUri is produced.
+    let mixed = VaultItem::new(
+        "blank-and-real",
+        "Login",
+        ItemData::Login {
+            username: "u".into(),
+            password: Zeroizing::new("vT7#kQm2!zR9wP4$xL8@".into()),
+            totp: Zeroizing::new("GEZDGNBVGY3TQOJQ".into()),
+            uris: vec![
+                LoginUri::new("\u{200b}"),
+                LoginUri::new("https://real.example"),
+            ],
+        },
+    );
+    assert!(
+        report_of(vec![mixed]).items.is_empty(),
+        "a visible URI keeps the login clean"
+    );
+
+    // The undecryptable marker still takes precedence over NoUri: it renders
+    // visible text and is therefore not filtered out as a blank URI.
+    use crate::vault_sync::UNDECRYPTABLE_URI;
+    let marked = VaultItem::new(
+        "undecryptable",
+        "Login",
+        ItemData::Login {
+            username: "u".into(),
+            password: Zeroizing::new("vT7#kQm2!zR9wP4$xL8@".into()),
+            totp: Zeroizing::new("GEZDGNBVGY3TQOJQ".into()),
+            uris: vec![LoginUri::new(UNDECRYPTABLE_URI)],
+        },
+    );
+    let report = report_of(vec![marked]);
+    assert!(report.items[0]
+        .findings
+        .contains(&Finding::UriUninspectable));
+    assert!(!report.items[0].findings.contains(&Finding::NoUri));
+}
+
+#[test]
 fn totp_coverage_counts_logins_only() {
     let mut note = VaultItem::new("3", "Note", ItemData::SecureNote { text: "x".into() });
     note.revision_date = NOW;

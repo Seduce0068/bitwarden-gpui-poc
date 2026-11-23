@@ -1145,6 +1145,44 @@ fn audit_panel_has_up_down_enter_keyboard_path() {
 }
 
 #[test]
+fn audit_arrow_prefixed_page_and_edge_keys_match_plain_bindings() {
+    // keys.rs:527-530 binds PageUp/PageDown/Home/End in the audit panel.
+    // Backends spelling them with an `arrow` prefix must reach the very same
+    // actions, mirroring the vault assertions in keys.rs:1231-1247.
+    let mut value = ctx("pageup");
+    value.panel = Panel::Audit;
+    for (key, expected) in [
+        ("pageup", UiAction::MoveSelectionPage(-1)),
+        ("arrowpageup", UiAction::MoveSelectionPage(-1)),
+        ("ArrowPageUp", UiAction::MoveSelectionPage(-1)),
+        ("pagedown", UiAction::MoveSelectionPage(1)),
+        ("arrowpagedown", UiAction::MoveSelectionPage(1)),
+        ("ArrowPageDown", UiAction::MoveSelectionPage(1)),
+        ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+        (
+            "arrowhome",
+            UiAction::MoveSelectionToEdge(SelectionEdge::First),
+        ),
+        (
+            "ArrowHome",
+            UiAction::MoveSelectionToEdge(SelectionEdge::First),
+        ),
+        ("end", UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
+        (
+            "arrowend",
+            UiAction::MoveSelectionToEdge(SelectionEdge::Last),
+        ),
+        (
+            "ArrowEnd",
+            UiAction::MoveSelectionToEdge(SelectionEdge::Last),
+        ),
+    ] {
+        value.key = key;
+        assert_eq!(classify_key(&value), expected, "audit/{key}");
+    }
+}
+
+#[test]
 fn reserved_audit_and_quit_sentinels_do_not_collide_with_item_ids() {
     assert_ne!(AUDIT_SELECTED_ROW_SENTINEL, QUIT_OR_WARN_SENTINEL);
     assert_eq!(
