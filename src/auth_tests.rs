@@ -435,6 +435,33 @@ fn control_character_only_credentials_are_rejected_as_blank() {
 }
 
 #[test]
+fn embedded_cf_cc_in_credentials_is_present_but_rejected_in_email() {
+    // `credential_is_blank` only rejects values made entirely of invisible
+    // characters (auth.rs:434-438); a visible character makes the field
+    // present. `valid_email` is stricter: any embedded Cf or Cc rejects the
+    // whole address (auth.rs:444-455). Pin the contrast so a partial paste
+    // artifact is classified consistently across the two field families.
+    for invisible in ['\u{200b}', '\u{0}'] {
+        let credential = format!("a{invisible}b");
+        assert!(
+            !super::credential_is_blank(&credential),
+            "{credential:?} has visible letters"
+        );
+        let mut value = config();
+        value.client_id = credential.clone();
+        value.client_secret = SecretString::from(credential.clone());
+        value.master_password = SecretString::from(credential);
+        assert_eq!(validate_config(&value), Ok(()), "{invisible:?}");
+
+        let email = format!("alice{invisible}@example.com");
+        assert!(!valid_email(&email), "{email:?}");
+        let mut invalid = config();
+        invalid.email = email;
+        assert_eq!(validate_config(&invalid), Err(AuthError::InvalidEmail));
+    }
+}
+
+#[test]
 fn master_password_padding_is_preserved_for_kdf() {
     // Unlike `client_secret` (trimmed by `clamp_auth_config` and `api_key_from`),
     // the master password reaches `MasterKey::derive` verbatim (auth.rs:1184).
@@ -557,13 +584,12 @@ fn every_unicode_cf_range_is_rejected_in_an_email() {
 }
 
 #[test]
-fn uppercase_email_is_not_case_folded_before_kdf_is_a_known_constraint() {
-    // Known constraint documented at the `MasterKey::derive` call in
-    // `authenticate_inner`: the address is trimmed but its case is preserved.
-    // `valid_email` / `validate_config` accept any casing and clamping only
-    // removes padding, so a mixed-case address reaches the KDF verbatim; a
-    // user who typed a different case than the server's stored address
-    // derives a different key. Pin the observable half of that contract here.
+fn email_case_is_folded_by_openwarden_derive_not_by_our_config_layer() {
+    // Our config layer trims but preserves case (auth.rs:1184-1185). The
+    // dependency is the layer that folds it: openwarden 0.1.1's
+    // `MasterKey::derive` calls `normalize_email` = `trim().to_lowercase()`
+    // (openwarden-0.1.1/src/kdf.rs:168-189), so the earlier claim that a
+    // mixed-case address derived a different key was wrong. Pin both halves.
     const MIXED: &str = "Alice.MIXED@Example.COM";
     assert!(valid_email(MIXED));
     let mut value = config();
@@ -576,7 +602,35 @@ fn uppercase_email_is_not_case_folded_before_kdf_is_a_known_constraint() {
     );
     // Re-applying the cap is a no-op and must not fold case either.
     clamp_auth_config(&mut value);
-    assert_eq!(value.email, MIXED, "the KDF sees the original case");
+    assert_eq!(
+        value.email, MIXED,
+        "our config layer keeps the original case"
+    );
+
+    // The real derive is case-insensitive. Use a cheap, policy-valid PBKDF2
+    // KDF so this is deterministic and needs no server or clock.
+    let cheap = KdfPolicy {
+        pbkdf2_min_iterations: 2,
+        ..KdfPolicy::default()
+    };
+    let kdf = Kdf::Pbkdf2 { iterations: 2 };
+    let password = SecretString::from("correct horse".to_string());
+    let from_mixed = MasterKey::derive(&password, MIXED, &kdf, &cheap)
+        .expect("a policy-valid KDF must derive a key");
+    let from_lower = MasterKey::derive(&password, &MIXED.to_lowercase(), &kdf, &cheap)
+        .expect("the lowercase spelling must derive too");
+    let from_padded = MasterKey::derive(&password, &format!("  {MIXED}\t"), &kdf, &cheap)
+        .expect("the padded spelling must derive too");
+    assert_eq!(
+        from_mixed.password_hash(&password).expose_secret(),
+        from_lower.password_hash(&password).expose_secret(),
+        "openwarden normalizes email case before deriving"
+    );
+    assert_eq!(
+        from_mixed.password_hash(&password).expose_secret(),
+        from_padded.password_hash(&password).expose_secret(),
+        "openwarden also trims the email before deriving"
+    );
 }
 
 #[test]
@@ -4221,5 +4275,136 @@ fn invisible_only_server_url_is_an_invalid_url_not_a_missing_field() {
         "http://metadata.google.internal/\u{200b}latest",
     ] {
         assert!(is_blocked_server_url_without_dns(value), "{value:?}");
+    }
+}
+
+#[test]
+fn argon2id_kdf_derive_success_path_is_deterministic() {
+    // Argon2id is the other KDF openwarden supports (`Kdf::Argon2id`, type 1).
+    // A cheap but policy-valid parameter set keeps this deterministic: only
+    // the minimum iteration/memory bounds are lowered, the default maximums
+    // stay in force. This is the success arm of the same production call
+    // (auth.rs:1187) whose PBKDF2 arm is pinned by the sibling test above.
+    let cheap = KdfPolicy {
+        argon2_min_iterations: 1,
+        argon2_min_memory_mib: 1,
+        ..KdfPolicy::default()
+    };
+    let kdf = Kdf::Argon2id {
+        iterations: 2,
+        memory_mib: 8,
+        parallelism: 1,
+    };
+    let password = SecretString::from("correct horse".to_string());
+    let email = "alice@example.com";
+
+    let first = MasterKey::derive(&password, email, &kdf, &cheap)
+        .expect("a policy-valid Argon2id KDF must derive a master key");
+    let second = MasterKey::derive(&password, email, &kdf, &cheap)
+        .expect("the same Argon2id inputs must derive again");
+    let baseline = first.password_hash(&password);
+    assert_eq!(
+        baseline.expose_secret(),
+        second.password_hash(&password).expose_secret(),
+        "derive must be deterministic for identical Argon2id inputs"
+    );
+
+    // Every input matters, so the equality above is not a constant-valued
+    // stub. Each variant stays policy-valid under the same cheap policy.
+    let other_password = SecretString::from("correct horses".to_string());
+    let changed = [
+        (
+            "password",
+            MasterKey::derive(&other_password, email, &kdf, &cheap).unwrap(),
+            &other_password,
+        ),
+        (
+            "email",
+            MasterKey::derive(&password, "bob@example.com", &kdf, &cheap).unwrap(),
+            &password,
+        ),
+        (
+            "iterations",
+            MasterKey::derive(
+                &password,
+                email,
+                &Kdf::Argon2id {
+                    iterations: 3,
+                    memory_mib: 8,
+                    parallelism: 1,
+                },
+                &cheap,
+            )
+            .unwrap(),
+            &password,
+        ),
+    ];
+    for (label, key, pw) in changed {
+        assert_ne!(
+            baseline.expose_secret(),
+            key.password_hash(pw).expose_secret(),
+            "changing {label} must change the Argon2id-derived key"
+        );
+    }
+}
+
+#[test]
+fn argon2id_kdf_rejection_paths_are_reported_by_the_real_derive() {
+    use crate::error::{AppError, BoxedCause};
+
+    // `KdfPolicy::check` (openwarden-0.1.1/src/kdf.rs:119-155) refuses weak,
+    // inflated and degenerate Argon2id parameters before any memory is
+    // allocated. Drive the real derive so this pins the guard the production
+    // `MasterKey::derive` call hits, plus its conversion to the status bar.
+    let password = SecretString::from("correct horse".to_string());
+    let email = "alice@example.com";
+    for (kdf, reason) in [
+        (
+            Kdf::Argon2id {
+                iterations: 1,
+                memory_mib: 64,
+                parallelism: 4,
+            },
+            "argon2id iterations below the minimum",
+        ),
+        (
+            Kdf::Argon2id {
+                iterations: 3,
+                memory_mib: 1,
+                parallelism: 4,
+            },
+            "argon2id memory below the minimum",
+        ),
+        (
+            Kdf::Argon2id {
+                iterations: 3,
+                memory_mib: 64,
+                parallelism: 0,
+            },
+            "argon2id parallelism is zero",
+        ),
+        (
+            Kdf::Argon2id {
+                iterations: 3,
+                memory_mib: 64,
+                parallelism: 64,
+            },
+            "argon2id parallelism above the maximum",
+        ),
+    ] {
+        let error = MasterKey::derive(&password, email, &kdf, &KdfPolicy::default())
+            .expect_err("a policy-violating Argon2id KDF must be refused");
+        assert_eq!(
+            error.to_string(),
+            format!("KDF parameters rejected: {reason}")
+        );
+
+        let small = AuthError::from(AppError::KdfRejectedCause(BoxedCause::new(error)));
+        assert!(
+            matches!(&small, AuthError::KdfRejectedDetail(text) if text.contains(reason)),
+            "the real Argon2id reason must survive: {small:?}"
+        );
+        assert_eq!(small.message(), "KDF 設定がポリシーで拒否されました");
+        assert!(small.status_message().contains(reason));
     }
 }

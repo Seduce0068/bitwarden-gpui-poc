@@ -177,6 +177,41 @@ pub(super) fn finish_search_on_panel_transition(view: &mut VaultViewState) {
     }
 }
 
+/// Pure form of the TOTP-to-selection sync over the two state pieces it needs.
+///
+/// `deselect_and_rewind` raises `VaultViewState::totp_stale_after_deselect`
+/// even when the deselection happens below the app layer (for example in
+/// `VaultViewState::finish_search`, called from the input handlers). Consuming
+/// that signal here wipes the cached secret unconditionally, so a code from
+/// the dropped row can never be copied or redrawn afterwards. The ordinary
+/// secret comparison is kept for selection changes that do not deselect.
+/// Kept as a free function over plain state so the contract can be tested
+/// without a GPUI window (this crate does not enable gpui's `test-support`).
+pub(super) fn sync_totp_to_selection_state(view: &mut VaultViewState, totp: &mut TotpState) {
+    let stale_after_deselect = view.take_totp_stale();
+    let visible = view.visible_items();
+    let secret = crate::ui::logic::required_item_index(view.selected_id.as_deref(), &visible)
+        .and_then(|index| visible[index].totp_secret())
+        .unwrap_or("")
+        .to_string();
+    if stale_after_deselect || !totp.matches_secret(&secret) {
+        totp.clear();
+    }
+}
+
+/// Finish a search and drop any TOTP secret belonging to the cleared row.
+///
+/// This is the single wiring between `VaultViewState::finish_search` (which
+/// only owns the selection) and `TotpState` (owned by `BitwardenApp`). Every
+/// in-scope caller should use it instead of calling `finish_search` directly;
+/// out-of-scope callers are covered because the view-level stale signal is
+/// consumed by the next `sync_totp_to_selection`, which both rendering and
+/// copying already perform.
+pub(super) fn finish_search_and_sync_totp(view: &mut VaultViewState, totp: &mut TotpState) {
+    view.finish_search();
+    sync_totp_to_selection_state(view, totp);
+}
+
 /// Marker appended to transient statuses and to the list detail line.
 ///
 /// Keeping it in one place makes the unsaved state visible outside the
@@ -196,15 +231,18 @@ pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
 
 /// Whether `value` carries no visible content.
 ///
-/// Whitespace-only strings render as blank, and Unicode `Cf` (format)
-/// characters such as zero-width spaces or bidi overrides are invisible too.
-/// Both must count as "empty" for UI text checks; otherwise a value that looks
-/// empty still passes a plain `trim().is_empty()` guard. Shared with the list
-/// row renderer so the two places agree on what "empty" means.
+/// Whitespace, Unicode `Cc` (control) characters and Unicode `Cf` (format)
+/// characters such as zero-width spaces or bidi overrides all render nothing,
+/// whether at the edges or between visible letters. `Cc` is not whitespace
+/// (`str::trim()` alone keeps NUL and C1 controls), so it is listed explicitly
+/// to match `crate::model::is_visually_empty` and
+/// `crate::auth::credential_is_blank`. Otherwise a value that looks empty still
+/// passes a plain `trim().is_empty()` guard. Shared with the list row renderer
+/// so the two places agree on what "empty" means.
 pub(super) fn is_visually_empty(value: &str) -> bool {
     value
         .chars()
-        .all(|ch| ch.is_whitespace() || crate::limits::is_format_character(ch))
+        .all(|ch| ch.is_whitespace() || ch.is_control() || crate::limits::is_format_character(ch))
 }
 
 /// Placeholder drawn for a vault item whose name has no visible content.
@@ -934,6 +972,9 @@ impl BitwardenApp {
         self.editing = None;
         self.auth.take_field();
         finish_search_on_panel_transition(&mut self.view);
+        // Leaving an active search deselects the row; consume the stale-TOTP
+        // signal it raised so no secret from that row survives the transition.
+        self.sync_totp_to_selection();
         self.panel = crate::ui::logic::effective_panel(panel, self.view.audit_report.is_some());
         if let Some(status) = exit_warning {
             // Leaving the settings-owning panels does not persist anything.
@@ -963,15 +1004,7 @@ impl BitwardenApp {
     /// Without this the ticker keeps invalidating a stale code every second,
     /// and a later copy could use the previous item's secret.
     pub(super) fn sync_totp_to_selection(&mut self) {
-        let visible = self.view.visible_items();
-        let secret =
-            crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible)
-                .and_then(|index| visible[index].totp_secret())
-                .unwrap_or("")
-                .to_string();
-        if !self.totp.matches_secret(&secret) {
-            self.totp.clear();
-        }
+        sync_totp_to_selection_state(&mut self.view, &mut self.totp);
     }
 
     /// Decide whether a platform window close may proceed.
@@ -1028,7 +1061,7 @@ impl BitwardenApp {
         self.set_panel(Panel::Vault, cx);
         self.view.filter = Filter::All;
         self.view.query.clear();
-        self.view.finish_search();
+        finish_search_and_sync_totp(&mut self.view, &mut self.totp);
         // A click carries an item id, not a row index. Move the audit highlight
         // to the clicked row (and queue its scroll) so the old row does not stay
         // highlighted, and name that row in the status as the keyboard path does.
@@ -2183,6 +2216,55 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn finish_search_wires_deselection_to_totp_clear() {
+        let mut view = VaultViewState::new();
+        view.vault.items.push(crate::model::VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::Login {
+                username: "u".into(),
+                password: Zeroizing::new("p".into()),
+                totp: Zeroizing::new(TOTP_SECRET.into()),
+                uris: Vec::new(),
+            },
+        ));
+        view.selected_id = Some("a".into());
+
+        let mut totp = TotpState::new();
+        let _ = totp.display(TOTP_SECRET, 40);
+        assert!(totp.has_secret(), "precondition: a secret is cached");
+
+        // An ordinary sync with a still-matching selection keeps the secret.
+        sync_totp_to_selection_state(&mut view, &mut totp);
+        assert!(totp.has_secret(), "a matching selection must not be wiped");
+
+        // Confirming the search drops the selection and, in one step, the
+        // cached secret from the row that was just deselected.
+        finish_search_and_sync_totp(&mut view, &mut totp);
+        assert_eq!(view.selected_id, None);
+        assert!(
+            !view.totp_stale_after_deselect,
+            "the signal must be consumed"
+        );
+        assert!(
+            !totp.has_secret(),
+            "finish_search must not leave a stale TOTP secret behind"
+        );
+
+        // The view-only path used by callers that cannot see `TotpState`:
+        // deselecting and then syncing must clear the cached secret too.
+        let _ = totp.display(TOTP_SECRET, 40);
+        assert!(totp.has_secret());
+        view.selected_id = Some("a".into());
+        view.deselect_and_rewind();
+        sync_totp_to_selection_state(&mut view, &mut totp);
+        assert!(
+            !totp.has_secret(),
+            "a plain sync must consume the stale signal raised by deselection"
+        );
+    }
+
+    #[::core::prelude::v1::test]
     fn panel_transition_restores_a_normal_status_after_an_edit_mode() {
         // The modes cleared by `set_panel` all install the "入力中:" prefix;
         // without this assertion the test would pass without exercising the
@@ -2609,6 +2691,34 @@ mod tests {
         assert!(!is_visually_empty(" alice "));
         // A visible character next to a Cf is still real content.
         assert!(!is_visually_empty("alice\u{200b}"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn is_visually_empty_treats_cc_controls_as_empty_like_the_model() {
+        // NUL, DEL and the C1 controls are Unicode Cc, not whitespace. The UI
+        // rule must include `char::is_control`, exactly like
+        // `model::is_visually_empty` and `auth::credential_is_blank`; otherwise
+        // a Cc-only name / TOTP value counts as present in the UI alone.
+        for control in ['\u{0}', '\u{1}', '\u{1f}', '\u{7f}', '\u{80}', '\u{9f}'] {
+            let value = control.to_string();
+            assert!(
+                is_visually_empty(&value),
+                "Cc U+{:04X} must be invisible",
+                control as u32
+            );
+            // Cc mixed with whitespace and Cf is still invisible on the rule.
+            let mixed = format!(" \u{200b}{control}\t");
+            assert!(
+                is_visually_empty(&mixed),
+                "mixed Cc U+{:04X} must be invisible",
+                control as u32
+            );
+            // One visible character makes the value present again.
+            assert!(!is_visually_empty(&format!("{control}GitHub")));
+        }
+        // The pre-existing halves of the rule still hold.
+        assert!(is_visually_empty(" \t\n \u{200b}"));
+        assert!(!is_visually_empty("GitHub"));
     }
 
     #[::core::prelude::v1::test]

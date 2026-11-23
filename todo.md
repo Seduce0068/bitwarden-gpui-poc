@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第111弾で 6 件すべてを完了）。
+なし（第112弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第112弾（16 担当・56 回目）の指摘 8 件を完結（2026-11-23）
+  - UI Cc 判定、選択解除時 TOTP クリア、カード番号の不可視判定、
+    http:/ 単一スラッシュ検出を修正。
+  - Argon2id KDF、大文字メール、埋め込み不可視文字、
+    userinfo/authority 境界、data 必須、Cc 結合経路をテスト。
+  - 同期 doc と恒真アサーション、README 矛盾、CHANGELOG を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1088 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第111弾（16 担当・55 回目）の指摘 6 件を完結（2026-11-23）
   - 数値パスワード＋'/' マスク、model の Cc 判定、
     確定クエリ案内、ADR redact 行参照を修正。

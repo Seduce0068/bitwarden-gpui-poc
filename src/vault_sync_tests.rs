@@ -705,23 +705,25 @@ fn folder_name_text_covers_ok_none_placeholder_and_the_reachable_branches() {
     let name = super::folder_name_text(Ok(Some(decrypted)));
     assert_eq!(name, "Work");
 
-    // Verify the strings the helper actually produced, plus a real folder row
-    // whose id is "f-bad". A loop over hard-coded literal placeholders is true
-    // by construction and proves nothing about the importer (the previous
-    // version of this assertion was such a tautology).
+    // The real folder row below is the non-tautological check: it carries the
+    // id "f-bad", so its placeholder not echoing that id and matching the
+    // helper's decryption-failure output proves the importer applies the
+    // id-free placeholder. Asserting "no f-bad" over the three hand-built
+    // literals is true by construction and was removed (that was the previous
+    // version's tautology).
     let vault = vault_with_folders(
         &[serde_json::json!({"id": "f-bad", "name": "not-an-enc-string"})],
         &[],
     );
     let folders = folders_from(&vault).expect("the folder list must be readable");
     assert_eq!(folders.len(), 1);
-    for folder in &folders {
-        assert_eq!(folder.id, "f-bad");
-        assert!(!folder.name.contains(folder.id.as_str()), "{folder:?}");
-    }
-    for rendered in [missing.as_str(), undecryptable.as_str(), name.as_str()] {
-        assert!(!rendered.contains("f-bad"), "{rendered}");
-    }
+    assert_eq!(folders[0].id, "f-bad");
+    assert_eq!(folders[0].name, undecryptable);
+    assert!(
+        !folders[0].name.contains(folders[0].id.as_str()),
+        "{:?}",
+        folders[0]
+    );
 }
 
 #[test]

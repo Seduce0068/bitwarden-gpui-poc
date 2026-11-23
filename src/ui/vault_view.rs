@@ -19,6 +19,14 @@ pub(super) struct VaultViewState {
     pub(super) searching: bool,
     /// Stable id of the selected item.
     pub(super) selected_id: Option<String>,
+    /// Whether the cached TOTP may still belong to a selection just dropped.
+    ///
+    /// `deselect_and_rewind` is the single choke point for losing the
+    /// selection, but it lives below the app layer where `TotpState` is not
+    /// reachable (its callers include `finish_search` and the input handlers).
+    /// Raising this signal there lets the app's TOTP sync wipe the stale
+    /// secret even when the deselection happens outside `BitwardenApp`.
+    pub(super) totp_stale_after_deselect: bool,
     /// Last health audit result.
     pub(super) audit_report: Option<Report>,
     /// Scroll position of the item list.
@@ -45,6 +53,7 @@ impl VaultViewState {
             sort: SortKey::NameAsc,
             searching: false,
             selected_id: None,
+            totp_stale_after_deselect: false,
             audit_report: None,
             scroll_handle: UniformListScrollHandle::new(),
             #[cfg(test)]
@@ -71,11 +80,24 @@ impl VaultViewState {
     /// drops the selection leaves the same visible range behind.
     pub(super) fn deselect_and_rewind(&mut self) {
         self.selected_id = None;
+        // The cached TOTP (if any) now belongs to a row that is no longer
+        // selected. Raise the signal so the app-level TOTP sync drops it; see
+        // the field docs and `BitwardenApp::sync_totp_to_selection`.
+        self.totp_stale_after_deselect = true;
         self.scroll_to_top();
         #[cfg(test)]
         {
             self.rewind_calls += 1;
         }
+    }
+
+    /// Consume the "TOTP may be stale" signal raised by deselection.
+    ///
+    /// Returns `true` at most once per deselection, so the app's TOTP sync can
+    /// wipe the old secret exactly once without clearing a freshly displayed
+    /// code on every render.
+    pub(super) fn take_totp_stale(&mut self) -> bool {
+        std::mem::take(&mut self.totp_stale_after_deselect)
     }
 
     /// Reset the view when locking the vault.
@@ -984,6 +1006,49 @@ mod tests {
             before + 1,
             "confirming search rewinds through deselect_and_rewind"
         );
+    }
+
+    #[test]
+    fn finish_search_signals_that_the_cached_totp_is_stale() {
+        // `finish_search` deselects below the app layer, where it cannot touch
+        // `TotpState`. It must still raise the signal the app reads to wipe a
+        // secret belonging to the row that was dropped.
+        type DeselectPath = (&'static str, fn(&mut VaultViewState));
+        let paths: Vec<DeselectPath> = vec![
+            ("start_search", |state| state.start_search()),
+            ("finish_search", |state| state.finish_search()),
+            ("push_query", |state| state.push_query("B")),
+            ("pop_query", |state| state.pop_query()),
+            ("cycle_filter", |state| state.cycle_filter()),
+            ("deselect_and_rewind", |state| state.deselect_and_rewind()),
+        ];
+
+        for (name, apply) in paths {
+            let mut state = state_with_items();
+            state.selected_id = Some("a".into());
+            assert!(
+                !state.totp_stale_after_deselect,
+                "{name}: precondition: no pending signal"
+            );
+
+            apply(&mut state);
+
+            assert_eq!(state.selected_id, None, "{name}: selection must be dropped");
+            assert!(
+                state.totp_stale_after_deselect,
+                "{name}: deselection must signal a stale TOTP"
+            );
+            // The signal is one-shot: the app's sync consumes it exactly once
+            // and never clears a freshly displayed code on later renders.
+            assert!(
+                state.take_totp_stale(),
+                "{name}: first read gets the signal"
+            );
+            assert!(
+                !state.take_totp_stale(),
+                "{name}: second read must not repeat the signal"
+            );
+        }
     }
 
     #[test]

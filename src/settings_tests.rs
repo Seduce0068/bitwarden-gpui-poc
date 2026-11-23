@@ -1875,6 +1875,59 @@ fn sanitized_uses_the_ui_email_format_policy() {
 }
 
 #[test]
+fn sanitized_email_cc_is_kept_but_valid_email_rejects_it() {
+    // Documented asymmetry: `normalize_email_text` (settings.rs:201-216) only
+    // knows about Unicode `Cf`, so a Cc control (NUL, DEL, C1) survives
+    // `sanitized()` unchanged. `auth::valid_email` rejects Cc explicitly
+    // (auth.rs:449-454), so such a stored address cannot be used to log in.
+    // Pin both halves; the boundary is a settings-layer constraint, not
+    // evidence that Cc is an acceptable email character.
+    for control in ['\u{0}', '\u{1f}', '\u{7f}', '\u{80}', '\u{9f}'] {
+        let raw = format!("alice{control}@example.com");
+        let settings = Settings {
+            email: raw.clone(),
+            ..Default::default()
+        };
+        let safe = settings.sanitized();
+        assert_eq!(safe.email, raw, "Cc U+{:04X} is not a Cf", control as u32);
+        assert_eq!(settings.email, raw, "sanitized() must stay a pure clone");
+        assert!(
+            !crate::auth::valid_email(&safe.email),
+            "auth must reject the Cc the settings layer kept: {raw:?}"
+        );
+    }
+
+    // The Cf mirror image: a leading zero-width run is stripped and the
+    // remainder is accepted, while an interior Cf clears the whole address.
+    let leading = Settings {
+        email: "\u{200b}alice@example.com".into(),
+        ..Default::default()
+    };
+    let safe = leading.sanitized();
+    assert_eq!(safe.email, "alice@example.com");
+    assert!(crate::auth::valid_email(&safe.email));
+    let interior = Settings {
+        email: "al\u{200b}ice@example.com".into(),
+        ..Default::default()
+    };
+    assert!(interior.sanitized().email.is_empty());
+
+    // Embedded credentials in the server URL are presentation-redacted, not
+    // rewritten: sanitized() keeps the string (only its length is clamped).
+    // A Cf/Cc inside that userinfo is preserved too, so Debug's `[redacted]`
+    // must not be mistaken for a storage guarantee.
+    let raw = "https://user\u{200b}:\u{0}pass@vault.example.com/p";
+    let settings = Settings {
+        server_url: raw.into(),
+        ..Default::default()
+    };
+    assert_eq!(settings.sanitized().server_url, raw);
+    let debug = format!("{settings:?}");
+    assert!(debug.contains("server_url: \"[redacted]\""), "{debug}");
+    assert!(!debug.contains("pass@vault.example.com"), "{debug}");
+}
+
+#[test]
 fn sanitized_clips_clipboard_delay_to_the_lower_bound() {
     use crate::limits::{MAX_CLIPBOARD_RESTORE_SECONDS, MIN_CLIPBOARD_RESTORE_SECONDS};
 

@@ -835,7 +835,10 @@ fn audit_item(
                 findings.push(Finding::NoTotp);
             }
         }
-        crate::model::ItemData::Card(card) if card.number.trim().is_empty() => {
+        // Share the model's visibility rule with the name/TOTP/search paths:
+        // `trim()` alone keeps NUL, DEL, C1 controls and zero-width spaces, so
+        // such a number looked present instead of being reported as missing.
+        crate::model::ItemData::Card(card) if is_visually_empty(&card.number) => {
             findings.push(Finding::NoCardNumber);
         }
         crate::model::ItemData::SshKey(key) => match key.verify_fingerprint() {
@@ -863,9 +866,11 @@ fn audit_item(
         // Invisible whitespace, control and format characters (e.g. zero-width
         // space) can hide an insecure scheme anywhere in the string, so strip
         // them from the value used both for detection and for the masked
-        // finding. Backslashes are treated as slashes the way browsers do, so
-        // `http:\host` cannot evade the scheme check. The raw URI is never
-        // stored: both the check and `mask_uri` use this normalized value.
+        // finding. Backslashes are treated as slashes the way browsers do, and
+        // browsers also accept one slash after `http:`, so the check accepts
+        // `http:/` as well as `http://`; neither spelling can evade it. The
+        // raw URI is never stored: both the check and `mask_uri` use this
+        // normalized value.
         let visible: String = uri
             .uri
             .chars()
@@ -876,7 +881,7 @@ fn audit_item(
             })
             .map(|ch| if ch == '\\' { '/' } else { ch })
             .collect();
-        if visible.to_lowercase().starts_with("http://") {
+        if visible.to_lowercase().starts_with("http:/") {
             findings.push(Finding::InsecureUri {
                 uri: crate::model::mask_uri(&visible),
             });

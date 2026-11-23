@@ -2668,6 +2668,49 @@ fn authority_start_accepts_uppercase_schemes_and_ignores_query_schemes() {
 }
 
 #[test]
+fn has_userinfo_colon_empty_value_does_not_count_as_userinfo() {
+    // `has_userinfo_colon` (cache.rs:166-171) requires a non-empty value after
+    // the colon, so a bare `host:` (empty port) is not mistaken for a password.
+    assert!(!super::has_userinfo_colon("host:"));
+    assert!(!super::has_userinfo_colon(":"));
+    assert!(!super::has_userinfo_colon("user:"));
+    // A canonical port is still not userinfo; a non-empty non-digit value is.
+    assert!(!super::has_userinfo_colon("host:8443"));
+    assert!(super::has_userinfo_colon("user:pass"));
+    // A non-canonical digit run counts as a numeric password.
+    assert!(super::has_userinfo_colon("user:12345"));
+    assert!(super::has_userinfo_colon("user:0"));
+
+    // Integration: the empty value keeps the path delimiter authoritative, so
+    // a later '@' in the path is not reinterpreted as the userinfo separator
+    // and the whole URL is not masked. Without the guard the authority would
+    // be extended past '/' and the credential-looking text would be rewritten.
+    let url = "https://host:/user:SECRET@evil.example.com/p";
+    assert_eq!(super::mask_url_userinfo(url), url);
+}
+
+#[test]
+fn authority_start_skips_non_scheme_delimiters_and_counts_leading_slashes() {
+    // `authority_start` (cache.rs:133-146) only accepts `://` at the very
+    // front after a valid scheme. Every other candidate is skipped by the
+    // loop and the fallback counts leading '/' bytes for scheme-less values.
+    assert!(!super::is_scheme("1bad"));
+    assert!(!super::is_scheme("/a"));
+    assert_eq!(super::authority_start("1bad://user:p@host/p"), 0);
+    assert_eq!(super::authority_start("/a://b://user:p@host/p"), 1);
+    assert_eq!(
+        super::authority_start("//host/p?next=https://cb.example.com/done"),
+        2
+    );
+    // Two non-scheme delimiters before the leading slash: the loop advances
+    // past both and the fallback still starts the authority after '/'.
+    assert_eq!(
+        super::authority_start("/a://b://user:p@host/p?next=x://y"),
+        1
+    );
+}
+
+#[test]
 fn uppercase_scheme_and_query_scheme_userinfo_are_masked() {
     for (url, expected) in [
         (

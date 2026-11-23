@@ -3135,6 +3135,9 @@ fn vault_item_metadata_wrong_types_and_missing_fields_are_rejected() {
         ("favorite", serde_json::json!("true")),
         ("notes", serde_json::json!(42)),
         ("revision_date", serde_json::json!("1700000123")),
+        // `data` is the internally tagged kind-specific payload: no default
+        // and no way to coerce a scalar into an `ItemData`.
+        ("data", serde_json::json!(42)),
     ] {
         let mut value = valid.clone();
         value[field] = wrong.clone();
@@ -3145,7 +3148,9 @@ fn vault_item_metadata_wrong_types_and_missing_fields_are_rejected() {
     }
     // `folder_id` is an `Option<String>` and is allowed to be absent (it
     // deserializes to `None`), so it is excluded from the missing-field cases.
-    for field in ["id", "name", "favorite", "notes", "revision_date"] {
+    // `data` is the tagged kind-specific payload with no serde default, so it
+    // is required like the metadata fields above.
+    for field in ["id", "name", "favorite", "notes", "revision_date", "data"] {
         let mut value = valid.clone();
         value.as_object_mut().unwrap().remove(field);
         assert!(
@@ -3784,4 +3789,73 @@ fn control_characters_only_values_are_visually_empty_like_auth_credentials() {
     // Controls: the pre-existing halves of the rule still hold.
     assert!(super::is_visually_empty(" \t\n \u{200b}"));
     assert!(!super::is_visually_empty("GitHub"));
+}
+
+#[test]
+fn control_only_names_and_needles_share_the_search_and_duplicate_rules() {
+    // `is_visually_empty` (model.rs:100-114) includes `Cc`. The earlier Cf-only
+    // suites cover search and duplicates separately; this test drives the
+    // combined path with Cc-only values so the two consumers cannot drift.
+    let controls = ["\u{0}", "\u{1}\u{1f}", "\u{7f}", "\u{80}", "\u{9f}"];
+
+    let mut vault = Vault::new();
+    for (index, value) in controls.iter().enumerate() {
+        vault.items.push(login(
+            &format!("cc-{index}"),
+            value,
+            "u",
+            "p",
+            "https://example.com",
+        ));
+        // Cc mixed with Cf and whitespace is invisible on the same rule.
+        vault.items.push(login(
+            &format!("cc-mixed-{index}"),
+            &format!(" \u{200b}{value}\t"),
+            "u",
+            "p",
+            "https://example.com",
+        ));
+    }
+    // A real duplicate pair must still be reported in the same vault, so an
+    // empty group list would not pass for the wrong reason.
+    vault
+        .items
+        .push(login("visible-1", "Alpha", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("visible-2", "alpha", "u", "p", "https://b.example"));
+
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "alpha");
+    assert_eq!(
+        groups[0].1,
+        vec!["visible-1".to_string(), "visible-2".to_string()]
+    );
+
+    // Every Cc-only value is invisible to search on both public entry points.
+    let item = &vault.items[0];
+    for value in controls {
+        assert!(!item.matches_query(value), "Cc needle matched: {value:?}");
+        assert!(
+            vault.view(&Filter::All, value, SortKey::NameAsc).is_empty(),
+            "Cc query showed items: {value:?}"
+        );
+        let mixed = format!(" \u{200b}{value}\t");
+        assert!(
+            !item.matches_query(&mixed),
+            "mixed needle matched: {mixed:?}"
+        );
+        assert!(
+            vault
+                .view(&Filter::All, &mixed, SortKey::NameAsc)
+                .is_empty(),
+            "mixed query showed items: {mixed:?}"
+        );
+    }
+    // Blank queries keep the long-standing "show all" behaviour.
+    assert_eq!(
+        vault.view(&Filter::All, "", SortKey::NameAsc).len(),
+        vault.items.len()
+    );
 }

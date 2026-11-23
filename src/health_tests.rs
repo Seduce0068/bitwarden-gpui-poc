@@ -2987,3 +2987,90 @@ fn cf_only_names_use_the_unnamed_finding_and_placeholder() {
         report.items
     );
 }
+
+#[test]
+fn invisible_only_card_numbers_are_flagged_as_no_card_number() {
+    // `audit_item` now shares the model's `is_visually_empty` rule with the
+    // name/TOTP/search paths (health.rs:841). `trim()` alone kept NUL, DEL, C1
+    // controls and zero-width spaces, so such a number looked present.
+    for number in [
+        "\u{200b}",
+        "\u{0}",
+        "\u{1f}",
+        "\u{7f}",
+        "\u{80}",
+        "\u{9f}",
+        " \u{200b}\u{0}\t",
+    ] {
+        let card = VaultItem::new(
+            "card-invisible",
+            "Card",
+            ItemData::Card(CardData {
+                number: number.into(),
+                ..CardData::default()
+            }),
+        );
+        let report = report_of(vec![card]);
+        let item = report
+            .items
+            .iter()
+            .find(|item| item.id == "card-invisible")
+            .unwrap_or_else(|| panic!("an invisible number must be flagged: {number:?}"));
+        assert!(
+            item.findings.contains(&Finding::NoCardNumber),
+            "number {number:?}: {:?}",
+            item.findings
+        );
+    }
+
+    // A visible character next to a control keeps the number present.
+    let present = VaultItem::new(
+        "card-present",
+        "Card",
+        ItemData::Card(CardData {
+            number: "\u{0}4111 1111 1111 1234".into(),
+            ..CardData::default()
+        }),
+    );
+    assert!(!report_of(vec![present])
+        .items
+        .iter()
+        .any(|item| item.findings.contains(&Finding::NoCardNumber)));
+}
+
+#[test]
+fn single_slash_http_uris_are_detected_as_insecure() {
+    // Browsers normalize `http:/host` to `http://host`, so a single slash is
+    // still an insecure scheme. The check (health.rs:884) must accept `http:/`
+    // as a prefix, not only `http://`.
+    for raw in [
+        "http:/example.com",
+        "HTTP:/Example.com",
+        "http:/user:token@example.com/path?key=secret",
+        "http:\\example.com",
+    ] {
+        let report = report_of(vec![login("1", "A", "vT7#kQm2!zR9wP4$xL8@", raw, "SECRET")]);
+        let finding = report.items[0]
+            .findings
+            .iter()
+            .find(|finding| matches!(finding, Finding::InsecureUri { .. }))
+            .unwrap_or_else(|| panic!("single-slash URI was not detected: {raw:?}"));
+        let Finding::InsecureUri { uri } = finding else {
+            unreachable!()
+        };
+        assert_eq!(uri, "http://example.com", "raw: {raw:?}");
+        assert!(!finding.message().contains("token"), "{raw:?}");
+    }
+
+    // A scheme without any slash stays out of scope, and https is not flagged.
+    for raw in ["http:example.com", "https:/example.com"] {
+        let report = report_of(vec![login("2", "B", "vT7#kQm2!zR9wP4$xL8@", raw, "SECRET")]);
+        assert!(
+            !report.items.iter().any(|item| item
+                .findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::InsecureUri { .. }))),
+            "{raw:?}"
+        );
+    }
+}

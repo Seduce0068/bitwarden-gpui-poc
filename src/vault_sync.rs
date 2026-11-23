@@ -48,10 +48,11 @@
 //! parameter; tests pass real byte slices and pin the observable
 //! classification instead. A private helper taking an already-parsed
 //! `serde_json::Value` (or a parser/constructor closure) could provide the
-//! seam without changing `parse_sync`'s public signature, just as the private
-//! decryptor seams elsewhere in this module do. That refactor is outside this
-//! change's scope, so this note records the limit rather than implying the
-//! failure branches are covered.
+//! seam without changing `parse_sync`'s public signature. This is unlike the
+//! field decryptors, for which a private seam was explicitly rejected above:
+//! it would fork the real reader path these tests exercise. That refactor is
+//! outside this change's scope, so this note records the limit rather than
+//! implying the failure branches are covered.
 
 use std::collections::{HashMap, HashSet};
 
@@ -152,10 +153,12 @@ pub const MAX_SYNC_BODY_BYTES: usize = crate::limits::MAX_SYNC_BODY_BYTES;
 /// # Errors
 ///
 /// [`SyncError::InvalidLoginCause`] when the body is larger than
-/// [`MAX_SYNC_BODY_BYTES`], cannot be parsed as JSON, or is rejected by
-/// `openwarden`. The size gate runs first so an oversized body never reaches
-/// the JSON parser; its typed cause carries the byte count and the cap. The
-/// auth layer maps this family to a retryable sync failure.
+/// [`MAX_SYNC_BODY_BYTES`], cannot be parsed as JSON, has conflicting keys
+/// after PascalCase normalization, or is rejected by `openwarden`. The size
+/// gate runs first so an oversized body never reaches the JSON parser; its
+/// typed cause carries the byte count and the cap. Every failure keeps the
+/// original parser/normalizer/constructor text as its typed cause. The auth
+/// layer maps this family to a retryable sync failure.
 pub fn parse_sync(body: &[u8]) -> Result<openwarden::SyncData, SyncError> {
     if body.len() > MAX_SYNC_BODY_BYTES {
         let detail = format!(

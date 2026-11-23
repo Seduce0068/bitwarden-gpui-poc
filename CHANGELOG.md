@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 全体改善（第110〜111弾 / 2026-11-23）
+
+- 監査 status の内部 ID／Cf 名、arrow キー、master_password 不可視判定を修正
+- 数値パスワード＋'/' マスク、model の Cc 判定、
+  確定クエリ案内、ADR redact 行参照を修正
+- KDF 成功経路、ensure_device_id 早期リターンをテスト
+
 ### 全体改善（第107〜109弾 / 2026-11-23）
 
 - コピー／生成 status の未保存マーカー、Cf 検索、

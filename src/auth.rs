@@ -441,6 +441,13 @@ fn credential_is_blank(value: &str) -> bool {
 /// one `@`, no whitespace/control/format characters, no leading/trailing or
 /// consecutive dots in either the local part or the domain, and a dotted
 /// domain. Regex-level RFC 5322 validation is out of scope for the PoC.
+///
+/// Interaction with persisted settings: [`crate::settings::Settings::sanitized`]
+/// filters only Unicode `Cf` format characters from a stored email; it does
+/// not reject `Cc` controls (NUL, DEL, C1). Such an address can therefore
+/// survive sanitization but is rejected here. The asymmetry is pinned by
+/// `sanitized_email_cc_is_kept_but_valid_email_rejects_it` in
+/// `settings_tests.rs`.
 pub fn valid_email(value: &str) -> bool {
     let value = value.trim();
     if value.is_empty()
@@ -1171,16 +1178,16 @@ async fn authenticate_inner(
     };
     // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
     //
-    // Known constraint: the email is trimmed here but NOT case-folded before
-    // `MasterKey::derive`. Bitwarden derives the master key from the account
-    // email as stored by the server, so an address entered with different
-    // casing yields a different key and unlock fails, even though
-    // `validate_config` accepts every casing and no validation error is
-    // reported. Lowercasing would silently change the derived key for every
-    // existing mixed-case address, so this PoC records the limitation instead
-    // of normalizing; the regression test
-    // `uppercase_email_is_not_case_folded_before_kdf_is_a_known_constraint`
-    // pins that the configured value keeps its case on the way to this call.
+    // This layer trims the email but does not fold its case before calling
+    // `MasterKey::derive`. The dependency does fold it: openwarden 0.1.1's
+    // `normalize_email` applies `trim().to_lowercase()` inside `derive`
+    // (openwarden-0.1.1/src/kdf.rs:168-189), so a mixed-case address yields the
+    // same master key as its lowercase spelling. Adding our own folding here
+    // would be redundant; the earlier claim that a case mismatch changed the
+    // derived key was incorrect. The regression test
+    // `email_case_is_folded_by_openwarden_derive_not_by_our_config_layer`
+    // pins both halves: our config/clamp keeps the original case while the
+    // real derive is case-insensitive.
     let password = config.master_password.clone();
     let email = config.email.trim().to_string();
     let policy = KdfPolicy::default();
