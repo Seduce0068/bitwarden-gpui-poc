@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第127〜128弾 / 2026-11-24）
+
+- comparison_key の trim 順序、adjust_idle_lock の端数保持、
+  不可視クエリのキー分類を修正
+- estimate_entropy の不可視文字扱い、編集キー案内、
+  README ゲート一覧を修正
+- ensure_device_id 不正 id、ItemKind wire 数値、
+  RFC3339 小文字、非オブジェクト profile、非ASCII区切りをテスト
+
 ### 全体改善（第125〜126弾 / 2026-11-24）
 
 - 空白パスワード桁数表示、編集中 n 案内、auth/ADR 行参照を修正

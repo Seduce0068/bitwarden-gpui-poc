@@ -245,6 +245,20 @@ pub(super) fn is_visually_empty(value: &str) -> bool {
         .all(|ch| ch.is_whitespace() || ch.is_control() || crate::limits::is_format_character(ch))
 }
 
+/// Count only characters that actually render, using the same invisibility rule
+/// as [`is_visually_empty`]. Whitespace and Unicode `Cc`/`Cf` characters (zero
+/// width spaces, bidi overrides, controls, ...) draw nothing, so including them
+/// in a user-facing "n文字" length made a value such as `a\u{200b}b` read as
+/// "3文字". Pure so the wording can be pinned without a GPUI window.
+pub(super) fn visible_char_count(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|ch| {
+            !ch.is_whitespace() && !ch.is_control() && !crate::limits::is_format_character(*ch)
+        })
+        .count()
+}
+
 /// Placeholder drawn for a vault item whose name has no visible content.
 pub(super) const ITEM_NAME_PLACEHOLDER: &str = "(名称未設定)";
 
@@ -407,6 +421,8 @@ pub(super) fn totp_detail_text(secret: &str, generated: String, error: Option<St
 /// visible content, but the detail row used to count every `char` and render
 /// e.g. "3文字" for a whitespace/Unicode `Cf`-only value. Both now go through
 /// [`is_visually_empty`], so an absent password reads "なし" on both sides.
+/// For a present password the count uses [`visible_char_count`], so invisible
+/// characters *between* visible ones do not inflate the label either.
 /// The undecryptable sentinel keeps its own label and is checked first because
 /// it carries visible text. Pure so the wording can be pinned without a GPUI
 /// window.
@@ -416,7 +432,7 @@ pub(super) fn password_detail_label(password: &str) -> String {
     } else if is_visually_empty(password) {
         "なし".to_string()
     } else {
-        format!("{}文字", password.chars().count())
+        format!("{}文字", visible_char_count(password))
     }
 }
 
@@ -564,15 +580,24 @@ pub(super) fn auto_lock_status(idle_lock_seconds: u64, dirty: bool) -> String {
 /// Status after toggling a favorite, keeping the unsaved marker visible.
 ///
 /// Both branches of `toggle_favorite` (success and no selection) compose
-/// their status through `status_with_unsaved`. The pure form lets that
-/// contract be tested without a GPUI window.
-pub(super) fn favorite_toggle_status(favorite: bool, dirty: bool) -> String {
+/// their status through `status_with_unsaved`. `selection_valid` is the result
+/// of `VaultViewState::revalidate_selection`: under the Favorites filter an
+/// unfavorite drops the selected row from the view, so a bare
+/// "お気に入りを解除にしました" left the disappearance unexplained. When the
+/// selection was dropped, the status now says so. The pure form lets both
+/// contracts be tested without a GPUI window.
+pub(super) fn favorite_toggle_status(favorite: bool, selection_valid: bool, dirty: bool) -> String {
     let base = if favorite {
-        "お気に入りを設定にしました"
+        "お気に入りを設定にしました".to_string()
     } else {
-        "お気に入りを解除にしました"
+        "お気に入りを解除にしました".to_string()
     };
-    status_with_unsaved(base, dirty)
+    let base = if selection_valid {
+        base
+    } else {
+        format!("{base}（お気に入り一覧から外れたため選択を解除しました）")
+    };
+    status_with_unsaved(&base, dirty)
 }
 
 /// Status after cycling the sidebar filter, keeping the unsaved marker.
@@ -1258,9 +1283,11 @@ impl BitwardenApp {
             return;
         };
         if let Some(favorite) = self.view.vault.toggle_favorite(&id) {
-            self.status = favorite_toggle_status(favorite, self.settings_dirty);
             // Under the Favorites filter the item may have just left the view.
-            self.view.revalidate_selection();
+            // Feed the revalidation result back into the status so the vanished
+            // row is explained instead of silently dropping the selection.
+            let selection_valid = self.view.revalidate_selection();
+            self.status = favorite_toggle_status(favorite, selection_valid, self.settings_dirty);
             self.sync_totp_to_selection();
             cx.notify();
         }
@@ -1783,16 +1810,16 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn favorite_toggle_status_keeps_the_unsaved_marker() {
-        let set = favorite_toggle_status(true, false);
+        let set = favorite_toggle_status(true, true, false);
         assert_eq!(set, "お気に入りを設定にしました");
         assert!(!set.contains("[未保存"));
-        let set_dirty = favorite_toggle_status(true, true);
+        let set_dirty = favorite_toggle_status(true, true, true);
         assert_eq!(set_dirty, status_with_unsaved(&set, true));
         assert!(set_dirty.contains("[未保存の設定変更があります]"));
 
-        let unset = favorite_toggle_status(false, false);
+        let unset = favorite_toggle_status(false, true, false);
         assert_eq!(unset, "お気に入りを解除にしました");
-        let unset_dirty = favorite_toggle_status(false, true);
+        let unset_dirty = favorite_toggle_status(false, true, true);
         assert_eq!(unset_dirty, status_with_unsaved(&unset, true));
         assert!(unset_dirty.contains("[未保存の設定変更があります]"));
 
@@ -1801,6 +1828,29 @@ mod tests {
             status_with_unsaved(crate::ui::logic::no_selection_status(), true)
                 .contains("[未保存の設定変更があります]")
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn favorite_toggle_status_explains_a_selection_dropped_by_the_filter() {
+        // Unfavoriting under the Favorites filter removes the row from the view;
+        // `revalidate_selection` returns false and the status must say why the
+        // selected detail vanished.
+        let dropped = favorite_toggle_status(false, false, false);
+        assert_eq!(
+            dropped,
+            "お気に入りを解除にしました（お気に入り一覧から外れたため選択を解除しました）"
+        );
+
+        // A selection that is still visible keeps the original short wording.
+        let kept = favorite_toggle_status(false, true, false);
+        assert_eq!(kept, "お気に入りを解除にしました");
+        assert!(!kept.contains("お気に入り一覧から外れた"), "{kept}");
+
+        // The explanation composes with the persistent unsaved marker too.
+        let dirty = favorite_toggle_status(false, false, true);
+        assert_eq!(dirty, status_with_unsaved(&dropped, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
+        assert!(dirty.contains("お気に入り一覧から外れた"), "{dirty}");
     }
 
     #[::core::prelude::v1::test]
@@ -2856,9 +2906,15 @@ mod tests {
             assert_eq!(select_copy_value(&login(blank), true), None, "{blank:?}");
         }
 
-        // A visible secret keeps its old label and remains copyable.
+        // A visible secret keeps its label based on visible characters only;
+        // surrounding whitespace and embedded invisible characters do not
+        // inflate the count.
         assert_eq!(password_detail_label("s3cret"), "6文字");
-        assert_eq!(password_detail_label(" alice "), "7文字");
+        assert_eq!(password_detail_label(" alice "), "5文字");
+        assert_eq!(password_detail_label("a\u{200b}b"), "2文字");
+        assert_eq!(password_detail_label("a\u{0}b\u{feff}"), "2文字");
+        assert_eq!(password_detail_label("\u{202e}abc\u{200b}"), "3文字");
+        assert_eq!(password_detail_label("日本語"), "3文字");
         assert_eq!(
             select_copy_value(&login("s3cret"), true).as_deref(),
             Some("s3cret")
@@ -2950,6 +3006,27 @@ mod tests {
         // The pre-existing halves of the rule still hold.
         assert!(is_visually_empty(" \t\n \u{200b}"));
         assert!(!is_visually_empty("GitHub"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn visible_char_count_uses_the_same_invisibility_rule_as_is_visually_empty() {
+        assert_eq!(visible_char_count(""), 0);
+        assert_eq!(visible_char_count("   \t "), 0);
+        assert_eq!(visible_char_count("\u{200b}\u{feff}\u{202e}"), 0);
+        assert_eq!(visible_char_count("\u{0}\u{1f}"), 0);
+        // Invisible characters between / around visible ones are not counted.
+        assert_eq!(visible_char_count("a\u{200b}b"), 2);
+        assert_eq!(visible_char_count(" \u{202e}abc\u{feff} "), 3);
+        assert_eq!(visible_char_count(" alice "), 5);
+        // Every counted character is visible, so the label agrees with the
+        // emptiness check: zero visible characters means "なし".
+        for value in ["", " \t ", "\u{200b}", "a\u{200b}"] {
+            assert_eq!(
+                visible_char_count(value) == 0,
+                is_visually_empty(value),
+                "{value:?}"
+            );
+        }
     }
 
     #[::core::prelude::v1::test]

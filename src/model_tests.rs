@@ -446,6 +446,52 @@ fn page_matching_uses_bitwarden_rules() {
 }
 
 #[test]
+fn default_domain_match_covers_subdomains_but_not_lookalikes() {
+    // A `LoginUri` without an explicit match type uses
+    // `MatchOptions::default_match` (Domain), as in Bitwarden. A login stored
+    // for a registrable domain is therefore offered on its subdomains too.
+    let uri = LoginUri::new("https://example.com/login");
+    assert_eq!(
+        uri.match_enum(),
+        None,
+        "precondition: no explicit match type"
+    );
+    let opts = openwarden::MatchOptions::default();
+    assert_eq!(opts.default_match, openwarden::UriMatch::Domain);
+
+    assert!(uri.matches("https://www.example.com/dashboard", &opts));
+    assert!(uri.matches("https://a.b.example.com/other", &opts));
+    // The default strict_scheme still refuses an https login on an http page.
+    assert!(!uri.matches("http://www.example.com/", &opts));
+    // Neither a lookalike nor a sibling registrable domain shares the base.
+    assert!(!uri.matches("https://example.com.evil.net/", &opts));
+    assert!(!uri.matches("https://notexample.com/", &opts));
+
+    // Both `matches_page` entry points reach the same default-domain rule.
+    let item = VaultItem::new(
+        "default-domain",
+        "Example",
+        ItemData::Login {
+            username: "u".into(),
+            password: Zeroizing::new("p".into()),
+            totp: Zeroizing::new(String::new()),
+            uris: vec![LoginUri::new("https://example.com/login")],
+        },
+    );
+    assert!(item.matches_page("https://sub.example.com/dashboard", &opts));
+    let vault = Vault {
+        items: vec![item],
+        folders: Vec::new(),
+    };
+    let hits = vault.matches_page("https://sub.example.com/dashboard", &opts);
+    assert_eq!(hits.len(), 1, "an item must not be duplicated per URI");
+    assert_eq!(hits[0].id, "default-domain");
+    assert!(vault
+        .matches_page("https://sub.example.com.evil.net/", &opts)
+        .is_empty());
+}
+
+#[test]
 fn page_matching_orders_multiple_hits_by_favorite_then_revision_then_name() {
     let mut vault = Vault::new();
     let page = "https://example.com/settings";
@@ -1664,11 +1710,25 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
         1_800_000_000,
         "zero revision must not rewind an explicit one"
     );
+
+    // An explicit revision is honoured in the decreasing direction too:
+    // `upsert` replaces the row, it does not enforce a monotonic revision
+    // clock. Only the UNKNOWN_REVISION sentinel preserves the old value.
+    let mut older = original.clone();
+    older.name = "Older".into();
+    older.revision_date = 1_600_000_000;
+    vault.upsert(older);
+    assert_eq!(vault.item("u-1").unwrap().name, "Older");
+    assert_eq!(
+        vault.item("u-1").unwrap().revision_date,
+        1_600_000_000,
+        "an explicit decreasing revision overwrites the stored one"
+    );
 }
 
 #[test]
 fn page_matching_ties_use_the_folded_name_key_then_the_id() {
-    // `matches_page` shares the `compare` tiebreak (model.rs:1103-1123,1215-1225):
+    // `matches_page` shares the `compare` tiebreak (model.rs:1109-1129,1221-1231):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
     let page = "https://example.com/shared";

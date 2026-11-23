@@ -174,6 +174,19 @@ pub(super) fn settings_panel_key_hint(editing: bool) -> String {
     }
 }
 
+/// Compose the key guidance drawn in a panel's fixed footer.
+///
+/// The settings and generator panels scroll their body with
+/// `.overflow_y_scroll()`. Their key hint used to be the last child of that
+/// scrollable div, so [`FOCUS_RECOVERY_HINT`] was invisible until the user
+/// scrolled to the end — exactly when a lost focus is hardest to recover from.
+/// Both panels now render the hint through this helper in a footer *outside*
+/// the scroll container, so F1 is always on screen. Keeping the composition
+/// pure lets the "always visible" contract be pinned without a GPUI window.
+pub(super) fn panel_key_hint_footer(hint: &str) -> String {
+    format!("操作: {hint}")
+}
+
 /// Generator-settings summary line shown in the settings panel.
 ///
 /// `ui::keys::classify_key` binds `n` directly to `Panel::Generator` in
@@ -512,75 +525,88 @@ pub(super) fn generator_panel<'a>(
         pp_bits,
         &passphrase.separator,
     );
+    // The body scrolls, but F1 must not: a hint hidden at the bottom of the
+    // scroll is useless precisely when focus has been lost. Keep the body in
+    // its own scroll container and draw the key guidance in a fixed footer.
     div()
-        .id("generator-panel-scroll")
         .flex()
         .flex_col()
-        .gap_2()
-        .p_4()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
         .child(
             div()
-                .text_lg()
-                .font_weight(FontWeight::BOLD)
-                .child("パスワード生成"),
+                .id("generator-panel-scroll")
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_4()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::BOLD)
+                        .child("パスワード生成"),
+                )
+                .child(setting_row("1  小文字 a-z", password.lowercase))
+                .child(setting_row("2  大文字 A-Z", password.uppercase))
+                .child(setting_row("3  数字 0-9", password.digits))
+                .child(setting_row("4  記号 !@#$%^&*", password.symbols))
+                .child(setting_row("5  曖昧文字を除外", password.avoid_ambiguous))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0xa6adc8))
+                        .child(password_label),
+                )
+                .child(result_row(
+                    "p  生成",
+                    state.last_password.as_ref().map(|value| value.as_str()),
+                ))
+                .child(
+                    div()
+                        .mt_4()
+                        .text_lg()
+                        .font_weight(FontWeight::BOLD)
+                        .child("パスフレーズ生成"),
+                )
+                .child(setting_row("6  先頭を大文字に", passphrase.capitalize))
+                .child(setting_row("7  数字を追加", passphrase.include_number))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0xa6adc8))
+                        .child(passphrase_label),
+                )
+                .child(result_row(
+                    "h  生成",
+                    state.last_passphrase.as_ref().map(|value| value.as_str()),
+                ))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(if dirty { rgb(0xf9e2af) } else { rgb(0xa6adc8) })
+                        .child(format!(
+                            "{} {}",
+                            unsaved_marker(dirty),
+                            if dirty {
+                                "生成設定は未保存です（w: 保存 / d: 破棄）"
+                            } else {
+                                "未保存の設定変更はありません"
+                            }
+                        )),
+                ),
         )
-        .child(setting_row("1  小文字 a-z", password.lowercase))
-        .child(setting_row("2  大文字 A-Z", password.uppercase))
-        .child(setting_row("3  数字 0-9", password.digits))
-        .child(setting_row("4  記号 !@#$%^&*", password.symbols))
-        .child(setting_row("5  曖昧文字を除外", password.avoid_ambiguous))
         .child(
             div()
-                .text_sm()
-                .text_color(rgb(0xa6adc8))
-                .child(password_label),
-        )
-        .child(result_row(
-            "p  生成",
-            state.last_password.as_ref().map(|value| value.as_str()),
-        ))
-        .child(
-            div()
-                .mt_4()
-                .text_lg()
-                .font_weight(FontWeight::BOLD)
-                .child("パスフレーズ生成"),
-        )
-        .child(setting_row("6  先頭を大文字に", passphrase.capitalize))
-        .child(setting_row("7  数字を追加", passphrase.include_number))
-        .child(
-            div()
-                .text_sm()
-                .text_color(rgb(0xa6adc8))
-                .child(passphrase_label),
-        )
-        .child(result_row(
-            "h  生成",
-            state.last_passphrase.as_ref().map(|value| value.as_str()),
-        ))
-        .child(
-            div()
-                .text_sm()
-                .text_color(if dirty { rgb(0xf9e2af) } else { rgb(0xa6adc8) })
-                .child(format!(
-                    "{} {}",
-                    unsaved_marker(dirty),
-                    if dirty {
-                        "生成設定は未保存です（w: 保存 / d: 破棄）"
-                    } else {
-                        "未保存の設定変更はありません"
-                    }
-                )),
-        )
-        .child(
-            div()
-                .mt_4()
+                .px_4()
+                .py_2()
                 .text_xs()
                 .text_color(rgb(0xa6adc8))
-                .child(generator_panel_key_hint(settings.clipboard_restore_seconds)),
+                .child(panel_key_hint_footer(&generator_panel_key_hint(
+                    settings.clipboard_restore_seconds,
+                ))),
         )
 }
 
@@ -630,80 +656,87 @@ pub(super) fn settings_panel<'a>(
     let path = Settings::default_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "(設定ディレクトリを特定できません)".to_string());
+    // As in the generator panel, F1 must not be hidden at the bottom of the
+    // scrollable body. The settings rows scroll; the key guidance is a fixed
+    // footer so the recovery key is always on screen.
     div()
-        .id("settings-panel-scroll")
         .flex()
         .flex_col()
-        .gap_2()
-        .p_4()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
-        .child(div().text_lg().font_weight(FontWeight::BOLD).child("設定"))
         .child(
             div()
-                .text_sm()
-                .text_color(if dirty { rgb(0xf9e2af) } else { rgb(0xa6adc8) })
-                .child(format!(
-                    "{} {}",
-                    unsaved_marker(dirty),
-                    if dirty {
-                        "未保存の変更があります（w: 保存 / d: 破棄）"
-                    } else {
-                        "未保存の変更はありません"
-                    }
-                )),
+                .id("settings-panel-scroll")
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_4()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(div().text_lg().font_weight(FontWeight::BOLD).child("設定"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(if dirty { rgb(0xf9e2af) } else { rgb(0xa6adc8) })
+                        .child(format!(
+                            "{} {}",
+                            unsaved_marker(dirty),
+                            if dirty {
+                                "未保存の変更があります（w: 保存 / d: 破棄）"
+                            } else {
+                                "未保存の変更はありません"
+                            }
+                        )),
+                )
+                .child(field_row(
+                    "1  サーバー URL",
+                    server_url,
+                    editing == Some(SettingsField::ServerUrl),
+                ))
+                .child(field_row(
+                    "2  メール",
+                    email,
+                    editing == Some(SettingsField::Email),
+                ))
+                .child(div().text_sm().text_color(rgb(0xa6adc8)).child(
+                    settings_generator_summary_line(
+                        settings.password_generator.length,
+                        settings.passphrase_generator.words,
+                        editing.is_some(),
+                    ),
+                ))
+                .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
+                    "監査閾値: 弱パスワード < {} bit / 更新が古い: {} 日以上",
+                    settings.thresholds.weak_bits, settings.thresholds.stale_days
+                )))
+                .child(div().text_sm().text_color(rgb(0xa6adc8)).child(
+                    settings_timeout_summary_line(
+                        settings.idle_lock_seconds,
+                        settings.login_timeout_seconds,
+                        settings.clipboard_restore_seconds,
+                    ),
+                ))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0xa6adc8))
+                        .child(format!("保存先: {path}")),
+                ),
         )
-        .child(field_row(
-            "1  サーバー URL",
-            server_url,
-            editing == Some(SettingsField::ServerUrl),
-        ))
-        .child(field_row(
-            "2  メール",
-            email,
-            editing == Some(SettingsField::Email),
-        ))
         .child(
             div()
-                .text_sm()
-                .text_color(rgb(0xa6adc8))
-                .child(settings_generator_summary_line(
-                    settings.password_generator.length,
-                    settings.passphrase_generator.words,
-                    editing.is_some(),
-                )),
-        )
-        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "監査閾値: 弱パスワード < {} bit / 更新が古い: {} 日以上",
-            settings.thresholds.weak_bits, settings.thresholds.stale_days
-        )))
-        .child(
-            div()
-                .text_sm()
-                .text_color(rgb(0xa6adc8))
-                .child(settings_timeout_summary_line(
-                    settings.idle_lock_seconds,
-                    settings.login_timeout_seconds,
-                    settings.clipboard_restore_seconds,
-                )),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(0xa6adc8))
-                .child(format!("保存先: {path}")),
-        )
-        .child(
-            div()
-                .mt_4()
+                .px_4()
+                .py_2()
                 .text_xs()
                 .text_color(rgb(0xa6adc8))
                 // The editing state and arrow-key ownership are announced
                 // once by the status bar (`text_edit_start_status`). The
                 // helper appends only the scroll note to the settings-specific
                 // hint, so no second "入力中:" line is drawn here.
-                .child(settings_panel_key_hint(editing.is_some())),
+                .child(panel_key_hint_footer(&settings_panel_key_hint(
+                    editing.is_some(),
+                ))),
         )
 }
 
@@ -945,6 +978,49 @@ mod tests {
         );
         assert!(hint.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{hint}");
         assert!(hint.contains("30秒で復元"), "{hint}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_key_hint_footer_keeps_focus_recovery_visible_without_scrolling() {
+        // Settings and generator scroll their body; the key guidance now lives
+        // in a fixed footer outside `.overflow_y_scroll()`. The footer must
+        // carry F1 exactly once for every hint variant, otherwise a lost focus
+        // would again be discoverable only at the end of the scroll.
+        for hint in [
+            generator_panel_key_hint(30),
+            settings_panel_key_hint(false),
+            settings_panel_key_hint(true),
+        ] {
+            let footer = panel_key_hint_footer(&hint);
+            assert!(footer.starts_with("操作: "), "{footer}");
+            assert!(
+                footer.contains(FOCUS_RECOVERY_HINT),
+                "the fixed footer must advertise F1: {footer}"
+            );
+            assert_eq!(
+                footer.matches(FOCUS_RECOVERY_HINT).count(),
+                1,
+                "F1 must appear once in the fixed footer: {footer}"
+            );
+            // The scroll note still belongs to the body; the footer only
+            // promises that the keys themselves are always reachable.
+            assert!(footer.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{footer}");
+            assert!(!footer.contains("入力中:"), "{footer}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_key_hint_advertises_the_focus_recovery_key_once() {
+        // Mirrors the generator hint contract: the settings footer must be the
+        // single, always-visible home of F1 in the editing and idle variants.
+        for editing in [false, true] {
+            let hint = settings_panel_key_hint(editing);
+            assert_eq!(
+                hint.matches(FOCUS_RECOVERY_HINT).count(),
+                1,
+                "the settings hint must advertise F1 exactly once: {hint}"
+            );
+        }
     }
 
     #[::core::prelude::v1::test]

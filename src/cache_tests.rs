@@ -1624,6 +1624,71 @@ fn secret_profile_keys_ignore_hyphen_and_underscore_separators() {
 }
 
 #[test]
+fn secret_profile_keys_fold_non_ascii_separators() {
+    // Stripping only ASCII '-'/'_' let a field decorated with an invisible Cf
+    // character or a full-width dash keep its separator and survive redaction.
+    // The fold now drops the separator families listed in `is_key_separator`.
+    for key in [
+        "k\u{200b}ey", // zero-width space (Cf)
+        "k\u{200d}ey", // zero-width joiner (Cf)
+        "k\u{00ad}ey", // soft hyphen (Cf)
+        "k\u{feff}ey", // BOM (Cf)
+        "private\u{200b}key",
+        "private\u{ff0d}key", // full-width hyphen-minus
+        "k\u{2014}ey",        // em dash
+        "k\u{ff0d}ey-",       // full-width plus ASCII separator
+        "private\u{3000}key", // ideographic space
+        "PRIVATE\u{ff3f}KEY", // full-width low line
+        "\u{200b}key\u{200b}",
+    ] {
+        assert!(
+            super::is_secret_profile_key(key),
+            "must be redacted: {key:?}"
+        );
+    }
+    // Documented limits: symbols/marks outside the explicit separator list are
+    // still part of the name, and non-ASCII letters receive no full case fold.
+    for key in [
+        "k.e.y",
+        "k!ey",
+        "ke\u{0301}y",
+        "Ｋｅｙ",
+        "keyId",
+        "privateKeyValue",
+        "\u{200b}",
+        "",
+    ] {
+        assert!(
+            !super::is_secret_profile_key(key),
+            "must not be redacted: {key:?}"
+        );
+    }
+}
+
+#[test]
+fn non_ascii_separated_key_is_stripped_from_the_cached_body() {
+    // `from_body` writes the raw JSON after redaction, so the fold must remove
+    // the field before serialization, not merely classify it correctly.
+    let body = serde_json::json!({
+        "profile": {
+            "id": "user-1",
+            "k\u{200b}ey": "ZWSP_PROFILE_KEY",
+            "private\u{ff0d}key": "FULLWIDTH_PRIVATE_KEY"
+        },
+        "folders": [],
+        "ciphers": [],
+        "object": "sync"
+    });
+    let cache = SyncCache::from_body(body.to_string().into_bytes(), "https://vault.example.com")
+        .expect("a keyless copy of the body must still be valid sync JSON");
+    let stored = String::from_utf8(cache.body.clone()).unwrap();
+    assert!(!stored.contains("ZWSP_PROFILE_KEY"), "{stored}");
+    assert!(!stored.contains("FULLWIDTH_PRIVATE_KEY"), "{stored}");
+    // Removing an unknown field must not change the body's parseability.
+    assert!(cache.sync().is_ok());
+}
+
+#[test]
 fn fragment_with_a_late_question_mark_is_masked() {
     // A `?` inside a fragment is not a query delimiter. The old code looked
     // for `?` first and copied everything before it verbatim, leaking the

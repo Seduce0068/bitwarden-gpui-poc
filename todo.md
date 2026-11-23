@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第128弾で 5 件すべてを完了）。
+なし（第129弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第129弾（16 担当・73 回目）の指摘 7 件を完結（2026-11-24）
+  - お気に入り解除 status、不可視文字桁数、F1 固定フッタ、
+    非ASCII区切りキー redaction を修正。
+  - catch-all ParseFailedCause、upsert 減方向、サブドメイン照合をテスト。
+  - CHANGELOG に第127〜128弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1186 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第128弾（16 担当・72 回目）の指摘 5 件を完結（2026-11-24）
   - estimate_entropy の不可視文字扱い、編集キー案内、
     README ゲート一覧を修正。

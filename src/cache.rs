@@ -892,19 +892,57 @@ pub(crate) fn is_cache_expired(created_at: Option<i64>, now: i64) -> bool {
     }
 }
 
+/// Whether `ch` is a separator the key-name fold may ignore.
+///
+/// Removing only ASCII `-` and `_` let a field such as `k\u{200b}ey` or
+/// `private\u{ff0d}key` keep its separator and survive redaction, so the fold
+/// covers the separator families that can plausibly decorate a field name:
+/// ASCII `-`/`_`, Unicode `Cf` format characters (reusing the Unicode 16.0 list
+/// in [`crate::limits::is_format_character`]), Unicode whitespace, and the
+/// common dash/connector punctuation, including the full-width spellings.
+fn is_key_separator(ch: char) -> bool {
+    ch.is_whitespace()
+        || crate::limits::is_format_character(ch)
+        || matches!(
+            ch,
+            '-'
+                | '_'
+                | '\u{2010}'..='\u{2015}'
+                | '\u{2212}'
+                | '\u{2e17}'
+                | '\u{2e3a}'..='\u{2e3b}'
+                | '\u{301c}'
+                | '\u{30a0}'
+                | '\u{fe31}'..='\u{fe34}'
+                | '\u{fe4d}'..='\u{fe4f}'
+                | '\u{fe58}'
+                | '\u{fe63}'
+                | '\u{ff0d}'
+                | '\u{ff3f}'
+        )
+}
+
 /// Whether a field name denotes protected or private key material, regardless
 /// of the casing/separator convention the server used.
 ///
 /// `normalize_sync_keys` (in [`crate::vault_sync`]) only lowercases the first
 /// character, so a raw PascalCase `Key` / `PrivateKey` would survive a literal
 /// `remove("key")`/`remove("privateKey")` pair. Comparing a separator-free,
-/// ASCII-lowercased form closes that gap without touching fields such as
-/// `keyId` that are not themselves secrets. The same fold is used for nested
-/// per-item keys (`ciphers[].key`, `attachments[].key`, …).
+/// lowercased form closes that gap without touching fields such as `keyId` that
+/// are not themselves secrets. The same fold is used for nested per-item keys
+/// (`ciphers[].key`, `attachments[].key`, …).
+///
+/// Known constraint (explicit separator list): [`is_key_separator`] is a
+/// hand-maintained list, not a Unicode general-category lookup. Other symbols
+/// (`.`, `!`, `/`, …), combining marks and non-ASCII letters are **not**
+/// removed, and there is no NFKC normalization or full case folding: a field
+/// named `k.e.y` or `Ｋｅｙ` is not recognized as a key. A key hidden behind one
+/// of those spellings can still be persisted, so this pass is best-effort
+/// redaction of server-supplied field names, never a cryptographic guarantee.
 fn is_secret_profile_key(key: &str) -> bool {
     let folded: String = key
         .chars()
-        .filter(|character| *character != '_' && *character != '-')
+        .filter(|character| !is_key_separator(*character))
         .flat_map(char::to_lowercase)
         .collect();
     matches!(folded.as_str(), "key" | "privatekey")

@@ -3879,20 +3879,34 @@ fn auth_error_catch_all_flattens_every_non_auth_family_to_other() {
     // sends every *other* family through its catch-all arm (auth.rs:238-280).
     // Cover one representative of each remaining layer — unlock, vault sync,
     // cache, settings, TOTP, generator and the unclassified family — so the
-    // claim matches the table. `InvalidLogin` is deliberately absent: its two
-    // variants map to `SyncDetail` (auth.rs:266-268) and are not catch-all
-    // inputs. Every case below must render the honest generic failure, never
-    // a known auth family.
+    // claim matches the table. Both the plain and the cause-carrying spellings
+    // of the unlock families are included: none of them has an `AuthError`
+    // sibling, so the typed cause must not change the catch-all verdict.
+    // `InvalidLogin` is deliberately absent: its two variants map to
+    // `SyncDetail` (auth.rs:266-268) and are not catch-all inputs. Every case
+    // below must render the honest generic failure, never a known auth family.
     let cases: Vec<(&str, AppError)> = vec![
         ("unlock/missing key", AppError::MissingProtectedKey),
         ("unlock/failed", AppError::UnlockFailed("bad key".into())),
+        (
+            "unlock/failed cause",
+            AppError::UnlockFailedCause("bad key".into(), BoxedCause::text("io failure")),
+        ),
         ("unlock/structured", AppError::unlock_failed("bad key")),
         (
             "unlock/structured cause",
             AppError::unlock_failed_cause("bad key", BoxedCause::text("io failure")),
         ),
         ("unlock/apply sync", AppError::apply_sync_failed("bad sync")),
+        (
+            "unlock/apply sync cause",
+            AppError::ApplySyncFailedCause("bad sync".into(), BoxedCause::text("io failure")),
+        ),
         ("unlock/import", AppError::import_failed("bad import")),
+        (
+            "unlock/import cause",
+            AppError::ImportFailedCause("bad import".into(), BoxedCause::text("io failure")),
+        ),
         ("vault sync/locked", AppError::Locked),
         ("settings/too large", AppError::TooLarge),
         (
@@ -3924,6 +3938,10 @@ fn auth_error_catch_all_flattens_every_non_auth_family_to_other() {
             AppError::ReadFailedCause(BoxedCause::text("denied")),
         ),
         ("cache/parse failed", AppError::ParseFailed),
+        (
+            "cache/parse failed cause",
+            AppError::ParseFailedCause(BoxedCause::text("bad json")),
+        ),
         ("totp/missing", AppError::Missing),
         ("totp/invalid", AppError::Invalid),
         (
@@ -3941,7 +3959,7 @@ fn auth_error_catch_all_flattens_every_non_auth_family_to_other() {
             AppError::Other("anything else".into()),
         ),
     ];
-    assert_eq!(cases.len(), 29, "every representative family is pinned");
+    assert_eq!(cases.len(), 33, "every representative family is pinned");
 
     for (name, app) in cases {
         let small = AuthError::from(app);
@@ -3975,6 +3993,9 @@ fn unlock_error_catch_all_keeps_the_original_status_text_in_other() {
         AppError::SettingsSaveCause("save detail".into(), BoxedCause::text("io failure")),
         AppError::InvalidCache,
         AppError::CacheParse(BoxedCause::text("bad json")),
+        // The envelope-level parse failure is a catch-all input here too; its
+        // cause is dropped while the rendered reason text survives.
+        AppError::ParseFailedCause(BoxedCause::text("bad json")),
         AppError::UserMismatch,
         AppError::CacheExpired,
         AppError::RandomUnavailable,
