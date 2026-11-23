@@ -2147,3 +2147,80 @@ fn mixed_capitalization_adds_the_passphrase_bonus_only_once() {
     assert_eq!(estimate_entropy(&mixed), expected);
     assert_eq!(estimate_entropy(&flat_mixed), expected);
 }
+
+#[test]
+fn duplicate_http_uris_on_one_host_are_counted_twice_today() {
+    // Characterization of the current behaviour, not a desired invariant:
+    // `audit_item` pushes one `InsecureUri` per URI entry (health.rs:725-747)
+    // without deduplicating by host, so two http URIs on the same host produce
+    // two findings. `Report::total_findings`/`count_of` count both; `affected`
+    // stays item-scoped. Pinning the double count makes a future dedup an
+    // explicit, reviewed change.
+    let mut item = VaultItem::new(
+        "dup-http",
+        "Duplicate HTTP",
+        ItemData::Login {
+            username: "u".into(),
+            password: Zeroizing::new("vT7#kQm2!zR9wP4$xL8@".into()),
+            totp: Zeroizing::new("GEZDGNBVGY3TQOJQ".into()),
+            uris: vec![
+                LoginUri::new("http://dup.example.com/path-a"),
+                // Port 80 is the scheme default, so `mask_uri` drops it and
+                // both findings render the same masked host.
+                LoginUri::new("http://dup.example.com:80/path-b?token=URI_SECRET"),
+                LoginUri::new("https://dup.example.com/secure"),
+            ],
+        },
+    );
+    item.revision_date = NOW;
+    let report = report_of(vec![item]);
+
+    let insecure: Vec<&str> = report.items[0]
+        .findings
+        .iter()
+        .filter_map(|finding| match finding {
+            Finding::InsecureUri { uri } => Some(uri.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        insecure,
+        vec!["http://dup.example.com", "http://dup.example.com"],
+        "two http URI entries produce two identical masked findings"
+    );
+    // No other finding should be present: strong password, valid TOTP, named
+    // item and revision == NOW avoid weak/reuse/TOTP/unnamed/stale findings.
+    assert_eq!(report.items[0].findings.len(), 2, "{:?}", report.items[0]);
+    assert_eq!(report.total_findings(), 2);
+    assert_eq!(
+        report.affected(),
+        1,
+        "findings are counted per URI, items once"
+    );
+    assert_eq!(report.count_of(Severity::High), 2);
+    assert_eq!(report.count_of(Severity::Medium), 0);
+    assert_eq!(report.count_of(Severity::Low), 0);
+    let summary = report.summary();
+    assert!(summary.contains("1 件に 2 個の問題"), "{summary}");
+    assert!(summary.contains("高 2"), "{summary}");
+    // The raw URI token never reaches the rendered finding.
+    assert!(!format!("{report:?}").contains("URI_SECRET"));
+
+    // Control: a single http URI on the same host yields exactly one finding,
+    // so the doubling above is caused by the duplicate entry, not the fixture.
+    let mut single_item = VaultItem::new(
+        "single-http",
+        "Single HTTP",
+        ItemData::Login {
+            username: "u".into(),
+            password: Zeroizing::new("vT7#kQm2!zR9wP4$xL8@".into()),
+            totp: Zeroizing::new("GEZDGNBVGY3TQOJQ".into()),
+            uris: vec![LoginUri::new("http://dup.example.com/path-a")],
+        },
+    );
+    single_item.revision_date = NOW;
+    let single = report_of(vec![single_item]);
+    assert_eq!(single.total_findings(), 1, "{:?}", single.items);
+    assert_eq!(single.count_of(Severity::High), 1);
+    assert_eq!(single.affected(), 1);
+}

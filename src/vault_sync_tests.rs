@@ -2591,3 +2591,124 @@ fn revision_dates_accept_the_four_digit_year_boundaries() {
         assert_eq!(parse_revision(Some(value)), None, "{value}");
     }
 }
+
+#[test]
+fn same_revision_tie_between_excluded_and_eligible_rows_keeps_eligible() {
+    // `dedup_ciphers_by_revision` (vault_sync.rs:224-240) compares the exclusion
+    // flag *before* the revision: an eligible personal login wins even when the
+    // excluded row has the same revision, and regardless of row order. A tie
+    // between two eligible rows still keeps the first one (see the sibling
+    // `dedup_counts_missing_and_invalid_revisions_as_unknown_and_keeps_first_on_ties`).
+    const REVISION: &str = "2024-01-01T00:00:00Z";
+    let mut value = serde_json::json!({
+        "ciphers": [
+            // Excluded first, eligible second.
+            {"id": "org", "revisionDate": REVISION, "type": 1,
+             "organizationId": "org-1", "name": "Excluded"},
+            {"id": "org", "revisionDate": REVISION, "type": 1, "name": "Eligible"},
+            // Eligible first, excluded second.
+            {"id": "deleted", "revisionDate": REVISION, "type": 1, "name": "Eligible"},
+            {"id": "deleted", "revisionDate": REVISION, "type": 1,
+             "deletedDate": "2024-02-01T00:00:00Z", "name": "Excluded"},
+            // A non-login type is excluded by the same classifier.
+            {"id": "note", "revisionDate": REVISION, "type": 2, "name": "Excluded"},
+            {"id": "note", "revisionDate": REVISION, "type": 1, "name": "Eligible"},
+            // Missing/unparsable dates both become UNKNOWN_REVISION (0): the
+            // exclusion rule still decides the tie, not row order. Both rows
+            // must be type 1 so only organizationId separates them.
+            {"id": "unknown", "type": 1, "organizationId": "org-2", "name": "Excluded"},
+            {"id": "unknown", "type": 1, "revisionDate": "not-a-date", "name": "Eligible"},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 4, "one row per id");
+    for (index, id) in ["org", "deleted", "note", "unknown"].iter().enumerate() {
+        assert_eq!(kept[index]["id"], serde_json::json!(*id));
+        assert_eq!(kept[index]["name"], "Eligible", "id {id}");
+        assert!(kept[index].get("organizationId").is_none(), "id {id}");
+        assert!(kept[index].get("deletedDate").is_none(), "id {id}");
+        assert_eq!(kept[index]["type"], serde_json::json!(1), "id {id}");
+    }
+}
+
+#[test]
+fn parse_sync_keeps_the_eligible_row_when_it_ties_with_an_excluded_row() {
+    // End-to-end: the excluded row is listed *first* and has the same revision,
+    // so only the exclusion-aware tie-break can keep the login alive. Without
+    // it openwarden would drop the organization-owned survivor and logins()
+    // would be empty.
+    let body = br#"{
+        "profile": {"id": "user-1"},
+        "folders": [],
+        "ciphers": [
+            {"id": "tie", "type": 1, "name": "Org", "organizationId": "org-1",
+             "login": {"uris": []}, "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "tie", "type": 1, "name": "Live",
+             "login": {"uris": []}, "revisionDate": "2024-01-01T00:00:00Z"}
+        ]
+    }"#;
+    let sync = parse_sync(body).expect("the sync body must parse");
+    let key = openwarden::UserKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(key, state);
+    vault.apply_sync(sync).expect("apply_sync must succeed");
+    let logins = vault.logins();
+    let ids: Vec<&str> = logins.iter().map(|info| info.id.as_str()).collect();
+    assert_eq!(ids, vec!["tie"], "the eligible row must win the tie");
+}
+
+#[test]
+fn non_array_ciphers_and_folders_are_classified_as_invalid_login_end_to_end() {
+    use std::error::Error as _;
+
+    // `dedup_ciphers_by_revision` / `dedup_folders_by_id` are no-ops for a
+    // non-array value (vault_sync.rs:203-209, 285-289). The classification is
+    // left to openwarden's `SyncWire` deserializer: every wrong JSON shape must
+    // land in `InvalidLoginCause` with a non-empty typed source, never a panic
+    // or a success with silently dropped data. A *missing* key is different:
+    // serde's `#[serde(default)]` turns it into an empty vector.
+    let wrong_shapes = [
+        serde_json::json!({"0": {"id": "row"}}),
+        serde_json::json!("text"),
+        serde_json::json!(42),
+        serde_json::json!(null),
+    ];
+    for field in ["ciphers", "folders"] {
+        for wrong in wrong_shapes.iter() {
+            let mut document = serde_json::json!({
+                "profile": {"id": "user-1"},
+                "ciphers": [],
+                "folders": [],
+            });
+            document[field] = wrong.clone();
+            let bytes = serde_json::to_vec(&document).unwrap();
+            let error = parse_sync(&bytes).unwrap_err();
+            assert!(
+                matches!(&error, SyncError::InvalidLoginCause(_, _)),
+                "{field}={wrong}: {error:?}"
+            );
+            assert_eq!(error.message(), "ログイン項目を読み取れませんでした");
+            let source = error
+                .source()
+                .expect("a wrong array shape must keep a typed cause")
+                .to_string();
+            assert!(!source.is_empty(), "{field}={wrong}");
+            assert!(
+                !source.contains("ログイン項目を読み取れませんでした"),
+                "{field}={wrong}: the family message must stay in message()"
+            );
+        }
+    }
+
+    // Controls: arrays still parse, and both omitted keys default to empty.
+    let arrays = parse_sync(br#"{"profile":{"id":"user-1"},"ciphers":[],"folders":[]}"#)
+        .expect("array-valued keys must parse");
+    assert_eq!(arrays.user_id(), "user-1");
+    let omitted = parse_sync(br#"{"profile":{"id":"user-1"}}"#)
+        .expect("omitted keys are defaulted by openwarden");
+    assert_eq!(omitted.user_id(), "user-1");
+}

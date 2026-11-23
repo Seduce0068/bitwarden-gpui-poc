@@ -969,6 +969,35 @@ mod single_character_text_tests {
     }
 
     #[::core::prelude::v1::test]
+    fn every_enumerated_non_text_key_name_is_non_text() {
+        // Mirrors the complete list in `is_non_text_key_name`'s `matches!`:
+        // every name enumerated there must be classified as carrying no text.
+        for name in [
+            "escape",
+            "esc",
+            "enter",
+            "return",
+            "backspace",
+            "tab",
+            "delete",
+            "del",
+            "insert",
+            "ins",
+            "clear",
+            "pause",
+            "print",
+            "capslock",
+            "shift",
+            "control",
+            "alt",
+            "platform",
+            "function",
+        ] {
+            assert!(is_non_text_key_name(name), "{name} must carry no text");
+        }
+    }
+
+    #[::core::prelude::v1::test]
     fn composed_text_keeps_ime_and_alt_text_but_rejects_key_names() {
         for key in ["unknown", "s"] {
             let ctx = editing_ctx(key, Some("日本語"));

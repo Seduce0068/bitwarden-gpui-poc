@@ -2573,3 +2573,144 @@ fn filter_kind_secure_note_accepts_only_notes_and_labels_them() {
     assert_eq!(Filter::Kind(ItemKind::Login).label(&[]), "ログイン");
     assert_eq!(Filter::Kind(ItemKind::Card).label(&[]), "カード");
 }
+
+#[test]
+fn every_login_uri_joins_the_search_haystack() {
+    // `VaultItem::haystacks` (model.rs:759-802) extends one Borrowed field per
+    // login URI, so a token that only appears in the *third* URI is still
+    // searchable. Passwords and TOTP secrets stay out of the index.
+    const URIS: [&str; 3] = [
+        "https://first.example.com/login",
+        "https://second.example.net/login?token=SECOND_URI_TOKEN",
+        "https://third.example.org/x#THIRD_URI_FRAGMENT",
+    ];
+    let item = VaultItem::new(
+        "multi-uri-search",
+        "Multi URI",
+        ItemData::Login {
+            username: "alice".into(),
+            password: Zeroizing::new("HAYSTACK_PASSWORD_SECRET".into()),
+            totp: Zeroizing::new("HAYSTACK_TOTP_SECRET".into()),
+            uris: URIS.iter().map(|uri| LoginUri::new(*uri)).collect(),
+        },
+    );
+
+    let fields: Vec<String> = item
+        .haystacks()
+        .iter()
+        .map(|field| field.to_string())
+        .collect();
+    assert_eq!(fields.len(), 6, "name + notes + username + three URIs");
+    for uri in URIS {
+        assert!(
+            fields.iter().any(|field| field.as_str() == uri),
+            "URI missing from haystack: {uri}"
+        );
+    }
+    assert!(fields.iter().any(|field| field == "alice"));
+    // The empty notes field is still a haystack slot (it is not a URI).
+    assert!(fields.iter().any(String::is_empty));
+    for secret in ["HAYSTACK_PASSWORD_SECRET", "HAYSTACK_TOTP_SECRET"] {
+        assert!(
+            !fields.iter().any(|field| field.contains(secret)),
+            "{secret}"
+        );
+    }
+
+    for needle in [
+        "first.example.com",
+        "SECOND_URI_TOKEN",
+        "third.example.org",
+        "THIRD_URI_FRAGMENT",
+    ] {
+        assert!(
+            item.matches_query(needle),
+            "needle {needle:?} must be found"
+        );
+    }
+    assert!(!item.matches_query("HAYSTACK_PASSWORD_SECRET"));
+    assert!(!item.matches_query("HAYSTACK_TOTP_SECRET"));
+    assert!(!item.matches_query("absent.example"));
+
+    // The same hit survives the public view path (Vault::view -> matches_query).
+    let mut vault = Vault::new();
+    vault.items.push(item);
+    let hits = vault.view(&Filter::All, "THIRD_URI_FRAGMENT", SortKey::NameAsc);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, "multi-uri-search");
+}
+
+#[test]
+fn favorites_filter_ands_with_a_non_empty_query() {
+    // `Vault::view` applies `Filter::accepts` and the normalized query as two
+    // chained filters (model.rs:977-987). With favorites among both the
+    // matching and the non-matching items, each half must do real work.
+    let mut favorite_match = login(
+        "fav-match",
+        "Favorite Bank",
+        "bank-user",
+        "pw",
+        "https://bank.example.com",
+    );
+    favorite_match.favorite = true;
+    let mut favorite_other = login(
+        "fav-other",
+        "Starred Mail",
+        "mail-user",
+        "pw",
+        "https://mail.example.net",
+    );
+    favorite_other.favorite = true;
+    let plain_match = login(
+        "plain-match",
+        "Public Bank",
+        "bank-user",
+        "pw",
+        "https://bank.other.example.com",
+    );
+    let mut vault = Vault::new();
+    vault.items = vec![favorite_match, favorite_other, plain_match];
+
+    // A plain helper rather than a closure: the vault is mutated below, and a
+    // closure borrowing it would keep that borrow alive across the mutation.
+    fn ids_of<'a>(vault: &'a Vault, filter: &Filter, query: &str) -> Vec<&'a str> {
+        vault
+            .view(filter, query, SortKey::NameAsc)
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect()
+    }
+    assert_eq!(
+        ids_of(&vault, &Filter::All, "bank"),
+        vec!["fav-match", "plain-match"]
+    );
+    assert_eq!(
+        ids_of(&vault, &Filter::Favorites, ""),
+        vec!["fav-match", "fav-other"]
+    );
+    // The AND: only the starred item that also matches "bank" survives.
+    assert_eq!(
+        ids_of(&vault, &Filter::Favorites, "bank"),
+        vec!["fav-match"]
+    );
+    // A query found only on a non-favorite item produces no hits.
+    assert!(ids_of(&vault, &Filter::Favorites, "Public").is_empty());
+    assert!(ids_of(&vault, &Filter::Favorites, "absent").is_empty());
+    // Matching on a URI works under the same intersection.
+    assert_eq!(
+        ids_of(&vault, &Filter::Favorites, "mail.example.net"),
+        vec!["fav-other"]
+    );
+
+    // Toggling the third item's favorite flag changes the intersection, so the
+    // result is not merely the precomputed "bank" hit list.
+    assert_eq!(vault.toggle_favorite("plain-match"), Some(true));
+    assert_eq!(
+        ids_of(&vault, &Filter::Favorites, "bank"),
+        vec!["fav-match", "plain-match"]
+    );
+    assert_eq!(
+        ids_of(&vault, &Filter::Favorites, "Public"),
+        vec!["plain-match"]
+    );
+}

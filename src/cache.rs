@@ -931,11 +931,20 @@ pub fn load(path: impl AsRef<std::path::Path>) -> Option<SyncCache> {
 /// hide a runaway sync response. `save_default` inherits the same guard via
 /// `save_to_path`.
 ///
+/// The write boundary also applies the same `redact_profile_keys` pass as
+/// [`SyncCache::from_body`]. Callers may build a [`SyncCache`] by hand (there is
+/// no production writer yet), so a key-bearing body would otherwise reach the
+/// disk even though the constructor would have stripped it. `save` takes
+/// `&SyncCache`: the caller's in-memory value is left untouched and only the
+/// serialized copy is sanitized. A body that cannot be redacted (not valid
+/// JSON) is refused instead of being written with unknown contents.
+///
 /// # Errors
 ///
 /// Returns `std::io::Error` on filesystem or serialization failure, with
 /// [`std::io::ErrorKind::InvalidInput`] when the body exceeds
-/// [`MAX_CACHE_BODY_BYTES`].
+/// [`MAX_CACHE_BODY_BYTES`] and [`std::io::ErrorKind::InvalidData`] when the
+/// body cannot be redacted.
 pub fn save(path: impl AsRef<std::path::Path>, cache: &SyncCache) -> Result<(), std::io::Error> {
     if cache.body.len() > MAX_CACHE_BODY_BYTES {
         return Err(std::io::Error::new(
@@ -947,8 +956,14 @@ pub fn save(path: impl AsRef<std::path::Path>, cache: &SyncCache) -> Result<(), 
             ),
         ));
     }
+    let body = redact_profile_keys(&cache.body)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let sanitized = SyncCache {
+        body,
+        ..cache.clone()
+    };
     let path = path.as_ref();
-    let contents = serde_json::to_vec_pretty(cache)?;
+    let contents = serde_json::to_vec_pretty(&sanitized)?;
     crate::private_file::write_private(path, &contents)
 }
 

@@ -2801,3 +2801,70 @@ fn plain_auth_error_variants_render_the_same_status_and_family_message() {
         AuthError::Login.message()
     );
 }
+
+#[test]
+fn prelogin_cause_converts_forward_to_prelogin_detail() {
+    use crate::error::{AppError, BoxedCause};
+
+    // The AppError -> AuthError direction (auth.rs:222-223) must keep the
+    // rendered cause in `PreloginDetail`; the sibling conversion and the
+    // reflexive equality are covered by `prelogin_is_reflexive_and_keeps_its_detail`.
+    const DETAIL: &str = "prelogin: TLS handshake failed";
+    let app = AppError::PreloginCause(BoxedCause::text(DETAIL));
+    assert!(
+        std::error::Error::source(&app).is_some(),
+        "premise: typed cause"
+    );
+
+    let small = AuthError::from(app);
+    assert!(
+        matches!(&small, AuthError::PreloginDetail(detail) if detail == DETAIL),
+        "the cause text must survive the UI boundary: {small:?}"
+    );
+    assert_eq!(
+        small,
+        AuthError::Prelogin,
+        "the cause is diagnostic, not identity"
+    );
+    assert_eq!(small.message(), AuthError::Prelogin.message());
+    assert_eq!(small.to_string(), AuthError::Prelogin.message());
+    assert_eq!(
+        small.status_message(),
+        format!("{}（{DETAIL}）", AuthError::Prelogin.message())
+    );
+    // The small enum owns only text: the typed cause stops at this boundary.
+    assert!(std::error::Error::source(&small).is_none());
+
+    // Converting back restores a cause-carrying AppError with the same text.
+    let restored = AppError::from(small);
+    assert!(
+        matches!(&restored, AppError::PreloginCause(cause) if cause.to_string() == DETAIL),
+        "the detail must become the cause again: {restored:?}"
+    );
+    assert!(std::error::Error::source(&restored).is_some());
+    assert_eq!(restored, AppError::Prelogin);
+
+    // A typed (non-text) cause is rendered the same way at the UI boundary.
+    #[derive(Debug)]
+    struct Inner(&'static str);
+    impl std::fmt::Display for Inner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Inner {}
+    let typed = AppError::PreloginCause(BoxedCause::new(Inner("connection refused")));
+    let typed_small = AuthError::from(typed);
+    assert!(
+        typed_small.status_message().contains("connection refused"),
+        "{}",
+        typed_small.status_message()
+    );
+    assert_eq!(typed_small, AuthError::Prelogin);
+
+    // An empty cause still selects the Detail variant but adds no decoration.
+    let empty = AuthError::from(AppError::PreloginCause(BoxedCause::text("")));
+    assert!(matches!(&empty, AuthError::PreloginDetail(detail) if detail.is_empty()));
+    assert_eq!(empty.status_message(), AuthError::Prelogin.message());
+    assert_eq!(empty, AuthError::Prelogin);
+}

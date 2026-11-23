@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第91弾で 7 件すべてを完了）。
+なし（第92弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第92弾（16 担当・36 回目）の指摘 7 件を完結（2026-11-23）
+  - キャッシュ save 前に profile.key/privateKey を除去。
+  - PreloginCause 変換、サイズ境界、server/user 不一致優先順位、
+    除外/適格同 revision、配列以外 ciphers/folders、複数 URI、
+    Favorites＋クエリ、rejection sampling、重複 URI をテスト。
+  - is_non_text_key_name の全列挙をテスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（880 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第91弾（16 担当・35 回目）の指摘 7 件を完結（2026-11-23）
   - 検索確定後クエリのエッジケース、AuthError status_message、
     サイズ超過のフォールバック拒否、ParseFailedCause source、

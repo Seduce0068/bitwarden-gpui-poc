@@ -1529,7 +1529,12 @@ fn cached_sync_for_detailed_reports_a_broken_body_in_a_valid_envelope() {
         body: b"not json".to_vec(),
         created_at: None,
     };
-    save_default(&broken).unwrap();
+    // `save` now applies `from_body`'s redaction at the write boundary and
+    // refuses a body that is not JSON. Place the hand-crafted envelope on disk
+    // directly (as the other invalid-body tests do) so this still exercises the
+    // restore path's classification instead of the write-side guard.
+    let path = default_path().expect("a cache directory from XDG_CACHE_HOME");
+    write_fixture(&path, &serde_json::to_vec(&broken).unwrap());
 
     assert!(matches!(
         cached_sync_for_detailed("https://vault.example.com", "user-1"),
@@ -3025,4 +3030,158 @@ fn parse_failed_cause_keeps_the_serde_error_as_source() {
     let plain = CacheLoadError::ParseFailed;
     assert!(std::error::Error::source(&plain).is_none());
     assert_eq!(cache_error_message(plain), REASON_CORRUPT);
+}
+
+#[test]
+fn save_redacts_profile_keys_at_the_write_boundary() {
+    // A caller can construct `SyncCache` directly (there is no production
+    // writer), bypassing `from_body`'s redactor. `save` must apply the same
+    // recursive redaction before serializing, without mutating the caller's
+    // value (it takes `&SyncCache`).
+    let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    let mut document: serde_json::Value = serde_json::from_slice(&cache.body).unwrap();
+    document["profile"]["key"] = serde_json::json!("WRITE_PROFILE_KEY");
+    document["profile"]["privateKey"] = serde_json::json!("WRITE_PROFILE_PRIVATE_KEY");
+    document["folders"][0]["Key"] = serde_json::json!("WRITE_FOLDER_KEY");
+    document["ciphers"] = serde_json::json!([{
+        "id": "c1",
+        "type": 1,
+        "name": null,
+        "revisionDate": "2024-01-01T00:00:00Z",
+        "login": { "uris": [] },
+        "key": "WRITE_CIPHER_KEY",
+    }]);
+    cache.body = serde_json::to_vec(&document).unwrap();
+    let before = cache.body.clone();
+    assert!(String::from_utf8_lossy(&cache.body).contains("WRITE_PROFILE_KEY"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("redacted-on-save.json");
+    save(&path, &cache).expect("a key-bearing body must be sanitized, not refused");
+    let on_disk = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    for secret in [
+        "WRITE_PROFILE_KEY",
+        "WRITE_PROFILE_PRIVATE_KEY",
+        "WRITE_FOLDER_KEY",
+        "WRITE_CIPHER_KEY",
+    ] {
+        assert!(!on_disk.contains(secret), "leaked {secret}: {on_disk}");
+    }
+    assert!(!on_disk.contains("\"privateKey\""), "{on_disk}");
+    assert!(!on_disk.contains("\"key\""), "{on_disk}");
+    // The caller's in-memory cache is untouched by the write-boundary copy.
+    assert_eq!(cache.body, before);
+
+    // The saved body is exactly what `from_body` would have stored, and it is
+    // still a usable offline sync body.
+    let loaded = load_detailed(&path).unwrap();
+    let via_constructor =
+        SyncCache::from_body(before, "https://vault.example.com").expect("valid sync body");
+    assert_eq!(loaded.body, via_constructor.body);
+    assert_ne!(loaded.body, cache.body);
+    assert!(loaded.sync().is_ok());
+
+    // A body that cannot be redacted is refused before touching the file.
+    let invalid = SyncCache {
+        body: b"not json".to_vec(),
+        ..cache
+    };
+    let invalid_path = dir.path().join("invalid-on-save.json");
+    assert_eq!(
+        save(&invalid_path, &invalid).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    assert!(!invalid_path.exists());
+}
+
+#[test]
+fn max_cache_body_bytes_boundary_is_accepted_by_from_body_save_and_load() {
+    // The cap is inclusive: a valid sync body padded to exactly
+    // MAX_CACHE_BODY_BYTES passes the raw-body gate, the write gate and the
+    // post-parse read gate. One byte past it is still refused on write.
+    let base = String::from_utf8(body()).unwrap();
+    let padding = MAX_CACHE_BODY_BYTES - base.len();
+    let at_limit = format!("{base}{}", " ".repeat(padding)).into_bytes();
+    assert_eq!(at_limit.len(), MAX_CACHE_BODY_BYTES);
+
+    let from_constructor = SyncCache::from_body(at_limit.clone(), "https://vault.example.com")
+        .expect("the exact raw-body boundary must be accepted");
+    assert_eq!(from_constructor.user_id, "user-1");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("exact-body.json");
+    let exact = SyncCache {
+        body: at_limit.clone(),
+        ..from_constructor
+    };
+    save(&path, &exact).expect("the exact write boundary must be accepted");
+    assert!(path.is_file());
+
+    // Read side: an envelope whose stored body is exactly at the cap loads.
+    let read_path = dir.path().join("exact-read.json");
+    write_fixture(&read_path, &serde_json::to_vec(&exact).unwrap());
+    assert_eq!(
+        load_detailed(&read_path).unwrap().body.len(),
+        MAX_CACHE_BODY_BYTES
+    );
+
+    let mut over = exact;
+    over.body.push(b' ');
+    assert_eq!(over.body.len(), MAX_CACHE_BODY_BYTES + 1);
+    let over_path = dir.path().join("over-body.json");
+    assert_eq!(
+        save(&over_path, &over).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert!(!over_path.exists());
+}
+
+#[test]
+fn simultaneous_server_and_user_mismatch_prefers_server_in_validate() {
+    // `validate` (cache.rs:1073-1085) checks the server before the account, so
+    // a cache that disagrees on both must report the server reason.
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    let error = validate(&cache, "user-2", "https://other.example.com").unwrap_err();
+    assert!(
+        matches!(&error, SyncCacheError::ServerMismatch),
+        "{error:?}"
+    );
+    assert_eq!(cache_error_message(error), REASON_SERVER_MISMATCH);
+
+    // Even when the envelope's user id also disagrees with the parsed body,
+    // the server check still wins before either account comparison runs.
+    let inconsistent = SyncCache {
+        user_id: "envelope-user".to_string(),
+        ..cache
+    };
+    let error = validate(&inconsistent, "user-2", "https://other.example.com").unwrap_err();
+    assert!(
+        matches!(&error, SyncCacheError::ServerMismatch),
+        "{error:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn simultaneous_server_and_user_mismatch_prefers_server_on_restore() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+    save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
+
+    let error = cached_sync_for_detailed("https://other.example.com", "user-2").unwrap_err();
+    assert!(
+        matches!(&error, SyncCacheError::ServerMismatch),
+        "{error:?}"
+    );
+    assert_eq!(cache_error_message(error), REASON_SERVER_MISMATCH);
+    assert!(cached_sync_for("https://other.example.com", "user-2").is_none());
+
+    // The other arm stays reachable: with the server matching, the wrong
+    // account still reports UserMismatch.
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", "user-2"),
+        Err(SyncCacheError::UserMismatch)
+    ));
 }

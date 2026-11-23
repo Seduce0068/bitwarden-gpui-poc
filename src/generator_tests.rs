@@ -545,3 +545,85 @@ fn mandatory_characters_are_shuffled_after_the_fixed_prefix() {
         "the first character must not be fixed to one class: {first_classes:?}"
     );
 }
+
+/// Draw `samples` values from the private sampler and tally them by index.
+///
+/// `draw_below` (generator.rs:190-221) has no injected randomness seam: it
+/// always calls `getrandom::fill`. The tests below therefore pin the two
+/// rejection branches through their observable contract — full support and,
+/// where a plain modulo would be measurably biased, a flat histogram. Sample
+/// sizes are chosen so every bucket has a large expected count (tens or
+/// hundreds), making a missing bucket or a 3-vs-2 modulo skew astronomically
+/// unlikely to pass by chance.
+fn draw_histogram(bound: u16, samples: usize) -> Vec<usize> {
+    let mut counts = vec![0usize; usize::from(bound)];
+    for _ in 0..samples {
+        let value = super::draw_below(bound).expect("OS randomness must be available in tests");
+        assert!(value < bound, "{value} >= {bound}");
+        counts[usize::from(value)] += 1;
+    }
+    counts
+}
+
+#[test]
+fn draw_below_rejection_sampling_for_bounds_up_to_256() {
+    // Zero is invalid and bound 1 has a single possible outcome on the byte
+    // fast path (`limit = 256 - 256 % 1 = 256`, so every byte is accepted).
+    assert_eq!(super::draw_below(0), Err(GeneratorError::InvalidSettings));
+    for _ in 0..128 {
+        assert_eq!(super::draw_below(1).unwrap(), 0);
+    }
+
+    // At the upper edge of the fast path every byte is a valid outcome.
+    let all_bytes = draw_histogram(256, 20_000);
+    assert_eq!(all_bytes.len(), 256);
+    assert!(
+        all_bytes.iter().all(|&count| count > 0),
+        "a byte value never appeared: {all_bytes:?}"
+    );
+
+    // 256 % 100 = 56, so bytes 200..=255 must be rejected instead of folded
+    // back with `% 100`. A modulo-only sampler would give values 0..=55 three
+    // byte sources and 56..=99 only two (1170 vs 780 at 100k samples); the
+    // ±15% band around 1000 separates the two with a wide safety margin.
+    let counts = draw_histogram(100, 100_000);
+    assert!(counts.iter().all(|&count| count > 0));
+    let expected = 100_000f64 / 100.0;
+    for (value, &count) in counts.iter().enumerate() {
+        let deviation = (count as f64 - expected).abs();
+        assert!(
+            deviation <= expected * 0.15,
+            "value {value} drew {count} times (expected {expected})"
+        );
+    }
+}
+
+#[test]
+fn draw_below_rejection_sampling_for_bounds_above_256() {
+    // 257 is the first bound on the u32 branch (generator.rs:212-218); it must
+    // still cover every outcome, including the top index.
+    let first_wide = draw_histogram(257, 20_000);
+    assert_eq!(first_wide.len(), 257);
+    assert!(
+        first_wide.iter().all(|&count| count > 0),
+        "a 0..257 outcome never appeared"
+    );
+
+    // The passphrase word list is the real >256 caller (~1160 entries). Each
+    // word must be reachable; a sampler that truncated to 256 would leave most
+    // buckets empty.
+    let words = WORDS.len() as u16;
+    assert!(words > 256, "fixture premise: the word list is wide");
+    let word_counts = draw_histogram(words, 50_000);
+    assert_eq!(word_counts.len(), usize::from(words));
+    assert!(
+        word_counts.iter().all(|&count| count > 0),
+        "some word index is unreachable"
+    );
+
+    // The largest u16 bound has almost no rejection, but must still stay in
+    // range (`value % bound` can never yield the bound itself).
+    for _ in 0..5_000 {
+        assert!(super::draw_below(u16::MAX).unwrap() < u16::MAX);
+    }
+}
