@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第132〜133弾 / 2026-11-24）
+
+- passphrase 不可視文字、監査 status 共通化、
+  scheme-less userinfo redaction を修正
+- 設定上限 doc、Debug リダクタ、小文字 protected_key、
+  フォルダのみのボルトをテスト
+- is_sensitive_param_key 部分一致、save の非 sync ボディ、
+  BASE64 5文字、数字 COMMON 到達不能をテスト
+
 ### 全体改善（第129〜131弾 / 2026-11-24）
 
 - お気に入り解除 status、不可視桁数、F1 固定フッタ、

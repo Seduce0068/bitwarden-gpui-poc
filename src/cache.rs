@@ -24,6 +24,29 @@
 //! ACL there. A cache file on Windows is therefore accepted as-is regardless
 //! of its ACL. Do not treat the read-side permission check as a cross-platform
 //! guarantee.
+//!
+//! Known constraint (special files): [`load_detailed`] performs blocking
+//! filesystem I/O without a file-type check or a timeout. `File::open` on a
+//! FIFO waits until another process opens the write end, and the bounded read
+//! waits until EOF (or until its byte cap is reached), so a cache path that is
+//! a FIFO/pipe (or another non-regular file) can hang the calling thread
+//! instead of returning `ReadFailedCause`. A FIFO also reports `metadata.len() == 0`, so the
+//! file-size gate cannot protect this case. No file-type rejection or
+//! `O_NONBLOCK` handling is added in this PoC; every caller of
+//! [`load_detailed`] — including [`load`], [`load_with_fallback`],
+//! [`load_default`], `cached_sync_for` and `cached_sync_for_detailed` —
+//! inherits the constraint and must ensure the cache path is a regular file
+//! it controls.
+//!
+//! Known constraint (credential persistence): [`SyncCache::server_url`] is
+//! stored verbatim. [`save`] redacts key material in the body but serializes
+//! the URL as-is, so URL-embedded userinfo (`https://user:pass@host`) and
+//! secret-bearing query parameters are written to the cache file in
+//! cleartext. The manual `Debug` implementation masks them for diagnostics
+//! only; it never rewrites the stored field. See the field and [`save`]
+//! documentation, plus the tests
+//! `server_url_credentials_are_persisted_verbatim_in_the_cache_envelope` and
+//! `hand_built_cache_server_url_credentials_are_plaintext_on_disk`.
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -1118,6 +1141,15 @@ fn read_bounded<R: Read>(reader: &mut R, limit: u64) -> Result<Vec<u8>, CacheLoa
 /// permission gate is `#[cfg(unix)]`; Windows has no equivalent read-side
 /// check, and the writer grants no restrictive Windows ACL either (see the
 /// module docs).
+///
+/// Known constraint (special files): the open and the bounded read are
+/// blocking calls with no file-type check or timeout. On a FIFO, `File::open`
+/// waits for a writer and the bounded read waits for EOF (or its byte cap), so
+/// this function can hang instead of returning `ReadFailedCause`; a FIFO's reported length of
+/// zero also bypasses the [`MAX_CACHE_BYTES`] pre-check. This is recorded, not
+/// fixed, in this PoC: the caller must guarantee that `path` names a regular
+/// file. All wrappers ([`load`], [`load_with_fallback`], [`load_default`] and
+/// the restore helpers) inherit the same behaviour.
 ///
 /// # Errors
 ///

@@ -3606,3 +3606,106 @@ fn lowercase_profile_key_folders_only_vault_imports_through_both_entry_points() 
     );
     assert_eq!(folders_from(&vault).unwrap(), model.folders);
 }
+
+#[test]
+fn non_string_profile_id_is_classified_as_invalid_login() {
+    use std::error::Error as _;
+
+    // `profile.id` is a string on the openwarden sync wire. A number or null is
+    // still valid JSON and normalization only rewrites keys, so these bodies
+    // reach `SyncData::from_json` and are rejected there. `parse_sync` must put
+    // every such type mismatch into the same `InvalidLoginCause` family as a
+    // missing or non-object profile, with a typed cause -- not a success with
+    // a fabricated id, a panic, or a different variant
+    // (vault_sync.rs:182-198). PascalCase `Id` is covered too: normalization
+    // must not change the value's type before the upstream check.
+    for profile in [
+        r#"{"id":42}"#,
+        r#"{"id":null}"#,
+        r#"{"Id":42}"#,
+        r#"{"Id":null}"#,
+    ] {
+        let body = format!("{{\"profile\":{profile},\"folders\":[],\"ciphers\":[]}}");
+        let error = parse_sync(body.as_bytes()).unwrap_err();
+        assert!(
+            matches!(&error, SyncError::InvalidLoginCause(_, _)),
+            "profile {profile}: {error:?}"
+        );
+        assert_eq!(
+            error.message(),
+            "ログイン項目を読み取れませんでした",
+            "profile {profile}"
+        );
+        let source = error
+            .source()
+            .expect("a wrong profile.id type must keep a typed cause")
+            .to_string();
+        assert!(!source.is_empty(), "profile {profile}");
+        assert!(
+            !source.contains("ログイン項目を読み取れませんでした"),
+            "profile {profile}: the family message must stay in message()"
+        );
+    }
+
+    // Controls: a string id in either casing survives normalization and parses.
+    for body in [
+        br#"{"profile":{"id":"user-1"},"folders":[],"ciphers":[]}"#.as_slice(),
+        br#"{"Profile":{"Id":"user-1"},"Ciphers":[]}"#.as_slice(),
+    ] {
+        let sync = parse_sync(body).expect("a string profile.id must parse");
+        assert_eq!(sync.user_id(), "user-1");
+    }
+}
+
+#[test]
+fn root_level_key_collision_is_rejected_without_echoing_the_raw_keys() {
+    use std::error::Error as _;
+
+    // `normalize_sync_keys` rebuilds every object it visits, including the
+    // document root (vault_sync.rs:219-244). A PascalCase spelling and its
+    // camelCase target both present at the top level must be rejected just
+    // like a collision inside `profile` or inside an array element, instead of
+    // letting the iteration order silently overwrite one of the two fields.
+    let mut value = serde_json::json!({
+        "Profile": {"Id": "user-1"},
+        "profile": {"id": "user-2"},
+        "Ciphers": [],
+        "ciphers": [],
+    });
+    let error = super::normalize_sync_keys(&mut value).unwrap_err();
+    assert!(error.contains("conflicting keys"), "{error}");
+    assert!(!error.contains("Profile"), "{error}");
+    assert!(!error.contains("Ciphers"), "{error}");
+
+    // End-to-end: the normalizer's detail becomes the typed cause of an
+    // InvalidLoginCause, and the server-controlled key names stay out of it.
+    let body = br#"{
+        "Profile": {"Id": "user-1"},
+        "profile": {"id": "user-2"},
+        "Ciphers": []
+    }"#;
+    let error = parse_sync(body).unwrap_err();
+    assert!(
+        matches!(&error, SyncError::InvalidLoginCause(_, _)),
+        "{error:?}"
+    );
+    assert_eq!(error.message(), "ログイン項目を読み取れませんでした");
+    let source = error
+        .source()
+        .expect("the normalizer detail must stay reachable")
+        .to_string();
+    assert!(source.contains("conflicting keys"), "{source}");
+    assert!(!source.contains("Profile"), "{source}");
+    assert!(!source.contains("profile"), "{source}");
+
+    // Control: one spelling per root key normalizes cleanly and parses.
+    let mut clean = serde_json::json!({
+        "Profile": {"Id": "user-1"},
+        "Ciphers": [],
+    });
+    assert!(super::normalize_sync_keys(&mut clean).is_ok());
+    assert!(clean.get("profile").is_some());
+    assert!(clean.get("Profile").is_none());
+    assert!(clean.get("ciphers").is_some());
+    assert!(clean.get("Ciphers").is_none());
+}

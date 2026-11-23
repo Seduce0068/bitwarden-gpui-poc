@@ -689,6 +689,36 @@ mod tests {
     }
 
     #[test]
+    fn display_supports_steam_uri_and_reuses_the_cached_snapshot() {
+        let mut state = TotpState::new();
+        // Bitwarden の `steam://` 形式は `code_at` が openwarden へ委譲する
+        // (totp.rs:104-121)。カウンタ 1 (t=40、t=59 と同じ窓) の RFC ベクトルは
+        // 5 文字の "PV9M4"。文字を含むため `Code::grouped` は分割しない
+        // (totp.rs:71-82)。30 秒周期の t=40 は残り 20 秒なので期限警告は付かない。
+        let steam = "steam://GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        let shown = state.display(steam, 40);
+        assert_eq!(shown, "PV9M4 (あと20秒)", "{shown}");
+        assert_eq!(state.current_code(), Some("PV9M4"));
+        assert_eq!(state.error_message(), None);
+        assert!(state.has_secret());
+        assert!(state.matches_secret(steam));
+        assert!(!state.matches_secret(SECRET));
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(40));
+
+        // 同じ 30 秒周期内の連続表示ではキャッシュが再利用される。
+        // タイムスタンプは変わらず、表示カウントダウンも t=40 のスナップショット
+        // (20 秒) のままで、t=50 の再サンプリング (10 秒) にはならない。
+        let sample_at = state.tick.as_ref().map(|tick| tick.at);
+        let again = state.display(steam, 50);
+        assert_eq!(again, shown);
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), sample_at);
+        assert_eq!(state.current_code(), Some("PV9M4"));
+        assert_eq!(state.error_message(), None);
+        assert!(state.matches_secret(steam));
+        assert!(!state.matches_secret(SECRET));
+    }
+
+    #[test]
     fn invalid_otpauth_uri_shows_failure_and_caches_its_error() {
         // totp_state.rs:73-79: a rejected URI still produces a `Tick`, but with
         // `code: None` and the failure cached for the copy path. These spellings

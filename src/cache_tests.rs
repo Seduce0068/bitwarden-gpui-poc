@@ -5121,3 +5121,34 @@ fn save_accepts_valid_json_but_non_sync_body() {
         );
     }
 }
+
+#[test]
+fn hand_built_cache_server_url_credentials_are_plaintext_on_disk() {
+    // Documented on `SyncCache::server_url` and `save`: masking is a Debug-only
+    // concern. A caller that builds the envelope by hand (there is no
+    // production writer) bypasses `from_body` entirely, yet `save` still
+    // serializes its `server_url` verbatim -- userinfo and secret query
+    // parameters included -- while redacting key material in the body.
+    let url =
+        "https://svc:HAND_BUILT_SECRET@vault.example.com:8443/sync?token=HAND_BUILT_TOKEN&state=ok";
+    let cache = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: url.to_string(),
+        body: body(),
+        created_at: None,
+    };
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("HAND_BUILT_SECRET"), "{rendered}");
+    assert!(!rendered.contains("HAND_BUILT_TOKEN"), "{rendered}");
+    assert!(rendered.contains("vault.example.com:8443"), "{rendered}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hand-built-credential-url.json");
+    save(&path, &cache).unwrap();
+    let on_disk = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(on_disk.contains("HAND_BUILT_SECRET"), "{on_disk}");
+    assert!(on_disk.contains("HAND_BUILT_TOKEN"), "{on_disk}");
+    // The plaintext value is what the server-mismatch check later compares.
+    assert_eq!(load_detailed(&path).unwrap().server_url, url);
+}
