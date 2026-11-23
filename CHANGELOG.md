@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第91〜92弾 / 2026-11-23）
+
+- 検索確定後クエリのエッジケース、AuthError status_message、
+  サイズ超過フォールバック、年 0000/9999、shuffle をテスト
+- キャッシュ save 前に profile.key/privateKey を除去
+- PreloginCause、server/user 不一致同時、除外/適格同 revision、
+  複数 URI、rejection sampling、全キー名をテスト
+
 ### 全体改善（第90弾 / 2026-11-23）
 
 - 検索確定後のクエリへ印刷文字を追加できるようにし、

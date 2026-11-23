@@ -118,13 +118,23 @@ pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String
 ///
 /// `settings_hint` already carries the settings-specific keys and avoids the
 /// status bar's "入力中:" prefix; appending the scroll note must not reintroduce
-/// that prefix here.
+/// that prefix here. While a field is focused, the keys that look like settings
+/// commands but are actually inserted as text (`+`/`-`, `1`-`6`, `i`/`u`) are
+/// spelled out here, because `settings_hint(true)` only lists the letter keys.
 pub(super) fn settings_panel_key_hint(editing: bool) -> String {
-    format!(
-        "{} / {}",
-        settings_hint(editing),
-        MOUSE_WHEEL_SCROLL_ONLY_HINT
-    )
+    if editing {
+        format!(
+            "{} / +/-, 1-6（1〜6）, i/u も文字として入力（設定値は変更しません） / {}",
+            settings_hint(editing),
+            MOUSE_WHEEL_SCROLL_ONLY_HINT
+        )
+    } else {
+        format!(
+            "{} / {}",
+            settings_hint(editing),
+            MOUSE_WHEEL_SCROLL_ONLY_HINT
+        )
+    }
 }
 
 /// Colour for a finding's severity on an unselected audit row.
@@ -247,11 +257,11 @@ pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
     let row_keys = row_selection_keys_hint(report.items.len());
     if row_keys.is_empty() {
         format!(
-            "{base} / 監査する問題はありません / g: 一覧 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
+            "{base} / 監査する問題はありません / g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
         )
     } else {
         format!(
-            "{base} / {row_keys} / 行クリックでも選択 / g: 一覧 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
+            "{base} / {row_keys} / 行クリックでも選択 / g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
         )
     }
 }
@@ -934,7 +944,10 @@ mod tests {
         assert!(!empty.contains("Enter: 対象を選択"), "{empty}");
         assert!(!empty.contains("行クリックでも選択"), "{empty}");
         assert!(empty.contains("TOTP 設定済み"), "{empty}");
-        assert!(empty.contains("g: 一覧 / l: ロック / Esc: 終了"), "{empty}");
+        assert!(
+            empty.contains("g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了"),
+            "{empty}"
+        );
 
         let with_rows = Report {
             items: vec![crate::health::ItemReport {
@@ -1007,7 +1020,10 @@ mod tests {
                 1,
                 "the recovery key must appear exactly once ({label}): {line}"
             );
-            assert!(line.contains("g: 一覧 / l: ロック / Esc: 終了"), "{line}");
+            assert!(
+                line.contains("g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了"),
+                "{line}"
+            );
         }
     }
 
@@ -1088,5 +1104,38 @@ mod tests {
         assert_eq!(audit_row_label(base, true), format!("▶ {base}"));
         assert!(audit_row_label(base, true).starts_with("▶ "));
         assert_ne!(audit_row_label(base, true), audit_row_label(base, false));
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_editing_hint_names_every_literal_text_key() {
+        // While editing, `+`/`-`, `1`-`6` and `i`/`u` look like settings
+        // commands but are inserted as characters (`ui::keys` editing branch).
+        let editing = settings_panel_key_hint(true);
+        for token in [
+            "+/-",
+            "1-6",
+            "i/u",
+            "文字として入力",
+            "設定値は変更しません",
+        ] {
+            assert!(editing.contains(token), "missing {token} in {editing}");
+        }
+        // The original hint and the scroll note must survive the addition.
+        assert!(editing.contains(settings_hint(true)), "{editing}");
+        assert!(editing.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{editing}");
+        assert!(!editing.starts_with("入力中:"), "{editing}");
+
+        // Outside editing those keys really are commands, so the extra note
+        // belongs only to the editing variant.
+        let idle = settings_panel_key_hint(false);
+        assert!(!idle.contains("設定値は変更しません"), "{idle}");
+        assert_eq!(
+            idle,
+            format!(
+                "{} / {}",
+                settings_hint(false),
+                MOUSE_WHEEL_SCROLL_ONLY_HINT
+            )
+        );
     }
 }

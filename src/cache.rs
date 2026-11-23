@@ -645,8 +645,12 @@ impl SyncCache {
     ///
     /// # Errors
     ///
-    /// [`SyncCacheError::InvalidCache`] when the body is not a valid sync
-    /// response.
+    /// [`SyncCacheError::CacheTooLarge`] when `body` exceeds
+    /// [`MAX_CACHE_BODY_BYTES`], [`SyncCacheError::CacheParse`] when it is not a
+    /// valid sync response, and [`SyncCacheError::CacheRedact`] /
+    /// [`SyncCacheError::CacheSerialize`] when the redaction pass cannot parse
+    /// or re-serialize the JSON. These are [`crate::error::AppError`] variants;
+    /// this function never returns `InvalidCache`.
     pub fn from_body(body: Vec<u8>, server_url: &str) -> Result<Self, SyncCacheError> {
         if body.len() > MAX_CACHE_BODY_BYTES {
             return Err(SyncCacheError::CacheTooLarge);
@@ -668,7 +672,9 @@ impl SyncCache {
     ///
     /// # Errors
     ///
-    /// [`SyncCacheError::InvalidCache`] when the body no longer parses.
+    /// [`SyncCacheError::CacheParse`] when the cached body no longer parses.
+    /// The size check and the redaction/serialization variants belong to
+    /// [`Self::from_body`]; this reader produces no other variant.
     pub fn sync(&self) -> Result<openwarden::SyncData, SyncCacheError> {
         vault_sync::parse_sync(&self.body)
             .map_err(|error| SyncCacheError::CacheParse(crate::error::BoxedCause::new(error)))

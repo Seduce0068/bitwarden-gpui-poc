@@ -2868,3 +2868,76 @@ fn prelogin_cause_converts_forward_to_prelogin_detail() {
     assert_eq!(empty.status_message(), AuthError::Prelogin.message());
     assert_eq!(empty, AuthError::Prelogin);
 }
+
+#[test]
+fn ipv4_mapped_ipv6_link_local_dns_answers_are_blocked() {
+    // `is_link_local_ip` (auth.rs:440-456) unwraps `::ffff:a.b.c.d` before the
+    // fe80::/10 check. A DNS answer in that mapped form must block a name just
+    // like a native 169.254.* answer, including when mixed with a public A
+    // record (split-horizon / rebinding).
+    let mapped_metadata: IpAddr = "::ffff:169.254.169.254".parse().unwrap();
+    let mapped_lan: IpAddr = "::ffff:192.168.1.10".parse().unwrap();
+    let public: IpAddr = "93.184.216.34".parse().unwrap();
+
+    assert!(is_link_local_ip(mapped_metadata));
+    assert!(!is_link_local_ip(mapped_lan));
+    assert!(is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| vec![public, mapped_metadata]
+    ));
+    assert!(is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| vec![mapped_metadata]
+    ));
+    // A mapped private-LAN address is not link-local, so the same name stays
+    // allowed -- the filter is not a blanket "block every mapped address".
+    assert!(!is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| vec![public, mapped_lan]
+    ));
+
+    // The bracketed literal form takes the Ipv6 host arm of the classifier.
+    assert!(is_blocked_server_url_without_dns(
+        "https://[::ffff:169.254.169.254]"
+    ));
+    assert!(!is_blocked_server_url_without_dns(
+        "https://[::ffff:192.168.1.10]"
+    ));
+}
+
+#[test]
+fn userinfo_does_not_hide_a_blocked_host_from_the_ssrf_classifier() {
+    // The classifier matches on `url.host()` / `url.host_str()` (auth.rs:502-
+    // 515), which exclude userinfo. Credentials in a URL must therefore not
+    // change the literal, metadata-host, wildcard-alias or DNS-answer result.
+    for value in [
+        "https://user:pass@169.254.169.254/latest/meta-data",
+        "https://user:pass@[fe80::1]/",
+        "https://user:pass@[::ffff:169.254.1.1]/",
+        "https://user:pass@metadata.google.internal/latest",
+        "https://user:pass@169.254.169.254.nip.io",
+    ] {
+        assert!(
+            is_blocked_server_url_without_dns(value),
+            "userinfo must not hide the blocked host: {value}"
+        );
+        let mut invalid = config();
+        invalid.server_url = value.to_string();
+        assert_eq!(
+            validate_config(&invalid),
+            Err(AuthError::BlockedServerUrl),
+            "{value}"
+        );
+    }
+
+    // A public host with userinfo stays allowed without DNS and with a public
+    // answer; only a link-local answer in the injected resolver blocks it.
+    const PUBLIC: &str = "https://user:pass@vault.example.com/login";
+    assert!(!is_blocked_server_url_without_dns(PUBLIC));
+    let public: IpAddr = "93.184.216.34".parse().unwrap();
+    let metadata: IpAddr = "169.254.169.254".parse().unwrap();
+    assert!(!is_blocked_server_url_with(PUBLIC, |_| vec![public]));
+    assert!(is_blocked_server_url_with(PUBLIC, |_| vec![
+        public, metadata
+    ]));
+}

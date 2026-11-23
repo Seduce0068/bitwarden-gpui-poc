@@ -1604,3 +1604,123 @@ fn multi_character_key_char_still_inserts_genuine_compositions() {
         );
     }
 }
+
+#[test]
+fn audit_panel_jumps_directly_to_generator_and_settings() {
+    // The audit panel now reaches the other unlocked panels with the same
+    // `n`/`c` spellings the vault list uses, without giving up its own keys.
+    let mut value = ctx("n");
+    value.panel = Panel::Audit;
+    assert_eq!(
+        classify_key(&value),
+        UiAction::SetPanel(Panel::Generator),
+        "audit/n must open the generator directly"
+    );
+
+    value.key = "c";
+    assert_eq!(
+        classify_key(&value),
+        UiAction::SetPanel(Panel::Settings),
+        "audit/c must open the settings directly"
+    );
+
+    // `g` and `l` are kept: the new bindings must not shadow the back/lock
+    // keys or the audit's own Enter/Escape behaviour.
+    value.key = "g";
+    assert_eq!(classify_key(&value), UiAction::SetPanel(Panel::Vault));
+    value.key = "l";
+    assert_eq!(classify_key(&value), UiAction::Lock);
+    value.key = "enter";
+    assert_eq!(classify_key(&value), UiAction::focus_selected_audit_row());
+    value.key = "escape";
+    assert_eq!(classify_key(&value), UiAction::quit_or_warn());
+    value.key = "x";
+    assert_eq!(classify_key(&value), UiAction::None);
+}
+
+#[test]
+fn searching_takes_priority_over_a_nonempty_confirmed_query() {
+    // `ui::input::key_down` builds the context with `searching: view.searching`
+    // and `query_nonempty: !view.query.is_empty()`. `vault_view::push_query`
+    // makes both true while the field is still active, so the search branch of
+    // `classify_key` must own every key in that state.
+    let mut value = ctx("a");
+    value.searching = true;
+    value.query_nonempty = true;
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText("a".into()));
+
+    for (key, expected) in [
+        ("backspace", UiAction::BackspaceSearch),
+        ("enter", UiAction::FinishSearch),
+        ("escape", UiAction::FinishSearch),
+        ("l", UiAction::InsertSearchText("l".into())),
+        ("n", UiAction::InsertSearchText("n".into())),
+        // `/` stays literal text while searching; it only starts a *fresh*
+        // search from the confirmed-query/vault path.
+        ("/", UiAction::InsertSearchText("/".into())),
+        ("up", UiAction::None),
+        ("f1", UiAction::None),
+    ] {
+        value.key = key;
+        assert_eq!(classify_key(&value), expected, "searching/{key}");
+    }
+
+    // Leaving search mode with the same non-empty query switches to the
+    // confirmed-query path, proving the priority comes from `searching`.
+    value.searching = false;
+    value.key = "a";
+    assert_eq!(classify_key(&value), UiAction::InsertQueryText("a".into()));
+    value.key = "backspace";
+    assert_eq!(classify_key(&value), UiAction::BackspaceQuery);
+}
+
+#[test]
+fn generator_editing_settings_swallows_every_key_before_the_bindings() {
+    // `keys.rs` returns `UiAction::None` at the top of the Generator arm while
+    // a settings field is focused: no generator command, no global navigation
+    // and no text insertion may escape.
+    let mut value = ctx("x");
+    value.panel = Panel::Generator;
+    value.editing_settings = true;
+    for key in [
+        "escape",
+        "n",
+        "l",
+        "p",
+        "h",
+        "y",
+        "Y",
+        "w",
+        "d",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "+",
+        "-",
+        "=",
+        "_",
+        ",",
+        "backspace",
+        "enter",
+        "a",
+        "space",
+    ] {
+        value.key = key;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "generator/editing_settings/{key}"
+        );
+    }
+
+    // Clearing the flag restores the ordinary generator bindings.
+    value.editing_settings = false;
+    value.key = "p";
+    assert_eq!(classify_key(&value), UiAction::GeneratePassword);
+    value.key = "n";
+    assert_eq!(classify_key(&value), UiAction::SetPanel(Panel::Vault));
+}

@@ -485,6 +485,11 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             "enter" => UiAction::focus_selected_audit_row(),
             "g" => UiAction::SetPanel(Panel::Vault),
             "l" => UiAction::Lock,
+            // Direct jumps to the other unlocked panels, using the same
+            // `n`/`c` spellings as the vault list. The panel's own `g`/`l`
+            // bindings above stay intact instead of being swapped for them.
+            "n" => UiAction::SetPanel(Panel::Generator),
+            "c" => UiAction::SetPanel(Panel::Settings),
             _ => UiAction::None,
         },
         Panel::Generator => {
@@ -529,9 +534,12 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
         }
         Panel::Settings => {
             if ctx.editing_settings {
-                // Input-only mode: even `w`, `c` and `l` are literal text so a
-                // URL or email can contain them. Saving is an explicit action
-                // available only after Enter/Escape confirms the field.
+                // Input-only mode: even `w`, `c`, `l`, `d`, `+`/`-`, `1`-`6`
+                // and `i`/`u` are literal text so a URL or email can contain
+                // them, and no threshold/generator setting is adjusted.
+                // Saving is an explicit action available only after
+                // Enter/Escape confirms the field (mirrored by the inline
+                // hint in `ui::panels::settings_panel_key_hint`).
                 return match key {
                     "escape" | "enter" => UiAction::FinishSettingsEdit,
                     "backspace" => UiAction::BackspaceSettings,

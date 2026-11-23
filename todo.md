@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第92弾で 7 件すべてを完了）。
+なし（第93弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第93弾（16 担当・37 回目）の指摘 7 件を完結（2026-11-23）
+  - 監査の all_same と辞書 prefix バイパス、IPv4-mapped IPv6、
+    userinfo SSRF、TooLarge/未来スキーマの save ガードを修正・テスト。
+  - 監査パネルの n/c 導線、設定編集中ヒント、検索中＋クエリ非空、
+    Generator editing_settings、SshKey フィルタをテスト。
+  - cache/vault_sync の doc を実態へ修正。
+  - CHANGELOG に第91〜92弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（891 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第92弾（16 担当・36 回目）の指摘 7 件を完結（2026-11-23）
   - キャッシュ save 前に profile.key/privateKey を除去。
   - PreloginCause 変換、サイズ境界、server/user 不一致優先順位、

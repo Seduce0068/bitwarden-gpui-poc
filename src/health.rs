@@ -309,8 +309,9 @@ impl Default for Thresholds {
 /// The model: the character pool the password actually uses (the ASCII class
 /// sizes come from the generator's own constants), times its length, with a
 /// penalty for the patterns that make a password far weaker than its pool size
-/// suggests (a single repeated character, an all-digit string, a common word,
-/// or a short trailing-digit suffix on a word).
+/// suggests (a single repeated character, including one with a trailing digit
+/// run, an all-digit string, a common word with optional leading digits, or a
+/// short trailing-digit suffix on a word).
 pub fn estimate_entropy(password: &str) -> u32 {
     if password.is_empty() {
         return 0;
@@ -352,16 +353,31 @@ pub fn estimate_entropy(password: &str) -> u32 {
     }
     let raw = entropy_bits(pool, chars.len());
 
-    // Patterns that shrink the real search space.
-    let all_same = chars.iter().all(|c| *c == chars[0]);
-    if all_same {
+    // Patterns that shrink the real search space. Fold once so the all-same
+    // check and the dictionary checks below see the same characters.
+    let lower = password.to_lowercase();
+    // A bare run of one character scores zero. A trailing digit run must not
+    // hide such a run: `aaaaaaaaaa1` is no harder to guess than `aaaaaaaaaa`,
+    // because an attacker tries each character together with each suffix.
+    // Only an ASCII digit suffix is stripped here, so non-ASCII digits keep
+    // the wide-pool path and an all-digit value has an empty body and still
+    // takes the numeric-PIN branch below. The word-suffix discount remains
+    // suffix-only (`strip_trailing_digits`).
+    let repeated_body = strip_trailing_digits(&lower);
+    let all_same_body = repeated_body.is_some_and(|body| {
+        let mut body_chars = body.chars();
+        match body_chars.next() {
+            Some(first) => body_chars.all(|c| c == first),
+            None => false,
+        }
+    });
+    if chars.iter().all(|c| *c == chars[0]) || all_same_body {
         return 0;
     }
     if chars.iter().all(char::is_ascii_digit) {
         // A numeric PIN: length dominates, pool is 10.
         return entropy_bits(10, chars.len()).round().max(0.0) as u32;
     }
-    let lower = password.to_lowercase();
     let common = is_common_password(&lower);
     let mut adjusted = raw;
     if common {
@@ -565,7 +581,24 @@ fn is_exact_common_password(lower: &str) -> bool {
 /// Two independent branches: exact membership in the common list, or a short
 /// value capped to the `"password"` / `"qwerty"` prefix rule. Keeping them
 /// separate lets a test pin each one without the other masking a regression.
+/// The prefix branch ignores a leading ASCII digit run so `1password` cannot
+/// escape the cap; the exact branch is never stripped (see the function body).
 fn is_common_password(lower: &str) -> bool {
+    // Exact membership stays verbatim: a leading or trailing character must
+    // not turn an unlisted value into a COMMON entry.
+    if is_exact_common_password(lower) {
+        return true;
+    }
+    // A leading ASCII digit run is a guessable decoration, not extra entropy:
+    // `1password` must take the same dictionary cap as `password`. Strip the
+    // leading run only for the prefix rules below; the word-suffix discount in
+    // `estimate_entropy` stays suffix-only and the exact list stays unstripped.
+    let without_leading = lower.trim_start_matches(|c: char| c.is_ascii_digit());
+    let candidate = if without_leading.is_empty() {
+        lower
+    } else {
+        without_leading
+    };
     // A long random value that merely begins with "password" (or "qwerty")
     // is not a dictionary password. Cap the prefix matches so those values
     // keep their real (high) entropy estimate; see PASSWORD_PREFIX_LIMIT for
@@ -573,9 +606,8 @@ fn is_common_password(lower: &str) -> bool {
     // Count Unicode characters, not UTF-8 bytes: a multibyte suffix makes the
     // byte length exceed the cap even when the value is only a short
     // dictionary guess plus a few letters, which must still be flagged weak.
-    is_exact_common_password(lower)
-        || (lower.starts_with("password") && lower.chars().count() <= PASSWORD_PREFIX_LIMIT)
-        || (lower.starts_with("qwerty") && lower.chars().count() <= QWERTY_PREFIX_LIMIT)
+    (candidate.starts_with("password") && candidate.chars().count() <= PASSWORD_PREFIX_LIMIT)
+        || (candidate.starts_with("qwerty") && candidate.chars().count() <= QWERTY_PREFIX_LIMIT)
 }
 
 /// Whether `item` has a TOTP field that can actually produce a code.

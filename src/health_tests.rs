@@ -2224,3 +2224,90 @@ fn duplicate_http_uris_on_one_host_are_counted_twice_today() {
     assert_eq!(single.count_of(Severity::High), 1);
     assert_eq!(single.affected(), 1);
 }
+
+#[test]
+fn repeated_character_with_a_digit_suffix_does_not_escape_the_all_same_penalty() {
+    // Regression: `all_same` compared every char with chars[0], so the last
+    // digit in "aaaaaaaaaa1" hid a bare ten-character run. The digit-suffix
+    // discount then still charged ~50 bit for those identical letters.
+    assert_eq!(estimate_entropy("aaaaaaaaaa1"), 0);
+    assert_eq!(estimate_entropy("AAAAAAAAAA1"), 0);
+    assert_eq!(estimate_entropy("zzzz9"), 0);
+    assert_eq!(estimate_entropy("aaaaaaaa"), 0);
+    // A genuinely varied word keeps the documented suffix behaviour.
+    let plain = estimate_entropy("sunflower");
+    let suffixed = estimate_entropy("sunflower42");
+    assert!(suffixed > plain, "{suffixed} vs {plain}");
+    assert!(
+        suffixed < estimate_entropy("sunflower!!"),
+        "only digits get the suffix discount"
+    );
+
+    let bits = estimate_entropy("aaaaaaaaaa1");
+    let report = report_of(vec![login(
+        "repeat",
+        "Repeat",
+        "aaaaaaaaaa1",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn leading_digit_dictionary_passwords_take_the_prefix_cap() {
+    // Regression: `is_common_password` only tested `starts_with("password")`,
+    // so "1password" escaped the cap and was scored from the raw character
+    // pool instead of the ~11-bit dictionary estimate.
+    assert!(!super::is_exact_common_password("1password"));
+    assert!(super::is_common_password("1password"));
+    assert!(estimate_entropy("1password") < 20);
+    assert!(super::is_common_password("1qwerty"));
+    assert!(estimate_entropy("1qwerty") < 20);
+
+    // The cap still protects long values that merely start with the prefix.
+    let weak_bits = Thresholds::default().weak_bits;
+    let long = "1passwordVt7#kQm2!zR9wP4$xL8@";
+    assert!(!super::is_common_password(long));
+    assert!(estimate_entropy(long) >= weak_bits, "{long}");
+
+    let bits = estimate_entropy("1password");
+    let report = report_of(vec![login(
+        "p",
+        "Leading digit",
+        "1password",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn digit_suffix_only_and_exact_common_contracts_survive_the_prefix_rule() {
+    // The two contracts named in the change stay pinned: only a trailing digit
+    // run earns the word-suffix discount, and COMMON remains an exact match.
+    assert!(estimate_entropy("sunflower42") < estimate_entropy("sunflower!!"));
+    assert!(estimate_entropy("sunflower42") > estimate_entropy("sunflower"));
+    for word in [
+        "password",
+        "password1",
+        "password123",
+        "qwerty123",
+        "1234567890",
+        "correcthorsebatterystaple",
+    ] {
+        assert!(super::is_exact_common_password(word), "{word}");
+    }
+    assert!(!super::is_exact_common_password("1password"));
+    assert!(!super::is_exact_common_password("password123!"));
+}

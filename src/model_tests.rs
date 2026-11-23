@@ -2714,3 +2714,51 @@ fn favorites_filter_ands_with_a_non_empty_query() {
         vec!["plain-match"]
     );
 }
+
+#[test]
+fn filter_kind_ssh_key_accepts_and_shows_only_ssh_keys() {
+    // `Filter::Kind(kind)` compares the payload-derived item kind in
+    // `Filter::accepts` (model.rs:843-853), and `Vault::view` applies that
+    // filter before the normalized query (model.rs:976-987). SshKey is the one
+    // kind the login-only sync importer cannot produce, so pin its sidebar
+    // path with fixtures as the sibling SecureNote test does.
+    let ssh = VaultItem::new("s", "Deploy key", ItemData::SshKey(SshKeyData::default()));
+    let vault = Vault {
+        items: vec![
+            login("l", "Login", "alice", "pw", "https://example.com"),
+            ssh.clone(),
+            VaultItem::new(
+                "n",
+                "Note",
+                ItemData::SecureNote {
+                    text: "note".into(),
+                },
+            ),
+        ],
+        folders: Vec::new(),
+    };
+    let filter = Filter::Kind(ItemKind::SshKey);
+
+    assert!(filter.accepts(&ssh));
+    assert!(!filter.accepts(vault.item("l").unwrap()));
+    assert!(!filter.accepts(vault.item("n").unwrap()));
+
+    let ids: Vec<&str> = vault
+        .view(&filter, "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["s"]);
+
+    // The query is ANDed with the kind filter: a token that only exists on a
+    // login must not leak into the SSH-only view, while the SSH item's name
+    // keeps it visible.
+    assert!(vault.view(&filter, "alice", SortKey::NameAsc).is_empty());
+    let matched: Vec<&str> = vault
+        .view(&filter, "deploy", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(matched, vec!["s"]);
+    assert_eq!(filter.label(&vault.folders), "SSH鍵");
+}

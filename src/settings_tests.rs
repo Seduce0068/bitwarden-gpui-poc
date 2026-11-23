@@ -1203,7 +1203,17 @@ fn save_device_id_only_aborts_on_an_oversized_file() {
     std::fs::write(&path, &original).unwrap();
 
     let id = generate_device_id().unwrap();
-    assert!(Settings::save_device_id_only(&path, &id).is_err());
+    let error = Settings::save_device_id_only(&path, &id).unwrap_err();
+    // The abort arm formats the SettingsLoadError with `{:?}`, so the reason
+    // is the variant name -- not the load message promising default values.
+    assert_eq!(
+        error.to_string(),
+        "保存済みの設定を読み込めないため上書きを中止しました（TooLarge）",
+        "{error}"
+    );
+    assert!(error.to_string().contains("中止"), "{error}");
+    assert!(error.to_string().contains("TooLarge"), "{error}");
+    assert!(!error.to_string().contains("既定値"), "{error}");
     assert_eq!(std::fs::read(&path).unwrap(), original);
 }
 
@@ -2771,4 +2781,38 @@ fn pop_shared_char_is_a_no_op_on_empty_and_pops_consecutive_characters() {
     settings.pop_shared_char(SharedSettingsField::Email);
     assert_eq!(settings.server_url, "keep");
     assert_eq!(settings.email, "");
+}
+
+#[test]
+fn save_guard_distinguishes_oversized_files_from_future_schema_files() {
+    // `Settings::save` (settings.rs:930-943) guards only on `file_schema_version`.
+    // An oversized file yields no marker, so it is replaced with the sanitized
+    // struct; a future marker aborts with a distinct wording and leaves the
+    // file byte-for-byte intact.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let oversized = vec![b' '; MAX_SETTINGS_BYTES as usize + 1];
+    std::fs::write(&path, &oversized).unwrap();
+    assert_eq!(super::file_schema_version(&path), None);
+
+    Settings {
+        email: "replace@example.com".into(),
+        ..Default::default()
+    }
+    .save(&path)
+    .expect("an oversized file has no future marker and must be replaced");
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "replace@example.com");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+
+    let future = br#"{"schema_version":999,"email":"keep@example.com"}"#.to_vec();
+    std::fs::write(&path, &future).unwrap();
+    assert_eq!(super::file_schema_version(&path), Some(999));
+    let error = Settings::default().save(&path).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "設定ファイルのバージョン 999 は未対応のため上書きを中止しました",
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), future);
 }

@@ -29,6 +29,17 @@
 //! nor invents a folder for it. The end-to-end behaviour is pinned by
 //! `dangling_folder_id_is_kept_verbatim_without_creating_a_folder` in the test
 //! module; no deeper invariant about orphaned folders is verified here.
+//!
+//! Known constraint: `cipher_row_is_excluded` is a hand-copied replica of
+//! `openwarden`'s *private* `StoredCipher::parse` / `info` filtering rules.
+//! Upstream drops organization-owned, soft-deleted and non-`type: 1` ciphers,
+//! but that decision is not exposed through its public API, so this module
+//! cannot ask the dependency which rows it will keep. Duplicating the rule is
+//! what lets [`parse_sync`] keep an excluded row from winning a cipher-id
+//! dedup and making the whole id disappear. If a future `openwarden` release
+//! changes the private rule, this copy can drift; there is no injection seam
+//! for the upstream filter, so the tests pin the current observable behaviour
+//! instead of proving equivalence with a future version.
 
 use std::collections::{HashMap, HashSet};
 
@@ -265,6 +276,14 @@ fn dedup_ciphers_by_revision(value: &mut serde_json::Value) {
 /// openwarden's wire format, so a missing or non-numeric value fails
 /// deserialization and is excluded too. A note/card must not win a cipher-id
 /// dedup: openwarden would drop the survivor and the whole id would vanish.
+///
+/// Known constraint: these checks are a local replica of `openwarden`'s
+/// non-public exclusion behaviour, not a call into a public upstream
+/// predicate. The dependency does not expose the rule, so keeping the dedup
+/// consistent means duplicating it here; a dependency upgrade that changes
+/// the private rule must update this helper in the same change. This is a
+/// documented PoC constraint, not a guarantee that the two implementations
+/// stay in sync.
 fn cipher_row_is_excluded(cipher: &serde_json::Value) -> bool {
     let is_login = cipher
         .get("type")
