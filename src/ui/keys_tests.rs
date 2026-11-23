@@ -240,7 +240,7 @@ fn generator_keys_toggle_options_and_clamp_lengths() {
 fn separator_falls_back_to_dash_for_unknown_values() {
     // The documented cycle is "-" -> "." -> "_" -> "" -> "-". A hand-edited
     // or legacy value outside that set must land on "-" through the `_` arm
-    // in `apply_generator_key` (keys.rs:573), rather than being kept or cleared.
+    // in `apply_generator_key` (keys.rs:87), rather than being kept or cleared.
     let mut settings = Settings::default();
     for unknown in ["x", "::", "unknown"] {
         settings.passphrase_generator.separator = unknown.into();

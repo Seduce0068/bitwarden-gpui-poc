@@ -385,7 +385,7 @@ fn name_sort_id_tiebreak_is_reversed_only_for_name_desc() {
 #[test]
 fn recently_modified_breaks_equal_revision_ties_by_name_then_id() {
     // `compare` orders `RecentlyModified` by revision descending, then reuses
-    // the un-reversed `name + id` ordering (model.rs:1174-1184). With equal
+    // the un-reversed `name + id` ordering (model.rs:1215-1225). With equal
     // revisions the folded name must win first and the id must break an
     // exactly equal name, regardless of insertion order.
     let mut vault = Vault::new();
@@ -1388,7 +1388,7 @@ fn ssh_fingerprint_works_without_an_optional_comment_field() {
 fn ssh_fingerprint_rejects_extra_base64_padding() {
     // Padding is optional, but a surplus `=` must not decode to the same blob:
     // otherwise distinct public-key lines would share one fingerprint
-    // (model.rs:380-433).
+    // (model.rs:456-509).
     let canonical = super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ== fp");
     assert!(canonical.is_some());
     for extra in [
@@ -4228,4 +4228,76 @@ fn empty_folder_id_is_a_present_id_for_filters() {
     });
     assert_eq!(vault.folder_counts(), vec![(String::new(), 1)]);
     assert_eq!(Filter::Folder(String::new()).label(&vault.folders), "空");
+}
+
+// --- R2-CORE-121: stable ordering on Equal and empty SSH blob rejection ---
+
+#[test]
+fn compare_equal_keeps_the_original_row_order() {
+    // Two raw rows that `compare` ranks as Equal on every sort key must keep
+    // their insertion order through `Vault::view`'s stable `sort_by`
+    // (model.rs:1098, 1215-1225). They differ only in fields `compare` never
+    // inspects, so the notes reveal which row came first.
+    let mut first = login("dup", "Same", "u", "p", "https://first.example");
+    first.revision_date = 100;
+    first.notes = Zeroizing::new("FIRST".to_string());
+    let mut second = login("dup", "Same", "u", "p", "https://second.example");
+    second.revision_date = 100;
+    second.favorite = true;
+    second.notes = Zeroizing::new("SECOND".to_string());
+
+    let keys = [
+        SortKey::NameAsc,
+        SortKey::NameDesc,
+        SortKey::RecentlyModified,
+        SortKey::Kind,
+    ];
+    for sort in keys {
+        assert_eq!(
+            super::compare(&first, &second, sort),
+            std::cmp::Ordering::Equal,
+            "{sort:?}"
+        );
+    }
+
+    let vault = Vault {
+        items: vec![first, second],
+        folders: Vec::new(),
+    };
+    for sort in keys {
+        let order: Vec<&str> = vault
+            .view(&Filter::All, "", sort)
+            .iter()
+            .map(|item| item.notes.as_str())
+            .collect();
+        assert_eq!(order, vec!["FIRST", "SECOND"], "{sort:?}");
+    }
+}
+
+#[test]
+fn ssh_base64_decoder_rejects_an_empty_blob() {
+    // `decode` rejects a zero-byte result (model.rs:456-509): an empty string
+    // must never be hashed into a fingerprint. Padding-only input decodes to
+    // zero bytes too and must fail for the same reason.
+    assert_eq!(super::ssh_fingerprint::decode(b""), None);
+    for input in [&b"="[..], &b"=="[..], &b"===="[..]] {
+        assert_eq!(super::ssh_fingerprint::decode(input), None, "{input:?}");
+    }
+    // Whitespace cannot create a blob field through `split_whitespace`, so a
+    // blob-less key line yields no fingerprint either.
+    for line in ["", "   ", "ssh-ed25519", "ssh-ed25519   "] {
+        assert_eq!(
+            super::ssh_fingerprint::sha256_fingerprint(line),
+            None,
+            "{line:?}"
+        );
+    }
+    // Premise: a real one-byte blob still decodes, so the rejection above is
+    // specific to the empty case rather than a blanket refusal.
+    assert_eq!(super::ssh_fingerprint::decode(b"AQ=="), Some(vec![0x01]));
+    let key = ssh_key("", REFERENCE_FINGERPRINT);
+    assert_eq!(
+        key.verify_fingerprint(),
+        FingerprintVerify::InvalidPublicKey
+    );
 }

@@ -4580,3 +4580,81 @@ fn empty_account_ids_fail_closed_on_the_restore_path() {
         Err(SyncCacheError::ServerMismatch)
     ));
 }
+
+// --- R2-CORE-121: write-side permissions and i64::MIN capture time ---
+
+#[cfg(unix)]
+#[test]
+fn save_writes_owner_only_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("nested");
+    let path = nested.join("sync-cache.json");
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+
+    save(&path, &cache).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "file mode {mode:04o}");
+    assert_eq!(mode & 0o066, 0, "group/other bits must be clear");
+    let parent_mode = std::fs::metadata(&nested).unwrap().permissions().mode();
+    assert_eq!(parent_mode & 0o777, 0o700, "parent mode {parent_mode:04o}");
+
+    // Replacing an existing world-readable file must tighten it again.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    save(&path, &cache).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "replacement mode {mode:04o}");
+}
+
+#[cfg(target_os = "linux")]
+#[cfg(unix)]
+#[test]
+fn save_default_writes_owner_only_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let cache_home = root.path().join("xdg-cache-home");
+    let _env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
+
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save_default(&cache).unwrap();
+    let path = default_path().expect("cache path");
+    assert!(path.is_file(), "save_default must create the cache file");
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "file mode {mode:04o}");
+    assert_eq!(mode & 0o066, 0, "group/other bits must be clear");
+}
+
+#[test]
+fn minimum_i64_capture_time_is_expired() {
+    let now = 1_800_000_000_i64;
+    // Premise: the direct subtraction overflows, so `is_cache_expired` must
+    // take the saturating arm of the match (cache.rs:832-838).
+    assert_eq!(now.checked_sub(i64::MIN), None);
+    assert_eq!(now.saturating_sub(i64::MIN), i64::MAX);
+    const {
+        assert!(i64::MAX > MAX_CACHE_AGE_SECS);
+    }
+    assert!(is_cache_expired(Some(i64::MIN), now));
+    assert!(is_cache_expired(Some(i64::MIN), 0));
+    // The verdict is about the extreme capture time, not a blanket rejection
+    // of old-but-representable timestamps.
+    assert!(!is_cache_expired(Some(now), now));
+
+    // The sentinel also survives a serde round-trip as an expired timestamp.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("min-created-at.json");
+    let envelope = serde_json::json!({
+        "version": SyncCache::VERSION,
+        "user_id": "user-1",
+        "server_url": "https://vault.example.com",
+        "body": body(),
+        "created_at": i64::MIN,
+    });
+    write_fixture(&path, &serde_json::to_vec(&envelope).unwrap());
+    let loaded = load_detailed(&path).unwrap();
+    assert_eq!(loaded.created_at, Some(i64::MIN));
+    assert!(is_cache_expired(loaded.created_at, now));
+}

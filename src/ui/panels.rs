@@ -174,14 +174,18 @@ pub(super) fn settings_panel_key_hint(editing: bool) -> String {
 ///
 /// `ui::keys::classify_key` binds `n` directly to `Panel::Generator` in
 /// `Panel::Settings`, so the guidance must not send the user back to the vault
-/// list first (the old wording did). Pure so the rendered text can be pinned
-/// without a GPUI window.
+/// list first (the old wording did). While a settings field is focused, `n` is
+/// inserted as text instead of jumping to the generator, so the hint is
+/// suppressed rather than advertising a command that cannot fire. Pure so the
+/// rendered text can be pinned without a GPUI window.
 pub(super) fn settings_generator_summary_line(
     password_length: usize,
     passphrase_words: usize,
+    editing: bool,
 ) -> String {
+    let jump_hint = if editing { "" } else { "（n: 生成へ）" };
     format!(
-        "生成設定: パスワード {password_length} 文字 / パスフレーズ {passphrase_words} 語（n: 生成へ）"
+        "生成設定: パスワード {password_length} 文字 / パスフレーズ {passphrase_words} 語{jump_hint}"
     )
 }
 
@@ -659,6 +663,7 @@ pub(super) fn settings_panel<'a>(
                 .child(settings_generator_summary_line(
                     settings.password_generator.length,
                     settings.passphrase_generator.words,
+                    editing.is_some(),
                 )),
         )
         .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
@@ -849,7 +854,7 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn settings_generator_summary_line_points_to_the_direct_generator_jump() {
-        let line = settings_generator_summary_line(24, 6);
+        let line = settings_generator_summary_line(24, 6, false);
         assert_eq!(
             line,
             "生成設定: パスワード 24 文字 / パスフレーズ 6 語（n: 生成へ）"
@@ -859,6 +864,18 @@ mod tests {
         // stale and must not come back.
         assert!(line.contains("n: 生成へ"), "{line}");
         assert!(!line.contains("一覧"), "{line}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_generator_summary_line_hides_jump_hint_while_editing() {
+        let line = settings_generator_summary_line(24, 6, true);
+        assert_eq!(line, "生成設定: パスワード 24 文字 / パスフレーズ 6 語");
+        // While a settings field is focused, `n` is inserted as text rather
+        // than switching to `Panel::Generator`, so advertising the jump here
+        // would promise a command that cannot fire.
+        assert!(!line.contains("n: 生成へ"), "{line}");
+        assert!(!line.contains("n:"), "{line}");
+        assert!(line.starts_with("生成設定: パスワード 24 文字"), "{line}");
     }
 
     #[::core::prelude::v1::test]

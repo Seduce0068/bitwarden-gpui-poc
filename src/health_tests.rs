@@ -3321,3 +3321,53 @@ fn custom_weak_bits_changes_the_audit_not_the_generated_strength() {
     );
     assert!(boundary.items.is_empty(), "{boundary:?}");
 }
+
+// --- R2-CORE-121: numeric rendering in Finding::message ---
+
+#[test]
+fn finding_message_renders_weak_bits_and_stale_days_numbers() {
+    // `Finding::message` interpolates its payload fields verbatim
+    // (health.rs:88-92). Pin the exact text plus the digits so a regression to
+    // a fixed placeholder (or to a unit-less rendering) is caught.
+    for bits in [0u32, 1, 13, 40, 41, 999, u32::MAX] {
+        let message = Finding::WeakPassword { bits }.message();
+        assert_eq!(message, format!("弱いパスワード（推定 {bits} bit）"));
+        assert!(message.contains(&bits.to_string()), "{message}");
+        assert!(message.contains(" bit"), "{message}");
+    }
+    for days in [0i64, 1, 7, 365, 400, 10_000, i64::MIN, i64::MAX] {
+        let message = Finding::Stale { days }.message();
+        assert_eq!(message, format!("{days} 日以上更新されていない"));
+        assert!(message.contains(&days.to_string()), "{message}");
+        assert!(message.contains("日以上"), "{message}");
+    }
+    // Distinct payloads must render distinctly: no shared placeholder.
+    assert_ne!(
+        Finding::WeakPassword { bits: 13 }.message(),
+        Finding::WeakPassword { bits: 31 }.message()
+    );
+    assert_ne!(
+        Finding::Stale { days: 400 }.message(),
+        Finding::Stale { days: 40 }.message()
+    );
+}
+
+#[test]
+fn report_text_renders_finding_numbers() {
+    // End-to-end: `to_text` renders each finding through `message`
+    // (health.rs:278-280), so the values observed in the report must be the
+    // same numbers carried by the finding variants.
+    let mut item = login("1", "StaleWeak", "1234", "https://a.example", "SECRET");
+    item.revision_date = NOW - 400 * 86_400;
+    let report = report_of(vec![item]);
+    assert!(report.items[0]
+        .findings
+        .contains(&Finding::WeakPassword { bits: 13 }));
+    assert!(report.items[0]
+        .findings
+        .contains(&Finding::Stale { days: 400 }));
+
+    let text = report.to_text();
+    assert!(text.contains("推定 13 bit"), "{text}");
+    assert!(text.contains("400 日以上更新されていない"), "{text}");
+}

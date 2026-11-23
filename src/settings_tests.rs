@@ -3724,3 +3724,83 @@ fn save_device_id_only_resanitizes_the_fields_it_reads_back() {
     assert_eq!(loaded.thresholds.weak_bits, MIN_WEAK_BITS);
     assert_eq!(loaded.thresholds.stale_days, MAX_STALE_DAYS);
 }
+
+// --- R2-CORE-121: variant nibbles and future-schema uppercase UUID rescue ---
+
+#[test]
+fn device_id_variant_nibbles_9_a_b_are_accepted() {
+    // RFC 4122 encodes the variant as the `10xx` bit pattern, whose low nibble
+    // is 8/9/a/b. `is_valid_device_id` must accept every one of those spellings
+    // (settings.rs:670-671), including the uppercase form of a/b, and reject
+    // every non-variant nibble. Position 14 stays the version-4 marker.
+    let base = generate_device_id().unwrap();
+    assert_eq!(base.as_bytes()[14], b'4');
+
+    for variant in *b"89abAB" {
+        let mut id = base.clone().into_bytes();
+        id[19] = variant;
+        let id = std::str::from_utf8(&id).unwrap();
+        assert!(is_valid_device_id(id), "variant {variant}: {id}");
+    }
+    for variant in *b"07cCdfgz" {
+        let mut id = base.clone().into_bytes();
+        id[19] = variant;
+        let id = std::str::from_utf8(&id).unwrap();
+        assert!(!is_valid_device_id(id), "variant {variant}: {id}");
+    }
+
+    // Uppercase hex anywhere else is accepted too; only the version nibble and
+    // the variant nibble carry semantic meaning.
+    let uppercase = base.to_ascii_uppercase();
+    assert!(is_valid_device_id(&uppercase), "{uppercase}");
+    let mut wrong_version = uppercase.clone().into_bytes();
+    wrong_version[14] = b'5';
+    assert!(!is_valid_device_id(
+        std::str::from_utf8(&wrong_version).unwrap()
+    ));
+}
+
+#[test]
+fn future_schema_rescues_uppercase_uuid_device_ids() {
+    // A future writer may spell the opaque id in uppercase hex. The rescue in
+    // `parse_settings` (settings.rs:884-895) calls `is_valid_device_id`, so the
+    // uppercase form with each variant nibble must survive both the detailed
+    // and the public loader while schema-governed fields still fall back.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let future = CURRENT_SCHEMA_VERSION + 1;
+
+    for variant in *b"9abAB" {
+        let mut bytes = generate_device_id().unwrap().into_bytes();
+        bytes[19] = variant;
+        let id = std::str::from_utf8(&bytes).unwrap().to_ascii_uppercase();
+        assert!(is_valid_device_id(&id), "variant {variant}: {id}");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"schema_version":{future},"email":"future@example.com","server_url":"https://future.example","device_id":"{id}"}}"#
+            ),
+        )
+        .unwrap();
+
+        let detailed = Settings::load_detailed(&path).unwrap();
+        assert_eq!(detailed.device_id, id, "detailed must rescue {id}");
+        assert_eq!(detailed.email, "", "schema-governed fields still fall back");
+        assert_eq!(detailed.server_url, Settings::default().server_url);
+        assert_eq!(detailed.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(Settings::load(&path).device_id, id, "load must rescue {id}");
+    }
+
+    // An uppercase id with a non-variant nibble is still rejected on both paths.
+    let mut bytes = generate_device_id().unwrap().into_bytes();
+    bytes[19] = b'C';
+    let invalid = std::str::from_utf8(&bytes).unwrap().to_ascii_uppercase();
+    assert!(!is_valid_device_id(&invalid), "{invalid}");
+    std::fs::write(
+        &path,
+        format!(r#"{{"schema_version":{future},"device_id":"{invalid}"}}"#),
+    )
+    .unwrap();
+    assert!(Settings::load_detailed(&path).unwrap().device_id.is_empty());
+    assert!(Settings::load(&path).device_id.is_empty());
+}

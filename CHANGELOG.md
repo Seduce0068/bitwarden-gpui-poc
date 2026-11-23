@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第118〜120弾 / 2026-11-24）
+
+- 空 profile.id／folder_id、folder_name_text 空文字、
+  has_usable_totp／password_entropy doc を修正
+- 空 user_id 照合 fail-open、設定 TOCTOU 記録、
+  生成／設定パネル直接遷移キーを修正
+- UI キー案内、auth/settings/model 行参照、WEAK_BITS／TotpError doc を修正
+
 ### 全体改善（第117弾 / 2026-11-24）
 
 - 空一覧 Up/Down 反馈、F1 大小文字正規化、
@@ -390,7 +398,7 @@
 ### 修正（共有フィールドの所有権）
 
 - ServerUrl/Email の編集を `Settings` のメソッドへ集約し、設定パネルと
-  ロック画面で同じ経路を通すようにした（284 passed）
+  ロック画面で同じ経路を通すようにした（283 passed）
 
 ### 修正（選択ロジックの集約）
 
