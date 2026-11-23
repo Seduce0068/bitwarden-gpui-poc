@@ -2359,6 +2359,89 @@ fn integral_float_zero_is_the_legacy_marker_not_current() {
 }
 
 #[test]
+fn negative_zero_and_finite_string_schema_markers_are_classified_by_value() {
+    use serde_json::json;
+
+    // IEEE 754: `-0.0 < 0.0` is false and `-0.0.fract() == 0.0`, so the float
+    // helper maps negative zero to the legacy marker 0 -- neither "no marker"
+    // nor the current version (settings.rs:502-510).
+    assert_eq!(super::version_from_float(-0.0), Some(0));
+    assert_eq!(super::version_from_float(0.0), Some(0));
+    for marker in [json!(-0.0), json!("-0.0"), json!("  -0.0  ")] {
+        assert_eq!(super::schema_version_of(Some(&marker)), Some(0), "{marker}");
+    }
+
+    // Finite decimal/exponent spellings are parsed as floats after the u64
+    // parse fails; in-range values keep their exact version (settings.rs:521-535).
+    for (marker, expected) in [
+        ("0.0", 0),
+        ("0e0", 0),
+        ("1.0", 1),
+        ("1e0", 1),
+        ("1E+0", 1),
+        ("2.0", 2),
+        ("2e0", 2),
+        ("1e1", 10),
+    ] {
+        assert_eq!(
+            super::schema_version_of(Some(&json!(marker))),
+            Some(expected),
+            "{marker}"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // A JSON -0.0 or a "-0.0"/"0.0" string is a legacy marker on disk: fields
+    // stay compatible and the read paths report legacy, never current.
+    for body in [
+        r#"{"schema_version":-0.0,"email":"negzero@example.com","idle_lock_seconds":123}"#,
+        r#"{"schema_version":"-0.0","email":"negzero@example.com","idle_lock_seconds":123}"#,
+        r#"{"schema_version":"0.0","email":"negzero@example.com","idle_lock_seconds":123}"#,
+    ] {
+        std::fs::write(&path, body).unwrap();
+        let loaded = Settings::parse_settings(body).unwrap();
+        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION, "{body}");
+        assert_eq!(loaded.email, "negzero@example.com", "{body}");
+        assert_eq!(loaded.idle_lock_seconds, 123, "{body}");
+        assert_eq!(super::file_schema_version(&path), Some(0), "{body}");
+        assert!(load_advisories(&path).is_empty(), "{body}");
+    }
+
+    // A finite in-range marker of 1 is compatible. The string spelling is
+    // reported as legacy because only a JSON number is trusted as the marker,
+    // but the raw value is still 1, so no write guard refuses the file.
+    for marker in ["1.0", "1e0"] {
+        let body = format!(
+            r#"{{"schema_version":"{marker}","email":"one@example.com","idle_lock_seconds":123}}"#
+        );
+        std::fs::write(&path, &body).unwrap();
+        let loaded = Settings::load_detailed(&path).unwrap();
+        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION, "{body}");
+        assert_eq!(loaded.email, "one@example.com", "{body}");
+        assert_eq!(loaded.idle_lock_seconds, 123, "{body}");
+        assert_eq!(super::file_schema_version(&path), Some(1), "{body}");
+        assert!(load_advisories(&path).is_empty(), "{body}");
+    }
+
+    // The same finite spellings above the current version stay future markers:
+    // the whole file falls back to defaults while the raw marker is still read.
+    for (marker, version) in [("2.0", 2), ("2e0", 2), ("1e1", 10)] {
+        let body = format!(
+            r#"{{"schema_version":"{marker}","email":"future@example.com","idle_lock_seconds":123}}"#
+        );
+        std::fs::write(&path, &body).unwrap();
+        assert_eq!(
+            Settings::load_detailed(&path).unwrap(),
+            Settings::default(),
+            "{body}"
+        );
+        assert_eq!(super::file_schema_version(&path), Some(version), "{body}");
+        assert_eq!(Settings::load(&path), Settings::default(), "{body}");
+    }
+}
+
+#[test]
 fn string_and_float_future_schemas_still_rescue_a_valid_device_id() {
     use serde_json::json;
 

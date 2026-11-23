@@ -2737,6 +2737,66 @@ fn ambiguous_hash_is_treated_as_a_nested_password_and_fails_closed() {
 }
 
 #[test]
+fn real_fragment_with_sensitive_key_and_colonless_value_is_not_rewritten() {
+    // `hash_continues_nested_password` only re-encodes a '#' when the query
+    // carries a `user:secret` marker. A genuine fragment whose text merely
+    // holds an '@', combined with a sensitive key whose value has no colon,
+    // must keep its delimiter (cache.rs:720-744).
+    let tail = "section@docs.example";
+    for head in [
+        "https://vault.example.com/cb?token=PLAIN_SECRET",
+        "https://vault.example.com/cb?access_token=PLAIN_SECRET&state=ok",
+        "https://vault.example.com/cb?password=PLAIN_SECRET",
+        "https://vault.example.com/cb?next=done",
+    ] {
+        assert!(
+            !super::hash_continues_nested_password(head, tail),
+            "genuine fragment after {head}"
+        );
+    }
+
+    // End to end: the '#' stays a fragment delimiter, the sensitive query key
+    // is still redacted by the ordinary query pass, and no secret reaches Debug.
+    let url = "https://vault.example.com/cb?token=FRAG_TOKEN_SECRET#section@docs.example";
+    assert_eq!(
+        super::mask_url_secrets(url),
+        "https://vault.example.com/cb?token=[redacted]#section@docs.example"
+    );
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("FRAG_TOKEN_SECRET"), "{rendered}");
+    assert!(rendered.contains("#section@docs.example"), "{rendered}");
+    // Debug-only masking: the stored URL stays byte-for-byte identical.
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn hash_continues_nested_password_requires_a_usable_user_and_secret() {
+    // Both halves of the `user:secret` marker are checked independently
+    // (cache.rs:725-733): an empty user, a user carrying '@'/'?'/'/' and an
+    // empty secret must each leave a genuine fragment delimiter intact.
+    let tail = "frag@cb.example.com";
+    let good = "https://vault.example.com/login?next=user:NESTED_SECRET";
+    assert!(
+        super::hash_continues_nested_password(good, tail),
+        "premise: a real user:secret marker takes the re-encode path"
+    );
+
+    for head in [
+        "https://vault.example.com/login?next=:NESTED_SECRET", // empty user
+        "https://vault.example.com/login?next=u@ser:NESTED_SECRET", // '@' in user
+        "https://vault.example.com/login?next=u?ser:NESTED_SECRET", // '?' in user
+        "https://vault.example.com/login?next=u/ser:NESTED_SECRET", // '/' in user
+        "https://vault.example.com/login?next=user:",          // empty secret
+    ] {
+        assert!(
+            !super::hash_continues_nested_password(head, tail),
+            "invalid user/secret must not rewrite {head} #{tail}"
+        );
+    }
+}
+
+#[test]
 fn debug_pins_the_stored_body_byte_count() {
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     let stored = String::from_utf8(cache.body.clone()).expect("the cached JSON body is UTF-8");

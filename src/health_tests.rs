@@ -786,6 +786,93 @@ fn empty_passwords_are_reported_as_weak() {
 }
 
 #[test]
+fn visually_empty_passwords_are_not_registered_as_reused() {
+    // The reuse map in `audit` now shares the model's `is_visually_empty` rule
+    // with the name/card/URI/TOTP checks (health.rs:741-751). Whitespace, Cc
+    // controls and Unicode `Cf` render nothing, so two logins carrying such a
+    // password must not be reported as sharing one. They still take the
+    // WeakPassword path, so the exclusion is not a blanket skip.
+    for blank in [
+        " ",
+        "  \t  ",
+        "\u{200b}",             // ZERO WIDTH SPACE (Cf)
+        "\u{feff}\u{200d}",     // BOM + ZWJ (Cf)
+        " \u{200b}\t\u{2060} ", // Cf mixed with whitespace
+        "\u{0}\u{9f}",          // NUL + C1 control (Cc)
+    ] {
+        let report = report_of(vec![
+            login("1", "A", blank, "https://a.example", "GEZDGNBVGY3TQOJQ"),
+            login("2", "B", blank, "https://b.example", "GEZDGNBVGY3TQOJQ"),
+        ]);
+        assert_eq!(report.items.len(), 2, "password {blank:?}");
+        for item in &report.items {
+            assert!(
+                item.findings
+                    .iter()
+                    .any(|finding| matches!(finding, Finding::WeakPassword { .. })),
+                "password {blank:?}: {item:?}"
+            );
+            assert!(
+                !item
+                    .findings
+                    .iter()
+                    .any(|finding| matches!(finding, Finding::ReusedPassword { .. })),
+                "blank password {blank:?} must not be a reuse match: {item:?}"
+            );
+        }
+    }
+
+    // Control: a real shared password is still counted, so the exclusion above
+    // is about visible content rather than a disabled reuse check.
+    const SHARED: &str = "vT7#kQm2!zR9wP4$xL8@";
+    let report = report_of(vec![
+        login("1", "A", SHARED, "https://a.example", "GEZDGNBVGY3TQOJQ"),
+        login("2", "B", SHARED, "https://b.example", "GEZDGNBVGY3TQOJQ"),
+    ]);
+    assert_eq!(report.items.len(), 2);
+    for item in &report.items {
+        assert!(
+            item.findings
+                .contains(&Finding::ReusedPassword { count: 2 }),
+            "{item:?}"
+        );
+    }
+
+    // A blank-looking pair beside the real pair must not form its own reuse
+    // group either: only the two real logins carry a ReusedPassword finding.
+    // Under the old `!password.is_empty()` check these two Cf-only entries
+    // passed the map gate and produced two extra count-2 findings.
+    let mixed = report_of(vec![
+        login("1", "A", SHARED, "https://a.example", "GEZDGNBVGY3TQOJQ"),
+        login("2", "B", SHARED, "https://b.example", "GEZDGNBVGY3TQOJQ"),
+        login(
+            "3",
+            "C",
+            "\u{200b}",
+            "https://c.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+        login(
+            "4",
+            "D",
+            "\u{200b}",
+            "https://d.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+    ]);
+    let counts: Vec<usize> = mixed
+        .items
+        .iter()
+        .flat_map(|item| item.findings.iter())
+        .filter_map(|finding| match finding {
+            Finding::ReusedPassword { count } => Some(*count),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(counts, vec![2, 2], "{mixed:?}");
+}
+
+#[test]
 fn invalid_totp_is_not_counted_as_configured() {
     const VALID: &str = "GEZDGNBVGY3TQOJQ";
     let report = report_of(vec![

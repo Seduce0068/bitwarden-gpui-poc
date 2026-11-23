@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第125弾で 6 件すべてを完了）。
+なし（第126弾で 3 件すべてを完了）。
 
 ## 完了
 
+- [x] 第126弾（16 担当・70 回目）の指摘 3 件を完結（2026-11-24）
+  - 空白/Cf パスワードの再利用登録、スキーマ -0.0／小数指数、
+    ネスト '#' 副条件と本物フラグメントを修正・テスト。
+  - 空監査 Home/End の指摘は既に修正済みで却下。
+  - 起動エージェント: 17 体（補充探索 16 + 実装 1）。
+  - 検証: fmt / check / test（1167 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第125弾（16 担当・69 回目）の指摘 6 件を完結（2026-11-24）
   - 空白パスワード桁数表示、編集中 n キー案内、auth/ADR 行参照を修正。
   - 曖昧 '#' fail-closed、PascalCase URI match、URI マーカー偽物、

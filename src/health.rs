@@ -741,9 +741,12 @@ pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
     let mut passwords: HashMap<&str, Vec<&str>> = HashMap::new();
     for item in &vault.items {
         if let Some(password) = item.password() {
-            // Empty passwords have no guessable value, and undecryptable ones
-            // are excluded from every password check (including reuse).
-            if !password.is_empty() && !is_undecryptable_password(password) {
+            // Blank-looking passwords have no guessable value, and undecryptable
+            // ones are excluded from every password check (including reuse).
+            // Share the model's `is_visually_empty` rule with the name/card/URI/
+            // TOTP checks so whitespace, Cc controls and Unicode `Cf` cannot
+            // register a phantom reuse match or hide a real one behind a count.
+            if !is_visually_empty(password) && !is_undecryptable_password(password) {
                 passwords.entry(password).or_default().push(&item.id);
             }
         }
