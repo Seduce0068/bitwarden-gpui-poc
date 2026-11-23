@@ -844,7 +844,8 @@ fn login_deadline(now: std::time::Instant, timeout: std::time::Duration) -> Logi
 /// The timeout half of the login race.
 ///
 /// Both arms report the same [`AuthError::Timeout`]; the relative form is the
-/// fallback for an unrepresentable absolute deadline (auth.rs:791-829).
+/// fallback chosen by `login_deadline` for an unrepresentable absolute deadline
+/// (auth.rs:837-842).
 async fn login_watchdog(deadline: LoginDeadline) -> Result<AuthenticatedVault, AuthError> {
     match deadline {
         LoginDeadline::At(at) => {
@@ -890,7 +891,7 @@ pub async fn authenticate_with_timeout(
     // fires on the first poll, which the zero-duration test seam relies on.
     // An unrepresentable deadline is not a reason to skip the watchdog:
     // `login_deadline` selects smol's relative timer with the original
-    // duration in that case (auth.rs:808-813).
+    // duration in that case (auth.rs:837-842).
     let deadline = login_deadline(std::time::Instant::now(), timeout);
     let timer = login_watchdog(deadline);
     smol::future::race(login, timer).await
@@ -1061,6 +1062,17 @@ async fn authenticate_inner(
         }
     };
     // KDF derivation is CPU- and memory-heavy; move it off the UI thread.
+    //
+    // Known constraint: the email is trimmed here but NOT case-folded before
+    // `MasterKey::derive`. Bitwarden derives the master key from the account
+    // email as stored by the server, so an address entered with different
+    // casing yields a different key and unlock fails, even though
+    // `validate_config` accepts every casing and no validation error is
+    // reported. Lowercasing would silently change the derived key for every
+    // existing mixed-case address, so this PoC records the limitation instead
+    // of normalizing; the regression test
+    // `uppercase_email_is_not_case_folded_before_kdf_is_a_known_constraint`
+    // pins that the configured value keeps its case on the way to this call.
     let password = config.master_password.clone();
     let email = config.email.trim().to_string();
     let policy = KdfPolicy::default();

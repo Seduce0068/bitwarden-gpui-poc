@@ -384,6 +384,104 @@ fn email_validation_rejects_format_characters() {
 }
 
 #[test]
+fn every_unicode_cf_range_is_rejected_in_an_email() {
+    // `crate::limits::is_format_character` lists 21 disjoint ranges/characters
+    // from Unicode 16.0's Cf category (limits.rs). The older regression test
+    // samples only eight of them; cover every arm here (start, middle where
+    // the range has one, and end) through both the primitive and the email
+    // validator, so a shortened list cannot slip through unnoticed.
+    const CF_RANGES: &[(u32, u32)] = &[
+        (0x00ad, 0x00ad),
+        (0x0600, 0x0605),
+        (0x061c, 0x061c),
+        (0x06dd, 0x06dd),
+        (0x070f, 0x070f),
+        (0x0890, 0x0891),
+        (0x08e2, 0x08e2),
+        (0x180e, 0x180e),
+        (0x200b, 0x200f),
+        (0x202a, 0x202e),
+        (0x2060, 0x2064),
+        (0x2066, 0x206f),
+        (0xfeff, 0xfeff),
+        (0xfff9, 0xfffb),
+        (0x110bd, 0x110bd),
+        (0x110cd, 0x110cd),
+        (0x13430, 0x1343f),
+        (0x1bca0, 0x1bca3),
+        (0x1d173, 0x1d17a),
+        (0xe0001, 0xe0001),
+        (0xe0020, 0xe007f),
+    ];
+    assert_eq!(CF_RANGES.len(), 21, "the Cf list has 21 arms");
+    for &(start, end) in CF_RANGES {
+        assert!(start <= end, "bad range U+{start:04X}..U+{end:04X}");
+        let mut points = vec![start, end];
+        if end > start + 1 {
+            points.push(start + (end - start) / 2);
+        }
+        for point in points {
+            let ch = char::from_u32(point)
+                .unwrap_or_else(|| panic!("U+{point:04X} is not a scalar value"));
+            assert!(
+                crate::limits::is_format_character(ch),
+                "U+{point:04X} missing from the Cf list"
+            );
+            let email = format!("alice{ch}@example.com");
+            assert!(!valid_email(&email), "U+{point:04X} accepted: {email:?}");
+            let mut value = config();
+            value.email = email;
+            assert_eq!(
+                validate_config(&value),
+                Err(AuthError::InvalidEmail),
+                "U+{point:04X}"
+            );
+        }
+    }
+
+    // Just outside a range the character is ordinary (these neighbours are
+    // unassigned or non-Cf), so the assertions above are about the Cf policy
+    // rather than a blanket rejection of non-ASCII input.
+    for ch in ['\u{00ae}', '\u{0606}', '\u{2065}', '\u{e001f}', '\u{e0080}'] {
+        assert!(
+            !crate::limits::is_format_character(ch),
+            "U+{:04X} should not be Cf",
+            ch as u32
+        );
+        assert!(valid_email(&format!("alice{ch}@example.com")));
+    }
+}
+
+#[test]
+fn uppercase_email_is_not_case_folded_before_kdf_is_a_known_constraint() {
+    // Known constraint documented at the `MasterKey::derive` call in
+    // `authenticate_inner`: the address is trimmed but its case is preserved.
+    // `valid_email` / `validate_config` accept any casing and clamping does not
+    // rewrite it, so a mixed-case address reaches the KDF verbatim; a user who
+    // typed a different case than the server's stored address derives a
+    // different key. Pin the observable half of that contract here.
+    const MIXED: &str = "Alice.MIXED@Example.COM";
+    assert!(valid_email(MIXED));
+    let mut value = config();
+    value.email = format!("  {MIXED}\t");
+    assert_eq!(validate_config(&value), Ok(()));
+    clamp_auth_config(&mut value);
+    assert_eq!(
+        value.email,
+        format!("  {MIXED}\t"),
+        "clamp does not fold case"
+    );
+
+    let mut bounded = value.clone();
+    clamp_auth_config(&mut bounded);
+    assert_eq!(
+        bounded.email.trim(),
+        MIXED,
+        "the KDF sees the original case"
+    );
+}
+
+#[test]
 fn error_messages_are_present() {
     for error in [
         UnlockError::MissingProtectedKey,
@@ -2028,7 +2126,7 @@ fn unrepresentable_deadline_takes_the_relative_timer_fallback() {
 
     // Both watchdog arms still report Timeout when their timer fires. The
     // relative form is built directly with ZERO so the assertion does not
-    // wait out the sentinel duration (auth.rs:817-850).
+    // wait out the sentinel duration (auth.rs:844-859).
     assert_eq!(
         smol::block_on(login_watchdog(LoginDeadline::Relative(Duration::ZERO))).err(),
         Some(AuthError::Timeout)
@@ -2056,6 +2154,42 @@ fn user_id_is_derived_from_the_personal_api_key_client_id() {
         super::user_id_from_client_id("organization.abc"),
         "organization.abc"
     );
+}
+
+#[test]
+fn user_id_from_client_id_trims_and_fails_closed() {
+    // `user_id_from_client_id` trims before looking for `user.`, then returns
+    // the (trimmed) original when the prefix is missing or has nothing after
+    // it. That fail-closed shape cannot equal a real cache `profile.id`, so a
+    // malformed API key cannot restore another account's vault.
+    for (client_id, expected) in [
+        ("\t user.abc \n", "abc"),
+        ("\u{3000}user.abc\u{3000}", "abc"),
+        ("  user.1234", "1234"),
+    ] {
+        assert_eq!(
+            super::user_id_from_client_id(client_id),
+            expected,
+            "{client_id:?}"
+        );
+    }
+    // No recognized prefix, or no id after it: the trimmed value is returned
+    // unchanged instead of inventing an account id.
+    for malformed in [
+        "",
+        "   ",
+        "user.",
+        " user. \t",
+        "user",
+        "organization.",
+        "USER.",
+        "user .abc",
+        ".user.abc",
+    ] {
+        let derived = super::user_id_from_client_id(malformed);
+        assert_eq!(derived, malformed.trim(), "{malformed:?}");
+        assert_ne!(derived, "abc", "{malformed:?} must not impersonate an id");
+    }
 }
 
 #[test]

@@ -40,7 +40,12 @@ pub const MAX_CACHE_AGE_SECS: i64 = 7 * 24 * 60 * 60;
 /// Maximum raw `/api/sync` body accepted from a cache.
 ///
 /// openwarden caps a live sync response at 32 MiB; a PoC vault needs far less.
-pub const MAX_CACHE_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// The value is an alias of `crate::limits::MAX_SYNC_BODY_BYTES`, the neutral
+/// single source of truth also used by the live path. Keeping the reference on
+/// `crate::limits` (instead of defining a second cap here or reading it from
+/// `vault_sync`) removes the constant-level `cache` <-> `vault_sync` cycle; the
+/// remaining dependency is one-way, from this module to `vault_sync::parse_sync`.
+pub const MAX_CACHE_BODY_BYTES: usize = crate::limits::MAX_SYNC_BODY_BYTES;
 
 /// Maximum on-disk cache file size accepted before parsing.
 ///

@@ -451,6 +451,51 @@ fn userinfo_is_masked_when_the_authority_contains_question_or_hash() {
 }
 
 #[test]
+fn userinfo_password_question_and_hash_are_masked_with_a_real_query() {
+    // A '?'/'#' inside the userinfo password is password data, while the later
+    // '?'/'#' after the host is a genuine query/fragment. The authority scan
+    // must keep the first pair together (cache.rs:161-221) and the full
+    // `mask_url_secrets` pass must still redact the real query/fragment secrets
+    // that coexist in the same URL (cache.rs:616-649).
+    for (url, userinfo_masked, expected, password_secret, other_secrets) in [
+        (
+            "https://user:p?ss@vault.example.com/path?token=QUERY_SECRET&state=ok",
+            "https://[redacted]@vault.example.com/path?token=QUERY_SECRET&state=ok",
+            "https://[redacted]@vault.example.com/path?token=[redacted]&state=ok",
+            "p?ss",
+            &["QUERY_SECRET"][..],
+        ),
+        (
+            "https://user:p#ss@vault.example.com/path?token=QUERY_SECRET#code=FRAGMENT_SECRET",
+            "https://[redacted]@vault.example.com/path?token=QUERY_SECRET#code=FRAGMENT_SECRET",
+            "https://[redacted]@vault.example.com/path?token=[redacted]#code=[redacted]",
+            "p#ss",
+            &["QUERY_SECRET", "FRAGMENT_SECRET"][..],
+        ),
+        (
+            "https://user:p?#ss@vault.example.com/path?token=QUERY_SECRET&state=ok#code=FRAGMENT_SECRET",
+            "https://[redacted]@vault.example.com/path?token=QUERY_SECRET&state=ok#code=FRAGMENT_SECRET",
+            "https://[redacted]@vault.example.com/path?token=[redacted]&state=ok#code=[redacted]",
+            "p?#ss",
+            &["QUERY_SECRET", "FRAGMENT_SECRET"][..],
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), userinfo_masked, "{url}");
+        assert_eq!(super::mask_url_secrets(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(password_secret), "leaked {password_secret}: {rendered}");
+        for secret in other_secrets {
+            assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        }
+        assert!(rendered.contains("[redacted]@vault.example.com/path"), "{rendered}");
+        // Debug-only masking: the stored URL stays byte-for-byte identical for
+        // the server-mismatch check.
+        assert_eq!(cache.server_url, url);
+    }
+}
+
+#[test]
 fn slash_followed_by_question_or_hash_in_userinfo_password_is_masked() {
     // An unescaped '/' may be part of the password. A '?'/'#' directly after
     // that '/' is still password data, not a query/fragment delimiter: cutting

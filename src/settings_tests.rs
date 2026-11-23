@@ -3118,3 +3118,157 @@ fn ensure_device_id_refuses_to_write_through_a_future_schema_file() {
         );
     }
 }
+
+#[test]
+fn save_persists_clamped_numeric_fields_and_leaves_self_untouched() {
+    use crate::limits::{
+        MAX_CLIPBOARD_RESTORE_SECONDS, MAX_PASSWORD_LENGTH, MAX_WEAK_BITS, MIN_IDLE_LOCK_SECONDS,
+        MIN_LOGIN_TIMEOUT_SECONDS, MIN_PASSPHRASE_WORDS, MIN_STALE_DAYS,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let settings = Settings {
+        idle_lock_seconds: 0,
+        login_timeout_seconds: 0,
+        clipboard_restore_seconds: u64::MAX,
+        password_generator: crate::generator::PasswordSettings {
+            length: 10_000,
+            ..Default::default()
+        },
+        passphrase_generator: crate::generator::PassphraseSettings {
+            words: 0,
+            ..Default::default()
+        },
+        thresholds: crate::health::Thresholds {
+            weak_bits: u32::MAX,
+            stale_days: -1,
+        },
+        ..Default::default()
+    };
+
+    settings.save(&path).unwrap();
+
+    // `save` writes `sanitized()`, so the clamp must be visible in the raw
+    // JSON on disk, not only through a later load-time clamp.
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for (key, expected) in [
+        (
+            "idle_lock_seconds",
+            serde_json::json!(MIN_IDLE_LOCK_SECONDS),
+        ),
+        (
+            "login_timeout_seconds",
+            serde_json::json!(MIN_LOGIN_TIMEOUT_SECONDS),
+        ),
+        (
+            "clipboard_restore_seconds",
+            serde_json::json!(MAX_CLIPBOARD_RESTORE_SECONDS),
+        ),
+    ] {
+        assert_eq!(raw[key], expected, "{key} was not clamped on disk");
+    }
+    assert_eq!(
+        raw["password_generator"]["length"],
+        serde_json::json!(MAX_PASSWORD_LENGTH)
+    );
+    assert_eq!(
+        raw["passphrase_generator"]["words"],
+        serde_json::json!(MIN_PASSPHRASE_WORDS)
+    );
+    assert_eq!(
+        raw["thresholds"]["weak_bits"],
+        serde_json::json!(MAX_WEAK_BITS)
+    );
+    assert_eq!(
+        raw["thresholds"]["stale_days"],
+        serde_json::json!(MIN_STALE_DAYS)
+    );
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.idle_lock_seconds, MIN_IDLE_LOCK_SECONDS);
+    assert_eq!(loaded.login_timeout_seconds, MIN_LOGIN_TIMEOUT_SECONDS);
+    assert_eq!(
+        loaded.clipboard_restore_seconds,
+        MAX_CLIPBOARD_RESTORE_SECONDS
+    );
+    assert_eq!(loaded.password_generator.length, MAX_PASSWORD_LENGTH);
+    // The lower generator bound is pinned by the sibling sanitize tests; here
+    // `words: 0` demonstrates that the persisted file carries the clamp too.
+    assert_eq!(loaded.passphrase_generator.words, MIN_PASSPHRASE_WORDS);
+    assert_eq!(loaded.thresholds.weak_bits, MAX_WEAK_BITS);
+    assert_eq!(loaded.thresholds.stale_days, MIN_STALE_DAYS);
+    assert_eq!(loaded, settings.sanitized());
+
+    // The caller's struct is never mutated by save().
+    assert_eq!(settings.idle_lock_seconds, 0);
+    assert_eq!(settings.login_timeout_seconds, 0);
+    assert_eq!(settings.clipboard_restore_seconds, u64::MAX);
+    assert_eq!(settings.password_generator.length, 10_000);
+    assert_eq!(settings.passphrase_generator.words, 0);
+    assert_eq!(settings.thresholds.weak_bits, u32::MAX);
+    assert_eq!(settings.thresholds.stale_days, -1);
+}
+
+#[test]
+fn default_path_is_unchanged_after_the_config_environment_changes() {
+    // `Settings::default_path` resolves once into a OnceLock (settings.rs), so
+    // every later call must return that same path even if XDG_CONFIG_HOME is
+    // changed or removed. The environment is process-global; the guard below
+    // restores the original value on every exit so parallel tests are not
+    // left with a modified environment. The set/remove APIs are safe on this
+    // crate's edition (2021).
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+    impl EnvGuard {
+        fn set(key: &'static str, value: &std::path::Path) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let first_root = root.path().join("first-config");
+    let _first = EnvGuard::set("XDG_CONFIG_HOME", &first_root);
+    // Initialize the OnceLock before changing the environment, so the test is
+    // independent of whether another test called default_path() first.
+    let before = Settings::default_path();
+    assert_eq!(Settings::default_path(), before, "stable before the change");
+
+    let second_root = root.path().join("second-config");
+    let _second = EnvGuard::set("XDG_CONFIG_HOME", &second_root);
+    assert_ne!(
+        first_root, second_root,
+        "the fixture really changed the env"
+    );
+    assert_eq!(
+        Settings::default_path(),
+        before,
+        "a later XDG_CONFIG_HOME change must not move the cached path"
+    );
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    assert_eq!(
+        Settings::default_path(),
+        before,
+        "unsetting the variable must not move the cached path either"
+    );
+
+    if let Some(path) = before {
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("settings.json")
+        );
+    }
+}

@@ -130,11 +130,14 @@ pub type SyncError = crate::error::AppError;
 
 /// Maximum raw `/api/sync` body accepted on the live path.
 ///
-/// Alias of the cache's [`crate::cache::MAX_CACHE_BODY_BYTES`], so a body the
-/// cache would refuse on either side of the disk is refused on the live path as
-/// well. [`parse_sync`] is the single entry point for live *and* cached bodies,
-/// which keeps the two contracts from drifting apart.
-pub const MAX_SYNC_BODY_BYTES: usize = crate::cache::MAX_CACHE_BODY_BYTES;
+/// Alias of `crate::limits::MAX_SYNC_BODY_BYTES`, the neutral single source of
+/// truth shared with the offline cache. This used to point at
+/// `crate::cache::MAX_CACHE_BODY_BYTES`, which made this module depend on the
+/// cache layer even though the cache already calls [`parse_sync`]; the cycle is
+/// gone now that both caps come from `crate::limits`. [`parse_sync`] remains the
+/// single entry point for live *and* cached bodies, so the two contracts cannot
+/// drift apart. The public name is kept for existing callers.
+pub const MAX_SYNC_BODY_BYTES: usize = crate::limits::MAX_SYNC_BODY_BYTES;
 
 /// Parse a `/api/sync` response body, including folder names.
 ///

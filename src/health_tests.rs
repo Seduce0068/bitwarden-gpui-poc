@@ -2488,3 +2488,57 @@ fn leading_whitespace_and_symbol_dictionary_passwords_take_the_prefix_cap() {
         "{report:?}"
     );
 }
+
+#[test]
+fn digit_then_symbol_then_word_leading_decoration_takes_the_prefix_cap() {
+    // `strip_leading_decoration` alternates its symbol and ASCII-digit steps,
+    // so "1!password" (digit -> symbol -> word) must collapse to "password"
+    // just like the already-pinned symbol -> digit -> word spelling
+    // "!1password". Without the digit-first pass the '!' would hide the leading
+    // digit run and the raw character-pool estimate would clear the threshold.
+    let weak_bits = Thresholds::default().weak_bits;
+    for password in [
+        "1!password",
+        "1#qwerty",
+        "12!@password",
+        " 1 ! password",
+        "1!password123",
+    ] {
+        assert!(
+            !super::is_exact_common_password(&password.to_lowercase()),
+            "{password}"
+        );
+        assert!(
+            super::is_common_password(&password.to_lowercase()),
+            "{password}"
+        );
+        let bits = estimate_entropy(password);
+        assert!(bits < weak_bits, "{password}: {bits} >= {weak_bits}");
+    }
+    assert_eq!(super::strip_leading_decoration("1!password"), "password");
+    assert_eq!(super::strip_leading_decoration("1#qwerty"), "qwerty");
+
+    // The cap still protects long values that merely start with a decorated
+    // dictionary prefix.
+    let long = "1!passwordVt7#kQm2!zR9wP4$xL8@";
+    assert!(!super::is_common_password(&long.to_lowercase()));
+    assert!(estimate_entropy(long) >= weak_bits, "{long}");
+
+    // End-to-end: with a valid TOTP and HTTPS URI only the weak password can
+    // produce a finding, so the estimate reaches the report verbatim.
+    let password = "1!password";
+    let bits = estimate_entropy(password);
+    let report = report_of(vec![login(
+        "digit-symbol-word",
+        "Digit then symbol",
+        password,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}

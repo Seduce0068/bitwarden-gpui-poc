@@ -122,6 +122,20 @@ fn vault_list_header_text(
     )
 }
 
+/// Username drawn in a vault list row.
+///
+/// `VaultItem::login()` is `Some` for every login item, even one whose username
+/// is empty. Drawing that string directly left a blank column that looked like
+/// a rendering failure. Both a missing login and an empty (whitespace-only)
+/// username use the "-" placeholder; non-empty names are rendered unchanged.
+/// Kept pure so the contract can be tested without a GPUI window.
+fn vault_row_username(login: Option<(&str, &str, &str, &[crate::model::LoginUri])>) -> String {
+    match login {
+        Some((user, _, _, _)) if !user.trim().is_empty() => user.to_string(),
+        _ => "-".to_string(),
+    }
+}
+
 impl BitwardenApp {
     fn render_locked(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -227,9 +241,7 @@ impl BitwardenApp {
                         } else {
                             rgb(0x45475a)
                         };
-                        let username = item
-                            .login()
-                            .map_or("-".to_string(), |(user, _, _, _)| user.to_string());
+                        let username = vault_row_username(item.login());
                         let badge = totp_badge(item);
                         // Row identity here is the render-position `index`, not
                         // the item's stable id. The click below sends that same
@@ -650,11 +662,11 @@ mod tests {
         // The idle-lock status appends the unsaved marker after the guidance;
         // removing F1 must not consume that marker or its separator.
         let idle = format!(
-            "無操作のため自動ロックしました（300秒）（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}） | [未保存の設定変更があります]"
+            "無操作のため自動ロックしました（5分）（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}） | [未保存の設定変更があります]"
         );
         assert_eq!(
             status_bar_text(&idle, Screen::Locked, Panel::Vault),
-            "無操作のため自動ロックしました（300秒）（Enter: ログイン / m: モック） | [未保存の設定変更があります]"
+            "無操作のため自動ロックしました（5分）（Enter: ログイン / m: モック） | [未保存の設定変更があります]"
         );
     }
 
@@ -709,6 +721,36 @@ mod tests {
         assert!(
             header.contains(crate::ui::panels::LIST_PAGE_AND_EDGE_HINT),
             "{header}"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn empty_login_username_shows_the_placeholder() {
+        fn login(user: &str) -> Option<(&str, &str, &str, &[crate::model::LoginUri])> {
+            let uris: &[crate::model::LoginUri] = &[];
+            Some((user, "", "", uris))
+        }
+
+        assert_eq!(vault_row_username(None), "-");
+        assert_eq!(
+            vault_row_username(login("")),
+            "-",
+            "Some with an empty username must not leave a blank column"
+        );
+        assert_eq!(
+            vault_row_username(login("   ")),
+            "-",
+            "a whitespace-only username is invisible too"
+        );
+        assert_eq!(
+            vault_row_username(login("alice@example.com")),
+            "alice@example.com",
+            "a real username must still be rendered unchanged"
+        );
+        assert_eq!(
+            vault_row_username(None),
+            vault_row_username(login("")),
+            "the Some(empty) case must be indistinguishable from the old None case"
         );
     }
 }

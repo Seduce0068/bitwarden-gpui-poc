@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第98弾で 8 件すべてを完了）。
+なし（第99弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第99弾（16 担当・43 回目）の指摘 7 件を完結（2026-11-23）
+  - 一覧行の空 username を "-" 表示、自動ロックを分＋残秒表示に修正。
+  - email 大文字の既知制約、Cf 全21範囲、client_id trim、
+    クランプ永続化、default_path 安定性、URL 共存マスク、
+    digit→symbol→語装飾をテスト。
+  - sync 上限定数を limits へ集約し、cache↔vault_sync の循環依存を解消。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（948 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第98弾（16 担当・42 回目）の指摘 8 件を完結（2026-11-23）
   - live sync ボディに 8MiB 上限、クランプ境界の誤告知、
     認証編集中ヒントの重複を修正。

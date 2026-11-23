@@ -279,13 +279,34 @@ fn lock_guidance() -> String {
     format!("（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}）")
 }
 
+/// Idle-lock timeout in minutes, matching the settings panel's display.
+///
+/// The settings panel shows `idle_lock_seconds / 60` minutes while this status
+/// used to show the raw seconds, so the same setting appeared as `5 分` and
+/// `300秒` in two places. A plain integer division would fix that by silently
+/// dropping the remainder (90 s -> "1 分"), which reports a shorter lock than
+/// the one actually configured; the leftover seconds are therefore appended
+/// whenever the value is not a whole minute. Kept pure so the wording can be
+/// tested without a GPUI window.
+fn idle_lock_minutes_text(idle_lock_seconds: u64) -> String {
+    let minutes = idle_lock_seconds / 60;
+    let seconds = idle_lock_seconds % 60;
+    if seconds == 0 {
+        format!("{minutes}分")
+    } else {
+        format!("{minutes}分{seconds}秒")
+    }
+}
+
 /// Status the ticker leaves on screen after an idle auto-lock.
 ///
 /// `lock()` composes its own status (including the unsaved-settings warning),
 /// but the ticker then replaces it to explain *why* the vault locked. Without
 /// re-applying the marker here an idle lock silently drops that warning; the
-/// same applies to the lock screen's key guidance.
+/// same applies to the lock screen's key guidance. The timeout is shown in
+/// minutes, like the settings panel (see [`idle_lock_minutes_text`]).
 pub(super) fn auto_lock_status(idle_lock_seconds: u64, dirty: bool) -> String {
+    let timeout = idle_lock_minutes_text(idle_lock_seconds);
     // Keep both pieces of information: the persistent unsaved marker *and*
     // the concrete recovery guidance that `lock()` showed before the ticker
     // replaced its status. Without the guidance the user only sees a marker
@@ -298,7 +319,7 @@ pub(super) fn auto_lock_status(idle_lock_seconds: u64, dirty: bool) -> String {
     };
     status_with_unsaved(
         &format!(
-            "無操作のため自動ロックしました（{idle_lock_seconds}秒）{unsaved_guidance}{}",
+            "無操作のため自動ロックしました（{timeout}）{unsaved_guidance}{}",
             lock_guidance()
         ),
         dirty,
@@ -1495,13 +1516,13 @@ mod tests {
         let clean = auto_lock_status(300, false);
         assert_eq!(
             clean,
-            format!("無操作のため自動ロックしました（300秒）{guidance}")
+            format!("無操作のため自動ロックしました（5分）{guidance}")
         );
         assert!(!clean.contains("[未保存"));
 
         let dirty = auto_lock_status(300, true);
         assert!(dirty.starts_with(
-            "無操作のため自動ロックしました（300秒）（未保存の設定変更があります / 再ログイン後に保存してください）"
+            "無操作のため自動ロックしました（5分）（未保存の設定変更があります / 再ログイン後に保存してください）"
         ));
         assert!(dirty.contains("[未保存の設定変更があります]"));
         assert!(
@@ -1512,7 +1533,7 @@ mod tests {
             dirty,
             status_with_unsaved(
                 &format!(
-                    "無操作のため自動ロックしました（300秒）（未保存の設定変更があります / 再ログイン後に保存してください）{guidance}"
+                    "無操作のため自動ロックしました（5分）（未保存の設定変更があります / 再ログイン後に保存してください）{guidance}"
                 ),
                 true
             )
@@ -1528,6 +1549,10 @@ mod tests {
         for dirty in [false, true] {
             let status = auto_lock_status(60, dirty);
             assert!(
+                status.starts_with("無操作のため自動ロックしました（1分）"),
+                "the timeout must be shown in minutes, like the settings panel: {status}"
+            );
+            assert!(
                 status.contains(&manual_guidance),
                 "idle lock must reuse the manual lock guidance: {status}"
             );
@@ -1535,6 +1560,35 @@ mod tests {
                 assert!(status.contains(key), "missing {key} in {status}");
             }
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn auto_lock_timeout_is_shown_in_minutes_without_dropping_the_remainder() {
+        assert_eq!(idle_lock_minutes_text(0), "0分");
+        assert_eq!(idle_lock_minutes_text(30), "0分30秒");
+        assert_eq!(idle_lock_minutes_text(60), "1分");
+        assert_eq!(idle_lock_minutes_text(61), "1分1秒");
+        assert_eq!(idle_lock_minutes_text(90), "1分30秒");
+        assert_eq!(idle_lock_minutes_text(300), "5分");
+        assert_eq!(idle_lock_minutes_text(3600), "60分");
+
+        // The status uses the same wording; a fractional minute keeps its
+        // leftover seconds instead of being silently rounded down.
+        assert_eq!(
+            auto_lock_status(90, false),
+            format!(
+                "無操作のため自動ロックしました（1分30秒）{}",
+                lock_guidance()
+            )
+        );
+        assert_eq!(
+            auto_lock_status(300, false),
+            format!("無操作のため自動ロックしました（5分）{}", lock_guidance())
+        );
+        assert!(
+            auto_lock_status(90, true).contains("[未保存の設定変更があります]"),
+            "switching to minutes must not drop the unsaved marker"
+        );
     }
     use crate::ui::state::AuthField;
     use std::time::{Duration, Instant};

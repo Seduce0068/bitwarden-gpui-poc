@@ -18,6 +18,14 @@ pub const MAX_CLIENT_SECRET_LEN: usize = 1024;
 /// Maximum length of a master password, in characters. Long passphrases are
 /// legitimate, but the in-memory buffer still needs a finite bound.
 pub const MAX_MASTER_PASSWORD_LEN: usize = 1024;
+/// Maximum raw `/api/sync` body accepted on the live path and from the offline cache.
+///
+/// Single source of truth for `crate::vault_sync::MAX_SYNC_BODY_BYTES` and
+/// `crate::cache::MAX_CACHE_BODY_BYTES`. Keeping the cap in this neutral module
+/// removes the constant-level `cache` <-> `vault_sync` cycle: neither consumer
+/// has to look into the other for the same number, and the cache's remaining
+/// dependency on `vault_sync::parse_sync` is one-way.
+pub const MAX_SYNC_BODY_BYTES: usize = 8 * 1024 * 1024;
 /// Default time budget for the whole login sequence.
 pub const DEFAULT_LOGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Default inactivity before auto-lock, in seconds.
@@ -129,6 +137,15 @@ mod tests {
         let mut ascii = "abcdef".to_string();
         truncate_to_limit(&mut ascii, 2);
         assert_eq!(ascii, "ab");
+    }
+
+    #[test]
+    fn sync_body_cap_is_the_single_source_of_truth() {
+        // Both the live parser and the offline cache alias this value; pin the
+        // value and the two aliases so a drift is an explicit, reviewed edit.
+        assert_eq!(MAX_SYNC_BODY_BYTES, 8 * 1024 * 1024);
+        assert_eq!(crate::vault_sync::MAX_SYNC_BODY_BYTES, MAX_SYNC_BODY_BYTES);
+        assert_eq!(crate::cache::MAX_CACHE_BODY_BYTES, MAX_SYNC_BODY_BYTES);
     }
 
     #[test]
