@@ -44,9 +44,21 @@ pub const MAX_CACHE_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Maximum on-disk cache file size accepted before parsing.
 ///
-/// `body: Vec<u8>` is serialized as a JSON number per byte, expanding roughly
-/// fourfold, so the file cap leaves headroom over the raw-body cap. A corrupt
-/// or hostile file must not exhaust memory before the parser runs.
+/// `body: Vec<u8>` is serialized as a JSON number per byte, so a corrupt or
+/// hostile file must not exhaust memory before the parser runs.
+///
+/// Known constraint (size-limit consistency): the compact form expands only
+/// about fourfold, which was the original headroom estimate, but [`save`]
+/// writes the envelope with `serde_json::to_vec_pretty`. The pretty formatter
+/// puts every byte of the array on its own indented line (about 8 bytes per
+/// byte), so a body at [`MAX_CACHE_BODY_BYTES`] expands to roughly the same
+/// size as this cap and, once the envelope is added, exceeds it. `save`
+/// accepts that body, but [`load_detailed`] then rejects the written file with
+/// `CacheTooLarge`: the write-side and read-side caps are not round-trip
+/// compatible at the very top of the range. This is recorded rather than
+/// fixed in this PoC (raising this cap or switching to a compact writer would
+/// change the accepted-file contract). The regression test
+/// `save_at_max_body_size_documents_the_pretty_expansion_limit` pins it.
 pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A cached sync response, still encrypted.
@@ -958,6 +970,11 @@ pub fn load(path: impl AsRef<std::path::Path>) -> Option<SyncCache> {
 /// this build would immediately reject on load can only waste disk space and
 /// hide a runaway sync response. `save_default` inherits the same guard via
 /// `save_to_path`.
+///
+/// Known constraint: the pretty-printed byte array expands far more than the
+/// compact estimate at [`MAX_CACHE_BYTES`]. A body at [`MAX_CACHE_BODY_BYTES`]
+/// passes this write-side guard, yet the resulting file can be refused by
+/// [`load_detailed`] with `CacheTooLarge`: see the note on [`MAX_CACHE_BYTES`].
 ///
 /// The write boundary also applies the same `redact_profile_keys` pass as
 /// [`SyncCache::from_body`]. Callers may build a [`SyncCache`] by hand (there is

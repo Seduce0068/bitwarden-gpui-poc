@@ -137,7 +137,7 @@ fn revision_dates_apply_rfc3339_offsets() {
 
 #[test]
 fn pre_1970_timestamps_produce_negative_epoch_seconds() {
-    // The checked day arithmetic in `days_from_civil` (vault_sync.rs:481-500)
+    // The checked day arithmetic in `days_from_civil` (vault_sync.rs:599-620)
     // must stay signed: a revision before the Unix epoch is a negative i64,
     // not UNKNOWN_REVISION (0) and not a wrapped positive value.
     assert_eq!(parse_revision(Some("1969-12-31T23:59:59Z")), Some(-1));
@@ -178,7 +178,7 @@ fn revision_dates_reject_malformed_timestamps() {
 #[test]
 fn revision_dates_accept_the_maximum_numeric_utc_offsets() {
     // parse_revision validates the offset with `offset_hour > 23` and
-    // `offset_minute > 59` (vault_sync.rs:411-418), so +23:59 and -23:59 are
+    // `offset_minute > 59` (vault_sync.rs:528-535), so +23:59 and -23:59 are
     // the last accepted spellings on either side of UTC.
     let utc = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
     let plus = parse_revision(Some("2024-01-01T00:00:00+23:59"));
@@ -383,8 +383,8 @@ fn newer_duplicate_replaces_the_older_revision() {
 
 #[test]
 fn missing_and_invalid_revision_dates_fall_back_to_unknown_revision() {
-    // Both the import item (vault_sync.rs:343-344) and the audit entry
-    // (vault_sync.rs:548-549) use the same fallback when `revisionDate` is
+    // Both the import item (vault_sync.rs:468-469) and the audit entry
+    // (vault_sync.rs:683-684) use the same fallback when `revisionDate` is
     // absent or unparsable. `unlocked_vault_raw` keeps the rows as supplied.
     let mut missing = cipher("no-revision", "2024-01-01T00:00:00Z");
     missing
@@ -422,7 +422,7 @@ fn missing_and_invalid_revision_dates_fall_back_to_unknown_revision() {
 fn three_duplicate_rows_chain_a_clipped_then_an_updated_decision() {
     // A clipped row must not overwrite the accepted revision in the tracking
     // map: the following newer row has to compare against the *kept* rev and
-    // emit `Updated { old_revision: kept, .. }` (vault_sync.rs:551-585).
+    // emit `Updated { old_revision: kept, .. }` (vault_sync.rs:677-722).
     let id = "chain-1";
     let kept = parse_revision(Some("2024-02-01T00:00:00Z")).unwrap();
     let regressed = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
@@ -606,7 +606,7 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
         .iter()
         .find(|folder| folder.id == "f-bad")
         .unwrap();
-    // The placeholder must not expose the internal folder id (vault_sync.rs:237).
+    // The placeholder must not expose the internal folder id (vault_sync.rs:346-350).
     assert_eq!(bad.name, "(復号できませんでした)");
     assert!(!bad.name.contains("f-bad"), "{:?}", bad.name);
     // The id is still available for filtering and lookup.
@@ -615,7 +615,7 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
 
 #[test]
 fn folder_name_text_covers_ok_none_placeholder_and_the_reachable_branches() {
-    // `folder_name_text` (vault_sync.rs:283-302) maps the otherwise unreachable
+    // `folder_name_text` (vault_sync.rs:339-352) maps the otherwise unreachable
     // `Ok(None)` result to the "(名前なし)" placeholder. The helper exists so
     // this defensive arm can be pinned without a fake `openwarden::Vault`.
     assert_eq!(
@@ -638,7 +638,7 @@ fn folder_name_text_covers_ok_none_placeholder_and_the_reachable_branches() {
 
 #[test]
 fn dedup_folders_returns_early_when_folders_are_missing_or_not_an_array() {
-    // `dedup_folders_by_id` (vault_sync.rs:267-273) is a no-op when the key is
+    // `dedup_folders_by_id` (vault_sync.rs:316-330) is a no-op when the key is
     // absent or the value is not an array; openwarden's parser, not the dedup
     // pass, is responsible for rejecting such a sync body.
     let mut missing = serde_json::json!({"ciphers": []});
@@ -679,7 +679,7 @@ fn dedup_folders_returns_early_when_folders_are_missing_or_not_an_array() {
 fn undecryptable_login_name_is_placeholdered_without_the_internal_id() {
     // G07: the login-name fallback must not expose the internal cipher id;
     // the id stays on `VaultItem::id` for lookup and filtering
-    // (vault_sync.rs:271-286).
+    // (vault_sync.rs:396-415).
     let mut bad = cipher("login-secret-id", "2024-01-01T00:00:00Z");
     bad["name"] = serde_json::json!("not-an-enc-string");
     bad["login"]["username"] = serde_json::json!("USERNAME_SHOULD_NOT_LEAK");
@@ -750,7 +750,7 @@ fn real_login_decrypts_secrets_and_enables_totp_copy() {
     let item = &model.items[0];
     // The decrypted name/username from `encrypted_login` must survive the
     // openwarden -> model path, not just the password/TOTP fields
-    // (vault_sync.rs:272-282).
+    // (vault_sync.rs:411-421).
     assert_eq!(item.name, "Example Login");
     let (username, password, totp, uris) = item.login().expect("the item is a login");
     assert_eq!(username, "alice@example.com");
@@ -897,7 +897,7 @@ fn undecryptable_uri_becomes_a_marker_and_is_audited_as_uninspectable() {
     assert_eq!(uris.len(), 1);
     assert_eq!(uris[0].uri, UNDECRYPTABLE_URI);
     // A failed URI decryption has no wire `match` value to carry, so the
-    // marker is emitted with `match_type: None` (vault_sync.rs:313-318).
+    // marker is emitted with `match_type: None` (vault_sync.rs:430-435).
     assert_eq!(uris[0].match_type, None);
 
     let report = crate::health::audit(
@@ -952,7 +952,7 @@ fn undecryptable_uri_marker_and_real_match_types_are_distinguished() {
 
 #[test]
 fn uri_marker_rejects_pseudo_markers() {
-    // `is_undecryptable_uri` (vault_sync.rs:38-41) is exact equality, like its
+    // `is_undecryptable_uri` (vault_sync.rs:79-82) is exact equality, like its
     // password/TOTP siblings. A lookalike must never trigger the
     // "UriUninspectable" classification.
     assert!(is_undecryptable_uri(UNDECRYPTABLE_URI));
@@ -999,7 +999,7 @@ fn camel_case_key_lowercases_only_the_leading_ascii_uppercase() {
 #[test]
 fn non_ascii_leading_keys_are_passed_through_verbatim() {
     // `camel_case_key` only folds a leading *ASCII* uppercase letter
-    // (vault_sync.rs:122-133). A non-ASCII initial code point must survive
+    // (vault_sync.rs:164-175). A non-ASCII initial code point must survive
     // unchanged: applying a Unicode lowercase mapping there would invent a
     // wire key openwarden never sees, and could collide with a real field.
     for key in ["État", "Äpfel", "Ωmega", "étagère", "日本"] {
@@ -1023,7 +1023,7 @@ fn non_ascii_leading_keys_are_passed_through_verbatim() {
 fn an_empty_vault_imports_as_an_empty_model_and_audit() {
     // Importing an unlocked vault with no folders and no ciphers must succeed:
     // the empty collections are a valid contract, not a lock or parse error
-    // (vault_sync.rs:552-613). Both public entry points agree.
+    // (vault_sync.rs:640-730). Both public entry points agree.
     let vault = unlocked_vault(&[]);
     let (model, audit) = import_logins_with_audit(&vault).expect("empty vault import");
     assert!(model.items.is_empty());
@@ -1041,7 +1041,7 @@ fn an_empty_vault_imports_as_an_empty_model_and_audit() {
 #[test]
 fn revision_dates_combine_fractional_seconds_with_numeric_offsets() {
     // `parse_revision` reads the optional fraction before the numeric offset
-    // (vault_sync.rs:392-430). A fraction must not hide the offset, and the
+    // (vault_sync.rs:509-547). A fraction must not hide the offset, and the
     // offset must still be subtracted from the local wall-clock time.
     let utc = Some(1_700_000_000);
     for value in [
@@ -1063,7 +1063,7 @@ fn revision_dates_combine_fractional_seconds_with_numeric_offsets() {
 #[test]
 fn login_without_a_folder_id_imports_with_none() {
     // `login_item` maps an absent `folderId` to `None`; the import must not
-    // fabricate a folder or discard the login (vault_sync.rs:347-350).
+    // fabricate a folder or discard the login (vault_sync.rs:464-467).
     let vault = unlocked_vault(&[cipher("no-folder", "2024-01-01T00:00:00Z")]);
     let model = import_logins(&vault).expect("import should succeed");
     assert_eq!(model.items.len(), 1);
@@ -1120,7 +1120,7 @@ fn mixed_case_key_collision_is_rejected() {
 
 #[test]
 fn dedup_counts_missing_and_invalid_revisions_as_unknown_and_keeps_first_on_ties() {
-    // `dedup_ciphers_by_revision` (vault_sync.rs:168-198) must not let a
+    // `dedup_ciphers_by_revision` (vault_sync.rs:226-278) must not let a
     // malformed timestamp outrank a real one, and equal revisions must keep
     // the first row so normalization stays deterministic.
     let mut value = serde_json::json!({
@@ -1163,7 +1163,7 @@ fn dedup_counts_missing_and_invalid_revisions_as_unknown_and_keeps_first_on_ties
 fn dedup_skips_rows_without_a_string_id() {
     // Rows whose `id` is missing, null or a number are left untouched rather
     // than being keyed under a fabricated id or aborting the dedup pass
-    // (vault_sync.rs:180-183). Valid duplicate ids still collapse normally.
+    // (vault_sync.rs:236-240). Valid duplicate ids still collapse normally.
     let mut value = serde_json::json!({
         "ciphers": [
             {"name": "no-id"},
@@ -1188,7 +1188,7 @@ fn dedup_skips_rows_without_a_string_id() {
 
 #[test]
 fn key_conflicts_inside_array_objects_are_rejected() {
-    // `normalize_sync_keys` recurses into arrays (vault_sync.rs:148-151): a
+    // `normalize_sync_keys` recurses into arrays (vault_sync.rs:199-203): a
     // collision between `Key` and `key` inside any array element must be
     // reported, not silently overwritten by whichever key iterates last.
     let mut value = serde_json::json!({
@@ -1201,7 +1201,7 @@ fn key_conflicts_inside_array_objects_are_rejected() {
     assert!(error.contains("conflicting keys"), "{error}");
     assert!(error.contains("key"), "{error}");
     // The server controls the raw key names; they must not be echoed into a
-    // detail string that may reach diagnostics (vault_sync.rs:139-143).
+    // detail string that may reach diagnostics (vault_sync.rs:189-193).
     assert!(!error.contains("`Key`"), "{error}");
     assert!(!error.contains("`key`"), "{error}");
 
@@ -1436,7 +1436,7 @@ fn absent_password_is_empty_and_markers_are_exact() {
     assert!(!is_undecryptable_password(item.password().unwrap()));
     assert!(!is_undecryptable_totp(item.totp_secret().unwrap_or("")));
 
-    // The marker helpers use exact equality (vault_sync.rs:39-52): a lookalike
+    // The marker helpers use exact equality (vault_sync.rs:79-98): a lookalike
     // must never be mistaken for "ciphertext could not be decrypted".
     assert!(is_undecryptable_password(UNDECRYPTABLE_PASSWORD));
     assert!(is_undecryptable_totp(UNDECRYPTABLE_TOTP));
@@ -1463,7 +1463,7 @@ fn absent_password_is_empty_and_markers_are_exact() {
 fn absent_username_field_is_empty_without_a_marker() {
     // `cipher()` has no `login.username`, so `vault.username()` returns
     // `Ok(None)`. `login_item` folds that into an empty string with the same
-    // `unwrap_or_default()` used for `Err(_)` (vault_sync.rs:299-304).
+    // `unwrap_or_default()` used for `Err(_)` (vault_sync.rs:416-421).
     // The existing sibling test covers the Err(_) half of the fold; this one
     // pins the Ok(None) half through the real, uninjected openwarden vault.
     let vault = unlocked_vault(&[cipher("no-username", "2024-01-01T00:00:00Z")]);
@@ -1478,7 +1478,7 @@ fn absent_username_field_is_empty_without_a_marker() {
 #[test]
 fn dedup_is_a_no_op_when_ciphers_is_missing_or_not_an_array() {
     // `dedup_ciphers_by_revision` returns early when `ciphers` is absent or
-    // not an array (vault_sync.rs:181-186). It must neither panic nor rewrite
+    // not an array (vault_sync.rs:226-232). It must neither panic nor rewrite
     // the remaining document; `parse_sync` may be handed such a body.
     let mut missing = serde_json::json!({"profile": {"id": "user-1"}, "folders": []});
     let before = missing.clone();
@@ -1502,7 +1502,7 @@ fn dedup_is_a_no_op_when_ciphers_is_missing_or_not_an_array() {
 fn dedup_prefers_unknown_revision_over_a_negative_one() {
     // Pre-epoch timestamps parse to negative i64 seconds, while a missing or
     // unparsable date becomes UNKNOWN_REVISION (0). The comparison at
-    // vault_sync.rs:194-198 must therefore let 0 outrank a negative revision.
+    // vault_sync.rs:247-267 must therefore let 0 outrank a negative revision.
     let negative = "1969-12-31T23:59:59Z";
     assert!(parse_revision(Some(negative)).unwrap() < crate::model::UNKNOWN_REVISION);
 
@@ -1530,7 +1530,7 @@ fn login_without_a_name_keeps_an_empty_name_without_leaking_the_id() {
     // `cipher()` stores "name": null; removing the key exercises the same
     // result through serde's default. openwarden's `Vault::name` maps a
     // missing name to an empty SecretString, so `.ok().map(...)` yields
-    // Some("") and the placeholder arm at vault_sync.rs:294-298 is reserved
+    // Some("") and the placeholder arm at vault_sync.rs:411-415 is reserved
     // for a decryption failure. Pin the real outcome: no id in the name, no
     // invented placeholder.
     let mut row = cipher("nameless-secret-id", "2024-01-01T00:00:00Z");
@@ -1549,7 +1549,7 @@ fn same_revision_duplicate_keeps_the_first_rows_decrypted_fields() {
     // The `Ignored` audit entry alone cannot show *which* row survived: both
     // rows must carry a distinguishing field. Raw duplicates (bypassing
     // `parse_sync`) reach the `revision == old_revision` branch, which keeps
-    // the already pushed item untouched (vault_sync.rs:569-585).
+    // the already pushed item untouched (vault_sync.rs:699-702).
     let id = "rev-tie-fields";
     let revision = parse_revision(Some("2024-05-01T00:00:00Z")).unwrap();
     let mut first = encrypted_login(id, "FIRST_PASSWORD_VALUE", REAL_TOTP);
@@ -1664,7 +1664,7 @@ fn non_login_ciphers_are_excluded_from_import_and_audit() {
 
 #[test]
 fn favorite_and_notes_keep_their_defaults_when_imported_from_sync() {
-    // vault_sync.rs:272-277: openwarden 0.1.1's `LoginInfo` and `Vault` public
+    // vault_sync.rs:389-394: openwarden 0.1.1's `LoginInfo` and `Vault` public
     // readers expose neither the favorite flag nor free-form notes, so even a
     // wire body that carries both must leave the model defaults untouched.
     // Pin that on the production importer and on the audit sibling, which
@@ -1701,7 +1701,7 @@ fn favorite_and_notes_keep_their_defaults_when_imported_from_sync() {
 #[test]
 fn password_and_totp_markers_reject_the_other_status_markers() {
     // Each helper is an exact-equality check against its own sentinel
-    // (vault_sync.rs:34-60). Treating a sibling marker as "undecryptable
+    // (vault_sync.rs:63-98). Treating a sibling marker as "undecryptable
     // password/TOTP" would hide the real classification in the health audit.
     assert!(is_undecryptable_password(UNDECRYPTABLE_PASSWORD));
     assert!(is_undecryptable_totp(UNDECRYPTABLE_TOTP));
@@ -1732,7 +1732,7 @@ fn password_and_totp_markers_reject_the_other_status_markers() {
 
 #[test]
 fn undecryptable_markers_begin_with_a_nul_literal() {
-    // The NUL prefix (vault_sync.rs:28-55) is what makes a marker practically
+    // The NUL prefix (vault_sync.rs:63-98) is what makes a marker practically
     // impossible to collide with a real password or TOTP value. Assert the
     // literal itself, not just a helper's verdict, so dropping or changing the
     // prefix is caught even if the recognisers are updated in lockstep.
@@ -1750,7 +1750,7 @@ fn undecryptable_markers_begin_with_a_nul_literal() {
 #[test]
 fn an_empty_uri_list_imports_as_empty_without_the_undecryptable_marker() {
     // `openwarden::Vault::uris` returns `Ok(vec![])` for a login whose `uris`
-    // array is empty. The Ok arm of `login_item` (vault_sync.rs:305-319) must
+    // array is empty. The Ok arm of `login_item` (vault_sync.rs:422-436) must
     // map that to an empty model list; the marker is reserved for the Err arm.
     let vault = unlocked_vault(&[cipher("empty-uris", "2024-01-01T00:00:00Z")]);
     let model = import_logins(&vault).expect("an empty URI list must not abort");
@@ -1777,7 +1777,7 @@ fn an_empty_uri_list_imports_as_empty_without_the_undecryptable_marker() {
 fn uri_wire_matches_zero_two_four_survive_the_sync_to_model_round_trip() {
     // The sibling test pins wire 1/3/5 and `null`. Wire 0/2/4 are the remaining
     // accepted values; `login_item` forwards openwarden's `to_wire()` verbatim
-    // (vault_sync.rs:305-312), so each must reach the model unchanged and map
+    // (vault_sync.rs:422-429), so each must reach the model unchanged and map
     // back to its own `UriMatch` through `LoginUri::match_enum()`.
     let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
     let enc = |plain: &[u8]| {
@@ -1833,7 +1833,7 @@ fn uri_wire_matches_zero_two_four_survive_the_sync_to_model_round_trip() {
 
 #[test]
 fn one_undecryptable_uri_replaces_the_whole_list_with_the_marker() {
-    // vault_sync.rs:312-326: `Vault::uris` decrypts the list as one operation.
+    // vault_sync.rs:422-436: `Vault::uris` decrypts the list as one operation.
     // A single bad ciphertext makes that call fail, so `login_item` substitutes
     // one marker for the *entire* list. Valid siblings are not kept.
     let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
@@ -2177,7 +2177,7 @@ fn dedup_leaves_non_object_cipher_and_folder_rows_untouched() {
 #[test]
 fn clipped_revision_does_not_overwrite_the_accepted_items_encrypted_fields() {
     // The `Clipped` branch only records the decision and `continue`s
-    // (vault_sync.rs:642-649), so the already accepted item keeps its decrypted
+    // (vault_sync.rs:691-698), so the already accepted item keeps its decrypted
     // fields. Raw duplicates (bypassing `parse_sync`) are required to reach the
     // branch; give every secret-bearing field a distinct ciphertext so a
     // stray replacement would be observable.
@@ -2234,7 +2234,7 @@ fn pascal_case_body_with_excluded_newer_duplicates_keeps_eligible_rows() {
     // a newer revision. `normalize_sync_keys` must fold `OrganizationId` /
     // `DeletedDate` to camelCase before `dedup_ciphers_by_revision` checks
     // exclusions; otherwise the excluded row wins, openwarden drops it and the
-    // item disappears entirely (vault_sync.rs:151-176, 194-258).
+    // item disappears entirely (vault_sync.rs:177-207, 226-278).
     let mut org_old = encrypted_login("pascal-org", "KEPT_ORG_PASSWORD", REAL_TOTP);
     org_old["revisionDate"] = serde_json::json!("2024-01-01T00:00:00Z");
     let mut org_new = encrypted_login("pascal-org", "ORG_PASSWORD", REAL_TOTP);
@@ -2278,7 +2278,7 @@ fn pascal_case_body_with_excluded_newer_duplicates_keeps_eligible_rows() {
 fn revision_dates_accept_zero_utc_offsets_in_both_signs() {
     // RFC 3339 allows both `+00:00` and `-00:00`. The sign is applied to a zero
     // magnitude, so both spellings must produce the exact same epoch value as
-    // `Z` (vault_sync.rs:474-498).
+    // `Z` (vault_sync.rs:523-547).
     let utc = parse_revision(Some("2023-11-14T22:13:20Z")).unwrap();
     assert_eq!(parse_revision(Some("2023-11-14T22:13:20+00:00")), Some(utc));
     assert_eq!(parse_revision(Some("2023-11-14T22:13:20-00:00")), Some(utc));
@@ -2295,7 +2295,7 @@ fn revision_dates_accept_zero_utc_offsets_in_both_signs() {
 fn updated_audit_records_zero_old_revision_for_an_undated_first_row() {
     // A first row whose `revisionDate` is missing gets UNKNOWN_REVISION (0).
     // A later duplicate with a real revision must therefore emit
-    // `Updated { old_revision: 0, .. }` (vault_sync.rs:634-671): the audit
+    // `Updated { old_revision: 0, .. }` (vault_sync.rs:669-730): the audit
     // reports the sentinel actually stored for the replaced row, not an
     // invented timestamp. The `unwrap_or(UNKNOWN_REVISION)` lookup fallback on
     // that branch stays unreachable because the Added arm always inserts the
@@ -2408,7 +2408,7 @@ fn ignored_audit_records_zero_revision_when_both_duplicates_are_undated() {
 fn dedup_ties_between_excluded_rows_keep_the_first_row() {
     // When both duplicates are excluded (organization-owned / soft-deleted),
     // the ordinary newest-revision rule still applies: a higher revision wins
-    // and an equal revision keeps the first row (vault_sync.rs:215-231).
+    // and an equal revision keeps the first row (vault_sync.rs:219-221, 247-267).
     // openwarden drops the single survivor either way, but the choice must
     // stay deterministic. Distinct `name` values make the winner observable.
     let mut value = serde_json::json!({
@@ -2456,7 +2456,7 @@ fn dedup_ties_between_excluded_rows_keep_the_first_row() {
 fn non_numeric_cipher_types_are_excluded_from_dedup() {
     use serde_json::json;
 
-    // `cipher_row_is_excluded` (vault_sync.rs:260-268) recognizes a login only
+    // `cipher_row_is_excluded` (vault_sync.rs:299-307) recognizes a login only
     // when `type` is the integer 1 (`as_u64() == Some(1)`). openwarden's wire
     // format has no serde default for `type`, so any other JSON tag fails its
     // deserialization: a string, bool, null or fractional number is never a
@@ -2594,7 +2594,7 @@ fn revision_dates_accept_the_four_digit_year_boundaries() {
 
 #[test]
 fn same_revision_tie_between_excluded_and_eligible_rows_keeps_eligible() {
-    // `dedup_ciphers_by_revision` (vault_sync.rs:224-240) compares the exclusion
+    // `dedup_ciphers_by_revision` (vault_sync.rs:246-262) compares the exclusion
     // flag *before* the revision: an eligible personal login wins even when the
     // excluded row has the same revision, and regardless of row order. A tie
     // between two eligible rows still keeps the first one (see the sibling
@@ -2666,7 +2666,7 @@ fn non_array_ciphers_and_folders_are_classified_as_invalid_login_end_to_end() {
     use std::error::Error as _;
 
     // `dedup_ciphers_by_revision` / `dedup_folders_by_id` are no-ops for a
-    // non-array value (vault_sync.rs:203-209, 285-289). The classification is
+    // non-array value (vault_sync.rs:226-232, 316-322). The classification is
     // left to openwarden's `SyncWire` deserializer: every wrong JSON shape must
     // land in `InvalidLoginCause` with a non-empty typed source, never a panic
     // or a success with silently dropped data. A *missing* key is different:

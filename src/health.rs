@@ -375,8 +375,10 @@ pub fn estimate_entropy(password: &str) -> u32 {
         return 0;
     }
     if chars.iter().all(char::is_ascii_digit) {
-        // A numeric PIN: length dominates, pool is 10.
-        return entropy_bits(10, chars.len()).round().max(0.0) as u32;
+        // A numeric PIN: length dominates, pool is 10. Apply the same 1000-bit
+        // ceiling as the character-pool and passphrase paths below, so an
+        // arbitrarily long digit run cannot report an uncapped score.
+        return entropy_bits(10, chars.len()).round().clamp(0.0, 1000.0) as u32;
     }
     let common = is_common_password(&lower);
     let mut adjusted = raw;

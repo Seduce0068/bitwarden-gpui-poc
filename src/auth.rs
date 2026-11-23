@@ -437,6 +437,16 @@ const BLOCKED_METADATA_HOSTS: &[&str] = &[
 /// Only `169.254.0.0/16`, `fe80::/10` and IPv4-mapped forms of the former are
 /// blocked. Private LAN addresses remain allowed so self-hosted Vaultwarden
 /// instances keep working.
+///
+/// Known constraint: IPv4-*compatible* IPv6 addresses (`::a.b.c.d`, e.g.
+/// `::a9fe:a9fe`, the compatible spelling of `169.254.169.254`) are **not**
+/// detected. Only `Ipv6Addr::to_ipv4_mapped()` (`::ffff:a.b.c.d`) is unwrapped
+/// to IPv4 here, so the compatible form falls through to the `fe80::/10`
+/// check and is treated as non-link-local. The whole-host URL path cannot
+/// compensate because `url::Url` keeps that literal as an `Ipv6` host. The
+/// regression test `ipv4_compatible_ipv6_link_local_is_a_known_blind_spot`
+/// pins this behaviour so a fix is an explicit, reviewed change. Do not treat
+/// this guard as complete; see the scope comment above.
 fn is_link_local_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {

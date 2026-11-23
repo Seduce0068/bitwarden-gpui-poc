@@ -93,6 +93,20 @@ fn numeric_pins_are_charged_the_digit_pool() {
 }
 
 #[test]
+fn very_long_numeric_pins_are_clamped_like_the_character_pool_path() {
+    // 400 digits * log2(10) is ~1329 bits. The character-pool and passphrase
+    // paths clamp their estimate to 1000 bits; the numeric-PIN branch must
+    // apply the same ceiling so an ultra-long digit run cannot report more.
+    let long = "1234567890".repeat(40);
+    assert_eq!(long.len(), 400);
+    assert_eq!(estimate_entropy(&long), 1000);
+    assert_eq!(password_strength(&long).1, Strength::Strong);
+    // A mixed-character value of the same length is clamped identically.
+    let mixed = "aB3!".repeat(100);
+    assert_eq!(estimate_entropy(&mixed), 1000);
+}
+
+#[test]
 fn common_passwords_collapse_to_a_dictionary_estimate() {
     let common = estimate_entropy("password123");
     let random = estimate_entropy("vT7#kQm2!zR9");

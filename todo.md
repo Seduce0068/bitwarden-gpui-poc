@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第94弾で 6 件すべてを完了）。
+なし（第95弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第95弾（16 担当・39 回目）の指摘 8 件を完結（2026-11-23）
+  - 数値PIN の 1000bit クランプ、IPv4-compatible IPv6 の
+    既知制約、非10進 IPv4 全体ホスト、トップレベル u64 型不一致、
+    schema bool/null、期限ガード優先順位、サイズ境界をテスト。
+  - cache の pretty 展開による上限非整合を doc 化。
+  - vault_sync 行参照 40 箇所、重複 id 更新、favorite_count を修正・テスト。
+  - CHANGELOG に第93〜94弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（911 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第94弾（16 担当・38 回目）の指摘 6 件を完結（2026-11-23）
   - 確定クエリの Alt/AltGr、行クリック index 契約、SSRF 非10進
     埋め込みリテラルの既知制約、入れ子 URL の '@' 混在マスク、

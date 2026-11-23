@@ -2894,3 +2894,114 @@ fn sanitized_truncates_shared_text_fields_on_multibyte_char_boundaries() {
     assert_eq!(settings.server_url.chars().count(), MAX_SERVER_URL_LEN + 1);
     assert_eq!(settings.email.chars().count(), MAX_EMAIL_LEN + 1);
 }
+
+#[test]
+fn top_level_u64_fields_fall_back_per_field_on_type_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // `idle_lock_seconds`, `login_timeout_seconds` and
+    // `clipboard_restore_seconds` are u64. One wrong JSON type used to make
+    // serde reject the whole struct; `tolerant_struct` must keep each bad
+    // field's default while correctly typed siblings survive
+    // (settings.rs:540-581, 889-906).
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "email": "u64@example.com",
+            "server_url": "https://u64.example",
+            "idle_lock_seconds": "600",
+            "login_timeout_seconds": true,
+            "clipboard_restore_seconds": null,
+            "thresholds": {"weak_bits": 90, "stale_days": 30}
+        }"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    let defaults = Settings::default();
+
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(loaded.email, "u64@example.com");
+    assert_eq!(loaded.server_url, "https://u64.example");
+    assert_eq!(loaded.idle_lock_seconds, defaults.idle_lock_seconds);
+    assert_eq!(loaded.login_timeout_seconds, defaults.login_timeout_seconds);
+    assert_eq!(
+        loaded.clipboard_restore_seconds,
+        defaults.clipboard_restore_seconds
+    );
+    // Siblings of a different type tag are kept, both nested and top level.
+    assert_eq!(loaded.thresholds.weak_bits, 90);
+    assert_eq!(loaded.thresholds.stale_days, 30);
+}
+
+#[test]
+fn top_level_u64_fields_keep_valid_siblings_and_reject_fractional_numbers() {
+    let defaults = Settings::default();
+
+    // One valid u64, one fractional number (same JSON number tag but not a
+    // u64, rejected by the trial parse) and one u64::MAX that serde accepts
+    // but `sanitized()` clamps. The mismatch must not discard the good field.
+    let parsed = Settings::parse_settings(
+        r#"{
+            "schema_version": 1,
+            "email": "mixed@example.com",
+            "idle_lock_seconds": 600,
+            "login_timeout_seconds": 12.5,
+            "clipboard_restore_seconds": 18446744073709551615
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(parsed.email, "mixed@example.com");
+    assert_eq!(parsed.idle_lock_seconds, 600);
+    assert_eq!(parsed.login_timeout_seconds, defaults.login_timeout_seconds);
+    // u64::MAX is a valid u64, so tolerance keeps it; the clamp is a later,
+    // separate step that runs on load(), not inside parse_settings().
+    assert_eq!(parsed.clipboard_restore_seconds, u64::MAX);
+    assert_eq!(
+        parsed.sanitized().clipboard_restore_seconds,
+        crate::limits::MAX_CLIPBOARD_RESTORE_SECONDS
+    );
+}
+
+#[test]
+fn bool_and_null_schema_markers_are_legacy() {
+    use serde_json::json;
+
+    // `schema_version_of` (settings.rs:497-511) has no arm for JSON booleans
+    // or null, so both are "not a version marker" (None), never a future one.
+    for raw in [json!(true), json!(false), json!(null)] {
+        assert_eq!(super::schema_version_of(Some(&raw)), None, "{raw}");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    for marker in ["true", "false", "null"] {
+        std::fs::write(
+            &path,
+            format!(r#"{{"schema_version":{marker},"email":"marker@example.com","idle_lock_seconds":123}}"#),
+        )
+        .unwrap();
+
+        // `well_typed` is false for a non-Number marker, so parse_settings
+        // rewrites serde's default (CURRENT) to LEGACY (settings.rs:857-905).
+        let loaded = Settings::load_detailed(&path).unwrap();
+        assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION, "{marker}");
+        assert_ne!(loaded.schema_version, CURRENT_SCHEMA_VERSION, "{marker}");
+        // A legacy marker stays compatible: known fields are still honoured.
+        assert_eq!(loaded.email, "marker@example.com", "{marker}");
+        assert_eq!(loaded.idle_lock_seconds, 123, "{marker}");
+
+        // No future-version advisory is raised for a bool/null marker, and
+        // the write paths must not treat it as an unknown writer either.
+        assert!(load_advisories(&path).is_empty(), "{marker}");
+        assert_eq!(super::file_schema_version(&path), None, "{marker}");
+        loaded.save(&path).unwrap();
+        assert_eq!(
+            Settings::load_detailed(&path).unwrap().schema_version,
+            CURRENT_SCHEMA_VERSION,
+            "{marker}"
+        );
+        let id = generate_device_id().unwrap();
+        Settings::save_device_id_only(&path, &id).unwrap();
+    }
+}

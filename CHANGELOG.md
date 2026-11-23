@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 全体改善（第93〜94弾 / 2026-11-23）
+
+- 監査の all_same／辞書 prefix バイパス、IPv4-mapped IPv6、
+  userinfo SSRF、save ガードを修正
+- 監査パネルの n/c 導線、設定編集中ヒント、検索中＋クエリ非空、
+  SshKey フィルタをテスト
+- 確定クエリの Alt/AltGr、行クリック index 契約、
+  SSRF 非10進埋め込みリテラルの既知制約を修正・記録
+- 入れ子 URL の '@' 混在マスク、有効 device_id 往復、
+  1000bit／大文字 +1bit をテスト
+
 ### 全体改善（第91〜92弾 / 2026-11-23）
 
 - 検索確定後クエリのエッジケース、AuthError status_message、

@@ -3248,3 +3248,173 @@ fn simultaneous_server_and_user_mismatch_prefers_server_on_restore() {
         Err(SyncCacheError::UserMismatch)
     ));
 }
+
+#[test]
+fn save_at_max_body_size_documents_the_pretty_expansion_limit() {
+    // Size-limit consistency (documented on MAX_CACHE_BYTES in cache.rs):
+    // `save` accepts a body of exactly MAX_CACHE_BODY_BYTES, but it serializes
+    // `body: Vec<u8>` with `to_vec_pretty`, which emits one indented number per
+    // byte (~8 bytes per byte). The resulting file exceeds MAX_CACHE_BYTES, so
+    // `load_detailed` refuses the very file `save` just wrote. Build the body
+    // from a padded JSON string: the redaction pass reparses/re-serializes it
+    // compactly without shrinking it, so the stored body stays at the cap.
+    const TEMPLATE: &str = r#"{"pad":""}"#;
+    let body = format!(
+        r#"{{"pad":"{}"}}"#,
+        "A".repeat(MAX_CACHE_BODY_BYTES - TEMPLATE.len())
+    )
+    .into_bytes();
+    assert_eq!(body.len(), MAX_CACHE_BODY_BYTES);
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&body).is_ok(),
+        "the fixture must be valid JSON for the write-side redactor"
+    );
+    let cache = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body,
+        created_at: None,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("max-body-pretty.json");
+    save(&path, &cache).expect("the write-side body cap is inclusive");
+
+    let disk_len = std::fs::metadata(&path).unwrap().len();
+    assert!(
+        disk_len > MAX_CACHE_BYTES,
+        "documented pretty-expansion limit: {disk_len} bytes written for a \
+         {MAX_CACHE_BODY_BYTES}-byte body (cap {MAX_CACHE_BYTES})"
+    );
+    // The file-size gate runs before parsing, so the oversized file is refused
+    // with the size reason rather than a parse error.
+    assert!(matches!(
+        load_detailed(&path),
+        Err(CacheLoadError::CacheTooLarge)
+    ));
+    assert!(load(&path).is_none());
+
+    // Control: the same body inside a compact envelope is under the file cap
+    // and loads, proving the failure above is the pretty expansion and not
+    // the body cap or a malformed fixture.
+    let compact = dir.path().join("max-body-compact.json");
+    write_fixture(&compact, &serde_json::to_vec(&cache).unwrap());
+    let loaded = load_detailed(&compact).expect("compact envelope stays under the file cap");
+    assert_eq!(loaded.body.len(), MAX_CACHE_BODY_BYTES);
+    assert_eq!(loaded, cache);
+}
+
+#[test]
+fn file_exactly_at_max_cache_bytes_is_loaded_and_one_byte_over_is_not() {
+    // The file-size gate in `load_detailed` is `metadata.len() > MAX_CACHE_BYTES`
+    // (cache.rs:908-913): exactly at the cap must pass, one byte past must not.
+    // Trailing spaces are valid JSON whitespace, so they can pad a real cache
+    // to the exact boundary without changing its parsed value.
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    let mut bytes = serde_json::to_vec(&cache).unwrap();
+    assert!((bytes.len() as u64) < MAX_CACHE_BYTES, "fixture premise");
+    bytes.resize(MAX_CACHE_BYTES as usize, b' ');
+    assert_eq!(bytes.len() as u64, MAX_CACHE_BYTES);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("exact-file-size.json");
+    write_fixture(&path, &bytes);
+    assert_eq!(load_detailed(&path).unwrap(), cache);
+
+    bytes.push(b' ');
+    write_fixture(&path, &bytes);
+    assert_eq!(bytes.len() as u64, MAX_CACHE_BYTES + 1);
+    assert!(matches!(
+        load_detailed(&path),
+        Err(CacheLoadError::CacheTooLarge)
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restore_guard_priority_puts_identity_checks_before_expiry() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+
+    // One file that is expired AND belongs to another server AND another
+    // account. `cached_sync_for_detailed` checks the envelope server first
+    // (cache.rs:1066-1078), then the envelope account, then the clock.
+    let expired = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: body(),
+        created_at: Some(1),
+    };
+    save_default(&expired).unwrap();
+
+    assert!(matches!(
+        cached_sync_for_detailed("https://other.example.com", "user-2"),
+        Err(SyncCacheError::ServerMismatch)
+    ));
+    // Matching server but wrong account still wins over the expiry check.
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", "user-2"),
+        Err(SyncCacheError::UserMismatch)
+    ));
+    // Only once both identity checks pass does the expired marker surface.
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", "user-1"),
+        Err(SyncCacheError::CacheExpired)
+    ));
+    assert!(cached_sync_for("https://vault.example.com", "user-1").is_none());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn restore_guard_priority_puts_expiry_before_body_parse_and_body_user_check() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+    let path = default_path().expect("a cache directory from XDG_CACHE_HOME");
+
+    // Expired + a body that no longer parses. `save` refuses a non-JSON body,
+    // so write the envelope directly; the clock check (cache.rs:1075-1077)
+    // must fire before `cache.sync()` (cache.rs:1079).
+    let broken = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: b"not json".to_vec(),
+        created_at: Some(1),
+    };
+    write_fixture(&path, &serde_json::to_vec(&broken).unwrap());
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", "user-1"),
+        Err(SyncCacheError::CacheExpired)
+    ));
+
+    // Expired + a parseable body naming a different account. The envelope id
+    // matches the caller, so the body-id check (cache.rs:1080-1082) is the only
+    // competing guard; expiry still comes first.
+    let mismatched = SyncCache {
+        body: br#"{"profile":{"id":"body-user"},"folders":[],"ciphers":[]}"#.to_vec(),
+        ..broken
+    };
+    write_fixture(&path, &serde_json::to_vec(&mismatched).unwrap());
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", "user-1"),
+        Err(SyncCacheError::CacheExpired)
+    ));
+
+    // Control: with a fresh timestamp the very same envelope reaches the
+    // body-id check and reports UserMismatch instead.
+    let fresh = SyncCache {
+        created_at: None,
+        ..mismatched
+    };
+    write_fixture(&path, &serde_json::to_vec(&fresh).unwrap());
+    assert!(matches!(
+        cached_sync_for_detailed("https://vault.example.com", "user-1"),
+        Err(SyncCacheError::UserMismatch)
+    ));
+}

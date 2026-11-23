@@ -737,6 +737,69 @@ fn toggle_favorite_returns_false_when_it_turns_an_item_off() {
 }
 
 #[test]
+fn duplicate_id_mutations_touch_only_the_first_row_and_favorite_count_follows() {
+    // `item`, `toggle_favorite` and `set_folder` all resolve an id with
+    // `iter().find()` (model.rs:1013-1033), so two raw rows sharing one id
+    // expose only the first row to those mutations. `favorite_count`
+    // (model.rs:971-974) counts rows, so it must track the first row's flag
+    // after every toggle even though the duplicate stays untouched.
+    let mut vault = Vault::new();
+    vault.folders = vec![
+        Folder {
+            id: "f1".into(),
+            name: "F1".into(),
+        },
+        Folder {
+            id: "f2".into(),
+            name: "F2".into(),
+        },
+    ];
+    let mut first = login("dup", "First", "u", "p", "https://first.example");
+    first.folder_id = Some("f1".into());
+    let mut second = login("dup", "Second", "v", "p", "https://second.example");
+    second.favorite = true;
+    second.folder_id = Some("f2".into());
+    // The duplicate is kept raw on purpose: the importer normally dedups by
+    // id, but the model's id helpers must still behave predictably here.
+    vault.items = vec![first, second];
+
+    assert_eq!(vault.items.len(), 2);
+    assert_eq!(vault.item("dup").expect("first row").name, "First");
+    assert_eq!(
+        vault.favorite_count(),
+        1,
+        "only the second row is a favorite"
+    );
+
+    assert_eq!(vault.toggle_favorite("dup"), Some(true));
+    assert!(vault.items[0].favorite, "first row toggled on");
+    assert!(vault.items[1].favorite, "second row is untouched");
+    assert_eq!(vault.items[1].name, "Second");
+    assert_eq!(vault.favorite_count(), 2, "the count follows the toggle");
+
+    assert_eq!(vault.toggle_favorite("dup"), Some(false));
+    assert!(!vault.items[0].favorite, "first row toggled off");
+    assert!(vault.items[1].favorite, "second row stays untouched");
+    assert_eq!(vault.favorite_count(), 1);
+
+    assert!(vault.set_folder("dup", None));
+    assert_eq!(vault.items[0].folder_id, None);
+    assert_eq!(vault.items[1].folder_id.as_deref(), Some("f2"));
+    assert_eq!(
+        vault.folder_counts(),
+        vec![("f1".to_string(), 0), ("f2".to_string(), 1)]
+    );
+
+    assert!(vault.set_folder("dup", Some("f2".into())));
+    assert_eq!(vault.items[0].folder_id.as_deref(), Some("f2"));
+    assert_eq!(vault.items[1].folder_id.as_deref(), Some("f2"));
+    assert_eq!(
+        vault.folder_counts(),
+        vec![("f1".to_string(), 0), ("f2".to_string(), 2)]
+    );
+}
+
+#[test]
 fn nfkd_absorbs_canonical_and_compatibility_differences() {
     // NFC vs NFD (precomposed vs base + combining mark).
     assert_eq!(nfkd("Caf\u{e9}"), nfkd("Cafe\u{301}"));

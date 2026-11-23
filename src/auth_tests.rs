@@ -2944,12 +2944,35 @@ fn userinfo_does_not_hide_a_blocked_host_from_the_ssrf_classifier() {
 
 #[test]
 fn nondecimal_and_ipv6_embedded_link_local_literals_are_a_known_constraint() {
-    // Documented limit of `hostname_embeds_link_local` (auth.rs:463-490):
-    // only dotted/hyphenated *decimal* IPv4 quads are decoded. A bare
-    // non-decimal literal is still normalized by `url::Url` to an Ipv4 host,
-    // so the whole-host form stays blocked.
-    assert!(is_blocked_server_url_without_dns("http://0xa9fea9fe"));
-    assert!(is_blocked_server_url("http://0xa9fea9fe"));
+    // Documented limit of `hostname_embeds_link_local` (auth.rs:471-498):
+    // only dotted/hyphenated *decimal* IPv4 quads are decoded there. A bare
+    // non-decimal literal used as the WHOLE host is still normalized by
+    // `url::Url`'s WHATWG IPv4 parser before the classifier sees it, so every
+    // spelling of 169.254.169.254 below stays blocked offline.
+    for whole_host in [
+        "http://169.254.169.254",     // decimal control
+        "http://0xa9fea9fe",          // hexadecimal integer
+        "http://0251.0376.0251.0376", // octal dotted quad (0251=169, 0376=254)
+        "http://2852039166",          // 32-bit decimal integer
+    ] {
+        assert!(
+            is_blocked_server_url_without_dns(whole_host),
+            "whole-host spelling must be blocked: {whole_host}"
+        );
+        // A literal Ipv4 host never reaches the resolver, so the network-capable
+        // form must agree without any DNS.
+        assert!(
+            is_blocked_server_url(whole_host),
+            "network-capable classifier must agree: {whole_host}"
+        );
+        // Pin the premise: `url::Url` really normalized the literal to the
+        // link-local IPv4 address rather than leaving a DNS name to look up.
+        assert_eq!(
+            url::Url::parse(whole_host).unwrap().host(),
+            Some(url::Host::Ipv4(std::net::Ipv4Addr::new(169, 254, 169, 254))),
+            "{whole_host}"
+        );
+    }
 
     // The same spellings embedded in a wildcard-DNS name are invisible to the
     // network-free classifier and to `validate_config`'s SSRF check. Pin the
@@ -2980,4 +3003,50 @@ fn nondecimal_and_ipv6_embedded_link_local_literals_are_a_known_constraint() {
     assert!(is_blocked_server_url_without_dns(
         "http://169.254.169.254.nip.io"
     ));
+}
+
+#[test]
+fn ipv4_compatible_ipv6_link_local_is_a_known_blind_spot() {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    // `::a9fe:a9fe` is the IPv4-COMPATIBLE (`::a.b.c.d`) spelling of the
+    // link-local address 169.254.169.254. It is a different form from the
+    // IPv4-MAPPED `::ffff:a9fe:a9fe`, which the guard already blocks.
+    let compatible: Ipv6Addr = "::a9fe:a9fe".parse().unwrap();
+    // Rust's stable API has no `to_ipv4_compatible`; check the trailing
+    // 32 bits directly to pin the same premise.
+    let octets = compatible.octets();
+    assert_eq!(
+        Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]),
+        Ipv4Addr::new(169, 254, 169, 254),
+        "premise: compatible form of the link-local address"
+    );
+    assert_eq!(
+        compatible.to_ipv4_mapped(),
+        None,
+        "premise: not an IPv4-mapped address"
+    );
+
+    // Known constraint documented on `is_link_local_ip` (auth.rs:435-456):
+    // only `to_ipv4_mapped()` is unwrapped, so the compatible form falls
+    // through to the fe80::/10 check and is NOT detected. Pin that behaviour
+    // so a future fix is an explicit, reviewed change.
+    assert!(!is_link_local_ip(IpAddr::V6(compatible)));
+    assert!(!is_blocked_server_url_without_dns("http://[::a9fe:a9fe]"));
+    // The bracketed URL really does reach the classifier as an Ipv6 host, so
+    // the assertion above is about the compatible-form blind spot and not
+    // about a parse failure that never inspected the address.
+    match url::Url::parse("http://[::a9fe:a9fe]").unwrap().host() {
+        Some(url::Host::Ipv6(host)) => assert_eq!(host, compatible),
+        other => panic!("expected a bracketed IPv6 host, got {other:?}"),
+    }
+
+    // Control: the mapped spelling of the same address is still blocked, and
+    // an IPv4-compatible spelling of a non-link-local address is likewise
+    // allowed. This keeps the blind spot scoped to one specific form.
+    assert!(is_link_local_ip("::ffff:169.254.169.254".parse().unwrap()));
+    assert!(is_blocked_server_url_without_dns(
+        "http://[::ffff:a9fe:a9fe]"
+    ));
+    assert!(!is_link_local_ip("::c0a8:010a".parse().unwrap()));
 }
