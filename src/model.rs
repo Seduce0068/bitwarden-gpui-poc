@@ -46,10 +46,10 @@ mod unicode_normalize {
     fn fold_once(input: &str) -> String {
         let mut out = String::new();
         for character in nfkd(input).chars() {
-            // Invisible format characters carry no visible identity. Keeping
-            // them in the key made a search for the plain spelling miss a name
-            // that contained one, and split otherwise identical duplicates.
-            if crate::limits::is_format_character(character) {
+            // Invisible format/control characters carry no visible identity.
+            // Keeping them in the key made a plain search miss a name that
+            // contained one and split otherwise identical duplicates.
+            if character.is_control() || crate::limits::is_format_character(character) {
                 continue;
             }
             match character {
@@ -65,11 +65,11 @@ mod unicode_normalize {
     /// NFKD key with the documented extra case mappings, shared by search,
     /// duplicate-name detection and sorting.
     ///
-    /// Unicode `Cf` (format) characters are dropped from the key. They render
-    /// nothing, so a name such as `Git\u{200b}Hub` must compare equal to
-    /// `GitHub`: keeping the invisible code point made a plain search query
-    /// miss an otherwise identical name. Dropping it here keeps search,
-    /// duplicate detection and sorting on the same normalized value.
+    /// Unicode `Cf` (format) and `Cc` (control) characters are dropped from the
+    /// key. They render nothing, so `Git\u{200b}Hub` and `Git\u{0}Hub` must
+    /// compare equal to `GitHub`: keeping an invisible code point made a plain
+    /// search query miss an otherwise identical name. Dropping them here keeps
+    /// search, duplicate detection and sorting on the same normalized value.
     ///
     /// Lowercasing a decomposed string can surface a code point that NFKD
     /// would decompose again (for example U+01C4 LATIN CAPITAL LETTER DZ WITH
@@ -1150,14 +1150,20 @@ impl Vault {
     /// shared `is_visually_empty` rule decides, so two such items must not
     /// be reported as duplicates of each other. The same applies to a name
     /// made only of Unicode marks (`Mn`/`Me`/`Mc`, such as a combining accent
-    /// or an enclosing circle): with no base character they render as
-    /// decoration, not as a name. A mark following an ordinary base letter
-    /// stays significant.
+    /// or an enclosing circle), including when whitespace sits between the
+    /// marks: with no base character they render as decoration, not as a name.
+    /// A mark following an ordinary base letter stays significant.
     pub fn duplicate_names(&self) -> Vec<(String, Vec<String>)> {
         let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for item in &self.items {
             let key = comparison_key(item.name.trim());
-            if is_visually_empty(&item.name) || key.chars().all(unicode_normalize::is_mark) {
+            // Whitespace between marks renders nothing either, so a mark-only
+            // name with internal spaces is still decoration, not a name.
+            let marks_only = key
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .all(unicode_normalize::is_mark);
+            if is_visually_empty(&item.name) || marks_only {
                 continue;
             }
             match groups.iter_mut().find(|(name, _)| *name == key) {

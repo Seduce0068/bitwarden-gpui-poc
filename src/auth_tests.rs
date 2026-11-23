@@ -3869,19 +3869,28 @@ fn detail_variants_convert_forward_to_their_cause_app_error_arms() {
 }
 
 #[test]
-fn auth_error_catch_all_flattens_unlock_settings_and_cache_families_to_other() {
+fn auth_error_catch_all_flattens_every_non_auth_family_to_other() {
     use crate::error::{AppError, BoxedCause};
 
     // `From<AppError> for AuthError` handles the auth families explicitly and
-    // sends every other family through its catch-all arm (auth.rs:270-276).
-    // A failure from unlock, settings or cache must therefore be reported as
-    // the honest generic failure, never mislabelled as a known auth family.
+    // sends every *other* family through its catch-all arm (auth.rs:236-277).
+    // Cover one representative of each remaining layer — unlock, vault sync,
+    // cache, settings, TOTP, generator and the unclassified family — so the
+    // claim matches the table. `InvalidLogin` is deliberately absent: its two
+    // variants map to `SyncDetail` (auth.rs:264-266) and are not catch-all
+    // inputs. Every case below must render the honest generic failure, never
+    // a known auth family.
     let cases: Vec<(&str, AppError)> = vec![
         ("unlock/missing key", AppError::MissingProtectedKey),
         ("unlock/failed", AppError::UnlockFailed("bad key".into())),
         ("unlock/structured", AppError::unlock_failed("bad key")),
+        (
+            "unlock/structured cause",
+            AppError::unlock_failed_cause("bad key", BoxedCause::text("io failure")),
+        ),
         ("unlock/apply sync", AppError::apply_sync_failed("bad sync")),
         ("unlock/import", AppError::import_failed("bad import")),
+        ("vault sync/locked", AppError::Locked),
         ("settings/too large", AppError::TooLarge),
         (
             "settings/save",
@@ -3906,8 +3915,30 @@ fn auth_error_catch_all_flattens_unlock_settings_and_cache_families_to_other() {
         ("cache/expired", AppError::CacheExpired),
         ("cache/too large", AppError::CacheTooLarge),
         ("cache/not found", AppError::NotFound),
+        ("cache/read failed", AppError::ReadFailed),
+        (
+            "cache/read failed cause",
+            AppError::ReadFailedCause(BoxedCause::text("denied")),
+        ),
+        ("cache/parse failed", AppError::ParseFailed),
+        ("totp/missing", AppError::Missing),
+        ("totp/invalid", AppError::Invalid),
+        (
+            "totp/invalid cause",
+            AppError::InvalidCause(BoxedCause::text("bad secret")),
+        ),
+        ("generator/random unavailable", AppError::RandomUnavailable),
+        (
+            "generator/random unavailable cause",
+            AppError::RandomUnavailableCause(BoxedCause::text("getrandom failed")),
+        ),
+        ("generator/invalid settings", AppError::InvalidSettings),
+        (
+            "other/unclassified",
+            AppError::Other("anything else".into()),
+        ),
     ];
-    assert_eq!(cases.len(), 17, "every representative family is pinned");
+    assert_eq!(cases.len(), 29, "every representative family is pinned");
 
     for (name, app) in cases {
         let small = AuthError::from(app);

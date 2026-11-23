@@ -690,7 +690,7 @@ fn duplicate_names_group_case_insensitively() {
 
 #[test]
 fn duplicate_names_ignore_rows_with_the_same_id() {
-    // The ids in a group are deduplicated (model.rs:1063-1081), so two raw
+    // The ids in a group are deduplicated (model.rs:1156-1180), so two raw
     // rows with one id cannot masquerade as a name collision. A group of two
     // *distinct* ids with the same name must still be reported.
     let mut vault = Vault::new();
@@ -875,7 +875,7 @@ fn comparison_key_folds_the_documented_cases_and_is_idempotent() {
 fn comparison_key_is_idempotent_for_titlecase_dz_variants() {
     // U+01C4/01C5/01C6 (capital / titlecase / small DZ with caron) all NFKD to
     // D or d + z + combining caron once lowercasing is applied. The fixed-point
-    // loop (model.rs:74-84) must leave the folded key unchanged on a second
+    // loop (model.rs:86-96) must leave the folded key unchanged on a second
     // pass; otherwise a normalized needle would drift on the `view()` path.
     let title = comparison_key("\u{01c5}");
     let small = comparison_key("\u{01c6}");
@@ -2469,7 +2469,7 @@ fn item_data_rejects_an_unknown_or_missing_type_tag() {
 #[test]
 fn duplicate_names_ignore_surrounding_whitespace_differences() {
     // `duplicate_names` compares `comparison_key(item.name.trim())`
-    // (model.rs:1063-1081), so padding a name with ASCII or Unicode whitespace
+    // (model.rs:1156-1180), so padding a name with ASCII or Unicode whitespace
     // must not split it into a separate group.
     let mut vault = Vault::new();
     vault
@@ -3380,7 +3380,7 @@ fn multiple_folder_ids_resolve_to_their_own_names_and_counts() {
 fn mc_only_names_are_blank_for_duplicate_detection() {
     // Mc (spacing combining mark) is part of General_Category=Mark alongside
     // Mn/Me, so a name made only of Mc code points has no standalone glyph
-    // either. `duplicate_names` uses `is_combining_mark` (model.rs:1080-1111)
+    // either. `duplicate_names` uses `is_mark` (model.rs:31-33, 1156-1177)
     // and must skip these names instead of grouping them with each other.
     let mut vault = Vault::new();
     // U+0903 DEVANAGARI SIGN VISARGA and U+093E DEVANAGARI VOWEL SIGN AA are
@@ -3487,7 +3487,7 @@ fn mask_uri_embedded_nul_is_not_the_decryption_sentinel() {
 fn comparison_key_drops_format_characters_for_search_and_duplicates() {
     // Unicode Cf code points render nothing, so a name containing one must
     // compare equal to the plain spelling on every path that shares
-    // `comparison_key` (model.rs:59-90). Leaving the invisible code point in
+    // `comparison_key` (model.rs:46-96). Leaving the invisible code point in
     // the key made a plain search query miss an otherwise identical name.
     for invisible in ['\u{200b}', '\u{2060}', '\u{feff}', '\u{ad}'] {
         let with_cf = format!("Git{invisible}Hub");
@@ -3589,7 +3589,7 @@ fn format_only_query_does_not_match_every_item() {
 
 #[test]
 fn invisible_only_names_and_needles_share_the_view_rule() {
-    // `is_visually_empty` (model.rs:100-110) is the shared "no visible content"
+    // `is_visually_empty` (model.rs:110-114) is the shared "no visible content"
     // rule. Needles and names made only of whitespace + Unicode Cf must be
     // blank everywhere, including Cf separated by *internal* whitespace:
     // checking only `comparison_key().is_empty()` left a single space in the
@@ -3765,7 +3765,7 @@ fn item_data_debug_pins_the_empty_totp_branch() {
 
 #[test]
 fn control_characters_only_values_are_visually_empty_like_auth_credentials() {
-    // `is_visually_empty` (model.rs:100-114) now includes `Cc` through
+    // `is_visually_empty` (model.rs:110-114) now includes `Cc` through
     // `char::is_control`, matching `credential_is_blank` in auth. NUL, DEL and
     // the C1 controls are not whitespace, so the old whitespace + Cf rule
     // treated a Cc-only name / TOTP value as present.
@@ -3793,7 +3793,7 @@ fn control_characters_only_values_are_visually_empty_like_auth_credentials() {
 
 #[test]
 fn control_only_names_and_needles_share_the_search_and_duplicate_rules() {
-    // `is_visually_empty` (model.rs:100-114) includes `Cc`. The earlier Cf-only
+    // `is_visually_empty` (model.rs:110-114) includes `Cc`. The earlier Cf-only
     // suites cover search and duplicates separately; this test drives the
     // combined path with Cc-only values so the two consumers cannot drift.
     let controls = ["\u{0}", "\u{1}\u{1f}", "\u{7f}", "\u{80}", "\u{9f}"];
@@ -3857,5 +3857,86 @@ fn control_only_names_and_needles_share_the_search_and_duplicate_rules() {
     assert_eq!(
         vault.view(&Filter::All, "", SortKey::NameAsc).len(),
         vault.items.len()
+    );
+}
+
+#[test]
+fn comparison_key_drops_embedded_control_characters() {
+    // `comparison_key` (model.rs:46-96) drops `Cc` like it already dropped
+    // `Cf`: a literal NUL or C1 control inside a name must not split an
+    // otherwise identical search or duplicate pair. `is_visually_empty`
+    // (model.rs:110-114) still handles values made *only* of such characters.
+    for control in ['\u{0}', '\u{1f}', '\u{7f}', '\u{80}', '\u{9f}'] {
+        let with_cc = format!("Git{control}Hub");
+        assert_eq!(
+            comparison_key(&with_cc),
+            "github",
+            "U+{:04X} was not dropped",
+            control as u32
+        );
+        assert!(!comparison_key(&with_cc).contains(control));
+        assert_eq!(
+            comparison_key(comparison_key(&with_cc).as_str()),
+            "github",
+            "idempotence must survive the Cc drop"
+        );
+    }
+
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("cc-1", "Git\u{0}Hub", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("cc-2", "github", "u", "p", "https://b.example"));
+    assert_eq!(
+        vault.view(&Filter::All, "github", SortKey::NameAsc).len(),
+        2
+    );
+    // A Cc-bearing needle finds the plain name too (both sides use this key).
+    assert_eq!(
+        vault
+            .view(&Filter::All, "Git\u{1f}Hub", SortKey::NameAsc)
+            .len(),
+        2
+    );
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "github");
+    assert_eq!(groups[0].1, vec!["cc-1".to_string(), "cc-2".to_string()]);
+}
+
+#[test]
+fn mark_only_names_with_internal_whitespace_are_not_duplicates() {
+    // Combining marks (Mn/Mc/Me) have no standalone glyph, and whitespace
+    // between them renders nothing either. `duplicate_names` must skip such
+    // rows just like a contiguous mark-only name (model.rs:1145-1180). A real
+    // duplicate pair in the same vault proves the rule is not simply dropping
+    // every group.
+    let mut vault = Vault::new();
+    for (id, name) in [
+        ("m-space", "\u{0301} \u{0302}"),
+        ("m-tab", "\u{0301}\t\u{0302}"),
+        ("m-newline", "\u{0301}\n\u{0302}"),
+        ("m-padded", " \u{0301} \u{0302} "),
+        ("m-with-cf", "\u{0301}\u{200b} \u{0302}"),
+    ] {
+        vault
+            .items
+            .push(login(id, name, "u", "p", "https://example.com"));
+    }
+    vault
+        .items
+        .push(login("real-1", "Alpha", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("real-2", "alpha", "u", "p", "https://b.example"));
+
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "alpha");
+    assert_eq!(
+        groups[0].1,
+        vec!["real-1".to_string(), "real-2".to_string()]
     );
 }

@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第112弾で 8 件すべてを完了）。
+なし（第113弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第113弾（16 担当・57 回目）の指摘 6 件を完結（2026-11-23）
+  - AuthError catch-all 網羅、at_is_in_query 恒真式、comparison_key Cc
+    除去、mark-only 内部空白、CHANGELOG 第112弾を修正。
+  - hex デコード、parse_sync 空ボディ、埋め込み Cc、
+    語サフィックス 3 文字境界をテスト。
+  - 起動エージェント: 17 体（補充探索 16 + 実装 1）。
+  - 検証: fmt / check / test（1094 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第112弾（16 担当・56 回目）の指摘 8 件を完結（2026-11-23）
   - UI Cc 判定、選択解除時 TOTP クリア、カード番号の不可視判定、
     http:/ 単一スラッシュ検出を修正。

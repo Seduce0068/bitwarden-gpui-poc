@@ -269,12 +269,13 @@ fn mask_url_userinfo(url: &str) -> String {
 /// be masked even though `user:12345` looks like `host:port`. The username is
 /// arbitrary — the classifier no longer looks for a hardcoded `user` name —
 /// and a bare trailing `=` (`https://user:12345?=@host`) is also password
-/// decoration rather than a `key=value` query. A genuine query carries an
-/// assignment with a non-empty key (`https://host:8443?email=a@b`) and still
-/// wins. This keeps `https://host?email=a@b` untouched while still masking
-/// `https://user:pass?x=1@host`. A non-canonical numeric password wins over the
-/// assignment, so `https://user:12345?key=value@host` is masked as well instead
-/// of being mistaken for a query whose value contains an '@'.
+/// decoration rather than a `key=value` query. Once those credential shapes
+/// are ruled out, the head is a bare host or a canonical `host:port`, so the
+/// delimiter is a genuine query/fragment boundary whether or not the tail
+/// carries an assignment: `https://host:8443?email=a@b`, `https://host#frag@x`
+/// and `https://host:8443#frag@x` all stay untouched. A non-canonical numeric
+/// password wins over any assignment, so `https://user:12345?key=value@host`
+/// is masked instead of being mistaken for a query whose value contains an '@'.
 ///
 /// Bracketed IPv6 hosts need special care: the colons in `[::1]` belong to the
 /// address, not to a `user:password` marker, and `:1]` is not a port. Both
@@ -321,16 +322,17 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
         if numeric_password {
             return false;
         }
-        // No marker at all: the head is a bare host or a `host:8443` port. A
-        // genuine query/fragment parameter carries an assignment with a
-        // non-empty key (`key=value`). A bare '=' directly before the '@'
-        // (`user:12345?=@host`) is password decoration, not a query parameter,
-        // so it must not make the credential look like a real query.
-        let query_tail = &before[delimiter + 1..];
-        let has_assignment = query_tail
-            .split_once('=')
-            .is_some_and(|(key, _)| !key.is_empty());
-        has_assignment || !numeric_password
+        // No marker at all: the head is a bare host or a canonical `host:8443`
+        // port, so the `?`/`#` is a genuine query/fragment boundary and the
+        // '@' after it is query text. An assignment is not required here:
+        // `https://host#frag@x` and `https://host:8443#frag@x` must stay
+        // untouched. Credential shapes were already rejected above (the
+        // userinfo-colon and numeric-password branches), so a tail such as
+        // `text` in `https://user:12345?text@host` cannot reach this point.
+        // The old `has_assignment || !numeric_password` was a tautology: the
+        // early return above guarantees `numeric_password == false`, so the
+        // assignment test never changed the verdict. Drop the dead check.
+        true
     })
 }
 

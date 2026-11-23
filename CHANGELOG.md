@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第112弾 / 2026-11-23）
+
+- UI Cc 判定、選択解除時 TOTP クリア、カード番号の不可視判定、
+  http:/ 単一スラッシュ検出を修正
+- Argon2id KDF、大文字メール、埋め込み不可視文字、
+  userinfo/authority 境界、data 必須をテスト
+- 同期 doc と恒真アサーション、README のパスワード説明を修正
+
 ### 全体改善（第110〜111弾 / 2026-11-23）
 
 - 監査 status の内部 ID／Cf 名、arrow キー、master_password 不可視判定を修正

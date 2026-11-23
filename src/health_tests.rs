@@ -1500,6 +1500,52 @@ fn twelve_digit_pin_sits_exactly_on_the_40_bit_boundary() {
 }
 
 #[test]
+fn word_suffix_discount_requires_at_least_three_letters() {
+    // The word-suffix branch of `estimate_entropy` (health.rs:398-405) only
+    // discounts a trailing digit run when the stripped body is at least three
+    // ASCII lowercase letters. Two letters stay on the raw character-pool
+    // estimate; three (or more) switch to the word + suffix model. Using the
+    // same four-digit suffix isolates the length threshold from the suffix
+    // itself. Neither value is a dictionary word or a generated passphrase,
+    // so both take the character-pool path before the discount.
+    let two = "ab1234";
+    let three = "abc1234";
+    let four = "abcd1234";
+    let raw_two = entropy_bits(36, 6).round() as u32;
+    let discounted_three = (entropy_bits(26, 3) + entropy_bits(10, 4)).round() as u32;
+    let discounted_four = (entropy_bits(26, 4) + entropy_bits(10, 4)).round() as u32;
+
+    // Premise: the word list has no `abc`/`ab` entry, so no passphrase path
+    // hijacks these values (WORDS is prefix-free).
+    assert!(!crate::words::WORDS.contains(&"abc"));
+    assert_eq!(estimate_entropy(two), raw_two, "{two}");
+    assert_eq!(estimate_entropy(three), discounted_three, "{three}");
+    assert_eq!(estimate_entropy(four), discounted_four, "{four}");
+    assert!(
+        discounted_three < raw_two,
+        "{discounted_three} vs {raw_two}"
+    );
+    assert!(
+        discounted_four > discounted_three,
+        "a longer word costs more"
+    );
+
+    // The three-letter test is on ASCII lowercase letters. A digit inside the
+    // three-character body disqualifies it, and uppercase input is folded by
+    // `password.to_lowercase()` before the check, so uppercase still discounts.
+    assert_eq!(
+        estimate_entropy("a1b1234"),
+        entropy_bits(36, 7).round() as u32
+    );
+    assert_eq!(estimate_entropy("ABC1234"), discounted_three);
+
+    // A two-letter body with no digits at all must also stay undiscounted:
+    // the threshold is on the word length, not on the presence of a suffix
+    // (`ab` alone is still the raw pool estimate).
+    assert_eq!(estimate_entropy("ab"), entropy_bits(26, 2).round() as u32);
+}
+
+#[test]
 fn empty_separator_passphrases_are_scored_with_the_word_list() {
     use crate::generator::{passphrase_entropy, PassphraseSettings};
     use crate::words::WORDS;

@@ -4354,3 +4354,60 @@ fn numeric_password_with_an_unescaped_slash_is_masked_before_the_path_boundary()
     assert!(super::numeric_password_colon("user:10000"));
     assert!(super::numeric_password_colon("user:0123"));
 }
+
+#[test]
+fn hex_value_accepts_lowercase_b_to_f_and_uppercase_b_c_e() {
+    // Every hex digit must decode in both cases; a missing arm would leave a
+    // `%62` / `%42` escape literal and could hide the name of a secret key
+    // from `is_sensitive_param_key` (cache.rs:482-490).
+    for (byte, expected) in [
+        (b'a', 10),
+        (b'b', 11),
+        (b'c', 12),
+        (b'd', 13),
+        (b'e', 14),
+        (b'f', 15),
+        (b'A', 10),
+        (b'B', 11),
+        (b'C', 12),
+        (b'E', 14),
+    ] {
+        assert_eq!(super::hex_value(byte), Some(expected), "0x{byte:02X}");
+    }
+    // Controls: digits and the remaining uppercase letters still decode, and
+    // non-hex bytes are rejected rather than mapped to zero.
+    assert_eq!(super::hex_value(b'0'), Some(0));
+    assert_eq!(super::hex_value(b'9'), Some(9));
+    assert_eq!(super::hex_value(b'D'), Some(13));
+    assert_eq!(super::hex_value(b'F'), Some(15));
+    for byte in [b'g', b'G', b'@', 0x80] {
+        assert_eq!(super::hex_value(byte), None, "0x{byte:02X}");
+    }
+    // End-to-end through `percent_decode`: lowercase and uppercase digits in
+    // the same value decode to their ASCII characters.
+    assert_eq!(super::percent_decode("%62%42%63%43"), "bBcC");
+}
+
+#[test]
+fn query_delimiter_without_an_assignment_is_still_in_query() {
+    // The last classifier arm used to be `has_assignment || !numeric_password`.
+    // The numeric-password branch above already returned, so `!numeric_password`
+    // was always true and the assignment test was dead. With the credential
+    // shapes ruled out, a bare host or a canonical `host:8443` port keeps its
+    // `?`/`#` as a genuine delimiter even without a `key=value` tail
+    // (cache.rs:321-335).
+    for scan in ["host#frag@x", "host:8443#frag@x", "host?text@x"] {
+        let at = scan.rfind('@').expect("an '@' after the delimiter");
+        assert!(super::at_is_in_query(scan, at), "{scan}");
+    }
+    // Control: a real assignment is classified the same way, so the assertions
+    // above pin the no-assignment case rather than a blanket "always query".
+    let with_assignment = "host:8443?email=a@b";
+    assert!(super::at_is_in_query(
+        with_assignment,
+        with_assignment.rfind('@').unwrap()
+    ));
+    for url in ["https://host#frag@x", "https://host:8443#frag@x"] {
+        assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+}

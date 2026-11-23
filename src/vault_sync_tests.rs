@@ -27,6 +27,46 @@ fn malformed_sync_body_is_reported() {
 }
 
 #[test]
+fn empty_and_whitespace_only_sync_bodies_are_rejected_as_invalid_login() {
+    use std::error::Error as _;
+
+    // An empty or whitespace-only body is not valid JSON: `serde_json` fails
+    // before normalization or cipher dedup can run. It must take the same
+    // typed `InvalidLoginCause` path as any other malformed body instead of
+    // producing an empty-but-valid sync response (vault_sync.rs:162-191).
+    let bodies: Vec<Vec<u8>> = vec![
+        Vec::new(),
+        b" ".to_vec(),
+        b"\t".to_vec(),
+        b"\r\n".to_vec(),
+        b" \t\r\n  ".to_vec(),
+        // U+3000 (ideographic space) is not JSON whitespace either.
+        b"\xe3\x80\x80 \xe3\x80\x80".to_vec(),
+    ];
+    for body in &bodies {
+        let error = parse_sync(body).unwrap_err();
+        assert!(
+            matches!(error, SyncError::InvalidLoginCause(_, _)),
+            "body {body:?}: {error:?}"
+        );
+        assert_eq!(
+            error.message(),
+            "ログイン項目を読み取れませんでした",
+            "body {body:?}"
+        );
+        let source = error
+            .source()
+            .expect("a JSON parse failure must keep a typed cause")
+            .to_string();
+        assert!(!source.is_empty(), "body {body:?}");
+        assert!(
+            !source.contains("ログイン項目を読み取れませんでした"),
+            "body {body:?}: the family message must stay in message()"
+        );
+    }
+}
+
+#[test]
 fn non_object_sync_bodies_are_classified_as_invalid_login() {
     use std::error::Error as _;
 
