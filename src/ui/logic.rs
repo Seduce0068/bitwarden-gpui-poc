@@ -289,16 +289,22 @@ pub(super) fn clipboard_copy_status(seconds: u64, has_original: bool) -> String 
 
 /// Adjust the idle auto-lock timeout in one-minute steps, clamped to 1..=60
 /// minutes.
+///
+/// The setting is stored in seconds but displayed with leftover seconds (see
+/// [`crate::ui::app::idle_lock_minutes_text`]), so the step must be added in
+/// seconds: truncating to whole minutes first made 90 s ("1分30秒") jump to
+/// 120 s instead of 150 s on `i`, disagreeing with the displayed value.
+/// Out-of-range values are still clamped before the step, and the result is
+/// clamped again in seconds. `try_from` plus `saturating_add` keep a
+/// hand-edited `u64::MAX` sentinel from wrapping into the minimum on `+`.
 pub(super) fn adjust_idle_lock(current_seconds: u64, delta_minutes: i32) -> u64 {
-    let current_minutes = (current_seconds / 60).clamp(
-        crate::limits::MIN_IDLE_LOCK_MINUTES,
-        crate::limits::MAX_IDLE_LOCK_MINUTES,
-    ) as i64;
-    let next = (current_minutes + i64::from(delta_minutes)).clamp(
-        crate::limits::MIN_IDLE_LOCK_MINUTES as i64,
-        crate::limits::MAX_IDLE_LOCK_MINUTES as i64,
-    );
-    (next * 60) as u64
+    let min = crate::limits::MIN_IDLE_LOCK_SECONDS as i64;
+    let max = crate::limits::MAX_IDLE_LOCK_SECONDS as i64;
+    let current = i64::try_from(current_seconds)
+        .unwrap_or(i64::MAX)
+        .clamp(min, max);
+    let step = i64::from(delta_minutes).saturating_mul(60);
+    current.saturating_add(step).clamp(min, max) as u64
 }
 
 /// Adjust a seconds-based setting by one UI step, clamped to the shared
@@ -692,6 +698,36 @@ mod tests {
         // Hand-edited / stale values are clamped back into the valid range.
         assert_eq!(adjust_idle_lock(0, 0), 60);
         assert_eq!(adjust_idle_lock(10_000, 0), 3600);
+    }
+
+    #[test]
+    fn idle_lock_adjustment_keeps_sub_minute_remainders() {
+        // The panel renders 90 s as "1分30秒", so a one-minute step must add
+        // 60 seconds to the stored value instead of truncating it to minutes
+        // first (the old code produced 120 s here).
+        assert_eq!(adjust_idle_lock(90, 1), 150);
+        assert_eq!(adjust_idle_lock(150, 1), 210);
+        assert_eq!(adjust_idle_lock(150, -1), 90);
+        assert_eq!(adjust_idle_lock(90, 0), 90);
+        assert_eq!(
+            crate::ui::app::idle_lock_minutes_text(adjust_idle_lock(90, 1)),
+            "2分30秒"
+        );
+
+        // Remainders near either bound are clamped in seconds, and the step
+        // still moves a non-whole-minute value by exactly one minute.
+        assert_eq!(adjust_idle_lock(59, 0), 60);
+        assert_eq!(adjust_idle_lock(3599, 0), 3599);
+        assert_eq!(adjust_idle_lock(3599, 1), 3600);
+        assert_eq!(adjust_idle_lock(60, -1), 60);
+        assert_eq!(adjust_idle_lock(3600, 1), 3600);
+        assert_eq!(adjust_idle_lock(0, -1), 60);
+
+        // A `u64::MAX` sentinel saturates to i64::MAX and is clamped before the
+        // step, so it cannot wrap into the minimum on a positive delta.
+        assert_eq!(adjust_idle_lock(u64::MAX, 1), 3600);
+        assert_eq!(adjust_idle_lock(u64::MAX, -1), 3540);
+        assert_eq!(adjust_idle_lock(i64::MAX as u64, 1), 3600);
     }
 
     #[test]

@@ -214,19 +214,34 @@ pub(super) fn search_finished_status_with_query(
     text_edit_finished_status(&text, dirty)
 }
 
+/// Whether a query still carries visible content.
+///
+/// Shared by the confirmed-search status and by [`BitwardenApp::key_down`]'s
+/// `KeyContext`: both must use the same `crate::ui::app::is_visually_empty`
+/// rule as the header placeholder in `ui::render`. A query made only of
+/// whitespace and invisible `Cf` characters renders as "(なし)", so it must
+/// neither advertise the re-edit keys nor keep Backspace/typed text bound to
+/// query editing. `key_down` used a raw `is_empty()` check, which made such a
+/// query look like an active editing session in classification alone
+/// (R2-UI-127).
+pub(super) fn confirmed_query_nonempty(query: &str) -> bool {
+    !crate::ui::app::is_visually_empty(query)
+}
+
 /// Compose the confirmed-search status from a view's live query and result set.
 ///
 /// Every query edit goes through a `VaultViewState`, so deriving both inputs
 /// here prevents one path from forgetting to re-check whether the query is
-/// still non-empty. Emptiness uses the same `crate::ui::app::is_visually_empty`
-/// rule as the header placeholder in `ui::render`: an invisible-only query is
-/// shown as "(なし)" there and must not advertise the re-edit keys here.
+/// still non-empty. Emptiness goes through [`confirmed_query_nonempty`], the
+/// same rule [`BitwardenApp::key_down`] uses to classify the re-edit keys: an
+/// invisible-only query is shown as "(なし)" in the header and must not
+/// advertise those keys here either.
 pub(super) fn search_finished_status_for_view(
     view: &crate::ui::vault_view::VaultViewState,
     dirty: bool,
 ) -> String {
     search_finished_status_with_query(
-        !crate::ui::app::is_visually_empty(&view.query),
+        confirmed_query_nonempty(&view.query),
         view.visible_items().len(),
         dirty,
     )
@@ -701,7 +716,10 @@ impl BitwardenApp {
             editing_settings: self.editing.is_some(),
             login_failed: self.auth.login_failed(),
             has_audit_report: self.view.audit_report.is_some(),
-            query_nonempty: !self.view.query.is_empty(),
+            // Same visual rule as the confirmed-search status and the header
+            // placeholder: an invisible-only query is not an active re-edit
+            // session, so Backspace and typed text stay vault commands.
+            query_nonempty: confirmed_query_nonempty(&self.view.query),
         };
         self.apply_action(classify_key(&ctx), cx);
     }
@@ -1492,6 +1510,62 @@ mod tests {
             assert_eq!(
                 status,
                 search_finished_status_with_query(true, view.visible_items().len(), dirty)
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn confirmed_query_nonempty_unifies_status_and_key_classification() {
+        // R2-UI-127: an invisible-only query is rendered as "(なし)" and the
+        // status drops the re-edit hint, but `key_down` used a raw `is_empty()`
+        // check. That kept Backspace and typed text bound to query editing in
+        // key classification alone. Both paths now share this one helper.
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+
+        for query in ["", "  \t", "\u{200b}", "\u{202e}", "\u{feff}"] {
+            assert!(crate::ui::app::is_visually_empty(query), "{query:?}");
+            view.query = query.to_string();
+            assert!(!confirmed_query_nonempty(&view.query), "{query:?}");
+
+            // Status path: no re-edit hint for a visually empty query.
+            let status = search_finished_status_for_view(&view, false);
+            assert!(!status.contains(hint), "{query:?}: {status}");
+
+            // Classification path: the `KeyContext` `key_down` now builds with
+            // the same flag must not enter the editing branches either.
+            let mut ctx = context(Screen::Unlocked, Panel::Vault, "backspace");
+            ctx.query_nonempty = confirmed_query_nonempty(&view.query);
+            assert_eq!(classify_key(&ctx), UiAction::None, "{query:?}");
+            ctx.key = "a";
+            assert_eq!(classify_key(&ctx), UiAction::None, "{query:?}");
+        }
+
+        for query in ["Alpha", " a ", "a\u{200b}"] {
+            view.query = query.to_string();
+            assert!(confirmed_query_nonempty(&view.query), "{query:?}");
+
+            let status = search_finished_status_for_view(&view, false);
+            assert!(status.contains(hint), "{query:?}: {status}");
+
+            let mut ctx = context(Screen::Unlocked, Panel::Vault, "backspace");
+            ctx.query_nonempty = confirmed_query_nonempty(&view.query);
+            assert_eq!(classify_key(&ctx), UiAction::BackspaceQuery, "{query:?}");
+            ctx.key = "a";
+            assert_eq!(
+                classify_key(&ctx),
+                UiAction::InsertQueryText("a".into()),
+                "{query:?}"
             );
         }
     }

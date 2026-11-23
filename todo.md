@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第126弾で 3 件すべてを完了）。
+なし（第127弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第127弾（16 担当・71 回目）の指摘 7 件を完結（2026-11-24）
+  - comparison_key の trim 順序、adjust_idle_lock の端数保持、
+    不可視クエリのキー分類を修正。
+  - ensure_device_id 不正 id、ItemKind wire 数値、
+    Cf/Cc に守られた空白をテスト。
+  - CHANGELOG 第125〜126弾、ADR コピー機能を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1172 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第126弾（16 担当・70 回目）の指摘 3 件を完結（2026-11-24）
   - 空白/Cf パスワードの再利用登録、スキーマ -0.0／小数指数、
     ネスト '#' 副条件と本物フラグメントを修正・テスト。

@@ -3749,7 +3749,7 @@ fn positive_schema_markers_beyond_u32_width_are_future_versions() {
 
 #[test]
 fn ensure_device_id_with_a_valid_id_and_a_path_does_not_create_a_file() {
-    // `ensure_device_id` (settings.rs:736-749) only generates and persists when
+    // `ensure_device_id` (settings.rs:759-774) only generates and persists when
     // the in-memory value fails `is_valid_device_id`. With an already valid id
     // and `Some(path)` it takes the early return: the id is reused verbatim and
     // no settings file is created. This is the "valid id + Some(path) + no
@@ -3775,6 +3775,42 @@ fn ensure_device_id_with_a_valid_id_and_a_path_does_not_create_a_file() {
     // Repeating the call keeps the same early-return behaviour.
     assert_eq!(settings.ensure_device_id(Some(&path)).unwrap(), VALID);
     assert!(!path.exists());
+}
+
+#[test]
+fn ensure_device_id_with_an_invalid_in_memory_id_and_a_path_generates_and_persists_it() {
+    // The mirror of the test above: an in-memory id that fails
+    // `is_valid_device_id` takes the generation/persist arm of
+    // `ensure_device_id` (settings.rs:759-774). A fresh id replaces the bad
+    // value in memory and is written through `save_device_id_only`, so the
+    // name's "generates and persists" matches every assertion below (a
+    // "does not create a file" name/assertion pair would contradict the
+    // behaviour of this branch).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    const INVALID: &str = "not-a-canonical-v4-uuid";
+    assert!(!is_valid_device_id(INVALID), "fixture premise: {INVALID}");
+    assert!(!path.exists(), "fixture premise: no file yet");
+
+    let mut settings = Settings {
+        device_id: INVALID.to_string(),
+        ..Default::default()
+    };
+    let generated = settings.ensure_device_id(Some(&path)).unwrap().to_string();
+    assert!(is_valid_device_id(&generated), "{generated}");
+    assert_ne!(generated, INVALID, "a malformed id must never be reused");
+    assert_eq!(settings.device_id, generated);
+    assert!(path.exists(), "this branch must persist the generated id");
+    assert_eq!(Settings::load(&path).device_id, generated);
+
+    // Once the valid id is in memory the call rejoins the early-return path:
+    // the same id is returned and the file is not rewritten.
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(
+        settings.ensure_device_id(Some(&path)).unwrap(),
+        generated.as_str()
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
 #[test]

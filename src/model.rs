@@ -75,7 +75,11 @@ mod unicode_normalize {
     /// side: the padded and bare spellings of a name must fold to one key on
     /// every path (duplicate detection, `view` sorting and `matches_page`
     /// ordering). A caller-local trim in `duplicate_names` alone used to make
-    /// that path disagree with the two sort paths.
+    /// that path disagree with the two sort paths. The trim is applied *after*
+    /// the `Cf`/`Cc` pass in [`fold_once`], so an invisible code point at
+    /// an edge cannot shield the whitespace next to it: `GitHub \u{200b}` and
+    /// `GitHub` must share one key. Trimming the input first left a trailing
+    /// space in the key whenever the invisible character sat at the boundary.
     ///
     /// Lowercasing a decomposed string can surface a code point that NFKD
     /// would decompose again (for example U+01C4 LATIN CAPITAL LETTER DZ WITH
@@ -90,10 +94,13 @@ mod unicode_normalize {
     /// normalized needle back through this function. The loop bound is
     /// defensive: two passes suffice for the mappings above.
     pub(crate) fn comparison_key(input: &str) -> String {
-        let input = input.trim();
-        let mut key = fold_once(input);
+        // Fold before trimming: `fold_once` drops the leading/trailing `Cf`
+        // and `Cc` code points, so a space next to one of them reaches the
+        // edge of the folded string and is removed. Trimming `input` first
+        // left that space in the key (`"GitHub \u{200b}"` -> `"github "`).
+        let mut key = fold_once(input).trim().to_string();
         for _ in 0..3 {
-            let next = fold_once(&key);
+            let next = fold_once(&key).trim().to_string();
             if next == key {
                 return key;
             }
@@ -885,10 +892,9 @@ impl VaultItem {
     pub fn matches_query(&self, needle: &str) -> bool {
         let trimmed = needle.trim();
         // Share the "no visible identifier" test with `view` and duplicate
-        // detection: a Cf-only needle with an internal space still folds to a
-        // non-empty key (" "), and a mark-only needle keeps its mark, so
-        // checking only `comparison_key().is_empty()` would let either match
-        // more than it should.
+        // detection: a mark-only needle keeps its mark, so checking only
+        // `comparison_key().is_empty()` would let it match more than it
+        // should; a Cf/Cc-only needle is blank here as well.
         if has_no_visible_identity(needle) {
             return trimmed.is_empty();
         }

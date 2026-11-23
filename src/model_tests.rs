@@ -221,6 +221,24 @@ fn kind_round_trips_through_wire_numbers() {
 }
 
 #[test]
+fn item_kind_wire_numbers_are_one_through_five() {
+    // Bitwarden's `type` field uses 1..=5 (model.rs:198-248). Pin each exact
+    // number in both directions; the sibling round-trip test only proves the
+    // two functions are inverses, so a simultaneous shift of every value
+    // would go unnoticed there.
+    for (number, kind) in [
+        (1u8, ItemKind::Login),
+        (2, ItemKind::SecureNote),
+        (3, ItemKind::Card),
+        (4, ItemKind::Identity),
+        (5, ItemKind::SshKey),
+    ] {
+        assert_eq!(kind.to_wire(), number, "{kind:?}");
+        assert_eq!(ItemKind::from_wire(number), Some(kind), "wire {number}");
+    }
+}
+
+#[test]
 fn item_kind_labels_cover_all_five_variants() {
     // `ItemKind::label` (model.rs:155-163) is the sidebar's display text; every
     // wire kind needs one, so the five arms are pinned in a table.
@@ -906,6 +924,52 @@ fn comparison_key_is_idempotent_for_combining_greek_ypogegrammeni() {
         comparison_key(&comparison_key(&with_base)),
         with_base,
         "{with_base:?}"
+    );
+}
+
+#[test]
+fn comparison_key_trims_whitespace_revealed_by_invisible_characters() {
+    // Trimming the raw input first let a leading/trailing `Cf`/`Cc` shield the
+    // whitespace next to it: `fold_once` then dropped the invisible character
+    // and left a trailing space in the key (model.rs:96-110). The fold must
+    // now happen before the trim so padded and bare spellings agree.
+    assert_eq!(comparison_key("GitHub"), "github");
+    assert_eq!(comparison_key("GitHub \u{200b}"), "github");
+    assert_eq!(comparison_key("\u{200b} GitHub"), "github");
+    // NUL is a `Cc`, not whitespace: `str::trim()` cannot remove it either.
+    assert_eq!(comparison_key(" GitHub \u{0}"), "github");
+    // A name that is whitespace plus invisible characters only is blank.
+    assert_eq!(comparison_key("\u{200b} \u{200b}"), "");
+    assert_eq!(comparison_key("\u{200d}\u{200f} \t"), "");
+    for value in ["GitHub \u{200b}", "\u{200b} GitHub", " GitHub \u{0}"] {
+        assert_eq!(
+            comparison_key(&comparison_key(value)),
+            comparison_key(value)
+        );
+    }
+
+    // All three consumers of the key agree: duplicate detection, search and
+    // sorting. A padded name must be a duplicate of the bare spelling and a
+    // padded needle must still find both.
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "GitHub \u{200b}", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("2", "github", "u", "p", "https://b.example"));
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].1, vec!["1".to_string(), "2".to_string()]);
+    assert_eq!(
+        vault.view(&Filter::All, "github", SortKey::NameAsc).len(),
+        2
+    );
+    assert_eq!(
+        vault
+            .view(&Filter::All, "github \u{200b}", SortKey::NameAsc)
+            .len(),
+        2
     );
 }
 

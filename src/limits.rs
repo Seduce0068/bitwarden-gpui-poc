@@ -46,10 +46,12 @@ pub const MAX_IDLE_LOCK_SECONDS: u64 = 3600;
 /// The UI adjuster works in whole minutes; this value is derived from
 /// `MIN_IDLE_LOCK_SECONDS` so the stored value, the clamp and the displayed
 /// range cannot drift apart.
+#[allow(dead_code)]
 pub const MIN_IDLE_LOCK_MINUTES: u64 = MIN_IDLE_LOCK_SECONDS / 60;
 /// Maximum idle-lock value expressed in the UI's minute step.
 ///
 /// Derived from `MAX_IDLE_LOCK_SECONDS` for the same reason as the minimum.
+#[allow(dead_code)]
 pub const MAX_IDLE_LOCK_MINUTES: u64 = MAX_IDLE_LOCK_SECONDS / 60;
 /// Minimum login time budget, in seconds.
 pub const MIN_LOGIN_TIMEOUT_SECONDS: u64 = 1;
