@@ -2731,7 +2731,7 @@ fn oversized_live_sync_body_uses_the_cache_limit_and_a_typed_cause() {
 
     // One cap for both paths: `parse_sync` is used by the live login path and
     // by `SyncCache::sync`, so the cache's limit must be the live limit too.
-    assert_eq!(MAX_SYNC_BODY_BYTES, crate::cache::MAX_CACHE_BODY_BYTES);
+    assert_eq!(MAX_SYNC_BODY_BYTES, crate::limits::MAX_SYNC_BODY_BYTES);
 
     let oversized = vec![b' '; MAX_SYNC_BODY_BYTES + 1];
     let error = parse_sync(&oversized).unwrap_err();
@@ -2744,7 +2744,7 @@ fn oversized_live_sync_body_uses_the_cache_limit_and_a_typed_cause() {
         .source()
         .expect("an oversized body must keep a typed cause")
         .to_string();
-    assert!(source.contains("MAX_CACHE_BODY_BYTES"), "{source}");
+    assert!(source.contains("MAX_SYNC_BODY_BYTES"), "{source}");
     let oversized_len = (MAX_SYNC_BODY_BYTES + 1).to_string();
     assert!(source.contains(oversized_len.as_str()), "{source}");
     // The gate runs before parsing, so the detail is about size, not JSON.

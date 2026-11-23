@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第99弾で 7 件すべてを完了）。
+なし（第100弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第100弾（16 担当・44 回目）の指摘 7 件を完結（2026-11-23）
+  - 辞書パスワードの末尾装飾、一覧 Cf 空 username、
+    詳細行の二重区切り、同期サイズエラー文言を修正。
+  - SettingsLoadError::Other、metadata 失敗、複数 IPv6、
+    非パディング base64 末尾ビット、length 境界、
+    全記号連続をテスト。
+  - cross-review の email 記述、CHANGELOG 第97〜99弾を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（958 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第99弾（16 担当・43 回目）の指摘 7 件を完結（2026-11-23）
   - 一覧行の空 username を "-" 表示、自動ロックを分＋残秒表示に修正。
   - email 大文字の既知制約、Cf 全21範囲、client_id trim、

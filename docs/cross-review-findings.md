@@ -733,6 +733,8 @@ r1-corr-state / r1-ops-build / r1-sec-secrets / r1-ops-runtime。
   - Confidence: high
 - 確認して誤検知除外: email 小文字化(openwarden normalize_email)、KDF 政策上下限、
   prelogin/session 不整合、Base32 処理、rejection sampling。暗号本体に新規欠陥なし。
+  （2026-11-23 注: email の KDF 前小文字化は現行実装で行われておらず、
+  auth.rs の既知制約として記録済み。上記は当時のレビュー前提を残した記述。）
 
 #### r4-invariants（状態の不変条件、4件）
 

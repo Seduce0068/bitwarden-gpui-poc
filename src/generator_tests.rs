@@ -627,3 +627,65 @@ fn draw_below_rejection_sampling_for_bounds_above_256() {
         assert!(super::draw_below(u16::MAX).unwrap() < u16::MAX);
     }
 }
+
+#[test]
+fn length_equal_to_the_enabled_class_count_is_accepted() {
+    // `generate` rejects only `length == 0` or `length < pools.len()`
+    // (generator.rs:99-103). At equality the mandatory-character loop fills
+    // the whole buffer, so every enabled class contributes exactly one draw.
+    for mask in 1u8..=0b1111 {
+        let expected = mask.count_ones() as usize;
+        let settings = PasswordSettings {
+            length: expected,
+            lowercase: mask & 0b0001 != 0,
+            uppercase: mask & 0b0010 != 0,
+            digits: mask & 0b0100 != 0,
+            symbols: mask & 0b1000 != 0,
+            ..PasswordSettings::default()
+        };
+        assert_eq!(settings.length, expected, "mask {mask:04b}");
+        let password = settings
+            .generate()
+            .unwrap_or_else(|error| panic!("mask {mask:04b}: {error}"));
+        assert_eq!(password.chars().count(), expected, "mask {mask:04b}");
+
+        let mut seen = [0usize; 4];
+        for character in password.chars() {
+            assert!(
+                settings.alphabet().contains(character),
+                "mask {mask:04b}, character {character:?}"
+            );
+            let class = if character.is_ascii_lowercase() {
+                0
+            } else if character.is_ascii_uppercase() {
+                1
+            } else if character.is_ascii_digit() {
+                2
+            } else {
+                3
+            };
+            seen[class] += 1;
+        }
+        let enabled = [
+            settings.lowercase,
+            settings.uppercase,
+            settings.digits,
+            settings.symbols,
+        ];
+        for (index, is_enabled) in enabled.iter().enumerate() {
+            assert_eq!(
+                seen[index],
+                usize::from(*is_enabled),
+                "mask {mask:04b}, class {index}, password {password:?}"
+            );
+        }
+    }
+
+    // The neighbour just below equality still fails, so the accepted case
+    // above is the real boundary rather than a disabled length guard.
+    let too_short = PasswordSettings {
+        length: 3,
+        ..PasswordSettings::default()
+    };
+    assert_eq!(too_short.generate(), Err(GeneratorError::InvalidSettings));
+}

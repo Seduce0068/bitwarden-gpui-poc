@@ -126,12 +126,13 @@ fn vault_list_header_text(
 ///
 /// `VaultItem::login()` is `Some` for every login item, even one whose username
 /// is empty. Drawing that string directly left a blank column that looked like
-/// a rendering failure. Both a missing login and an empty (whitespace-only)
-/// username use the "-" placeholder; non-empty names are rendered unchanged.
-/// Kept pure so the contract can be tested without a GPUI window.
+/// a rendering failure. A missing login, a whitespace-only username and a
+/// username made only of invisible Unicode `Cf` (format) characters all use the
+/// "-" placeholder; names with visible content are rendered unchanged. Kept
+/// pure so the contract can be tested without a GPUI window.
 fn vault_row_username(login: Option<(&str, &str, &str, &[crate::model::LoginUri])>) -> String {
     match login {
-        Some((user, _, _, _)) if !user.trim().is_empty() => user.to_string(),
+        Some((user, _, _, _)) if !crate::ui::app::is_visually_empty(user) => user.to_string(),
         _ => "-".to_string(),
     }
 }
@@ -752,5 +753,36 @@ mod tests {
             vault_row_username(login("")),
             "the Some(empty) case must be indistinguishable from the old None case"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn format_only_username_also_shows_the_placeholder() {
+        fn login(user: &str) -> Option<(&str, &str, &str, &[crate::model::LoginUri])> {
+            let uris: &[crate::model::LoginUri] = &[];
+            Some((user, "", "", uris))
+        }
+
+        // A username made only of Unicode Cf characters is invisible, so
+        // `trim().is_empty()` alone let it through and left a blank column.
+        // Zero-width space, BOM, bidi override, soft hyphen and a run of them:
+        // all must be indistinguishable from an empty username.
+        for cf in [
+            "\u{200b}",
+            "\u{feff}",
+            "\u{202e}",
+            "\u{00ad}",
+            "\u{200b}\u{feff}",
+        ] {
+            assert_eq!(
+                vault_row_username(login(cf)),
+                "-",
+                "Cf-only username {cf:?} must use the placeholder"
+            );
+        }
+        // Whitespace mixed with Cf is still invisible.
+        assert_eq!(vault_row_username(login(" \u{200b} ")), "-");
+        // A visible character next to a Cf is a real username and is kept.
+        let mixed = "alice\u{200b}";
+        assert_eq!(vault_row_username(login(mixed)), mixed);
     }
 }

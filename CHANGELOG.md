@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第97〜99弾 / 2026-11-23）
+
+- all-same 末尾記号、辞書先頭装飾、入力 status の未保存マーカーを修正
+- クランプ境界の誤告知、認証編集中ヒントの重複、
+  一覧空 username／自動ロック分表示を修正
+- sync 上限定数を limits へ集約し、cache↔vault_sync の循環依存を解消
+- 復号到達、redact 往復、非ゼロ user key、Cf 全範囲、
+  VaultItem 型違反をテスト
+
 ### 全体改善（第95〜96弾 / 2026-11-23）
 
 - 数値PIN の 1000bit クランプ、IPv4-compatible IPv6 の既知制約、

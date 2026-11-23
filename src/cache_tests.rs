@@ -3660,3 +3660,68 @@ fn wrong_typed_envelope_fields_are_a_parse_failed_cause() {
     assert_ne!(source, error.message());
     assert_eq!(cache_error_message(error), REASON_CORRUPT);
 }
+
+#[test]
+fn multiple_ipv6_literals_are_all_removed_before_the_colon_checks() {
+    // `without_ipv6_literals` loops over every `[...]` pair (cache.rs:268-281).
+    // Removing only the first literal leaves a later address's colons in the
+    // text, where they can be mistaken for a `user:password` marker and hide a
+    // real credential in a diagnostic URL.
+    let text = "user:SECRET@[2001:db8::1]:8443/[fe80::2]?email=a@b";
+    assert_eq!(
+        super::without_ipv6_literals(text),
+        "user:SECRET@:8443/?email=a@b"
+    );
+    // Three literals, including an adjacent pair and one followed by a port.
+    assert_eq!(
+        super::without_ipv6_literals("[::1][::2] tail [2001:db8::3]:443 end"),
+        " tail :443 end"
+    );
+    // No literal: the value is copied unchanged.
+    let plain = "user:SECRET@vault.example.com:8443?email=a@b";
+    assert_eq!(super::without_ipv6_literals(plain), plain);
+
+    // With both literals present, the userinfo is still masked and the query
+    // '@' is still left alone; neither address is rewritten by the masker.
+    let url = "https://user:SECRET@[2001:db8::1]:8443/[fe80::2]?email=a@b";
+    assert_eq!(
+        super::mask_url_userinfo(url),
+        "https://[redacted]@[2001:db8::1]:8443/[fe80::2]?email=a@b"
+    );
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("SECRET"), "{rendered}");
+    assert!(
+        rendered.contains("[redacted]@[2001:db8::1]:8443"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("[fe80::2]"), "{rendered}");
+    assert_eq!(cache.server_url, url, "masking is Debug-only");
+}
+
+#[test]
+fn file_metadata_failure_is_classified_as_read_failed_cause() {
+    use crate::error::BoxedCause;
+
+    // `load_detailed` opens the cache file and then calls `File::metadata`
+    // (cache.rs:917-927); any error there is mapped to `ReadFailedCause` with
+    // the io error retained as the typed cause. There is no injected seam for
+    // `fstat` on an already-open fd, so unlike the neighbouring `File::open`
+    // ENOTDIR case the OS branch cannot be forced through the public API. Pin
+    // the classification applied to such an error instead of implying coverage
+    // of the syscall itself.
+    let io_error = std::io::Error::other("simulated File::metadata failure");
+    let error: CacheLoadError = CacheLoadError::ReadFailedCause(BoxedCause::new(io_error));
+    assert!(matches!(&error, CacheLoadError::ReadFailedCause(_)));
+    assert_eq!(
+        std::error::Error::source(&error)
+            .expect("the io cause must stay reachable")
+            .to_string(),
+        "simulated File::metadata failure"
+    );
+    assert_eq!(cache_error_message(error.clone()), REASON_UNREADABLE);
+    assert_eq!(
+        super::cache_restore_status(error),
+        Some("同期に失敗しました（キャッシュを読み込めません）")
+    );
+}

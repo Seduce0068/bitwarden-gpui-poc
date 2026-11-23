@@ -159,7 +159,7 @@ pub const MAX_SYNC_BODY_BYTES: usize = crate::limits::MAX_SYNC_BODY_BYTES;
 pub fn parse_sync(body: &[u8]) -> Result<openwarden::SyncData, SyncError> {
     if body.len() > MAX_SYNC_BODY_BYTES {
         let detail = format!(
-            "sync body of {} bytes exceeds MAX_CACHE_BODY_BYTES ({})",
+            "sync body of {} bytes exceeds MAX_SYNC_BODY_BYTES ({})",
             body.len(),
             MAX_SYNC_BODY_BYTES
         );

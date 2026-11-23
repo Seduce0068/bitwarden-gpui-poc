@@ -194,6 +194,37 @@ pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
     format!("{base}{}", unsaved_status_suffix(dirty))
 }
 
+/// Whether `value` carries no visible content.
+///
+/// Whitespace-only strings render as blank, and Unicode `Cf` (format)
+/// characters such as zero-width spaces or bidi overrides are invisible too.
+/// Both must count as "empty" for UI text checks; otherwise a value that looks
+/// empty still passes a plain `trim().is_empty()` guard. Shared with the list
+/// row renderer so the two places agree on what "empty" means.
+pub(super) fn is_visually_empty(value: &str) -> bool {
+    value
+        .chars()
+        .all(|ch| ch.is_whitespace() || crate::limits::is_format_character(ch))
+}
+
+/// Join the vault detail fields with `" | "`, skipping empty ones.
+///
+/// A plain `format!("{base} | {a} | {b}")` leaves a double separator (`" |  | "`)
+/// when a middle field is empty and a dangling one (`" | "`) when the last one
+/// is. Filtering fields with no visible content before joining keeps the
+/// detail row readable. `base` is always kept so the row never disappears.
+fn join_detail_fields(base: &str, fields: &[String]) -> String {
+    let mut parts = Vec::with_capacity(fields.len() + 1);
+    parts.push(base.to_string());
+    parts.extend(
+        fields
+            .iter()
+            .filter(|field| !is_visually_empty(field))
+            .cloned(),
+    );
+    parts.join(" | ")
+}
+
 /// Status shown after following an audit finding, in both outcomes.
 ///
 /// `name` is the finding's display name from the current report (the same text
@@ -1054,22 +1085,35 @@ impl BitwardenApp {
                 } else {
                     format!("{}文字", password.chars().count())
                 };
-                format!(
-                    "{base} | {username} | パスワード: {password_label} | TOTP: {code} | URI: {}",
-                    uris.first()
-                        .map_or("なし".into(), |uri| { crate::model::mask_uri(&uri.uri) })
+                let uri = uris
+                    .first()
+                    .map_or("なし".into(), |uri| crate::model::mask_uri(&uri.uri));
+                join_detail_fields(
+                    &base,
+                    &[
+                        username.clone(),
+                        format!("パスワード: {password_label}"),
+                        format!("TOTP: {code}"),
+                        format!("URI: {uri}"),
+                    ],
                 )
             }
             ItemData::SecureNote { text } => {
-                format!("{base} | メモ: {}文字", text.chars().count())
+                join_detail_fields(&base, &[format!("メモ: {}文字", text.chars().count())])
             }
-            ItemData::Card(card) => format!(
-                "{base} | {} | 末尾: {}",
-                card.brand,
-                crate::ui::logic::card_last_four(&card.number)
+            ItemData::Card(card) => join_detail_fields(
+                &base,
+                &[
+                    card.brand.clone(),
+                    format!("末尾: {}", crate::ui::logic::card_last_four(&card.number)),
+                ],
             ),
-            ItemData::Identity(identity) => format!("{base} | {}", identity.email),
-            ItemData::SshKey(key) => format!("{base} | {}", key.fingerprint),
+            ItemData::Identity(identity) => {
+                join_detail_fields(&base, std::slice::from_ref(&identity.email))
+            }
+            ItemData::SshKey(key) => {
+                join_detail_fields(&base, std::slice::from_ref(&key.fingerprint))
+            }
         };
         status_with_unsaved(&detail, self.settings_dirty)
     }
@@ -2255,6 +2299,58 @@ mod tests {
         let label = format!("更新: {}", format_revision_date(1_700_000_000));
         assert!(label.contains("更新: "));
         assert!(!label.contains("更新: 1700000000"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn join_detail_fields_drops_empty_fields_and_their_separators() {
+        let base = "ログイン | example | 更新: 不明";
+
+        // With no empty fields the join is unchanged.
+        assert_eq!(
+            join_detail_fields(base, &["alice".into(), "パスワード: 12文字".into()]),
+            format!("{base} | alice | パスワード: 12文字")
+        );
+
+        // An empty middle field must not leave a double separator behind.
+        assert_eq!(
+            join_detail_fields(base, &["".into(), "パスワード: 12文字".into()]),
+            format!("{base} | パスワード: 12文字")
+        );
+        assert!(!join_detail_fields(base, &["".into(), "x".into()]).contains(" |  | "));
+
+        // An empty trailing field must not leave a dangling separator.
+        assert_eq!(
+            join_detail_fields(base, &["alice".into(), "".into()]),
+            format!("{base} | alice")
+        );
+        assert!(!join_detail_fields(base, &["alice".into(), "".into()]).ends_with(" | "));
+
+        // All fields empty: only the base remains.
+        assert_eq!(join_detail_fields(base, &["".into(), "".into()]), base);
+
+        // Whitespace-only and Unicode Cf-only fields are invisible as well.
+        let joined = join_detail_fields(
+            base,
+            &[
+                "   ".into(),
+                "\u{200b}\u{feff}\u{202e}".into(),
+                "末尾: 1234".into(),
+            ],
+        );
+        assert_eq!(joined, format!("{base} | 末尾: 1234"));
+        assert!(!joined.contains(" |  | "));
+    }
+
+    #[::core::prelude::v1::test]
+    fn is_visually_empty_treats_blank_and_cf_only_text_as_empty() {
+        assert!(is_visually_empty(""));
+        assert!(is_visually_empty("  \t "));
+        // Zero-width space, BOM and bidi override are all Unicode Cf.
+        assert!(is_visually_empty("\u{200b}\u{feff}\u{202e}"));
+        assert!(!is_visually_empty("alice"));
+        assert!(!is_visually_empty(" alice "));
+        // A visible character next to a Cf is still real content.
+        assert!(!is_visually_empty("alice\u{200b}"));
     }
 
     #[::core::prelude::v1::test]

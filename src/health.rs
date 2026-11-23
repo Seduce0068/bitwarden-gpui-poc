@@ -310,8 +310,8 @@ impl Default for Thresholds {
 /// sizes come from the generator's own constants), times its length, with a
 /// penalty for the patterns that make a password far weaker than its pool size
 /// suggests (a single repeated character, including one with a trailing digit
-/// run, an all-digit string, a common word with optional leading decoration, or
-/// a short trailing-digit suffix on a word).
+/// run, an all-digit string, a common word with optional leading or trailing
+/// decoration, or a short trailing-digit suffix on a word).
 pub fn estimate_entropy(password: &str) -> u32 {
     if password.is_empty() {
         return 0;
@@ -648,25 +648,42 @@ fn strip_leading_decoration(value: &str) -> &str {
     }
 }
 
+/// Strip decoration from both ends for the prefix rules only.
+///
+/// [`strip_leading_decoration`] alone let a short dictionary guess escape the
+/// cap by padding its *end* instead: `password!`, `password123!` or
+/// `qwerty1234567!` are no harder to guess than their undecorated forms, yet
+/// their extra symbol (or symbol-plus-digit run) pushed the character count
+/// past [`PASSWORD_PREFIX_LIMIT`] / [`QWERTY_PREFIX_LIMIT`]. Stripping both
+/// ends makes the cap symmetric with the leading-decoration rule and means the
+/// count reflects only the guessable core. The two helpers are applied in
+/// sequence so mixed runs such as `1password!2` collapse to `password` too.
+/// Nothing here is used for the exact COMMON list or the word-suffix discount.
+fn strip_decoration(value: &str) -> &str {
+    strip_trailing_decoration(strip_leading_decoration(value))
+}
+
 /// Whether a lowercase password looks like a known dictionary guess.
 ///
 /// Two independent branches: exact membership in the common list, or a short
 /// value capped to the `"password"` / `"qwerty"` prefix rule. Keeping them
 /// separate lets a test pin each one without the other masking a regression.
-/// The prefix branch ignores leading decoration (whitespace, symbols and an
-/// ASCII digit run) so `!password`, `  qwerty1` and `1password` cannot escape
-/// the cap; the exact branch is never stripped (see the function body).
+/// The prefix branch ignores decoration at **both** ends (whitespace, symbols
+/// and ASCII digit runs) so `!password`, `password!`, `  qwerty1` and
+/// `1password!` cannot escape the cap; the exact branch is never stripped (see
+/// the function body).
 fn is_common_password(lower: &str) -> bool {
     // Exact membership stays verbatim: a leading or trailing character must
     // not turn an unlisted value into a COMMON entry.
     if is_exact_common_password(lower) {
         return true;
     }
-    // Leading whitespace/symbol runs are guessable decoration, not entropy:
-    // `"!password123"` is no harder to guess than `"password123"`. Strip them
-    // only for the prefix rules below; the word-suffix discount in
-    // `estimate_entropy` stays suffix-only and the exact list stays unstripped.
-    let candidate = strip_leading_decoration(lower);
+    // Leading and trailing whitespace/symbol runs are guessable decoration,
+    // not entropy: `"!password123!"` is no harder to guess than
+    // `"password123"`. Strip both ends only for the prefix rules below; the
+    // word-suffix discount in `estimate_entropy` stays suffix-only and the
+    // exact list stays unstripped.
+    let candidate = strip_decoration(lower);
     // A long random value that merely begins with "password" (or "qwerty")
     // is not a dictionary password. Cap the prefix matches so those values
     // keep their real (high) entropy estimate; see PASSWORD_PREFIX_LIMIT for

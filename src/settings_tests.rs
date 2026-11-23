@@ -3272,3 +3272,27 @@ fn default_path_is_unchanged_after_the_config_environment_changes() {
         );
     }
 }
+
+#[test]
+fn settings_load_error_other_carries_its_message_and_display() {
+    // `message()` returns the carried `&'static str` verbatim for `Other`
+    // (settings.rs:286-303), and `Display` forwards to `message()`. Unlike the
+    // four fixed variants, it must not promise default values or add a prefix.
+    const DETAIL: &str = "設定固有の失敗（詳細）";
+    let error = SettingsLoadError::Other(DETAIL);
+    assert_eq!(error.message(), DETAIL);
+    assert_eq!(error.to_string(), DETAIL);
+    assert_eq!(format!("{error}"), DETAIL);
+    // Debug still names the variant so diagnostics can distinguish it.
+    let debug = format!("{error:?}");
+    assert!(debug.contains("Other"), "{debug}");
+    assert!(debug.contains(DETAIL), "{debug}");
+
+    // The catch-all conversion from an unrelated AppError goes through the
+    // same message/Display pair with the shared generic text.
+    let generic = SettingsLoadError::from(crate::error::AppError::RandomUnavailable);
+    assert_eq!(generic.message(), crate::error::OTHER_ERROR_MESSAGE);
+    assert_eq!(generic.to_string(), crate::error::OTHER_ERROR_MESSAGE);
+    assert_eq!(generic.message(), generic.to_string());
+    assert_ne!(generic.message(), SettingsLoadError::ReadFailed.message());
+}

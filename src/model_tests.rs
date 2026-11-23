@@ -3109,3 +3109,38 @@ fn match_options_allow_regex_reaches_both_matches_page_entry_points() {
     // Enabling regex does not make an unrelated page match.
     assert!(!item.matches_page("https://app.example.com/other", &regex));
 }
+
+#[test]
+fn ssh_base64_rejects_non_canonical_trailing_bits_without_padding() {
+    use super::ssh_fingerprint::{decode, sha256_fingerprint};
+
+    // Optional `=` padding must not weaken the canonical-bit check
+    // (model.rs:415-424). With one leftover byte the final character has four
+    // unused low bits: `AQ` decodes to 0x01, `AR` differs only in those bits.
+    assert_eq!(decode(b"AQ"), Some(vec![0x01]));
+    assert_eq!(decode(b"AR"), None);
+    assert_eq!(
+        sha256_fingerprint("ssh-ed25519 AQ fp"),
+        sha256_fingerprint("ssh-ed25519 AQ== fp")
+    );
+    assert_eq!(sha256_fingerprint("ssh-ed25519 AR fp"), None);
+
+    // Two leftover bytes leave two unused bits on the third character.
+    assert_eq!(decode(b"AQI"), Some(vec![0x01, 0x02]));
+    assert_eq!(decode(b"AQJ"), None);
+    assert_eq!(
+        sha256_fingerprint("ssh-ed25519 AQI fp"),
+        sha256_fingerprint("ssh-ed25519 AQI= fp")
+    );
+    assert_eq!(sha256_fingerprint("ssh-ed25519 AQJ fp"), None);
+
+    // The same check applies after a complete three-byte group: the final
+    // byte is encoded by two more characters and a nonzero low bit is invalid.
+    assert_eq!(decode(b"AQIDBA"), Some(vec![0x01, 0x02, 0x03, 0x04]));
+    assert_eq!(decode(b"AQIDBB"), None);
+
+    // A single trailing character has six leftover bits and is invalid in
+    // both the padded and unpadded form.
+    assert_eq!(decode(b"A"), None);
+    assert_eq!(decode(b"A==="), None);
+}

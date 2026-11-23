@@ -726,15 +726,22 @@ fn password_prefix_cap_is_the_boundary_for_the_dictionary_shortcut() {
     const VALID_TOTP: &str = "GEZDGNBVGY3TQOJQ";
     let weak_bits = Thresholds::default().weak_bits;
 
-    // Exactly at the cap: still a dictionary guess, hence Weak.
-    let at_cap = format!("password{}", "Vt7#kQm2"); // 8 + 8 = 16 chars
+    // Exactly at the cap: still a dictionary guess, hence Weak. The last
+    // character is alphanumeric on purpose: `strip_decoration` strips a
+    // trailing digit run, so a value ending in a digit would have a shorter
+    // guessable core than its raw length suggests.
+    let at_cap = format!("password{}", "Vt7#kQmA"); // 8 + 8 = 16 chars
     assert_eq!(at_cap.len(), PASSWORD_PREFIX_LIMIT);
+    let at_cap_lower = at_cap.to_lowercase();
+    let at_cap_core = super::strip_decoration(&at_cap_lower);
+    assert_eq!(at_cap_core.chars().count(), PASSWORD_PREFIX_LIMIT);
     let at_cap_bits = estimate_entropy(&at_cap);
     assert!(at_cap_bits < weak_bits, "{at_cap}: {at_cap_bits}");
 
     // One character past the cap: the same kind of value keeps its genuine
-    // entropy and is no longer flagged Weak.
-    let past_cap = format!("{at_cap}!"); // 17 chars
+    // entropy and is no longer flagged Weak. Again the extra character is
+    // alphanumeric: a trailing `!` is now decoration and would be stripped.
+    let past_cap = format!("{at_cap}a"); // 17 chars
     assert_eq!(past_cap.len(), PASSWORD_PREFIX_LIMIT + 1);
     let past_cap_bits = estimate_entropy(&past_cap);
     assert!(past_cap_bits >= weak_bits, "{past_cap}: {past_cap_bits}");
@@ -1144,10 +1151,16 @@ fn non_ascii_suffix_counts_towards_the_prefix_cap_by_characters() {
 
 #[test]
 fn qwerty_prefix_cap_boundary_changes_the_estimate() {
-    let at_cap = "qwerty123456"; // exactly 12 characters
-    let past_cap = "qwerty1234567"; // 13 characters
+    // The cap counts the decoration-free core: end with a letter so neither
+    // fixture loses a trailing digit run to `strip_decoration`.
+    let at_cap = "qwerty12345a"; // exactly 12 characters
+    let past_cap = "qwerty12345ab"; // 13 characters
     assert_eq!(at_cap.len(), 12);
     assert_eq!(past_cap.len(), 13);
+    assert_eq!(
+        super::strip_decoration(at_cap).chars().count(),
+        QWERTY_PREFIX_LIMIT
+    );
     let at_bits = estimate_entropy(at_cap);
     let past_bits = estimate_entropy(past_cap);
     assert!(at_bits < 20, "{at_bits}");
@@ -2541,4 +2554,92 @@ fn digit_then_symbol_then_word_leading_decoration_takes_the_prefix_cap() {
             .contains(&Finding::WeakPassword { bits }),
         "{report:?}"
     );
+}
+
+#[test]
+fn trailing_dictionary_decoration_does_not_escape_the_prefix_cap() {
+    // Regression: `is_common_password` stripped only leading decoration, so a
+    // short guess padded at the *end* pushed its character count past the cap
+    // and was scored from the raw character pool (health.rs:669,677-678).
+    let weak_bits = Thresholds::default().weak_bits;
+    for password in [
+        "password!",
+        "password123!",
+        "qwerty!",
+        "qwerty123!",
+        "qwerty1234567!",
+        "password!!!",
+        "password  ",
+        "password1 ",
+        "1password!",
+        "!password123!",
+        "1!password!2",
+    ] {
+        let lower = password.to_lowercase();
+        assert!(!super::is_exact_common_password(&lower), "{password}");
+        assert!(super::is_common_password(&lower), "{password}");
+        let bits = estimate_entropy(password);
+        assert!(bits < weak_bits, "{password}: {bits} >= {weak_bits}");
+    }
+
+    // Both strip helpers are applied in sequence, so mixed leading/trailing
+    // runs collapse all the way to the bare dictionary prefix.
+    assert_eq!(super::strip_decoration("!1password!2"), "password");
+    assert_eq!(super::strip_decoration(" password123 "), "password");
+    assert_eq!(super::strip_decoration("qwerty!!"), "qwerty");
+
+    // Long values that merely start with the prefix keep their real estimate
+    // even when they end with decoration: the cap is not a blanket rule.
+    let long = "passwordVt7#kQm2!zR9wP4$xL8@";
+    assert!(!super::is_common_password(&long.to_lowercase()));
+    assert!(estimate_entropy(long) >= weak_bits, "{long}");
+
+    // End-to-end: with a valid TOTP and HTTPS URI only the weak password can
+    // produce a finding, so the estimate reaches the report verbatim.
+    let password = "password123!";
+    let bits = estimate_entropy(password);
+    let report = report_of(vec![login(
+        "trailing-decoration",
+        "Trailing decoration",
+        password,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn repeated_symbol_runs_take_the_zero_entropy_branch() {
+    // `estimate_entropy` returns zero for a bare run of one repeated code
+    // point before charging any character-pool entropy. A symbol run is no
+    // exception: eight `!` are one repeated draw, not eight draws from SYMBOLS.
+    for password in [
+        "!!!!!!!!",
+        "@@@@@@@@",
+        "##########",
+        "********",
+        "！！！！！！",
+    ] {
+        assert_eq!(estimate_entropy(password), 0, "{password}");
+    }
+    // Decoration at the end must not hide the run, just as for a repeated
+    // letter (health.rs:521-547).
+    for password in ["!!!!!!!!1", "!!!!!!!!!", "!!!!!!!!!1!", "@@@@@@@1"] {
+        assert_eq!(estimate_entropy(password), 0, "{password}");
+    }
+    assert_eq!(password_strength("!!!!!!!!").1, Strength::Weak);
+
+    // A *varied* symbol run still scores from the generator's eight-symbol
+    // pool, so this is a uniform-run penalty and not a blanket symbol rule.
+    let mixed = "!@#$%^&*!@#$%^&*";
+    assert_eq!(
+        estimate_entropy(mixed),
+        entropy_bits(SYMBOLS.len(), 16).round() as u32
+    );
+    assert!(estimate_entropy(mixed) > 0);
 }
