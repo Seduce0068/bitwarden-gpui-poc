@@ -3396,3 +3396,79 @@ fn settings_load_error_other_carries_its_message_and_display() {
     assert_eq!(generic.message(), generic.to_string());
     assert_ne!(generic.message(), SettingsLoadError::ReadFailed.message());
 }
+
+#[test]
+fn default_path_mirrors_config_dir_including_the_none_branch() {
+    let _env = ENV_LOCK.lock().unwrap();
+    // `default_path()` caches `dirs::config_dir().map(|dir| ...)` in a OnceLock
+    // (settings.rs:805-811). The `Option` is mapped, not unwrapped: when no
+    // config directory can be resolved the result stays None instead of a
+    // fabricated relative path. Compare with the live resolver under the same
+    // environment; the dedicated caching test pins that later env changes
+    // cannot move the value once it has been resolved.
+    let resolver = dirs::config_dir();
+    let cached = Settings::default_path();
+    assert_eq!(
+        cached.is_some(),
+        resolver.is_some(),
+        "default_path must mirror config_dir's Option"
+    );
+    match (resolver, cached) {
+        (None, None) => {
+            // The config_dir None branch: no path is produced, and repeated
+            // calls keep returning None from the same cached cell.
+            assert_eq!(Settings::default_path(), None);
+        }
+        (Some(_), Some(path)) => {
+            assert_eq!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("settings.json")
+            );
+        }
+        other => unreachable!("the is_some correspondence rules this out: {other:?}"),
+    }
+}
+
+#[test]
+fn settings_load_error_never_carries_a_source() {
+    use crate::error::{AppError, BoxedCause};
+
+    // `SettingsLoadError` has no `source()` chain at all: even `Other` renders
+    // only its `&'static str` message (settings.rs:265-305).
+    for error in [
+        SettingsLoadError::NotFound,
+        SettingsLoadError::ReadFailed,
+        SettingsLoadError::ParseFailed,
+        SettingsLoadError::TooLarge,
+        SettingsLoadError::Other("detail"),
+    ] {
+        assert!(std::error::Error::source(&error).is_none(), "{error:?}");
+    }
+
+    // Cause-carrying `AppError`s do have a typed source before the boundary;
+    // converting to the small UI enum drops it, keeping only the category.
+    for app in [
+        AppError::ReadFailedCause(BoxedCause::text("io failure")),
+        AppError::ParseFailedCause(BoxedCause::text("json failure")),
+        AppError::SettingsSaveCause("save detail".into(), BoxedCause::text("io failure")),
+    ] {
+        assert!(
+            std::error::Error::source(&app).is_some(),
+            "premise: typed cause"
+        );
+        let small = SettingsLoadError::from(app);
+        assert!(std::error::Error::source(&small).is_none(), "{small:?}");
+    }
+
+    // The forward direction never invents a cause either.
+    for error in [
+        SettingsLoadError::NotFound,
+        SettingsLoadError::ReadFailed,
+        SettingsLoadError::ParseFailed,
+        SettingsLoadError::TooLarge,
+        SettingsLoadError::Other("固有の失敗"),
+    ] {
+        let app = AppError::from(error);
+        assert!(std::error::Error::source(&app).is_none(), "{app:?}");
+    }
+}

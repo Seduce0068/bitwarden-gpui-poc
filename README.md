@@ -337,7 +337,7 @@ CI（`.github/workflows/ci.yml`）と pre-commit で共通して使うツール�
 | ツール | CI | pre-commit |
 | --- | --- | --- |
 | betterleaks | `BETTERLEAKS_VERSION` = 1.10.1 | `rev`（pre-commit config） |
-| cargo-deny | `cargo install --version 0.21.0` | — |
+| cargo-deny | `cargo install cargo-deny@0.21.0 --exact --locked` | — |
 | markdownlint-cli | `npm install --global markdownlint-cli@0.50.0` | — |
 
 Betterleaks は CI 起動時に pre-commit の `rev` と一致するか検査し、ずれがあれば

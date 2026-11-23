@@ -181,6 +181,10 @@ pub(super) fn finish_search_from_row_click(
 /// Returns `None` when nothing is selected (for example an empty list), so the
 /// caller keeps its current status instead of claiming a selection that did
 /// not happen.
+///
+/// The name goes through [`crate::ui::app::item_name_text`], the same helper
+/// the list row and detail row use, so an empty or invisible-only (`Cf`) name
+/// shows the placeholder instead of leaving a blank after "選択しました: ".
 pub(super) fn selected_row_status(
     view: &crate::ui::vault_view::VaultViewState,
     dirty: bool,
@@ -191,7 +195,10 @@ pub(super) fn selected_row_status(
         .and_then(|id| visible.iter().find(|item| item.id == id))
         .map(|item| {
             crate::ui::app::status_with_unsaved(
-                &format!("項目を選択しました: {}", item.name),
+                &format!(
+                    "項目を選択しました: {}",
+                    crate::ui::app::item_name_text(&item.name)
+                ),
                 dirty,
             )
         })
@@ -1244,6 +1251,53 @@ mod tests {
         let click = selected_row_click_status(&view, true);
         assert_eq!(dirty.as_deref(), Some(click.as_str()));
         assert!(dirty.is_some_and(|text| text.contains("[未保存の設定変更があります]")));
+    }
+
+    #[::core::prelude::v1::test]
+    fn keyboard_row_selection_uses_the_empty_name_placeholder() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        fn item(id: &str, name: &str) -> VaultItem {
+            VaultItem::new(
+                id,
+                name,
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            )
+        }
+
+        let placeholder = crate::ui::app::ITEM_NAME_PLACEHOLDER;
+        let mut view = VaultViewState::new();
+        // The same three name shapes the list row and detail row already cover:
+        // empty, invisible-only (`Cf`) and visible.
+        view.vault.items.push(item("empty", ""));
+        view.vault.items.push(item("invisible", "\u{200b}"));
+        view.vault.items.push(item("named", "Alpha"));
+
+        let expected = format!("項目を選択しました: {placeholder}");
+        for id in ["empty", "invisible"] {
+            view.selected_id = Some(id.into());
+            let status = selected_row_status(&view, false);
+            assert_eq!(status.as_deref(), Some(expected.as_str()), "{id}");
+            // The invisible character must not leak into the status either.
+            assert!(!status.is_some_and(|text| text.contains('\u{200b}')));
+        }
+
+        // A visible name is still rendered verbatim.
+        view.selected_id = Some("named".into());
+        assert_eq!(
+            selected_row_status(&view, false).as_deref(),
+            Some("項目を選択しました: Alpha")
+        );
+
+        // The placeholder path keeps the persistent unsaved marker, just like
+        // the ordinary-name path does.
+        view.selected_id = Some("empty".into());
+        let dirty = selected_row_status(&view, true).unwrap();
+        assert_eq!(dirty, crate::ui::app::status_with_unsaved(&expected, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
     }
 
     #[::core::prelude::v1::test]

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第104弾 / 2026-11-23）
+
+- IPv4-mapped メタデータ IP のブロック、Windows ACL 主張の是正、
+  TOTP 失敗理由の 1 テンポ遅れを修正
+- 空監査 status、キーボード選択 status、Vault キー一覧を改善
+- Detail 前方変換、現行/将来 device_id、スカラー root、
+  オフセット短縮形、空白名プレースホルダをテスト
+
 ### 全体改善（第103弾 / 2026-11-23）
 
 - email の trim→クランプ、InvalidServerUrl の二重括弧、

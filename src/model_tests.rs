@@ -3337,3 +3337,110 @@ fn multiple_folder_ids_resolve_to_their_own_names_and_counts() {
     // NameAsc is by folded name, not by id; these fixtures place id 3 first.
     assert_eq!(shown, vec!["3", "2"]);
 }
+
+#[test]
+fn mc_only_names_are_blank_for_duplicate_detection() {
+    // Mc (spacing combining mark) is part of General_Category=Mark alongside
+    // Mn/Me, so a name made only of Mc code points has no standalone glyph
+    // either. `duplicate_names` uses `is_combining_mark` (model.rs:1080-1111)
+    // and must skip these names instead of grouping them with each other.
+    let mut vault = Vault::new();
+    // U+0903 DEVANAGARI SIGN VISARGA and U+093E DEVANAGARI VOWEL SIGN AA are
+    // both Mc; trim() leaves them intact, so only the mark rule can skip them.
+    vault
+        .items
+        .push(login("mc-1", "\u{0903}", "u", "p", "https://a.example"));
+    vault.items.push(login(
+        "mc-2",
+        "\u{093e}\u{0903}",
+        "u",
+        "p",
+        "https://b.example",
+    ));
+    // Control: a real duplicate pair must still be reported, so the test
+    // cannot pass simply because every group was suppressed.
+    vault
+        .items
+        .push(login("name-1", "alpha", "u", "p", "https://c.example"));
+    vault
+        .items
+        .push(login("name-2", "ALPHA", "u", "p", "https://d.example"));
+
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "alpha");
+    assert_eq!(
+        groups[0].1,
+        vec!["name-1".to_string(), "name-2".to_string()]
+    );
+    for id in ["mc-1", "mc-2"] {
+        assert!(
+            !groups
+                .iter()
+                .any(|(_, ids)| ids.iter().any(|entry| entry == id)),
+            "{id} must not be a duplicate: {groups:?}"
+        );
+    }
+
+    // A mark after an ordinary base letter stays significant: two such names
+    // are still a duplicate group.
+    let mut with_base = Vault::new();
+    with_base.items.push(login(
+        "1",
+        "\u{0915}\u{0903}",
+        "u",
+        "p",
+        "https://e.example",
+    ));
+    with_base.items.push(login(
+        "2",
+        "\u{0915}\u{0903}",
+        "u",
+        "p",
+        "https://f.example",
+    ));
+    let based = with_base.duplicate_names();
+    assert_eq!(based.len(), 1, "{based:?}");
+    assert_eq!(based[0].1, vec!["1".to_string(), "2".to_string()]);
+}
+
+#[test]
+fn mask_uri_embedded_nul_is_not_the_decryption_sentinel() {
+    use crate::vault_sync::UNDECRYPTABLE_URI;
+
+    // Only a LEADING NUL selects the undecryptable status branch (model.rs:106-132).
+    assert_eq!(mask_uri(UNDECRYPTABLE_URI), "（復号できませんでした）");
+    assert_eq!(
+        mask_uri("\0https://example.com/path"),
+        "（復号できませんでした）"
+    );
+
+    // An embedded NUL inside the host is a forbidden host code point for
+    // `url::Url`, so parsing fails and the value takes the same invalid-URI
+    // arm as any other unparsable input. It must NOT be reported as a
+    // decryption failure just because it contains a NUL byte.
+    for raw in [
+        "https://exa\0mple.com/path",
+        "https://user:pass@exa\0mple.com:8443/path",
+    ] {
+        assert_eq!(mask_uri(raw), "(不正な URI)", "{raw:?}");
+    }
+
+    // A NUL in the path/query does not change the host, so masking still
+    // reduces the value to scheme + host + port and never leaks the tail.
+    assert_eq!(
+        mask_uri("https://example.com/pa\0th?token=SECRET"),
+        "https://example.com"
+    );
+    assert_eq!(
+        mask_uri("https://example.com:8443/pa\0th?token=SECRET"),
+        "https://example.com:8443"
+    );
+    for masked in [
+        mask_uri("https://exa\0mple.com/path"),
+        mask_uri("https://example.com/pa\0th?token=SECRET"),
+    ] {
+        assert!(!masked.contains('\0'), "{masked:?}");
+        assert!(!masked.contains("SECRET"), "{masked:?}");
+    }
+}

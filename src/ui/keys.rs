@@ -277,19 +277,23 @@ fn typed_text<'a>(ctx: &KeyContext<'a>) -> Option<&'a str> {
 /// Whether a key name denotes a control/function key that never carries text.
 ///
 /// Function keys are the motivating case: F1 can be reported with
-/// `key = "f1"` and `key_char = "F1"`. Control and navigation names are kept in
-/// the same set so a backend echoing any of them cannot insert a key name into
-/// a text field. `space` is deliberately absent: it is a printable key.
+/// `key = "f1"` and `key_char = "F1"`. Any `f` followed by ASCII digits counts
+/// as a function-key name, not just the F1..=F24 window: a backend echoing an
+/// out-of-range name such as `F0` or `F25` into `key_char` would otherwise pass
+/// `composed_text` and insert that literal name into a focused field. A bare
+/// `f` (no digits) remains printable text. Control and navigation names are
+/// kept in the same set so a backend echoing any of them cannot insert a key
+/// name into a text field. `space` is deliberately absent: it is a printable
+/// key.
 fn is_non_text_key_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     let bare = lower.strip_prefix("arrow").unwrap_or(&lower);
     if is_text_cursor_key(&lower) {
         return true;
     }
-    if bare
-        .strip_prefix('f')
-        .is_some_and(|number| (1..=24).contains(&number.parse::<u8>().unwrap_or(0)))
-    {
+    if bare.strip_prefix('f').is_some_and(|number| {
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+    }) {
         return true;
     }
     matches!(
@@ -990,6 +994,54 @@ mod single_character_text_tests {
                 !is_non_text_key_name(name),
                 "{name} must not be treated as a control key"
             );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn out_of_range_function_key_names_are_non_text() {
+        // The old F1..=F24 window let an echoed `F0`/`F25` reach `composed_text`
+        // and be inserted as a literal into a focused field.
+        for name in [
+            "f0", "F0", "f25", "F25", "f30", "f35", "f99", "f000", "arrowf25",
+        ] {
+            assert!(is_non_text_key_name(name), "{name} must carry no text");
+        }
+        // A bare `f` and names that merely start with `f` remain printable.
+        for name in ["f", "F", "field", "f1a", "space", "日本語"] {
+            assert!(
+                !is_non_text_key_name(name),
+                "{name} must not be treated as a control key"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn out_of_range_function_keys_never_insert_text_while_editing() {
+        for (key, key_char) in [
+            ("f0", Some("F0")),
+            ("f25", Some("F25")),
+            ("F25", Some("f25")),
+            ("f0", None),
+        ] {
+            let mut ctx = editing_ctx(key, key_char);
+            assert_eq!(composed_text(&ctx), None, "{key}/{key_char:?}");
+            assert_eq!(insertable_text(&ctx), None, "{key}/{key_char:?}");
+
+            assert_eq!(classify_key(&ctx), UiAction::None, "auth/{key}");
+
+            ctx.editing_auth = false;
+            ctx.screen = Screen::Unlocked;
+            ctx.searching = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "search/{key}");
+
+            ctx.searching = false;
+            ctx.panel = Panel::Settings;
+            ctx.editing_settings = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "settings/{key}");
+
+            // Alt must not revive the echoed key name through the text fallback.
+            ctx.modifiers.alt = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "settings/alt/{key}");
         }
     }
 

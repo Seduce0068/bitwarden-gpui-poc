@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第104弾で 8 件すべてを完了）。
+なし（第105弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第105弾（16 担当・49 回目）の指摘 6 件を完結（2026-11-23）
+  - 空名行選択 status、F キー範囲外の non-text 判定を修正。
+  - catch-all 変換、config_dir None、SettingsLoadError source、
+    Mc 空白名、埋め込み NUL をテスト。
+  - auth_tests 行参照を現行位置へ修正。
+  - README の cargo-deny コマンド、CHANGELOG 第104弾を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1015 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第104弾（16 担当・48 回目）の指摘 8 件を完結（2026-11-23）
   - IPv4-mapped メタデータ IP、Windows ACL 主張、TOTP 理由遅延、
     空監査 status、キーボード選択 status、Vault キー一覧を修正。
