@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第100弾で 7 件すべてを完了）。
+なし（第101弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第101弾（16 担当・45 回目）の指摘 7 件を完結（2026-11-23）
+  - all-same の前後装飾、数字のみ userinfo マスク、Cf-only 重複名を修正。
+  - 検索中行クリック status、copy 判定の Cf、ページキー、
+    他ソート index を修正・テスト。
+  - UnlockFailedCause strip、空 source、ENV_LOCK、パディング将来版、
+    区切り文字、falsy 非 null、非ログイン Unnamed/Stale、
+    40bit 境界をテスト。
+  - CHANGELOG に第100弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（971 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第100弾（16 担当・44 回目）の指摘 7 件を完結（2026-11-23）
   - 辞書パスワードの末尾装飾、一覧 Cf 空 username、
     詳細行の二重区切り、同期サイズエラー文言を修正。

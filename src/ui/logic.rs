@@ -100,8 +100,11 @@ pub(super) fn card_last_four(number: &str) -> String {
 
 /// Value to copy from a login item, or `None` when nothing may be copied.
 ///
-/// Empty values and the undecryptable marker are refused so no placeholder or
-/// empty string is written into the user's clipboard.
+/// Values with no visible content and the undecryptable marker are refused so
+/// no placeholder or blank string is written into the user's clipboard. The
+/// blank check goes through [`crate::ui::app::is_visually_empty`] so whitespace
+/// and invisible Unicode `Cf` characters count as empty, matching the list
+/// row's own "empty username" rule.
 pub(super) fn select_copy_value(data: &crate::model::ItemData, password: bool) -> Option<String> {
     match data {
         crate::model::ItemData::Login {
@@ -114,7 +117,9 @@ pub(super) fn select_copy_value(data: &crate::model::ItemData, password: bool) -
             } else {
                 username.as_str()
             };
-            if raw.is_empty() || (password && crate::vault_sync::is_undecryptable_password(raw)) {
+            if crate::ui::app::is_visually_empty(raw)
+                || (password && crate::vault_sync::is_undecryptable_password(raw))
+            {
                 None
             } else {
                 Some(raw.to_string())
@@ -595,6 +600,34 @@ mod tests {
         };
         assert_eq!(select_copy_value(&empty, true), None);
         assert_eq!(select_copy_value(&empty, false), None);
+
+        // A username (or password) made only of whitespace and invisible
+        // Unicode Cf characters looks empty on screen and must not be copied.
+        let blank = ItemData::Login {
+            username: " \t\u{200b}\u{feff}\u{202e} ".to_string(),
+            password: Zeroizing::new(" \u{200b}\t ".to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(select_copy_value(&blank, false), None);
+        assert_eq!(select_copy_value(&blank, true), None);
+
+        // Visible content around the same format characters is still real
+        // data: the helper must not trim or silently rewrite the copied value.
+        let visible = ItemData::Login {
+            username: " alice \u{200b}".to_string(),
+            password: Zeroizing::new(" s3cret ".to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(
+            select_copy_value(&visible, false).as_deref(),
+            Some(" alice \u{200b}")
+        );
+        assert_eq!(
+            select_copy_value(&visible, true).as_deref(),
+            Some(" s3cret ")
+        );
 
         let note = ItemData::SecureNote {
             text: "body".to_string().into(),

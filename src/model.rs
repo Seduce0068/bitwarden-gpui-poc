@@ -1064,12 +1064,15 @@ impl Vault {
 
     /// Duplicate names (NFKD-equivalent and case-insensitive), each with its
     /// item ids. Blank names are ignored: an unnamed item is not a duplicate
-    /// of every other unnamed item.
+    /// of every other unnamed item. A name made only of invisible Unicode
+    /// `Cf` characters (for example a zero-width space) counts as blank too:
+    /// it has no visible identity, so two such items must not be reported as
+    /// duplicates of each other.
     pub fn duplicate_names(&self) -> Vec<(String, Vec<String>)> {
         let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for item in &self.items {
             let key = comparison_key(item.name.trim());
-            if key.is_empty() {
+            if key.is_empty() || key.chars().all(crate::limits::is_format_character) {
                 continue;
             }
             match groups.iter_mut().find(|(name, _)| *name == key) {
@@ -1101,3 +1104,56 @@ fn compare(a: &VaultItem, b: &VaultItem, sort: SortKey) -> std::cmp::Ordering {
 #[cfg(test)]
 #[path = "model_tests.rs"]
 mod tests;
+
+/// Tests for the invisible-name arm of [`Vault::duplicate_names`].
+///
+/// Kept inline here instead of in `model_tests.rs` so the fix and its
+/// regression guard stay together in this change's write scope.
+#[cfg(test)]
+mod duplicate_name_cf_tests {
+    use super::*;
+
+    fn note(id: &str, name: &str) -> VaultItem {
+        VaultItem::new(id, name, ItemData::SecureNote { text: "x".into() })
+    }
+
+    #[test]
+    fn cf_only_names_are_blank_for_duplicate_detection() {
+        let mut vault = Vault::new();
+        // Names made only of Unicode Cf code points look non-empty to `trim`,
+        // but have no visible identity: they must not form a duplicate group.
+        vault.items.push(note("cf-1", "\u{200b}"));
+        vault.items.push(note("cf-2", "\u{200d}\u{200b}"));
+        vault.items.push(note("cf-3", " \u{200b}\u{200f} "));
+        // Ordinary blank names stay skipped as before.
+        vault.items.push(note("blank-1", ""));
+        vault.items.push(note("blank-2", "   "));
+        // A real duplicate pair must still be reported.
+        vault.items.push(note("name-1", "Alpha"));
+        vault.items.push(note("name-2", "alpha"));
+
+        let groups = vault.duplicate_names();
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(groups[0].0, "alpha");
+        assert_eq!(
+            groups[0].1,
+            vec!["name-1".to_string(), "name-2".to_string()]
+        );
+        for id in ["cf-1", "cf-2", "cf-3", "blank-1", "blank-2"] {
+            assert!(
+                !groups
+                    .iter()
+                    .any(|(_, ids)| ids.iter().any(|entry| entry.as_str() == id)),
+                "{id} must not be a duplicate: {groups:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_cf_only_names_alone_produce_no_duplicates() {
+        let mut vault = Vault::new();
+        vault.items.push(note("a", "\u{200b}"));
+        vault.items.push(note("b", "\u{200b}"));
+        assert!(vault.duplicate_names().is_empty());
+    }
+}

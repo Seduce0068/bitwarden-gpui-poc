@@ -3725,3 +3725,64 @@ fn file_metadata_failure_is_classified_as_read_failed_cause() {
         Some("同期に失敗しました（キャッシュを読み込めません）")
     );
 }
+
+#[test]
+fn all_digit_password_with_a_question_or_hash_is_masked() {
+    // Regression: `at_is_in_query` treated every colon with an all-digit
+    // value as `host:port`, so `12345?` / `12345#` at the end of a password
+    // looked like a port followed by a query and the whole credential stayed
+    // in the diagnostic URL. A delimiter directly before the '@' has no query
+    // text after it and must stay part of the password.
+    for (url, expected, secret) in [
+        (
+            "https://user:12345?@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+            "12345?",
+        ),
+        (
+            "https://user:12345#@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+            "12345#",
+        ),
+        (
+            "https://user:9876543210?@vault.example.com:8443",
+            "https://[redacted]@vault.example.com:8443",
+            "9876543210?",
+        ),
+        (
+            "user:12345?@vault.example.com/path",
+            "[redacted]@vault.example.com/path",
+            "12345?",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        assert!(
+            rendered.contains("[redacted]@vault.example.com"),
+            "{rendered}"
+        );
+        // Debug-only masking: the stored URL stays byte-for-byte identical.
+        assert_eq!(cache.server_url, url);
+    }
+
+    // The real query/fragment after the host is still redacted by the full
+    // masker, and a genuine port + query '@' remains untouched (it has query
+    // text between the delimiter and the '@').
+    let url = "https://user:12345?@vault.example.com/path?token=QUERY_SECRET#code=FRAGMENT_SECRET";
+    let masked = super::mask_url_secrets(url);
+    assert!(
+        masked.contains("[redacted]@vault.example.com/path"),
+        "{masked}"
+    );
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+    assert!(masked.contains("code=[redacted]"), "{masked}");
+    assert!(!masked.contains("12345?"), "{masked}");
+    for url in [
+        "https://host:8443?email=a@b",
+        "https://vault.example.com:8443#frag@x",
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+}

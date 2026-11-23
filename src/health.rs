@@ -359,19 +359,20 @@ pub fn estimate_entropy(password: &str) -> u32 {
     // repeated character; checking the original code points let it dodge the
     // zero score.
     let lower = password.to_lowercase();
-    // A bare run of one character scores zero. Trailing decoration must not
-    // hide such a run: `aaaaaaaaaa1` and `aaaaaaaaaa!` are no harder to guess
-    // than `aaaaaaaaaa`, because an attacker tries each repeated character
-    // together with each suffix. The body is the folded value with trailing
+    // A bare run of one character scores zero. Decoration at *either* end must
+    // not hide such a run: `aaaaaaaaaa1`, `aaaaaaaaaa!` and `!aaaaaaaa` are no
+    // harder to guess than `aaaaaaaaaa`, because an attacker tries each
+    // repeated character together with a small amount of surrounding
+    // decoration. The body is the folded value with leading and trailing
     // non-alphanumeric symbols and ASCII digit runs removed, in either order
-    // (see `strip_trailing_decoration`); with no decoration the whole folded
-    // value is the body, so a mixed-case run is caught too. Only ASCII digits
-    // are stripped from the digit end, so non-ASCII digits keep the wide-pool
-    // path; an all-digit value is left intact and still takes the numeric-PIN
-    // branch below. The word-suffix discount stays suffix-only and keeps using
+    // (see `strip_decoration`); with no decoration the whole folded value is the
+    // body, so a mixed-case run is caught too. Only ASCII digits are stripped
+    // from the digit ends, so non-ASCII digits keep the wide-pool path; an
+    // all-digit value is left intact and still takes the numeric-PIN branch
+    // below. The word-suffix discount stays suffix-only and keeps using
     // `strip_trailing_digits` on the full folded value, so a symbol-suffixed
     // word still takes the raw character-pool estimate.
-    let body = strip_trailing_decoration(&lower);
+    let body = strip_decoration(&lower);
     let all_same_body = {
         let mut body_chars = body.chars();
         match body_chars.next() {
@@ -614,7 +615,7 @@ fn is_exact_common_password(lower: &str) -> bool {
     COMMON.contains(&lower)
 }
 
-/// Strip leading decoration for the prefix rules only.
+/// Strip leading decoration for the prefix rules and the all-same check.
 ///
 /// A short dictionary guess padded with whitespace or symbols at the front
 /// (`"!password123"`, `"  1qwerty"`) gains no real entropy: an attacker tries
@@ -631,7 +632,14 @@ fn strip_leading_decoration(value: &str) -> &str {
     loop {
         let no_symbols = current.trim_start_matches(|c: char| !c.is_alphanumeric());
         let after_symbols = if no_symbols.is_empty() {
-            current
+            // A run that is entirely decoration still has a uniform body once
+            // leading whitespace is dropped (" !!!!!!!!" -> "!!!!!!!!").
+            let no_whitespace = current.trim_start();
+            if no_whitespace.len() < current.len() {
+                no_whitespace
+            } else {
+                current
+            }
         } else {
             no_symbols
         };
@@ -648,7 +656,7 @@ fn strip_leading_decoration(value: &str) -> &str {
     }
 }
 
-/// Strip decoration from both ends for the prefix rules only.
+/// Strip decoration from both ends for the prefix rules and the all-same check.
 ///
 /// [`strip_leading_decoration`] alone let a short dictionary guess escape the
 /// cap by padding its *end* instead: `password!`, `password123!` or

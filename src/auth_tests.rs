@@ -3301,3 +3301,86 @@ fn more_than_four_hyphen_parts_fail_open_offline() {
         "http://169-254-1-1.nip.io"
     ));
 }
+
+#[test]
+fn legacy_unlock_failed_cause_loses_only_the_status_decoration() {
+    use crate::error::BoxedCause;
+
+    // The legacy `AppError::UnlockFailedCause` stores a fully formatted
+    // status message. `unlock_detail` (auth.rs:255-260) must strip that one
+    // prefix/suffix pair when converting to `UnlockError::UnlockFailedCause`,
+    // while `Error::source()` keeps the typed cause (auth.rs:298-301).
+    let decorated = "復号キーを取得できません（bad key）";
+    let app = AppError::UnlockFailedCause(
+        decorated.to_string(),
+        BoxedCause::text("original decryption failure"),
+    );
+    let small = UnlockError::from(app);
+    match &small {
+        UnlockError::UnlockFailedCause(detail, cause) => {
+            assert_eq!(detail.as_str(), "bad key", "{small:?}");
+            assert_eq!(cause.to_string(), "original decryption failure");
+        }
+        other => panic!("cause was dropped: {other:?}"),
+    }
+    assert_eq!(small.message(), "復号キーを取得できません（bad key）");
+    assert!(std::error::Error::source(&small).is_some());
+
+    // Converting back decorates exactly once, never twice.
+    assert_eq!(
+        AppError::from(small).message(),
+        AppError::unlock_failed_cause("bad key", BoxedCause::text("original decryption failure"))
+            .message()
+    );
+
+    // A detail that only resembles the prefix is kept verbatim.
+    let truncated = "復号キーを取得できません（truncated";
+    let raw = UnlockError::from(AppError::UnlockFailedCause(
+        truncated.to_string(),
+        BoxedCause::text("io failure"),
+    ));
+    assert_eq!(
+        raw,
+        UnlockError::UnlockFailedCause(truncated.to_string(), BoxedCause::text("io failure"))
+    );
+    assert_eq!(
+        AppError::from(raw).message(),
+        format!("復号キーを取得できません（{truncated}）")
+    );
+}
+
+#[test]
+fn sync_fallback_uses_the_cause_message_when_its_source_is_empty() {
+    use crate::error::{AppError, BoxedCause};
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct EmptySource;
+    impl fmt::Display for EmptySource {
+        fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+            Ok(())
+        }
+    }
+    impl std::error::Error for EmptySource {}
+
+    // `sync_fallback_failure` renders `Error::source()` first and falls back
+    // to `cause.message()` when that text is empty (auth.rs:961-968). Here the
+    // source exists but renders as `""`, so the assertion distinguishes this
+    // branch from "no source at all" (covered by a sibling test).
+    let cause = AppError::SyncCause(BoxedCause::new(EmptySource));
+    let source = std::error::Error::source(&cause).expect("a typed source exists");
+    assert_eq!(source.to_string(), "", "premise: empty source text");
+
+    let combined =
+        super::sync_fallback_failure(cache_restore_failure(AppError::CacheExpired), Some(cause));
+    assert_eq!(combined.message(), AuthError::Sync.message());
+    assert_eq!(
+        combined.status_message(),
+        "同期に失敗しました（キャッシュが有効期限を過ぎています（同期に失敗しました））"
+    );
+    assert!(matches!(
+        &combined,
+        AuthError::SyncDetail(detail)
+            if detail.as_str() == "キャッシュが有効期限を過ぎています（同期に失敗しました）"
+    ));
+}

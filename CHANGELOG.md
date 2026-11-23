@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第100弾 / 2026-11-23）
+
+- 辞書パスワードの末尾装飾、一覧 Cf 空 username、
+  詳細行の二重区切り、同期サイズエラー文言を修正
+- SettingsLoadError::Other、metadata 失敗、複数 IPv6、
+  非パディング base64、length 境界、全記号連続をテスト
+- cross-review の email 記述を是正
+
 ### 全体改善（第97〜99弾 / 2026-11-23）
 
 - all-same 末尾記号、辞書先頭装飾、入力 status の未保存マーカーを修正

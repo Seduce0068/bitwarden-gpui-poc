@@ -174,6 +174,32 @@ pub(super) fn finish_search_from_row_click(
     search_finished_status(view.visible_items().len(), dirty)
 }
 
+/// Status for a row click that actually selected a row while confirming search.
+///
+/// [`finish_search_from_row_click`] runs before `select_index`, so its
+/// count-based text still says "項目を選択してください" even though the click
+/// has just chosen that row. Callers must replace it once the selection is in
+/// place. No selected row falls back to the count-based text, so an
+/// out-of-range click cannot claim a selection that did not happen. Kept pure
+/// so the contract can be tested without a GPUI window.
+pub(super) fn selected_row_click_status(
+    view: &crate::ui::vault_view::VaultViewState,
+    dirty: bool,
+) -> String {
+    let visible = view.visible_items();
+    let selected = view
+        .selected_id
+        .as_deref()
+        .and_then(|id| visible.iter().find(|item| item.id == id));
+    match selected {
+        Some(item) => {
+            let name = &item.name;
+            crate::ui::app::status_with_unsaved(&format!("項目を選択しました: {name}"), dirty)
+        }
+        None => search_finished_status(visible.len(), dirty),
+    }
+}
+
 /// Remove the last character of a confirmed query and return the new status.
 ///
 /// `BackspaceQuery` (vault-panel Backspace while a query is present) edits the
@@ -565,7 +591,8 @@ impl BitwardenApp {
                 // A mouse click is an explicit selection: leaving search mode
                 // here keeps the row click and the keyboard path consistent.
                 // It must also replace the "入力中:" status from StartSearch.
-                if self.view.searching {
+                let confirming_search = self.view.searching;
+                if confirming_search {
                     let status = finish_search_from_row_click(&mut self.view, self.settings_dirty);
                     self.status = status;
                 }
@@ -573,6 +600,12 @@ impl BitwardenApp {
                     self.view
                         .scroll_handle
                         .scroll_to_item(index, gpui_kit::ScrollStrategy::Nearest);
+                    if confirming_search {
+                        // The confirmation status was computed before the
+                        // selection existed, so it still asks the user to
+                        // choose a row. Replace it with the selected row now.
+                        self.status = selected_row_click_status(&self.view, self.settings_dirty);
+                    }
                 }
                 self.sync_totp_to_selection();
                 cx.notify();
@@ -998,6 +1031,59 @@ mod tests {
         let dirty_status = finish_search_from_row_click(&mut view, true);
         assert_eq!(dirty_status, search_finished_status(1, true));
         assert!(dirty_status.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn row_click_during_search_replaces_the_no_selection_status_after_selecting() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        fn item(id: &str, name: &str) -> VaultItem {
+            VaultItem::new(
+                id,
+                name,
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            )
+        }
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(item("a", "Alpha"));
+        view.vault.items.push(item("b", "Beta"));
+        view.start_search();
+        view.push_query("Beta");
+        assert!(view.searching);
+        assert_eq!(view.visible_items().len(), 1, "precondition: one match");
+
+        // This is the ordering of `UiAction::SelectRow`: confirm the search,
+        // then select the clicked row, then compose the status from the view.
+        let stale = finish_search_from_row_click(&mut view, false);
+        assert_eq!(stale, crate::ui::logic::no_selection_status());
+        assert!(view.select_index(0));
+        let status = selected_row_click_status(&view, false);
+
+        assert_eq!(status, "項目を選択しました: Beta", "{status}");
+        assert_ne!(status, crate::ui::logic::no_selection_status());
+        assert!(!status.contains("入力中"), "{status}");
+        assert_eq!(view.selected_id.as_deref(), Some("b"));
+
+        // The unsaved marker survives the replacement just like the stale
+        // search-confirmation status did.
+        let dirty = selected_row_click_status(&view, true);
+        assert_eq!(dirty, crate::ui::app::status_with_unsaved(&status, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+
+        // A click that misses selects nothing, so it must not claim a
+        // selection either: the count-based status stays in place.
+        let mut out = VaultViewState::new();
+        out.vault.items.push(item("a", "Alpha"));
+        out.start_search();
+        out.push_query("Alpha");
+        let confirmation = finish_search_from_row_click(&mut out, false);
+        assert!(!out.select_index(3), "precondition: out of range");
+        assert_eq!(out.selected_id, None);
+        assert_eq!(selected_row_click_status(&out, false), confirmation);
     }
 
     #[::core::prelude::v1::test]

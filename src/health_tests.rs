@@ -2643,3 +2643,103 @@ fn repeated_symbol_runs_take_the_zero_entropy_branch() {
     );
     assert!(estimate_entropy(mixed) > 0);
 }
+
+#[test]
+fn non_login_items_still_get_unnamed_and_stale_findings() {
+    // `audit_item` runs the name and revision checks for every item, not just
+    // logins (health.rs:772-781, 866-871). A nameless, old card must therefore
+    // carry both findings while none of the login-only checks apply.
+    let mut card = VaultItem::new(
+        "old-card",
+        "  ",
+        ItemData::Card(CardData {
+            number: "4111 1111 1111 1234".into(),
+            ..CardData::default()
+        }),
+    );
+    card.revision_date = NOW - 400 * 86_400;
+    let report = report_of(vec![card]);
+
+    assert_eq!(report.examined, 1);
+    assert_eq!(report.logins, 0);
+    assert_eq!(report.with_totp, 0);
+    assert_eq!(report.items.len(), 1);
+    assert_eq!(report.items[0].id, "old-card");
+    assert_eq!(
+        report.items[0].findings,
+        vec![Finding::Stale { days: 400 }, Finding::Unnamed]
+    );
+    assert_eq!(report.items[0].worst(), Some(Severity::Medium));
+    for finding in &report.items[0].findings {
+        assert!(
+            !matches!(
+                finding,
+                Finding::WeakPassword { .. }
+                    | Finding::ReusedPassword { .. }
+                    | Finding::NoTotp
+                    | Finding::NoUri
+                    | Finding::UriUninspectable
+            ),
+            "login-only finding on a card: {finding:?}"
+        );
+    }
+    // The same two findings apply to a note, so this is not card-specific.
+    let mut note = VaultItem::new("old-note", "", ItemData::SecureNote { text: "x".into() });
+    note.revision_date = NOW - 365 * 86_400;
+    let note_report = report_of(vec![note]);
+    assert_eq!(
+        note_report.items[0].findings,
+        vec![Finding::Stale { days: 365 }, Finding::Unnamed]
+    );
+}
+
+#[test]
+fn leading_decoration_does_not_hide_a_repeated_character_run() {
+    // Regression: the all-same body stripped only the trailing edge, so a run
+    // prefixed with `!` (a digit, whitespace or a symbol) kept a non-uniform
+    // first code point and escaped the zero-entropy penalty. `strip_decoration`
+    // now removes decoration at both ends before the uniform-run check.
+    for password in [
+        "!aaaaaaaa",
+        "1aaaaaaaa",
+        " aaaaaaaa",
+        "!1aaaaaaaa",
+        "1!aaaaaaaa",
+        "!aaaaaaaa!",
+        "!aaaaaaaa1!",
+        "!aAaAaA",
+        "!@aaaaaaaa",
+        "！あああああ",
+        " !!!!!!!!",
+        "1########",
+    ] {
+        assert_eq!(estimate_entropy(password), 0, "{password}");
+    }
+
+    // A bare all-digit value is still left intact for the numeric-PIN branch.
+    assert_eq!(estimate_entropy("1234"), entropy_bits(10, 4).round() as u32);
+    // A leading symbol makes the *input* a mixed-class value, so it keeps the
+    // combined digit+symbol pool rather than the pure-PIN score.
+    assert!(estimate_entropy("!1234") > estimate_entropy("1234"));
+
+    // Only the ends are decoration: an interior symbol keeps the body varied.
+    assert!(estimate_entropy("!a!aaa") > 0);
+    assert!(estimate_entropy("!aB3!aB3!") > 0);
+    assert!(estimate_entropy("!@#$%^&*!@#$%^&*") > 0);
+
+    // The audit path surfaces the zero estimate as a WeakPassword finding.
+    let bits = estimate_entropy("!aaaaaaaa");
+    let report = report_of(vec![login(
+        "leading-repeat",
+        "Leading repeat",
+        "!aaaaaaaa",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}

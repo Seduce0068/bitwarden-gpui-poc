@@ -692,6 +692,112 @@ mod tests {
     }
 
     #[test]
+    fn selection_indexes_address_the_visible_list_under_recent_and_kind_sorts() {
+        use crate::model::CardData;
+
+        fn dated(id: &str, name: &str, revision: i64, data: ItemData) -> VaultItem {
+            let mut item = VaultItem::new(id, name, data);
+            item.revision_date = revision;
+            item
+        }
+
+        fn ids_after_sort(state: &mut VaultViewState, sort: SortKey) -> Vec<String> {
+            state.sort = sort;
+            state
+                .visible_items()
+                .iter()
+                .map(|item| item.id.clone())
+                .collect()
+        }
+
+        let mut state = VaultViewState::new();
+        // Insertion order differs from all three sorts below, so an index
+        // that silently addressed the vault order would be caught.
+        state.vault.items.push(dated(
+            "note",
+            "Aaa Note",
+            100,
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        state.vault.items.push(dated(
+            "card",
+            "Mmm Card",
+            300,
+            ItemData::Card(CardData::default()),
+        ));
+        state.vault.items.push(dated(
+            "login",
+            "Zzz Login",
+            200,
+            ItemData::Login {
+                username: "u".into(),
+                password: zeroize::Zeroizing::new("p".into()),
+                totp: zeroize::Zeroizing::new(String::new()),
+                uris: Vec::new(),
+            },
+        ));
+
+        assert_eq!(
+            ids_after_sort(&mut state, SortKey::NameAsc),
+            vec!["note", "card", "login"]
+        );
+        let recent = ids_after_sort(&mut state, SortKey::RecentlyModified);
+        let kind = ids_after_sort(&mut state, SortKey::Kind);
+        assert_eq!(recent, vec!["card", "login", "note"]);
+        assert_eq!(kind, vec!["login", "note", "card"]);
+        assert_ne!(recent, kind, "the two new sorts must not be conflated");
+
+        for (sort, expected) in [(SortKey::RecentlyModified, recent), (SortKey::Kind, kind)] {
+            state.sort = sort;
+            // Start every sort from the same state: a carried-over selection
+            // could make `select_index(0)` a no-op and weaken the assertion.
+            state.selected_id = None;
+            let visible = state.visible_items();
+            let expected_ids: Vec<&str> = expected.iter().map(String::as_str).collect();
+            let actual_ids: Vec<&str> = visible.iter().map(|item| item.id.as_str()).collect();
+            assert_eq!(actual_ids, expected_ids, "sort {sort:?}");
+            let visible_len = visible.len();
+
+            // `select_index` names the drawn row, not the inserted row.
+            for (index, id) in expected_ids.iter().enumerate() {
+                assert!(state.select_index(index), "sort {sort:?}/index {index}");
+                assert_eq!(state.selected_id.as_deref(), Some(*id));
+            }
+            let stable = state.selected_id.clone();
+            assert!(!state.select_index(visible_len), "sort {sort:?}/past end");
+            assert_eq!(state.selected_id, stable);
+
+            // `select_id` hands back that same visible position for scrolling.
+            for (index, id) in expected_ids.iter().enumerate() {
+                assert_eq!(state.select_id(id), Some(index), "sort {sort:?}/id {id}");
+            }
+            assert_eq!(state.select_id("missing"), None);
+
+            // Relative moves clamp inside the sorted list.
+            assert!(state.select_index(1));
+            let visible = state.visible_items();
+            let down = state.next_index_in(&visible, 1).unwrap();
+            let up = state.next_index_in(&visible, -1).unwrap();
+            let far_down = state.next_index_in(&visible, 99);
+            let far_up = state.next_index_in(&visible, -99);
+            let down_id = visible[down].id.clone();
+            let up_id = visible[up].id.clone();
+            assert_eq!(down_id, expected[2], "sort {sort:?}/down");
+            assert_eq!(up_id, expected[0], "sort {sort:?}/up");
+            assert_eq!(far_down, Some(visible_len - 1));
+            assert_eq!(far_up, Some(0));
+
+            // A selection hidden by a filter is not located by its vault
+            // position: with no visible row there is no index at all.
+            state.filter = crate::model::Filter::Favorites;
+            assert_eq!(state.next_index(1), None, "sort {sort:?}/empty");
+            state.filter = crate::model::Filter::All;
+        }
+    }
+
+    #[test]
     fn revalidate_selection_keeps_a_valid_selection_without_rewinding() {
         let mut state = state_with_items();
         state.selected_id = Some("b".into());

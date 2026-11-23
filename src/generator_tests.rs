@@ -689,3 +689,56 @@ fn length_equal_to_the_enabled_class_count_is_accepted() {
     };
     assert_eq!(too_short.generate(), Err(GeneratorError::InvalidSettings));
 }
+
+#[test]
+fn the_40_bit_weak_boundary_agrees_with_the_health_audit() {
+    // The generator's meter uses the unrounded `entropy_bits`, while the audit
+    // rounds its estimate to whole bits before comparing with `weak_bits`
+    // (generator.rs:320-322, health.rs:385-389). At the 40-bit boundary both
+    // must still put the same digit-only password on the same side: the
+    // rounding is what makes the 12-digit PIN exactly Fair in both views.
+    let unfiltered = PasswordSettings {
+        length: 12,
+        lowercase: false,
+        uppercase: false,
+        digits: true,
+        symbols: false,
+        avoid_ambiguous: false,
+    };
+    let meter_bits = password_entropy(&unfiltered);
+    assert_eq!(meter_bits, 40.0, "12 * log2(10) rounds to the boundary");
+    assert_eq!(Strength::from_bits(meter_bits), Strength::Fair);
+
+    let pin = "123456789012";
+    let audit_bits = crate::health::estimate_entropy(pin);
+    assert_eq!(audit_bits, WEAK_BITS);
+    let threshold = crate::health::Thresholds::default().weak_bits;
+    assert_eq!(threshold, WEAK_BITS);
+    assert!(audit_bits >= threshold, "audit: not weak at the boundary");
+    assert_eq!(
+        crate::health::password_strength(pin),
+        (audit_bits, Strength::from_bits(meter_bits)),
+        "meter and audit must agree at the boundary"
+    );
+
+    // One digit less stays Weak on both sides.
+    let short = PasswordSettings {
+        length: 11,
+        ..unfiltered
+    };
+    let short_bits = password_entropy(&short);
+    assert!(short_bits < f64::from(WEAK_BITS));
+    assert_eq!(Strength::from_bits(short_bits), Strength::Weak);
+    let short_pin = "12345678901";
+    assert_eq!(
+        crate::health::password_strength(short_pin),
+        (crate::health::estimate_entropy(short_pin), Strength::Weak)
+    );
+
+    // The generic boundary check still holds for the raw float values.
+    assert_eq!(
+        Strength::from_bits(f64::from(WEAK_BITS) - 0.1),
+        Strength::Weak
+    );
+    assert_eq!(Strength::from_bits(f64::from(WEAK_BITS)), Strength::Fair);
+}

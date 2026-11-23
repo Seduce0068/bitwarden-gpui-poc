@@ -234,8 +234,11 @@ fn mask_url_userinfo(url: &str) -> String {
 /// genuine query/fragment delimiter. It is genuine when the text before it has
 /// no userinfo-style `user:password` marker (`host:8443` is a port, not a
 /// password); an '@' already followed by a clean host also closes the authority,
-/// so a later `?`/`#` starts the query. This keeps `https://host?email=a@b`
-/// untouched while still masking `https://user:pass?x=1@host`.
+/// so a later `?`/`#` starts the query. A delimiter with nothing between it
+/// and the '@' is never a query start: it is password decoration, which also
+/// keeps an all-digit password (`https://user:12345?@host`) from looking like
+/// a `host:port` with a query. This keeps `https://host?email=a@b` untouched
+/// while still masking `https://user:pass?x=1@host`.
 ///
 /// Bracketed IPv6 hosts need special care: the colons in `[::1]` belong to the
 /// address, not to a `user:password` marker, and `:1]` is not a port. Both
@@ -243,6 +246,14 @@ fn mask_url_userinfo(url: &str) -> String {
 fn at_is_in_query(scan: &str, at: usize) -> bool {
     let before = &scan[..at];
     before.match_indices(&['?', '#'][..]).any(|(delimiter, _)| {
+        // A delimiter immediately before the '@' has no query/fragment text
+        // after it, so it cannot be a genuine query start: it is an unescaped
+        // character in the password. In particular an all-digit password such
+        // as `12345?` in `https://user:12345?@host` used to be mistaken for a
+        // `host:port` authority with a query, leaving the credential visible.
+        if delimiter + 1 == at {
+            return false;
+        }
         let head = &before[..delimiter];
         let has_userinfo_colon = head.split(&['?', '#'][..]).any(|part| {
             let part = without_ipv6_literals(part);

@@ -555,7 +555,9 @@ fn confirmed_query_text_insertion_keeps_command_and_cursor_keys() {
         ("up", UiAction::MoveSelection(-1)),
         ("down", UiAction::MoveSelection(1)),
         ("pageup", UiAction::MoveSelectionPage(-1)),
+        ("pagedown", UiAction::MoveSelectionPage(1)),
         ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+        ("end", UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
         ("escape", UiAction::quit_or_warn()),
         // Control/function/cursor names are never text, even with a query.
         ("enter", UiAction::None),

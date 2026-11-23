@@ -2815,3 +2815,80 @@ fn nonzero_user_key_sync_body_imports_decrypted_fields_without_an_item_key() {
         parse_revision(Some("2024-01-01T00:00:00Z")).unwrap()
     );
 }
+
+#[test]
+fn revision_dates_reject_non_rfc3339_date_and_time_separators() {
+    // `parse_revision` (vault_sync.rs:506-523) reads fixed-width fields at
+    // exact byte offsets: `-` between date parts, `T`/`t` before the time,
+    // `:` between time parts and `:` inside a numeric offset. Replacing any
+    // one of them with another separator must fail rather than being parsed
+    // leniently as a valid revision.
+    for value in [
+        "2024/01/01T00:00:00Z",      // slash date separator
+        "2024.01.01T00:00:00Z",      // dot date separator
+        "2024-01/01T00:00:00Z",      // one slash in the date
+        "2024-01-01 00:00:00Z",      // space instead of T
+        "2024-01-01T00-00-00Z",      // dashes in the time
+        "2024-01-01T00.00.00Z",      // dots in the time
+        "2024-01-01T00:00:00+0900",  // offset without colon
+        "2024-01-01T00:00:00+09-00", // dash in the offset
+        "2024-01-01T00:00:00Zx",     // trailing garbage
+    ] {
+        assert_eq!(parse_revision(Some(value)), None, "{value}");
+    }
+    // The canonical spelling and lowercase `t` still parse, so the assertions
+    // above are about separators rather than a disabled parser.
+    let utc = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    assert_eq!(parse_revision(Some("2024-01-01t00:00:00Z")), Some(utc));
+}
+
+#[test]
+fn falsy_non_null_organization_and_deleted_fields_still_exclude_a_cipher() {
+    use serde_json::json;
+
+    // `cipher_row_is_excluded` checks `!value.is_null()` (vault_sync.rs:325-
+    // 333), not truthiness. `0`, `false` and `""` are non-null JSON values and
+    // therefore mark a row as organization-owned / soft-deleted, even though
+    // they are falsy in most languages.
+    for value in [json!(0), json!(false), json!("")] {
+        for key in ["organizationId", "deletedDate"] {
+            let mut row = json!({"id": "x", "type": 1});
+            row[key] = value.clone();
+            assert!(
+                super::cipher_row_is_excluded(&row),
+                "{key}={value} must still exclude: {row}"
+            );
+        }
+    }
+    // Only JSON null (or a missing field) keeps the row eligible.
+    for value in [json!(null)] {
+        for key in ["organizationId", "deletedDate"] {
+            let mut row = json!({"id": "x", "type": 1});
+            row[key] = value.clone();
+            assert!(!super::cipher_row_is_excluded(&row), "{key}={value}");
+        }
+    }
+    assert!(!super::cipher_row_is_excluded(
+        &json!({"id": "x", "type": 1})
+    ));
+
+    // End-to-end: a falsy-but-non-null exclusion row loses the id dedup to an
+    // older eligible row, so openwarden still imports the live login.
+    let mut value = json!({
+        "ciphers": [
+            {"id": "dup", "type": 1, "name": "eligible",
+             "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "dup", "type": 1, "name": "falsy-org", "organizationId": 0,
+             "revisionDate": "2024-06-01T00:00:00Z"},
+            {"id": "dup2", "type": 1, "name": "eligible2",
+             "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "dup2", "type": 1, "name": "falsy-deleted", "deletedDate": false,
+             "revisionDate": "2024-06-01T00:00:00Z"},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 2);
+    assert_eq!(kept[0]["name"], "eligible");
+    assert_eq!(kept[1]["name"], "eligible2");
+}

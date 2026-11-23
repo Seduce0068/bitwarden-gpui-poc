@@ -2,6 +2,14 @@
 
 use crate::settings::*;
 
+/// Serializes tests that mutate process-global environment variables.
+///
+/// The `EnvGuard` in `default_path_is_unchanged_after_the_config_environment_changes`
+/// restores the previous value on drop, but that alone does not stop two tests
+/// from changing `XDG_CONFIG_HOME` at the same time. Every env-touching test
+/// must hold this lock for its whole body.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn defaults_are_sensible() {
     let settings = Settings::default();
@@ -1503,6 +1511,58 @@ fn save_aborts_on_a_future_schema_file() {
             "a future file must never be overwritten"
         );
     }
+}
+
+#[test]
+fn padded_future_schema_string_blocks_both_write_paths() {
+    // `schema_version_of` trims numeric strings before classifying them, so a
+    // padded future marker is still a future version. Both write guards must
+    // refuse to overwrite such a file: a future writer may have changed the
+    // meaning of otherwise familiar keys (settings.rs:775-782, 930-938).
+    let future = CURRENT_SCHEMA_VERSION + 1;
+    for marker in [format!("  {future}  "), format!("\t{future}\n")] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original = serde_json::json!({
+            "schema_version": marker,
+            "email": "future@example.com",
+        })
+        .to_string();
+        std::fs::write(&path, &original).unwrap();
+
+        assert_eq!(
+            super::file_schema_version(&path),
+            Some(u64::from(future)),
+            "{marker:?}"
+        );
+        // The read path falls back to defaults, but neither writer may stamp
+        // over the file with a schema this build claims to understand.
+        assert_eq!(Settings::load(&path), Settings::default());
+        let error = Settings::default().save(&path).unwrap_err();
+        assert!(error.to_string().contains("未対応"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        let id = generate_device_id().unwrap();
+        let error = Settings::save_device_id_only(&path, &id).unwrap_err();
+        assert!(error.to_string().contains("未対応"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    // Control: a padded *current* marker is a legacy/non-future file and is
+    // still upgraded by `save`, so the guard above is about the version.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let current = CURRENT_SCHEMA_VERSION;
+    std::fs::write(
+        &path,
+        format!(r#"{{"schema_version":"  {current}  ","email":"old@example.com"}}"#),
+    )
+    .unwrap();
+    Settings::default().save(&path).unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path).unwrap().schema_version,
+        CURRENT_SCHEMA_VERSION
+    );
 }
 
 #[test]
@@ -3212,6 +3272,9 @@ fn save_persists_clamped_numeric_fields_and_leaves_self_untouched() {
 
 #[test]
 fn default_path_is_unchanged_after_the_config_environment_changes() {
+    // XDG_CONFIG_HOME is process-global: hold ENV_LOCK so no other test can
+    // observe or overwrite the value while this one swaps it.
+    let _env = ENV_LOCK.lock().unwrap();
     // `Settings::default_path` resolves once into a OnceLock (settings.rs), so
     // every later call must return that same path even if XDG_CONFIG_HOME is
     // changed or removed. The environment is process-global; the guard below
