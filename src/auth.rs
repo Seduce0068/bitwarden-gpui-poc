@@ -464,6 +464,22 @@ fn is_blocked_metadata_host(host: &str) -> bool {
 /// `169.254.169.254.nip.io`. Recognizing the embedded literal here keeps the
 /// canonical bypass blocked even when resolution is offline; the general case
 /// is handled by the resolver-backed check.
+///
+/// Known constraint: only decimal IPv4 spellings are recognized here. A
+/// non-decimal IPv4 literal embedded in a DNS name — hexadecimal
+/// (`0xa9fea9fe.nip.io`), octal (`0251.0376.0251.0376.nip.io`) or a 32-bit
+/// decimal integer (`2852039166.nip.io`) — is not decoded by this
+/// network-free classifier, and neither is a link-local IPv6 address encoded
+/// as wildcard-DNS labels (`fe80--1.sslip.io`,
+/// `fe80-0-0-0-0-0-0-1.nip.io`). A non-decimal IPv4 spelling used as the
+/// *whole URL host* is still blocked: `url::Url` applies the WHATWG IPv4
+/// parser before [`is_blocked_server_url_with`] sees the host. An embedded spelling is only
+/// caught when the resolver returns a link-local answer; the offline path used
+/// by [`validate_config`] (and therefore a configuration assembled without
+/// DNS) does not. This is recorded rather than fixed in this PoC: adding a
+/// WHATWG-equivalent decoder for embedded labels would enlarge the SSRF guard
+/// beyond the change scope. Do not treat this classifier as a complete
+/// boundary; see the scope comment above.
 fn hostname_embeds_link_local(host: &str) -> bool {
     let normalized = host.trim_end_matches('.').to_ascii_lowercase();
     let labels: Vec<&str> = normalized.split('.').collect();

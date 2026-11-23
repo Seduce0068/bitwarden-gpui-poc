@@ -148,6 +148,13 @@ pub(super) enum UiAction {
     MoveSelectionPage(isize),
     /// Jump to the first or last selectable row (`Home`/`End`).
     MoveSelectionToEdge(SelectionEdge),
+    /// Select the row at a **render-position index**, not a stable item id.
+    ///
+    /// `ui::render` builds each row from `visible_items()` and sends the loop
+    /// `index` here on click; `ui::input` forwards it unchanged to
+    /// `VaultViewState::select_index`, which resolves it against the current
+    /// visible list. Both sides therefore depend on the same list snapshot.
+    /// Switching to a stable id is deliberately out of scope (R2-UI-94).
     SelectRow(usize),
     ToggleFavorite,
     OpenAudit,
@@ -398,7 +405,16 @@ fn is_text_cursor_key(key: &str) -> bool {
 /// not lock the vault. Keybindings with command-like modifiers are ignored so
 /// they can be handled by the platform (e.g. Ctrl+C).
 pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
-    let editing_text = ctx.editing_auth || ctx.searching || ctx.editing_settings;
+    // A confirmed vault query is an editable text context too: `InsertQueryText`
+    // and `BackspaceQuery` accept text in the vault panel after Enter/Escape.
+    // Leaving `query_nonempty` out of `editing_text` dropped every Alt/AltGr
+    // derived glyph before the vault fallback could insert it (R2-UI-94).
+    // Scope this to the unlocked vault panel: the query is kept when the user
+    // navigates away, but it is not being edited in another panel, where Alt
+    // must stay inert (see the guard note below).
+    let editing_query =
+        ctx.query_nonempty && ctx.screen == Screen::Unlocked && ctx.panel == Panel::Vault;
+    let editing_text = ctx.editing_auth || ctx.searching || ctx.editing_settings || editing_query;
     // macOS reports AltGr as Ctrl+Alt. In a text field the layout character in
     // `key_char` is the intended input, so give it priority over the command
     // guard. A bare Ctrl/Cmd/Fn (or Ctrl+Alt without a generated glyph) stays
@@ -412,11 +428,12 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
     // Alt alone may still produce a printable layout character (e.g. Option+S
     // -> "ß"), but `insertable_text` also falls back to a single-character
     // physical `key` (and the `space` name) when no glyph is reported. The real
-    // contract is therefore: allow Alt only while editing text and only when
-    // there is insertable text — a bare one-character physical key counts even
-    // with `key_char` absent, and so does a genuine multi-character IME
-    // composition. Multi-character key names (F1 and friends) stay inert, and
-    // in command panels every Alt+key stays inert.
+    // contract is therefore: allow Alt only while editing text (including a
+    // confirmed vault query) and only when there is insertable text — a bare
+    // one-character physical key counts even with `key_char` absent, and so
+    // does a genuine multi-character IME composition. Multi-character key names
+    // (F1 and friends) stay inert, and in command panels every Alt+key stays
+    // inert.
     if ctx.modifiers.alt && !(editing_text && insertable_text(ctx).is_some()) {
         return UiAction::None;
     }

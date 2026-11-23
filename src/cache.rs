@@ -424,6 +424,15 @@ pub(crate) const MAX_MASK_DEPTH: usize = 8;
 /// surrounding key/scheme is kept so the diagnostic URL remains traceable.
 /// A '/' inside the password is not a boundary either: the delimiter search
 /// keeps the rightmost split that still yields a whole `user:secret` value.
+///
+/// An '@' inside the password is not a boundary either. The first '@' after
+/// the candidate start is only a *possible* separator: when the password
+/// itself contains one, the text after it still contains another '@' and the
+/// real host follows that later one. The scan below therefore walks every
+/// remaining '@' and uses the first whose tail is a plausible host, while the
+/// candidate since the start must still look like `user:secret` carrying a
+/// pair separator. When no such '@' exists the original '@' is copied through
+/// verbatim, so harmless `state=a@b` values are untouched.
 fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
     let mut out = String::with_capacity(pairs.len());
     let mut rest = pairs;
@@ -436,8 +445,8 @@ fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
         });
         has_secret && (candidate.contains(';') || candidate.contains('&'))
     };
-    while let Some(relative_at) = rest.find('@') {
-        let before = &rest[..relative_at];
+    while let Some(first_at) = rest.find('@') {
+        let before = &rest[..first_at];
         // '?', '#' and '/' normally close the enclosing path/query, but '/' is
         // also a legal password character. Walk the delimiters from right to
         // left and keep the rightmost one whose tail is still a whole
@@ -456,28 +465,41 @@ fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
         // not look for '=' here: a password may itself contain `a=s`, and
         // treating that as the key/value boundary hid the real userinfo from
         // this helper.
-        let (prefix_end, candidate) = if pair_start == 0 {
+        let prefix_end = if pair_start == 0 {
             // Scheme-less authority: keep the `key=` prefix in the diagnostic
             // output. The first '=' is the pair separator here; later '=' are
             // part of the password and must not be treated as boundaries.
-            let head = before.find('=').map(|index| index + 1).unwrap_or(0);
-            (head, &before[head..])
+            before.find('=').map(|index| index + 1).unwrap_or(0)
         } else {
-            (pair_start, &before[pair_start..])
+            pair_start
         };
-        let after = &rest[relative_at + 1..];
-        let host = after.split(&['/', '?', '#'][..]).next().unwrap_or("");
-        // Both separators must be checked in the *candidate*: the pair splitter
-        // below would otherwise cut a password containing either one before
-        // the recursive masker ever sees the authority.
-        if userinfo_with_separator(candidate) && host_with_optional_port_ok(host) {
-            out.push_str(&before[..prefix_end]);
+
+        // The candidate at the first '@' may end inside the password. Keep
+        // scanning until an '@' has a plausible host after it; both checks
+        // together keep the rewrite limited to a `user:secret` authority.
+        let mut separator = None;
+        for (relative_at, _) in rest[first_at..].match_indices('@') {
+            let at = first_at + relative_at;
+            let candidate = &rest[prefix_end..at];
+            let after = &rest[at + 1..];
+            let host = after.split(&['/', '?', '#'][..]).next().unwrap_or("");
+            if userinfo_with_separator(candidate) && host_with_optional_port_ok(host) {
+                separator = Some(at);
+                break;
+            }
+        }
+
+        if let Some(at) = separator {
+            out.push_str(&rest[..prefix_end]);
             out.push_str("[redacted]");
             out.push('@');
+            rest = &rest[at + 1..];
         } else {
-            out.push_str(&rest[..relative_at + 1]);
+            // No nested authority with a pair-bearing password here: leave
+            // this '@' alone and let the pair splitter handle the tail.
+            out.push_str(&rest[..first_at + 1]);
+            rest = &rest[first_at + 1..];
         }
-        rest = &rest[relative_at + 1..];
     }
     out.push_str(rest);
     out

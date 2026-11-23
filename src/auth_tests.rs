@@ -2941,3 +2941,43 @@ fn userinfo_does_not_hide_a_blocked_host_from_the_ssrf_classifier() {
         public, metadata
     ]));
 }
+
+#[test]
+fn nondecimal_and_ipv6_embedded_link_local_literals_are_a_known_constraint() {
+    // Documented limit of `hostname_embeds_link_local` (auth.rs:463-490):
+    // only dotted/hyphenated *decimal* IPv4 quads are decoded. A bare
+    // non-decimal literal is still normalized by `url::Url` to an Ipv4 host,
+    // so the whole-host form stays blocked.
+    assert!(is_blocked_server_url_without_dns("http://0xa9fea9fe"));
+    assert!(is_blocked_server_url("http://0xa9fea9fe"));
+
+    // The same spellings embedded in a wildcard-DNS name are invisible to the
+    // network-free classifier and to `validate_config`'s SSRF check. Pin the
+    // constraint so it is reviewed rather than rediscovered.
+    let metadata: IpAddr = "169.254.169.254".parse().unwrap();
+    for alias in [
+        "http://0xa9fea9fe.nip.io",
+        "http://0251.0376.0251.0376.nip.io",
+        "http://2852039166.nip.io",
+        "http://fe80--1.sslip.io",
+        "http://fe80-0-0-0-0-0-0-1.nip.io",
+    ] {
+        assert!(
+            !is_blocked_server_url_without_dns(alias),
+            "documented classifier limit: {alias}"
+        );
+        // The resolver-backed form still closes the gap whenever DNS is
+        // available: a link-local answer rejects the whole name.
+        assert!(
+            is_blocked_server_url_with(alias, |_| vec![metadata]),
+            "resolver path must still block {alias}"
+        );
+    }
+
+    // Control: the decimal form the classifier does understand is blocked
+    // without any lookup, so the assertions above are about the spelling and
+    // not about a disabled wildcard-alias rule.
+    assert!(is_blocked_server_url_without_dns(
+        "http://169.254.169.254.nip.io"
+    ));
+}

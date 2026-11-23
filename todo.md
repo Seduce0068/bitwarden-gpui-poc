@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第93弾で 7 件すべてを完了）。
+なし（第94弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第94弾（16 担当・38 回目）の指摘 6 件を完結（2026-11-23）
+  - 確定クエリの Alt/AltGr、行クリック index 契約、SSRF 非10進
+    埋め込みリテラルの既知制約、入れ子 URL の '@' 混在マスク、
+    同期注入シーム不在の doc 化を修正。
+  - 有効 device_id 往復、マルチバイト境界、1000bit、大文字 +1bit
+    をテスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（901 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第93弾（16 担当・37 回目）の指摘 7 件を完結（2026-11-23）
   - 監査の all_same と辞書 prefix バイパス、IPv4-mapped IPv6、
     userinfo SSRF、TooLarge/未来スキーマの save ガードを修正・テスト。

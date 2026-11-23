@@ -40,6 +40,18 @@
 //! changes the private rule, this copy can drift; there is no injection seam
 //! for the upstream filter, so the tests pin the current observable behaviour
 //! instead of proving equivalence with a future version.
+//!
+//! Known constraint: [`parse_sync`] has no injection seam. It takes raw bytes
+//! and calls `serde_json::from_slice`, `normalize_sync_keys`, the two dedup
+//! passes and `openwarden::SyncData::from_json` directly, so neither a failing
+//! JSON parser nor a failing upstream constructor can be forced through a
+//! parameter; tests pass real byte slices and pin the observable
+//! classification instead. A private helper taking an already-parsed
+//! `serde_json::Value` (or a parser/constructor closure) could provide the
+//! seam without changing `parse_sync`'s public signature, just as the private
+//! decryptor seams elsewhere in this module do. That refactor is outside this
+//! change's scope, so this note records the limit rather than implying the
+//! failure branches are covered.
 
 use std::collections::{HashMap, HashSet};
 

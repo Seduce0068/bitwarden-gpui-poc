@@ -616,30 +616,33 @@ fn confirmed_query_text_edges_match_editing_mode_guards() {
     value.key_char = Some("ß");
     assert_eq!(classify_key(&value), UiAction::InsertQueryText("ß".into()));
 
-    // A confirmed query is NOT one of the editing modes. The Alt guard
-    // therefore suppresses every Alt combination here, unlike search/auth/
-    // settings editing where Alt + printable text still inserts.
+    // A confirmed query IS a text-editing context for the modifier guards:
+    // Alt and macOS Ctrl+Alt (AltGr) glyphs must reach `InsertQueryText`
+    // instead of being dropped (R2-UI-94). Only key names with no insertable
+    // text, such as F1, stay inert.
     value.modifiers.alt = true;
-    for (key, key_char) in [
-        ("a", None),
-        ("x", Some("X")),
-        ("space", None),
-        ("unknown", Some("日本語")),
-        ("f1", Some("F1")),
+    for (key, key_char, expected) in [
+        ("a", None, "a"),
+        ("x", Some("X"), "X"),
+        ("space", None, " "),
+        ("unknown", Some("日本語"), "日本語"),
     ] {
         value.key = key;
         value.key_char = key_char;
         assert_eq!(
             classify_key(&value),
-            UiAction::None,
+            UiAction::InsertQueryText(expected.into()),
             "confirmed/alt/{key}/{key_char:?}"
         );
     }
+    value.key = "f1";
+    value.key_char = Some("F1");
+    assert_eq!(classify_key(&value), UiAction::None, "confirmed/alt/f1");
     value.modifiers.alt = false;
 
-    // Command-like modifiers, including the macOS Ctrl+Alt AltGr spelling,
-    // stay reserved for the platform: a stray layout glyph must not let them
-    // insert into a confirmed query.
+    // Bare Ctrl, Windows and Fn stay reserved for the platform, even with a
+    // layout glyph. Ctrl+Alt is different: it is macOS AltGr, so with a glyph
+    // it now inserts into the confirmed query like any other editing mode.
     for modifiers in [
         KeyModifiers {
             control: true,
@@ -653,11 +656,6 @@ fn confirmed_query_text_edges_match_editing_mode_guards() {
             function: true,
             ..Default::default()
         },
-        KeyModifiers {
-            control: true,
-            alt: true,
-            ..Default::default()
-        },
     ] {
         value.modifiers = modifiers;
         value.key = "c";
@@ -668,6 +666,145 @@ fn confirmed_query_text_edges_match_editing_mode_guards() {
             "confirmed/modifiers/{modifiers:?}"
         );
     }
+    value.modifiers = KeyModifiers {
+        control: true,
+        alt: true,
+        ..Default::default()
+    };
+    value.key = "c";
+    value.key_char = Some("ç");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertQueryText("ç".into()),
+        "confirmed/ctrl-alt/ç"
+    );
+}
+
+#[test]
+fn confirmed_query_accepts_alt_and_altgr_glyphs() {
+    // R2-UI-94: a confirmed query (query_nonempty = true, searching = false)
+    // must not drop layout characters produced by Alt or macOS AltGr.
+    let mut value = ctx("s");
+    value.query_nonempty = true;
+
+    // Alt + a layout glyph carried by `key_char`.
+    value.key_char = Some("ß");
+    value.modifiers.alt = true;
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertQueryText("ß".into()),
+        "confirmed/alt/ß"
+    );
+
+    // macOS AltGr arrives as Ctrl+Alt with the glyph in `key_char`.
+    value.modifiers = KeyModifiers {
+        control: true,
+        alt: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertQueryText("ß".into()),
+        "confirmed/ctrl-alt/ß"
+    );
+
+    // A genuine multi-character composition reaches the same path. Use a
+    // non-command physical key so command matching falls through.
+    value.key = "unknown";
+    value.key_char = Some("日本語");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertQueryText("日本語".into()),
+        "confirmed/ctrl-alt/ime"
+    );
+
+    // Without any modifier the same glyph still inserts (existing contract).
+    value.modifiers = KeyModifiers::default();
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertQueryText("日本語".into()),
+        "confirmed/plain/ime"
+    );
+
+    // Scope: a leftover query in a command panel or on the lock screen is not
+    // an editing context, so the Alt guard must still suppress the glyph.
+    value.key_char = Some("ß");
+    value.modifiers.alt = true;
+    value.panel = Panel::Settings;
+    assert_eq!(classify_key(&value), UiAction::None, "settings/alt/ß");
+    value.panel = Panel::Audit;
+    assert_eq!(classify_key(&value), UiAction::None, "audit/alt/ß");
+    value.panel = Panel::Vault;
+    value.screen = Screen::Locked;
+    assert_eq!(classify_key(&value), UiAction::None, "locked/alt/ß");
+}
+
+#[test]
+fn confirmed_query_without_a_report_still_answers_g_with_audit_unavailable() {
+    // R2-UI-94: the confirmed-query text fallback must not swallow `g`, which
+    // keeps its own audit binding before that fallback in the vault arm.
+    let mut value = ctx("g");
+    value.query_nonempty = true;
+    value.has_audit_report = false;
+    assert_eq!(classify_key(&value), UiAction::AuditUnavailable);
+    assert_ne!(classify_key(&value), UiAction::None);
+
+    // With a report the same key opens the audit panel, as before.
+    value.has_audit_report = true;
+    assert_eq!(classify_key(&value), UiAction::OpenAudit);
+
+    // A Shift/Caps-Lock glyph folds to the same `g` binding.
+    value.has_audit_report = false;
+    value.key_char = Some("G");
+    assert_eq!(classify_key(&value), UiAction::AuditUnavailable);
+}
+
+#[test]
+fn settings_editing_inserts_threshold_time_and_adjustment_keys_as_text() {
+    // R2-UI-94: while a settings field is focused, 3-6, +/-/=/_ and i/u must
+    // be literal text (a URL or time may contain them) and must not adjust any
+    // setting or escape into a global action.
+    let mut value = ctx("3");
+    value.panel = Panel::Settings;
+
+    // Outside editing the very same keys keep their adjustment bindings.
+    for (key, expected) in [
+        ("3", UiAction::AdjustLoginTimeout(1)),
+        ("4", UiAction::AdjustLoginTimeout(-1)),
+        ("5", UiAction::AdjustClipboardRestore(1)),
+        ("6", UiAction::AdjustClipboardRestore(-1)),
+        ("+", UiAction::AdjustThreshold(1)),
+        ("=", UiAction::AdjustThreshold(1)),
+        ("-", UiAction::AdjustThreshold(-1)),
+        ("_", UiAction::AdjustThreshold(-1)),
+        ("i", UiAction::AdjustIdleLock(1)),
+        ("u", UiAction::AdjustIdleLock(-1)),
+    ] {
+        value.key = key;
+        value.key_char = None;
+        assert_eq!(classify_key(&value), expected, "settings/{key}");
+    }
+
+    // With the field focused every one of them is inserted verbatim.
+    value.editing_settings = true;
+    for key in ["3", "4", "5", "6", "+", "-", "=", "_", "i", "u"] {
+        value.key = key;
+        value.key_char = None;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSettingsText(key.into()),
+            "settings/editing/{key}"
+        );
+    }
+
+    // A layout glyph still wins over the physical character, as in every
+    // other editing mode.
+    value.key = "i";
+    value.key_char = Some("ï");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertSettingsText("ï".into())
+    );
 }
 
 #[test]
@@ -1549,9 +1686,10 @@ fn function_key_names_are_never_inserted_while_editing() {
             "settings/alt/{key}/{key_char:?}"
         );
 
-        // The confirmed-query fallback is not an editing mode, but it shares
-        // `insertable_text`: echoed function-key names must stay inert there
-        // too, with and without Alt.
+        // The confirmed-query fallback shares `insertable_text` with the
+        // editing modes (and now joins them for the Alt/AltGr guards), but an
+        // echoed function-key name must stay inert there too, with and without
+        // Alt.
         value.modifiers.alt = false;
         value.editing_settings = false;
         value.panel = Panel::Vault;

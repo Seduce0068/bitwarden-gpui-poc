@@ -2311,3 +2311,50 @@ fn digit_suffix_only_and_exact_common_contracts_survive_the_prefix_rule() {
     assert!(!super::is_exact_common_password("1password"));
     assert!(!super::is_exact_common_password("password123!"));
 }
+
+#[test]
+fn entropy_estimates_are_clamped_to_1000_bits_on_both_paths() {
+    use crate::words::WORDS;
+
+    // health.rs:395 clamps the character-pool estimate before it becomes the
+    // u32 in Finding::WeakPassword / password_strength. An unbounded value
+    // would wrap or report an absurd strength for a very long input.
+    let long = "aB3!".repeat(300); // 1200 chars, all four ASCII classes
+    assert_eq!(long.chars().count(), 1200);
+    let pool = LOWERCASE.len() + UPPERCASE.len() + DIGITS.len() + SYMBOLS.len();
+    assert!(entropy_bits(pool, long.chars().count()) > 1000.0);
+    assert_eq!(estimate_entropy(&long), 1000);
+    assert_eq!(password_strength(&long), (1000, Strength::Strong));
+
+    // The generated-passphrase path has its own clamp (health.rs:454).
+    let many_words = vec![WORDS[0]; 200].join("-");
+    assert!(entropy_bits(WORDS.len(), 200) > 1000.0);
+    assert_eq!(super::passphrase_estimate(&many_words), Some(1000));
+    assert_eq!(estimate_entropy(&many_words), 1000);
+}
+
+#[test]
+fn dictionary_passwords_gain_exactly_one_bit_for_uppercase() {
+    // health.rs:383-385: the dictionary estimate is `entropy_bits(2_000, 1)`
+    // plus one bit when the value has an uppercase letter. Pin the exact
+    // numbers so a future pool/size change cannot silently remove the bonus.
+    let base = entropy_bits(2_000, 1).round() as u32;
+    assert_eq!(base, 11);
+    for (lower, upper) in [
+        ("password123", "PASSWORD123"),
+        ("letmein", "LETMEIN"),
+        ("password", "Password"),
+    ] {
+        assert!(super::is_exact_common_password(lower), "{lower}");
+        assert_eq!(estimate_entropy(lower), base, "{lower}");
+        assert_eq!(estimate_entropy(upper), base + 1, "{upper}");
+        assert_eq!(
+            estimate_entropy(upper) - estimate_entropy(lower),
+            1,
+            "{lower} -> {upper}"
+        );
+    }
+    // The uppercase form is still far below the weak-password threshold, so
+    // the +1 bit does not turn a dictionary guess into an acceptable password.
+    assert!(estimate_entropy("PASSWORD123") < Thresholds::default().weak_bits);
+}

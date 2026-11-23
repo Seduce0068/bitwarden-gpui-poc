@@ -2616,6 +2616,69 @@ fn slash_and_amp_in_nested_userinfo_password_are_masked() {
 }
 
 #[test]
+fn at_signs_inside_nested_passwords_with_pair_separators_are_masked() {
+    // '@' is legal inside a password. When the password also holds '&' or ';',
+    // the pre-pass used to stop at the first '@', see a host containing another
+    // '@', and leave the whole credential in the diagnostic URL (cache.rs:
+    // 415-511). The real separator is the last '@' of the nested authority.
+    let with_scheme = "https://vault.example.com/login?next=https://user:AMP_AT_P&SS@INSIDE@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(with_scheme);
+    for secret in ["AMP_AT_P&SS", "INSIDE"] {
+        assert!(!masked.contains(secret), "leaked {secret}: {masked}");
+    }
+    assert!(
+        masked.contains("next=https://[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    let without_scheme = "https://vault.example.com/login?next=user:SEMI_AT_P;SS@INSIDE@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(without_scheme);
+    for secret in ["SEMI_AT_P;SS", "INSIDE"] {
+        assert!(!masked.contains(secret), "leaked {secret}: {masked}");
+    }
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // Both separators at once, and an '@' followed by a host-looking prefix
+    // inside the password: the rightmost '@' with a plausible host still wins.
+    let mixed = "https://vault.example.com/login?next=https://user:MIX&P;SS@evil.example@cb.example.com/done&state=ok";
+    let masked = super::mask_url_secrets(mixed);
+    for secret in ["MIX&P;SS", "evil.example"] {
+        assert!(!masked.contains(secret), "leaked {secret}: {masked}");
+    }
+    assert!(
+        masked.contains("next=https://[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+
+    // Pin the pre-pass directly: it rewrites the whole userinfo, not just the
+    // tail after the in-password '@'.
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs(
+            "next=https://user:AMP_AT_P&SS@INSIDE@cb.example.com/done"
+        ),
+        "next=https://[redacted]@cb.example.com/done"
+    );
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs("next=user:SEMI_AT_P;SS@INSIDE@cb.example.com/done"),
+        "next=[redacted]@cb.example.com/done"
+    );
+
+    // Debug reaches the same path through the stored server URL, and the
+    // stored value is still byte-for-byte the one used for the mismatch check.
+    let cache = SyncCache::from_body(body(), with_scheme).unwrap();
+    let rendered = format!("{cache:?}");
+    for secret in ["AMP_AT_P&SS", "INSIDE"] {
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+    }
+    assert_eq!(cache.server_url, with_scheme);
+}
+
+#[test]
 fn non_ascii_percent_escaped_keys_are_a_documented_masking_limit() {
     // `percent_decode` keeps non-ASCII escapes as `%XX`, so an ASCII key name
     // split by such an escape never matches the sensitive-name list. This is a

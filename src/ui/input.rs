@@ -507,6 +507,12 @@ impl BitwardenApp {
                 cx.notify();
             }
             UiAction::Generator(option) => self.toggle_generator(option, cx),
+            // `index` is the render-position index emitted by `ui::render`'s
+            // row click, NOT a stable item id. `select_index` resolves it
+            // against the current `visible_items()` snapshot and the same
+            // index is reused for scrolling, so both must name the same row.
+            // A snapshot change between draw and click can therefore select a
+            // different row; a stable id is deliberately out of scope (R2-UI-94).
             UiAction::SelectRow(index) => {
                 // A mouse click is an explicit selection: leaving search mode
                 // here keeps the row click and the keyboard path consistent.
@@ -855,6 +861,69 @@ mod tests {
         let dirty_status = finish_search_from_row_click(&mut view, true);
         assert_eq!(dirty_status, search_finished_status(1, true));
         assert!(dirty_status.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn select_row_index_is_the_visible_render_position() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        fn item(id: &str, name: &str) -> VaultItem {
+            VaultItem::new(
+                id,
+                name,
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            )
+        }
+
+        let mut view = VaultViewState::new();
+        // Insertion order deliberately differs from the visible (sorted) order:
+        // a click index is a position in `visible_items()`, not an item id and
+        // not the order the items were added.
+        view.vault.items.push(item("zeta", "Zulu"));
+        view.vault.items.push(item("alpha", "Alpha"));
+        view.vault.items.push(item("mid", "Mid"));
+
+        let visible = view.visible_items();
+        assert_eq!(
+            visible
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "mid", "zeta"],
+            "precondition: index 1 is the sorted middle row"
+        );
+
+        // The `ui::render` -> `UiAction::SelectRow` -> `select_index` contract:
+        // the drawn index selects the item drawn at that index.
+        let visible_len = visible.len();
+        let clicked = 1usize;
+        let expected_id = visible[clicked].id.clone();
+        assert!(view.select_index(clicked));
+        assert_eq!(view.selected_id.as_deref(), Some(expected_id.as_str()));
+        assert_eq!(view.selected_id.as_deref(), Some("mid"));
+
+        // A repeated click on the same index is not a change: the click path
+        // uses this flag to decide whether to scroll.
+        let before = view.rewind_calls;
+        assert!(!view.select_index(clicked));
+        assert_eq!(view.rewind_calls, before, "selection-only must not rewind");
+
+        // An out-of-range draw index is rejected rather than clamped.
+        assert!(!view.select_index(visible_len));
+        assert_eq!(view.selected_id.as_deref(), Some("mid"));
+
+        // Known limitation (documented in render.rs and keys.rs): the index is
+        // not stable across a list snapshot change. Once "alpha" is gone the
+        // same numeric index names a different item.
+        view.vault.items.remove(1);
+        let shifted = view.visible_items();
+        assert_eq!(shifted.len(), 2);
+        assert_eq!(shifted[clicked].id, "zeta");
+        assert!(view.select_index(clicked));
+        assert_eq!(view.selected_id.as_deref(), Some("zeta"));
     }
 
     #[::core::prelude::v1::test]

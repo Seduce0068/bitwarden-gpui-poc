@@ -231,6 +231,15 @@ impl BitwardenApp {
                             .login()
                             .map_or("-".to_string(), |(user, _, _, _)| user.to_string());
                         let badge = totp_badge(item);
+                        // Row identity here is the render-position `index`, not
+                        // the item's stable id. The click below sends that same
+                        // `index` as `UiAction::SelectRow`, and `ui::input`
+                        // resolves it through `VaultViewState::select_index`
+                        // against the visible list. Both sides must therefore
+                        // observe the same snapshot: a filter/sort/query change
+                        // between draw and click can make the index name a
+                        // different row (or fall out of range). Moving to a
+                        // stable id is intentionally out of scope (R2-UI-94).
                         rows.push(
                             div()
                                 .id(index)

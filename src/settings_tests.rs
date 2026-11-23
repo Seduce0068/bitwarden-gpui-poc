@@ -2816,3 +2816,81 @@ fn save_guard_distinguishes_oversized_files_from_future_schema_files() {
     );
     assert_eq!(std::fs::read(&path).unwrap(), future);
 }
+
+#[test]
+fn valid_device_id_survives_a_save_and_load_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+
+    // Both accepted hex spellings must make the full Settings -> save -> load
+    // round trip without being cleared by `sanitized()` (settings.rs:670-676).
+    for id in [
+        generate_device_id().unwrap(),
+        generate_device_id().unwrap().to_ascii_uppercase(),
+    ] {
+        assert!(is_valid_device_id(&id), "fixture id: {id}");
+        let settings = Settings {
+            device_id: id.clone(),
+            email: "alice@example.com".into(),
+            ..Default::default()
+        };
+        settings.save(&path).unwrap();
+
+        let loaded = Settings::load_detailed(&path).unwrap();
+        assert_eq!(loaded, settings, "the whole struct must round-trip: {id}");
+        assert_eq!(loaded.device_id, id);
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        // A valid stored id is reused on the next sync: no regeneration, no
+        // extra write, so the on-disk bytes are unchanged by ensure_device_id.
+        let before = std::fs::read(&path).unwrap();
+        let mut reused = loaded;
+        assert_eq!(reused.ensure_device_id(Some(&path)).unwrap(), id.as_str());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn sanitized_truncates_shared_text_fields_on_multibyte_char_boundaries() {
+    use crate::limits::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
+
+    // `sanitized()` applies the same `truncate_to_limit` used by
+    // `push_shared_text` (settings.rs:677-688, limits.rs:107-118): the cap
+    // counts characters and a 3-byte scalar straddling it is dropped whole.
+    let settings = Settings {
+        server_url: format!("{}{}", "a".repeat(MAX_SERVER_URL_LEN - 1), "あい"),
+        email: format!("{}{}", "a".repeat(MAX_EMAIL_LEN - 1), "あい"),
+        ..Default::default()
+    };
+    let safe = settings.sanitized();
+
+    assert_eq!(safe.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(
+        safe.server_url,
+        format!("{}あ", "a".repeat(MAX_SERVER_URL_LEN - 1))
+    );
+    assert_eq!(
+        safe.server_url.len(),
+        (MAX_SERVER_URL_LEN - 1) + 'あ'.len_utf8()
+    );
+    assert_eq!(safe.email.chars().count(), MAX_EMAIL_LEN);
+    assert_eq!(safe.email, format!("{}あ", "a".repeat(MAX_EMAIL_LEN - 1)));
+    assert_eq!(safe.email.len(), (MAX_EMAIL_LEN - 1) + 'あ'.len_utf8());
+    // The last admitted scalar is complete; the following one was dropped.
+    assert!(safe.email.ends_with('あ'));
+    assert!(!safe.email.contains('い'));
+
+    // The email format policy runs before the cap: a leading zero-width run
+    // is stripped and may not push a multibyte tail past the boundary.
+    let zero_width = Settings {
+        email: format!("\u{200b}\u{200d}あ{}", "い".repeat(MAX_EMAIL_LEN)),
+        ..Default::default()
+    }
+    .sanitized();
+    assert_eq!(zero_width.email.chars().count(), MAX_EMAIL_LEN);
+    assert!(zero_width.email.starts_with('あ'));
+    assert!(zero_width.email.is_char_boundary(zero_width.email.len()));
+
+    // sanitized() stays a pure clone-based operation.
+    assert_eq!(settings.server_url.chars().count(), MAX_SERVER_URL_LEN + 1);
+    assert_eq!(settings.email.chars().count(), MAX_EMAIL_LEN + 1);
+}
