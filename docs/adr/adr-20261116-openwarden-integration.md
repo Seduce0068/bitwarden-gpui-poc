@@ -205,7 +205,7 @@ openwarden 統合の検証）に見合わないため採用しない。既定値
 - かつて `SyncCache::from_body` の redact が camelCase のみを除去し、
   PascalCase の `Key` / `PrivateKey` が残存するリスクがあったが、
   2026-11-21 に大小文字・区切り文字を問わず除去するよう修正済み
-  （現在は `src/cache.rs:920-960` の `redact_secret_keys` /
+  （現在は `src/cache.rs:958-1000` の `redact_secret_keys` /
   `redact_profile_keys`、回帰テスト `src/cache_tests.rs:227-260`）。
   このリスクは writer 現状維持の根拠には使わない。
 - トリガー#2（オフライン復元の価値が実装コストを上回る実測）を

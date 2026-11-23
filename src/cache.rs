@@ -77,6 +77,8 @@ pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncCache {
     /// Schema version, so a future format change can be detected.
+    /// Missing in pre-versioning files: defaults to 0 (a version mismatch).
+    #[serde(default)]
     pub version: u32,
     /// The account the response belongs to.
     pub user_id: String,

@@ -148,6 +148,44 @@ fn wrong_version_is_rejected() {
 }
 
 #[test]
+fn older_versions_are_version_mismatches_not_parse_failures() {
+    // `load_detailed` deserializes the envelope before it compares the version
+    // (cache.rs:1145-1152). The sibling tests only pin a *newer* version. Both
+    // older shapes must deserialize and then take the same VersionMismatch arm:
+    // an explicit `version: 0`, and the pre-version envelope with no key at all.
+    let dir = tempfile::tempdir().unwrap();
+
+    let explicit_zero = serde_json::json!({
+        "version": 0,
+        "user_id": "user-1",
+        "server_url": "https://vault.example.com",
+        "body": body(),
+        "created_at": null,
+    });
+    let zero_path = dir.path().join("version-zero.json");
+    write_fixture(&zero_path, &serde_json::to_vec(&explicit_zero).unwrap());
+    let error = load_detailed(&zero_path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::VersionMismatch),
+        "version=0 must be a version mismatch, not a parse failure: {error:?}"
+    );
+
+    let no_version_key = serde_json::json!({
+        "user_id": "user-1",
+        "server_url": "https://vault.example.com",
+        "body": body(),
+        "created_at": null,
+    });
+    let absent_path = dir.path().join("version-absent.json");
+    write_fixture(&absent_path, &serde_json::to_vec(&no_version_key).unwrap());
+    let error = load_detailed(&absent_path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::VersionMismatch),
+        "a missing version key must be a version mismatch, not a parse failure: {error:?}"
+    );
+}
+
+#[test]
 fn validation_checks_the_server_and_the_account() {
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     assert!(validate(&cache, "user-1", "https://vault.example.com").is_ok());
@@ -1663,6 +1701,58 @@ fn secret_profile_keys_fold_non_ascii_separators() {
             "must not be redacted: {key:?}"
         );
     }
+}
+
+#[test]
+fn every_dash_and_connector_separator_is_redacted_from_keys_and_cached_body() {
+    // `is_key_separator` (cache.rs:903-923) keeps a hand-maintained list of
+    // dash/connector punctuation after the ASCII, `Cf` and whitespace families.
+    // Pin every code point of that list: one missing arm would leave a field
+    // such as `k<sep>ey` in the stored body with its key material intact.
+    const DASH_SEPARATORS: &[char] = &[
+        '\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2015}', '\u{2212}',
+        '\u{2e17}', '\u{2e3a}', '\u{2e3b}', '\u{301c}', '\u{30a0}', '\u{fe31}', '\u{fe32}',
+        '\u{fe33}', '\u{fe34}', '\u{fe4d}', '\u{fe4e}', '\u{fe4f}', '\u{fe58}', '\u{fe63}',
+        '\u{ff0d}', '\u{ff3f}',
+    ];
+
+    for &separator in DASH_SEPARATORS {
+        for (base, expected) in [("k", "ey"), ("private", "key")] {
+            let key = format!("{base}{separator}{expected}");
+            assert!(
+                super::is_secret_profile_key(&key),
+                "U+{:04X} must be folded: {key:?}",
+                u32::from(separator)
+            );
+        }
+    }
+
+    // Classification alone is not enough: the same list must also strip every
+    // field from the serialized body before it reaches disk (cache.rs:958-973).
+    let mut profile = serde_json::json!({ "id": "user-1" });
+    let mut secrets = Vec::new();
+    for (index, &separator) in DASH_SEPARATORS.iter().enumerate() {
+        let key = format!("k{separator}ey");
+        let secret = format!("SEPARATOR_SECRET_{index}");
+        profile[key.as_str()] = serde_json::json!(secret.as_str());
+        secrets.push(secret);
+    }
+    let body = serde_json::json!({
+        "profile": profile,
+        "folders": [],
+        "ciphers": [],
+        "object": "sync",
+    });
+    let cache = SyncCache::from_body(body.to_string().into_bytes(), "https://vault.example.com")
+        .expect("a keyless copy of the body must still be valid sync JSON");
+    let stored = String::from_utf8(cache.body.clone()).unwrap();
+    for secret in secrets {
+        assert!(
+            !stored.contains(secret.as_str()),
+            "leaked {secret}: {stored}"
+        );
+    }
+    assert!(cache.sync().is_ok());
 }
 
 #[test]
