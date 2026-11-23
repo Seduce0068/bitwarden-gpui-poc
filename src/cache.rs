@@ -725,6 +725,21 @@ fn mask_url_secrets(url: &str) -> String {
 /// Depth-limited implementation of [`mask_url_secrets`].
 fn mask_url_secrets_inner(url: &str, depth: usize) -> String {
     let masked = mask_url_userinfo(url);
+    // A nested authority can hide a literal '#' inside its password
+    // (`?next=user:p#SECRET@host`). Splitting on that '#' first would hand the
+    // fragment tail to `mask_param_pairs` without the `user:pass@` marker, so
+    // the credential survived. Re-encode the delimiter when an '@' follows it
+    // and the head has a colon; the parameter decoder restores it and the
+    // nested-authority masker then redacts the whole credential.
+    let masked = if let Some((head, tail)) = masked.split_once('#') {
+        if tail.contains('@') && head.contains('?') {
+            format!("{head}%23{tail}")
+        } else {
+            masked
+        }
+    } else {
+        masked
+    };
     let fragment_start = masked.find('#');
     let query_start = masked
         .find('?')

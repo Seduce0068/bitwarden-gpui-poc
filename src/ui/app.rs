@@ -331,6 +331,26 @@ pub(super) fn audit_no_selection_status(dirty: bool) -> String {
     )
 }
 
+/// Status when `Enter` in the audit panel cannot resolve a finding.
+///
+/// [`audit_no_selection_status`] tells the user to press ↑↓, which is
+/// impossible when the report has no findings at all. That case shares the
+/// count-aware "監査する問題がありません" wording from [`audit_refresh_status`]
+/// with the search-exit path. A non-empty report without a valid highlight,
+/// and a missing report, keep the original guidance. Kept pure so the contract
+/// can be tested without a GPUI window (this crate does not enable gpui's
+/// `test-support` feature).
+pub(super) fn audit_focus_no_selection_status(
+    report: Option<&crate::health::Report>,
+    dirty: bool,
+) -> String {
+    if report.is_some_and(|report| report.items.is_empty()) {
+        audit_refresh_status(None, 0, None, dirty)
+    } else {
+        audit_no_selection_status(dirty)
+    }
+}
+
 /// Status shown when a search is finished onto the audit panel.
 ///
 /// Finishing a search does **not** clear [`BitwardenApp::audit_row_selection`]:
@@ -339,12 +359,13 @@ pub(super) fn audit_no_selection_status(dirty: bool) -> String {
 /// highlight still drawn on screen. A highlighted row is described with the
 /// same wording as the keyboard move and refresh paths (and its name is always
 /// re-read from the current report). An *empty* report has no row at all, so it
-/// reuses [`audit_refresh_status`]'s "監査する問題がありません" wording instead
-/// of asking the user to select a non-existent row with ↑↓. The remaining
-/// no-selection cases (a non-empty report with no highlight, or no report at
-/// all) keep [`audit_no_selection_status`]. Kept pure so the contract can be
-/// tested without a GPUI window (this crate does not enable gpui's
-/// `test-support` feature).
+/// goes through [`audit_focus_no_selection_status`] and uses the count-aware
+/// "監査する問題がありません" wording instead of asking the user to select a
+/// non-existent row with ↑↓. The remaining no-selection cases (a non-empty
+/// report with no highlight, or no report at all) keep
+/// [`audit_no_selection_status`] through that same helper. Kept pure so the
+/// contract can be tested without a GPUI window (this crate does not enable
+/// gpui's `test-support` feature).
 pub(super) fn audit_search_exit_status(
     report: Option<&crate::health::Report>,
     selection: Option<usize>,
@@ -358,10 +379,7 @@ pub(super) fn audit_search_exit_status(
                 .map(|item| item_name_text(&item.name).to_string());
             audit_refresh_status(Some(index), len, name.as_deref(), dirty)
         }
-        None if report.is_some_and(|report| report.items.is_empty()) => {
-            audit_refresh_status(None, 0, None, dirty)
-        }
-        None => audit_no_selection_status(dirty),
+        None => audit_focus_no_selection_status(report, dirty),
     }
 }
 
@@ -1076,7 +1094,12 @@ impl BitwardenApp {
             Some(id.to_string())
         };
         let Some(id) = resolved else {
-            self.status = audit_no_selection_status(self.settings_dirty);
+            // `Enter` with no resolvable row must not ask for a ↑↓ selection
+            // when the report is empty: there is no row to highlight.
+            self.status = audit_focus_no_selection_status(
+                self.view.audit_report.as_ref(),
+                self.settings_dirty,
+            );
             cx.notify();
             return;
         };
@@ -1597,6 +1620,53 @@ mod tests {
         let dirty = audit_no_selection_status(true);
         assert_eq!(dirty, status_with_unsaved(&clean, true));
         assert!(dirty.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_focus_no_selection_status_counts_an_empty_report() {
+        use crate::health::ItemReport;
+        use crate::model::ItemKind;
+
+        // `Enter` on an empty audit report used to tell the user to press ↑↓
+        // even though no finding exists to highlight.
+        let empty = audit_focus_no_selection_status(Some(&Report::default()), false);
+        assert_eq!(empty, "監査する問題がありません（↑↓で行を選択できません）");
+        assert!(!empty.contains("選択されていません"), "{empty}");
+
+        let dirty = audit_focus_no_selection_status(Some(&Report::default()), true);
+        assert_eq!(dirty, status_with_unsaved(&empty, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+
+        // A non-empty report without a valid highlight, and no report at all,
+        // still need the original "press ↑↓" guidance.
+        let report = Report {
+            items: vec![ItemReport {
+                id: "item-1".into(),
+                name: "Finding".into(),
+                kind: ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 0,
+            logins: 1,
+        };
+        for (label, case) in [
+            (
+                "non-empty report",
+                audit_focus_no_selection_status(Some(&report), false),
+            ),
+            ("no report", audit_focus_no_selection_status(None, false)),
+        ] {
+            assert_eq!(case, audit_no_selection_status(false), "{label}");
+            assert!(case.contains("選択されていません"), "{label}: {case}");
+        }
+
+        // The search-exit path shares this helper, so its empty-report branch
+        // cannot drift back to the row-selection prompt.
+        assert_eq!(
+            audit_search_exit_status(Some(&Report::default()), Some(usize::MAX), false),
+            empty
+        );
     }
 
     #[::core::prelude::v1::test]

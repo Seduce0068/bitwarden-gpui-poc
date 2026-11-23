@@ -2621,6 +2621,42 @@ fn nested_scheme_less_authorities_and_semicolon_separators_are_masked() {
 }
 
 #[test]
+fn literal_hash_in_nested_userinfo_password_is_masked() {
+    // A scheme-less nested authority whose password carries a *literal* '#'
+    // used to be cut at the outer fragment boundary before `mask_param_pairs`
+    // could recurse into it. The delimiter is now re-encoded for the nested
+    // authority so the whole `user:secret@host` pair is redacted. Percent-
+    // encoding the same '#' follows the same recursive path.
+    let literal =
+        "https://vault.example.com/login?next=user:p#NESTED_HASH_SECRET@cb.example.com/done";
+    let masked = super::mask_url_secrets(literal);
+    assert!(
+        !masked.contains("NESTED_HASH_SECRET"),
+        "literal '#' must not shield the nested password: {masked}"
+    );
+
+    let encoded =
+        "https://vault.example.com/login?next=user:p%23NESTED_HASH_SECRET@cb.example.com/done";
+    let masked = super::mask_url_secrets(encoded);
+    assert!(!masked.contains("NESTED_HASH_SECRET"), "{masked}");
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+
+    // Debug reaches the same redactor through the stored server URL, so the
+    // same limit applies to a cached entry while the stored value itself stays
+    // byte-for-byte the one used for the mismatch check.
+    let cache = SyncCache::from_body(body(), literal).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(
+        !rendered.contains("NESTED_HASH_SECRET"),
+        "Debug must not leak the nested password: {rendered}"
+    );
+    assert_eq!(cache.server_url, literal);
+}
+
+#[test]
 fn debug_pins_the_stored_body_byte_count() {
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     let stored = String::from_utf8(cache.body.clone()).expect("the cached JSON body is UTF-8");

@@ -7,13 +7,20 @@
 //! buffers, so the UI can actually audit passwords and generate TOTP codes
 //! after a real login.
 //!
-//! Known constraint: there is no injection seam for the field decryptors.
-//! `login_item` and `folders_from` call the concrete `openwarden::Vault`
-//! readers directly, so a test cannot inject a decryption failure through a
-//! parameter; it must instead build a real vault with malformed `EncString`
-//! ciphertexts (see `undecryptable_password_keeps_the_vault_and_is_excluded_from_audit`).
-//! A private decryptor seam was considered and rejected: it would change the
-//! public import signature and fork the real reader path these tests exercise.
+//! Known constraint: only the folder **name** has an injection seam.
+//! `folder_name_text` takes the `Result<Option<SecretString>, Error>` returned
+//! by `openwarden`'s reader as a parameter, so all three decryption outcomes
+//! (`Ok(Some)`, `Ok(None)` and `Err`) are directly testable; `folders_from`
+//! passes that helper the real reader's result.
+//! The login field decryptors in `login_item` (name, username, URI, password
+//! and TOTP) have no equivalent seam: `login_item` calls the concrete
+//! `openwarden::Vault` readers itself, so a test cannot inject a decryption
+//! failure through a parameter and must instead build a real vault with
+//! malformed `EncString` ciphertexts (see
+//! `undecryptable_password_keeps_the_vault_and_is_excluded_from_audit`).
+//! A private seam for those login fields was considered but not added: it
+//! would change the public import signature or fork the real reader path these
+//! tests exercise.
 //!
 //! Known constraint: [`crate::model::Vault::duplicate_names`] is a model-layer
 //! helper with no production caller. Neither the auth/unlock path nor the UI
@@ -48,11 +55,12 @@
 //! parameter; tests pass real byte slices and pin the observable
 //! classification instead. A private helper taking an already-parsed
 //! `serde_json::Value` (or a parser/constructor closure) could provide the
-//! seam without changing `parse_sync`'s public signature. This is unlike the
-//! field decryptors, for which a private seam was explicitly rejected above:
-//! it would fork the real reader path these tests exercise. That refactor is
-//! outside this change's scope, so this note records the limit rather than
-//! implying the failure branches are covered.
+//! seam without changing `parse_sync`'s public signature. The folder-name
+//! decryptor already has such a private seam (`folder_name_text`); the login
+//! field decryptors in `login_item` do not, and a seam there was not added
+//! because it would fork the real reader path these tests exercise. That
+//! refactor is outside this change's scope, so this note records the limit
+//! rather than implying the failure branches are covered.
 
 use std::collections::{HashMap, HashSet};
 

@@ -190,7 +190,7 @@ login-race 2→1、item-kind 2→1、license 2→1。
 
 ## 検証
 
-候補25件に対する2エージェントの検証結果は confirmed 31件 /
+候補33件に対する2エージェントの検証結果は confirmed 31件 /
 partially-confirmed 2件（上記の訂正2件）だった。
 親エージェントは P0 4件について `src/ui/keys.rs`、`src/ui/input.rs`、
 `src/ui/login_flow.rs` を直接読み、根拠を確認した（Runtime Proof）。

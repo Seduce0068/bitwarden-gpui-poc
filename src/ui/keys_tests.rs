@@ -1412,6 +1412,66 @@ fn command_modifiers_are_suppressed_in_every_editing_mode() {
 }
 
 #[test]
+fn altgr_echoed_function_key_name_is_never_inserted() {
+    // macOS reports AltGr as Ctrl+Alt. A backend may also echo the function
+    // key name into `key_char` ("f1" -> "F1"), which makes the AltGr text
+    // priority in `classify_key` (keys.rs:451-468) see a non-empty glyph and
+    // bypass the command guard. A function-key name is not insertable text, so
+    // every editing mode must still reject it instead of inserting "F1"/"f12"
+    // into the focused field (keys.rs:1134-1162).
+    for (key, key_char) in [
+        ("f1", Some("F1")),
+        ("F1", Some("F1")),
+        ("f12", Some("f12")),
+        ("unknown", Some("F25")),
+        ("space", Some("F1")),
+    ] {
+        let mut value = ctx(key);
+        value.key_char = key_char;
+        value.modifiers = KeyModifiers {
+            control: true,
+            alt: true,
+            ..Default::default()
+        };
+
+        value.screen = Screen::Locked;
+        value.editing_auth = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "auth/{key}/{key_char:?}"
+        );
+
+        value.editing_auth = false;
+        value.screen = Screen::Unlocked;
+        value.searching = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "search/{key}/{key_char:?}"
+        );
+
+        value.searching = false;
+        value.panel = Panel::Settings;
+        value.editing_settings = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "settings/{key}/{key_char:?}"
+        );
+
+        value.editing_settings = false;
+        value.panel = Panel::Vault;
+        value.query_nonempty = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "query/{key}/{key_char:?}"
+        );
+    }
+}
+
+#[test]
 fn space_key_inserts_a_space_in_all_editing_modes() {
     let mut value = ctx("space");
 

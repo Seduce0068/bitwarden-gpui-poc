@@ -570,6 +570,48 @@ mod tests {
     }
 
     #[test]
+    fn select_index_and_select_id_do_not_raise_the_totp_stale_signal() {
+        // Only deselection invalidates the cached TOTP. Choosing a row keeps
+        // the cache so the app can sync it to the newly selected item.
+        let mut state = state_with_items();
+        assert!(
+            !state.take_totp_stale(),
+            "a fresh view must not carry a stale signal"
+        );
+
+        // Real changes by index and by stable id.
+        assert!(state.select_index(1));
+        assert!(
+            !state.take_totp_stale(),
+            "select_index must not raise the TOTP stale signal"
+        );
+
+        assert_eq!(state.select_id("a"), Some(0));
+        assert!(
+            !state.take_totp_stale(),
+            "select_id must not raise the TOTP stale signal"
+        );
+
+        // No-op outcomes must not raise it either.
+        assert!(!state.select_index(usize::MAX));
+        assert_eq!(state.select_id("missing"), None);
+        assert_eq!(state.select_id("a"), Some(0));
+        assert!(!state.take_totp_stale());
+
+        // An empty view obeys the same contract.
+        let mut empty = VaultViewState::new();
+        assert!(!empty.select_index(0));
+        assert_eq!(empty.select_id("anything"), None);
+        assert!(!empty.take_totp_stale());
+
+        // Contrast: the deselection path still raises the one-shot signal, so
+        // the negative assertions above are not vacuous.
+        state.deselect_and_rewind();
+        assert!(state.take_totp_stale());
+        assert!(!state.take_totp_stale());
+    }
+
+    #[test]
     fn selection_indexes_address_the_visible_list_under_filter_and_sort() {
         let mut state = state_with_items(); // a=Alpha, b=Beta
         state.vault.items.push(VaultItem::new(

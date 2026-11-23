@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第122弾で 6 件すべてを完了）。
+なし（第123弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第123弾（16 担当・67 回目）の指摘 5 件を完結（2026-11-24）
+  - 空監査レポート Enter 案内、ネスト URL の '#' パスワード
+    マスク、field decryptor doc を修正。
+  - select_index/id の TOTP 非失効、AltGr 関数キーをテスト。
+  - 調査レポート件数 25→33 を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1150 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第122弾（16 担当・66 回目）の指摘 6 件を完結（2026-11-24）
   - TOTP コピー復号不可判定、不可視クエリ案内、
     分／秒アイドルロック定数導出を修正。
