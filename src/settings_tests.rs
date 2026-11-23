@@ -1016,6 +1016,66 @@ fn infinite_and_huge_schema_markers_are_future_versions() {
 }
 
 #[test]
+fn infinity_spelled_as_a_schema_string_saturates_but_negative_is_legacy() {
+    use serde_json::json;
+
+    // `schema_version_of` (settings.rs:521-535) tries u64 first, then f64.
+    // `serde_json` serializes a non-finite JSON number as null, so the sibling
+    // test can only reach `version_from_float` directly; a hand-edited file
+    // can still carry the literal strings "Infinity"/"-Infinity", which
+    // Rust's f64 parser accepts. The positive spelling must saturate to
+    // u64::MAX (a future marker), the negative one must stay legacy (None).
+    for marker in ["Infinity", "infinity", "inf"] {
+        assert_eq!(
+            super::schema_version_of(Some(&json!(marker))),
+            Some(u64::MAX),
+            "{marker}"
+        );
+    }
+    for marker in ["-Infinity", "-infinity", "-inf"] {
+        assert_eq!(
+            super::schema_version_of(Some(&json!(marker))),
+            None,
+            "{marker}"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+
+    // Positive Infinity on disk: whole-file future fallback, raw marker still
+    // readable for the advisory.
+    let future =
+        r#"{"schema_version":"Infinity","email":"future@example.com","idle_lock_seconds":123}"#;
+    std::fs::write(&path, future).unwrap();
+    assert_eq!(
+        super::file_schema_version(&path),
+        Some(u64::MAX),
+        "{future}"
+    );
+    assert_eq!(Settings::load_detailed(&path).unwrap(), Settings::default());
+    assert_eq!(Settings::load(&path), Settings::default());
+    assert!(
+        load_advisories(&path)
+            .iter()
+            .any(|notice| notice.contains("18446744073709551615")),
+        "{:?}",
+        load_advisories(&path)
+    );
+
+    // Negative Infinity on disk: legacy marker, so every known field survives.
+    let legacy =
+        r#"{"schema_version":"-Infinity","email":"legacy@example.com","idle_lock_seconds":123}"#;
+    std::fs::write(&path, legacy).unwrap();
+    assert_eq!(super::file_schema_version(&path), None, "{legacy}");
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.schema_version, LEGACY_SCHEMA_VERSION, "{legacy}");
+    assert_eq!(loaded.email, "legacy@example.com", "{legacy}");
+    assert_eq!(loaded.idle_lock_seconds, 123, "{legacy}");
+    assert!(load_advisories(&path).is_empty(), "{legacy}");
+}
+
+#[test]
 fn sanitized_clamps_shared_text_fields() {
     use crate::limits::{MAX_EMAIL_LEN, MAX_SERVER_URL_LEN};
 
@@ -3620,6 +3680,39 @@ fn default_path_mirrors_config_dir_including_the_none_branch() {
             );
         }
         other => unreachable!("the is_some correspondence rules this out: {other:?}"),
+    }
+}
+
+#[test]
+fn default_path_maps_config_dir_to_the_app_settings_json() {
+    let _env = ENV_LOCK.lock().unwrap();
+    // `default_path` maps `dirs::config_dir()` through
+    // `.join("bitwarden-gpui-poc").join("settings.json")` and caches the
+    // Option in a OnceLock (settings.rs:825-835). An env-touching test in the
+    // same process may have initialized that cell under a different
+    // XDG_CONFIG_HOME, so compare the mapping's shape instead of the absolute
+    // value; the caching test pins stability across later env changes.
+    let mapped = dirs::config_dir().map(|dir| dir.join("bitwarden-gpui-poc").join("settings.json"));
+    let cached = Settings::default_path();
+    assert_eq!(cached.is_some(), mapped.is_some());
+    if let (Some(mapped), Some(cached)) = (mapped, cached) {
+        assert_eq!(cached.file_name(), mapped.file_name());
+        assert_eq!(
+            cached.parent().and_then(|dir| dir.file_name()),
+            mapped.parent().and_then(|dir| dir.file_name())
+        );
+        assert!(cached.is_absolute(), "{cached:?}");
+        assert_eq!(
+            cached.file_name().and_then(|name| name.to_str()),
+            Some("settings.json")
+        );
+        assert_eq!(
+            cached
+                .parent()
+                .and_then(|dir| dir.file_name())
+                .and_then(|name| name.to_str()),
+            Some("bitwarden-gpui-poc")
+        );
     }
 }
 

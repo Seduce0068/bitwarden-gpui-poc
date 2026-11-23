@@ -355,30 +355,72 @@ pub(super) fn totp_badge(item: &crate::model::VaultItem) -> TotpBadge {
 /// `generator_panel_key_hint`. Without it a user whose focus moved away from
 /// the view (for example via Tab) has no on-screen way back. Kept pure so the
 /// wording can be tested without rendering a GPUI window.
+///
+/// The rendered panel splits this line: [`audit_summary_base`] stays in the
+/// scrollable body while [`audit_panel_key_hint`] is drawn in a fixed footer,
+/// so a long report cannot push F1 out of view.
 pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
-    let base = format!(
+    let base = audit_summary_base(report, dirty);
+    let hint = audit_panel_key_hint(report);
+    format!("{base} / {hint}")
+}
+
+/// Coverage statistics rendered as the third header row of the audit body.
+///
+/// Split out of [`audit_panel_detail_line`] so the key guidance (and F1 with
+/// it) can live in a fixed footer. This row carries no key hints, so keeping
+/// it in the scroll container does not hide F1. Pure for testability.
+pub(super) fn audit_summary_base(report: &Report, dirty: bool) -> String {
+    format!(
         "{} TOTP 設定済み: {}/{} ({:.0}%)",
         unsaved_marker(dirty),
         report.with_totp,
         report.logins,
         report.totp_coverage() * 100.0
-    );
+    )
+}
+
+/// Key guidance for the audit panel, rendered in a fixed footer.
+///
+/// This used to be the last part of [`audit_panel_detail_line`] inside
+/// `.overflow_y_scroll()`, so a long report scrolled [`FOCUS_RECOVERY_HINT`]
+/// off screen. It now mirrors the generator and settings panels: only the
+/// footer carries F1, exactly once, independent of the scroll offset. The
+/// scroll note is intentionally absent here because the audit panel owns a
+/// `ScrollHandle` (Up/Down and PageUp/PageDown work), unlike those panels.
+/// Pure so the "always visible" contract can be pinned without a GPUI window.
+pub(super) fn audit_panel_key_hint(report: &Report) -> String {
     let row_keys = row_selection_keys_hint(report.items.len());
     if row_keys.is_empty() {
         format!(
-            "{base} / 監査する問題はありません / g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
+            "監査する問題はありません / g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
         )
     } else {
         format!(
-            "{base} / {row_keys} / 行クリックでも選択 / g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
+            "{row_keys} / 行クリックでも選択 / g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT}"
         )
     }
 }
 
-// Scrollable panel roots share the same pattern: a stable id keeps the scroll
-// offset in element state across frames, min_h_0 lets the flex item shrink
-// below its content height, and overflow_y_scroll keeps every row reachable
-// when the window is short.
+/// Coverage row rendered inside the scrollable body.
+///
+/// Derived from [`audit_panel_detail_line`] so the two renderings cannot
+/// drift: only the footer hint is removed. The third header row stays in the
+/// body, keeping `AUDIT_HEADER_ROWS` and `audit_row_scroll_index` unchanged.
+pub(super) fn audit_scroll_summary_line(report: &Report, dirty: bool) -> String {
+    let detail = audit_panel_detail_line(report, dirty);
+    let hint = audit_panel_key_hint(report);
+    let suffix = format!(" / {hint}");
+    detail.strip_suffix(&suffix).unwrap_or(&detail).to_string()
+}
+
+// The scrollable body keeps the stable id, min_h_0 and overflow_y_scroll that
+// preserve the offset and reach every row when the window is short. Its three
+// header rows (title, summary, coverage) are still the first children, so
+// `AUDIT_HEADER_ROWS` and `audit_row_scroll_index` remain correct. Unlike the
+// other scrollable panels, the key guidance is *not* the last body child: a
+// long report used to push `FOCUS_RECOVERY_HINT` out of view, so F1 now lives
+// in a fixed footer outside the scroll container.
 pub(super) fn audit_panel<'a, V: 'static>(
     report: &'a Report,
     selected: Option<usize>,
@@ -388,7 +430,7 @@ pub(super) fn audit_panel<'a, V: 'static>(
     cx: &mut Context<V>,
 ) -> impl IntoElement + 'a {
     let focus = std::rc::Rc::new(on_focus);
-    let mut panel = div()
+    let mut body = div()
         .id("audit-panel-scroll")
         .flex()
         .flex_col()
@@ -414,7 +456,7 @@ pub(super) fn audit_panel<'a, V: 'static>(
             div()
                 .text_xs()
                 .text_color(rgb(0xa6adc8))
-                .child(audit_panel_detail_line(report, dirty)),
+                .child(audit_scroll_summary_line(report, dirty)),
         );
     for (index, item) in report.items.iter().enumerate() {
         let is_selected = selected == Some(index);
@@ -427,7 +469,7 @@ pub(super) fn audit_panel<'a, V: 'static>(
         });
         let id = item.id.clone();
         let focus = focus.clone();
-        panel = panel.child(
+        body = body.child(
             div()
                 .id(SharedString::from(format!("audit-row-{id}")))
                 .mt_2()
@@ -456,7 +498,21 @@ pub(super) fn audit_panel<'a, V: 'static>(
                 })),
         );
     }
-    panel
+    // Fixed footer: F1 survives any scroll offset and any report length.
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(body)
+        .child(
+            div()
+                .px_4()
+                .py_2()
+                .text_xs()
+                .text_color(rgb(0xa6adc8))
+                .child(panel_key_hint_footer(&audit_panel_key_hint(report))),
+        )
 }
 
 pub(super) fn setting_row<'a>(label: &'a str, enabled: bool) -> impl IntoElement + 'a {
@@ -1260,6 +1316,106 @@ mod tests {
                 "{line}"
             );
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_fixed_footer_keeps_focus_recovery_visible_without_scrolling() {
+        // The audit key hint used to be the last child of `.overflow_y_scroll()`,
+        // so a long report pushed F1 out of view. The body row and the fixed
+        // footer must split cleanly: F1 lives only in the footer, once, for
+        // both empty and populated reports.
+        let with_rows = Report {
+            items: vec![crate::health::ItemReport {
+                id: "item-1".into(),
+                name: "Example".into(),
+                kind: crate::model::ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 1,
+            logins: 1,
+        };
+        for (label, report) in [("empty", Report::default()), ("with rows", with_rows)] {
+            let body = audit_scroll_summary_line(&report, true);
+            let hint = audit_panel_key_hint(&report);
+            let footer = panel_key_hint_footer(&hint);
+
+            assert_eq!(
+                body,
+                audit_summary_base(&report, true),
+                "the scroll row must keep only the coverage stats ({label})"
+            );
+            assert!(footer.starts_with("操作: "), "{label}: {footer}");
+            assert_eq!(
+                footer.matches(FOCUS_RECOVERY_HINT).count(),
+                1,
+                "the fixed footer must be the single home of F1 ({label}): {footer}"
+            );
+            assert!(
+                !body.contains(FOCUS_RECOVERY_HINT),
+                "the scroll body must not carry F1 ({label}): {body}"
+            );
+            for key_hint in ["↑↓", "g: 一覧", "Esc: 終了"] {
+                assert!(
+                    !body.contains(key_hint),
+                    "key guidance must stay in the footer, not the scroll body ({label}): {body}"
+                );
+            }
+            // The audit panel owns a ScrollHandle, so it must not promise the
+            // mouse-only scrolling note used by the generator/settings panels.
+            assert!(
+                !footer.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT),
+                "{label}: {footer}"
+            );
+            // The pure detail line keeps its prior wording for status/tests.
+            assert_eq!(
+                audit_panel_detail_line(&report, true),
+                format!("{body} / {hint}"),
+                "{label}"
+            );
+            assert!(
+                body.contains(unsaved_marker(true)),
+                "the coverage row still shows the dirty marker ({label}): {body}"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_panel_key_hint_tracks_the_report_row_state() {
+        let empty_hint = audit_panel_key_hint(&Report::default());
+        assert!(
+            empty_hint.contains("監査する問題はありません"),
+            "{empty_hint}"
+        );
+        assert!(!empty_hint.contains("↑↓"), "{empty_hint}");
+        assert!(!empty_hint.contains("Enter: 対象を選択"), "{empty_hint}");
+        assert!(!empty_hint.contains("行クリックでも選択"), "{empty_hint}");
+        assert!(
+            !empty_hint.contains(LIST_PAGE_AND_EDGE_HINT),
+            "{empty_hint}"
+        );
+
+        let with_rows = Report {
+            items: vec![crate::health::ItemReport {
+                id: "item-1".into(),
+                name: "Example".into(),
+                kind: crate::model::ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 1,
+            logins: 1,
+        };
+        let hint = audit_panel_key_hint(&with_rows);
+        assert!(hint.contains("↑↓: 行を選択"), "{hint}");
+        assert!(hint.contains("Enter: 対象を選択"), "{hint}");
+        assert!(hint.contains(LIST_PAGE_AND_EDGE_HINT), "{hint}");
+        assert!(hint.contains("行クリックでも選択"), "{hint}");
+        assert!(!hint.contains("監査する問題はありません"), "{hint}");
+        assert!(
+            hint.contains("g: 一覧 / n: 生成 / c: 設定 / l: ロック / Esc: 終了"),
+            "{hint}"
+        );
     }
 
     #[::core::prelude::v1::test]

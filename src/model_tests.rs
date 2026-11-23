@@ -1150,6 +1150,26 @@ fn sort_key_next_cycles_through_all_four_variants() {
 }
 
 #[test]
+fn filter_and_sort_key_defaults_are_all_items_name_ascending() {
+    // Both enums derive `Default` by marking their first variant with
+    // `#[default]` (model.rs:923-936 and 966-977). The UI's zero-argument
+    // default must therefore be the widest filter and the ascending name sort,
+    // not a narrower filter or a different ordering.
+    assert_eq!(Filter::default(), Filter::All);
+    assert_eq!(SortKey::default(), SortKey::NameAsc);
+    // The explicit `Default::default()` path agrees with the inherent call.
+    let filter: Filter = Default::default();
+    let sort: SortKey = Default::default();
+    assert_eq!(filter, Filter::All);
+    assert_eq!(sort, SortKey::NameAsc);
+    assert_ne!(Filter::default(), Filter::Favorites);
+    assert_ne!(SortKey::default(), SortKey::NameDesc);
+    // The labels pin the user-visible meaning of the two default variants.
+    assert_eq!(Filter::default().label(&[]), "すべてのアイテム");
+    assert_eq!(SortKey::default().label(), "名前 ↑");
+}
+
+#[test]
 fn view_sorting_uses_comparison_keys_for_names() {
     // `compare()` normalizes both names with `comparison_key` before ordering
     // (model.rs:1174-1184), and `Vault::view` normalizes the query the same way

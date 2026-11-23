@@ -878,14 +878,20 @@ impl std::error::Error for UnlockError {
 pub fn unlock_and_import(
     authenticated: AuthenticatedVault,
 ) -> Result<crate::model::Vault, UnlockError> {
-    let protected_key = authenticated
-        .session
-        .protected_key()
-        .unwrap_or("")
-        .to_string();
+    // `Session::protected_key()` already returns a secret-bearing `&str`. Keep
+    // the one-off owned copy in `Zeroizing<String>` so the buffer is wiped on
+    // every exit path (including the early `MissingProtectedKey` return in the
+    // helper) instead of leaving an un-zeroized `String` copy behind.
+    let protected_key = Zeroizing::new(
+        authenticated
+            .session
+            .protected_key()
+            .unwrap_or("")
+            .to_string(),
+    );
     let kdf = authenticated.session.kdf();
     unlock_and_import_with(
-        &protected_key,
+        protected_key.as_str(),
         kdf,
         &authenticated.master_key,
         authenticated.sync,

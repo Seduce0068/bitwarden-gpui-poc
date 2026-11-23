@@ -238,6 +238,44 @@ fn known_metadata_hostnames_are_blocked_without_dns() {
 }
 
 #[test]
+fn every_metadata_host_entry_is_case_and_trailing_dot_normalized() {
+    // `BLOCKED_METADATA_HOSTS` (auth.rs:546-552) has five entries, and
+    // `is_blocked_metadata_host` folds them with `trim_end_matches('.')` and
+    // `to_ascii_lowercase()` (auth.rs:587-590). Cover all five in every
+    // spelling combination so a shortened list or a dropped normalization
+    // step cannot slip through unnoticed.
+    const HOSTS: &[&str] = &[
+        "metadata.google.internal",   // GCP
+        "metadata.goog",              // GCP short alias
+        "metadata",                   // GCP guest-local short name
+        "instance-data",              // AWS EC2
+        "instance-data.ec2.internal", // AWS EC2
+    ];
+    assert_eq!(HOSTS.len(), 5, "the metadata host list has five entries");
+    for host in HOSTS {
+        let upper = host.to_ascii_uppercase();
+        let dotted = format!("{host}.");
+        let upper_dotted = format!("{upper}.");
+        for spelling in [(*host).to_string(), upper, dotted, upper_dotted] {
+            assert!(
+                super::is_blocked_metadata_host(&spelling),
+                "{spelling} was not normalized by is_blocked_metadata_host"
+            );
+            assert!(
+                is_blocked_server_url_without_dns(&format!("https://{spelling}/")),
+                "the URL classifier must agree for {spelling}"
+            );
+        }
+    }
+    // Normalization must not widen the rule to names that merely contain a
+    // blocked host as a suffix or prefix.
+    assert!(!super::is_blocked_metadata_host("not-metadata.goog"));
+    assert!(!super::is_blocked_metadata_host(
+        "metadata.goog.example.com"
+    ));
+}
+
+#[test]
 fn wildcard_dns_aliases_with_embedded_link_local_literals_are_blocked() {
     // No DNS is needed: the address encoded in the hostname is enough.
     for value in [

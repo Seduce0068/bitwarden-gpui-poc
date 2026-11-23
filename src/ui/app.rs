@@ -436,6 +436,17 @@ pub(super) fn password_detail_label(password: &str) -> String {
     }
 }
 
+/// SecureNote cell of a detail row.
+///
+/// The old label used `text.chars().count()`, so invisible whitespace and
+/// Unicode `Cc`/`Cf` characters (zero-width spaces, bidi overrides, controls)
+/// inflated the displayed length: `a\u{200b}b` read "3文字". Reuse
+/// [`visible_char_count`], the same rule as the password cell, so both counts
+/// agree. Kept pure so the wording can be pinned without a GPUI window.
+pub(super) fn secure_note_detail_label(text: &str) -> String {
+    format!("メモ: {}文字", visible_char_count(text))
+}
+
 /// TOTP cell of a login detail row.
 ///
 /// A blank or invisible-only (`Cf`) secret is *absent*, not malformed: sending
@@ -1354,7 +1365,7 @@ impl BitwardenApp {
                 )
             }
             ItemData::SecureNote { text } => {
-                join_detail_fields(&base, &[format!("メモ: {}文字", text.chars().count())])
+                join_detail_fields(&base, &[secure_note_detail_label(text.as_str())])
             }
             ItemData::Card(card) => join_detail_fields(
                 &base,
@@ -3025,6 +3036,34 @@ mod tests {
                 visible_char_count(value) == 0,
                 is_visually_empty(value),
                 "{value:?}"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn secure_note_detail_label_counts_only_visible_characters() {
+        // Regression: the old `text.chars().count()` counted invisible
+        // whitespace and Unicode Cc/Cf, so these labels were too large.
+        assert_eq!(secure_note_detail_label(""), "メモ: 0文字");
+        assert_eq!(secure_note_detail_label("   \t "), "メモ: 0文字");
+        assert_eq!(
+            secure_note_detail_label("\u{200b}\u{feff}\u{202e}"),
+            "メモ: 0文字"
+        );
+        assert_eq!(secure_note_detail_label("\u{0}\u{1f}"), "メモ: 0文字");
+        assert_eq!(secure_note_detail_label("a\u{200b}b"), "メモ: 2文字");
+        assert_eq!(
+            secure_note_detail_label(" \u{202e}abc\u{feff} "),
+            "メモ: 3文字"
+        );
+        assert_eq!(secure_note_detail_label(" alice "), "メモ: 5文字");
+        assert_eq!(secure_note_detail_label("日本語"), "メモ: 3文字");
+        // The note cell must agree with the password cell on the same input.
+        for text in ["a\u{200b}b", " alice ", "\u{202e}abc\u{feff} ", "日本語"] {
+            assert_eq!(
+                secure_note_detail_label(text),
+                format!("メモ: {}", password_detail_label(text)),
+                "note and password counts must agree for {text:?}"
             );
         }
     }

@@ -759,6 +759,38 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
 }
 
 #[test]
+fn duplicate_folder_id_with_an_undecryptable_first_row_keeps_the_placeholder() {
+    // `dedup_folders_by_id` (vault_sync.rs:346-367) keeps the **first** row for
+    // a repeated id. When that row's name is malformed, `folder_name_text`
+    // (vault_sync.rs:379-393) must still supply the id-free placeholder: the
+    // later, decryptable row must not silently replace it, and the whole vault
+    // must survive.
+    let symmetric = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).unwrap();
+    let later_name = openwarden::EncString::encrypt(&symmetric, b"Later Row")
+        .unwrap()
+        .to_string();
+    let vault = vault_with_folders(
+        &[
+            serde_json::json!({"id": "f-dup", "name": "not-an-enc-string"}),
+            serde_json::json!({"id": "f-dup", "name": later_name}),
+        ],
+        &[cipher("login-1", "2024-01-01T00:00:00Z")],
+    );
+
+    let model = import_logins(&vault).expect("a bad first folder name must not abort the import");
+    assert_eq!(model.items.len(), 1, "the login item must survive");
+    assert_eq!(
+        model.folders.len(),
+        1,
+        "the duplicate folder id must collapse"
+    );
+    assert_eq!(model.folders[0].id, "f-dup", "the first row's id is kept");
+    assert_eq!(model.folders[0].name, "(復号できませんでした)");
+    assert_ne!(model.folders[0].name, "Later Row");
+    assert!(!model.folders[0].name.contains("f-dup"));
+}
+
+#[test]
 fn folder_name_text_covers_ok_none_placeholder_and_the_reachable_branches() {
     // `folder_name_text` (vault_sync.rs:371-385) maps the otherwise unreachable
     // `Ok(None)` result to the "(名前なし)" placeholder. The helper exists so
@@ -3272,6 +3304,41 @@ fn updated_audit_advances_from_one_negative_revision_to_another() {
                 id: id.to_string(),
                 old_revision: older_rev,
                 new_revision: newer_rev,
+            },
+        ]
+    );
+}
+
+#[test]
+fn clipped_audit_reports_two_distinct_negative_revisions() {
+    // Mirror of the negative `Updated` case: both rows are pre-epoch (negative
+    // i64 seconds), but the second row regresses from a later negative value
+    // to an earlier one. The decision must be `Clipped` with both signed values
+    // recorded verbatim -- not clamped to UNKNOWN_REVISION (0) and not
+    // misreported as an `Updated` advance (vault_sync.rs:711-757).
+    let id = "negative-clipped";
+    let accepted = parse_revision(Some("1969-12-31T23:59:59Z")).unwrap();
+    let regressed = parse_revision(Some("1969-12-31T00:00:00Z")).unwrap();
+    assert!(accepted < 0 && regressed < 0 && regressed < accepted);
+
+    let vault = unlocked_vault_raw(&[
+        cipher(id, "1969-12-31T23:59:59Z"),
+        cipher(id, "1969-12-31T00:00:00Z"),
+    ]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].revision_date, accepted);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: accepted,
+            },
+            ImportAudit::Clipped {
+                id: id.to_string(),
+                old_revision: accepted,
+                new_revision: regressed,
             },
         ]
     );
