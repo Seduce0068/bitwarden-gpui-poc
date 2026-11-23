@@ -28,7 +28,24 @@ pub(super) fn is_focus_recovery_key(key: &str) -> bool {
 }
 
 /// Number of rows a single `PageUp`/`PageDown` press moves.
+///
+/// This is a **fixed** step, not a viewport-sized page: GPUI does not expose
+/// the live visible-row count here, so the step cannot follow the window
+/// height. User-facing guidance must therefore say "固定10行" rather than
+/// "ページ移動" (see [`PAGE_MOVE_FIXED_ROWS_HINT`]); a hint promising a visible
+/// page would not match this behaviour.
 pub(super) const PAGE_MOVE_ROWS: isize = 10;
+
+/// Guidance wording that matches the fixed [`PAGE_MOVE_ROWS`] step.
+///
+/// Mirrors the intent of `ui::panels::LIST_PAGE_AND_EDGE_HINT` without
+/// promising a viewport-sized page. Kept beside the code that implements the
+/// step (and pinned by a test) so the "dynamic row count is not available from
+/// GPUI" limitation is documented where it matters. That panel's hint itself
+/// lives outside this task's edit scope.
+#[allow(dead_code)]
+pub(super) const PAGE_MOVE_FIXED_ROWS_HINT: &str =
+    "PageUp/PageDown: 固定10行ずつ移動（表示行数に合わせた移動ではありません）";
 
 /// Delta for a `Home`/`End` jump accepted by the shared `move_selection` path.
 ///
@@ -165,6 +182,22 @@ pub(super) fn backspace_confirmed_query(
     dirty: bool,
 ) -> String {
     view.pop_query();
+    search_finished_status(view.visible_items().len(), dirty)
+}
+
+/// Append text to an already-confirmed query and return the new status.
+///
+/// `InsertQueryText` refines the query after Enter/Escape without re-entering
+/// search mode, so `/` remains free to start a fresh search. Like
+/// [`backspace_confirmed_query`], a query edit drops the selection and can
+/// change the match count, so the status must be recomputed from the visible
+/// items instead of leaving the confirmation text on screen.
+pub(super) fn insert_confirmed_query(
+    view: &mut crate::ui::vault_view::VaultViewState,
+    text: &str,
+    dirty: bool,
+) -> String {
+    view.push_query(text);
     search_finished_status(view.visible_items().len(), dirty)
 }
 
@@ -366,6 +399,14 @@ impl BitwardenApp {
                 // The previous status may still announce a zero-match
                 // confirmed search; report the count after this edit instead.
                 let status = backspace_confirmed_query(&mut self.view, self.settings_dirty);
+                self.status = status;
+                cx.notify();
+            }
+            UiAction::InsertQueryText(text) => {
+                // Symmetric to BackspaceQuery: refine the confirmed query and
+                // recompute the count-dependent status. Search mode is left
+                // untouched so a later `/` still starts a fresh search.
+                let status = insert_confirmed_query(&mut self.view, &text, self.settings_dirty);
                 self.status = status;
                 cx.notify();
             }
@@ -875,6 +916,60 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn insert_after_confirmed_search_updates_the_count_status() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        fn item(id: &str) -> VaultItem {
+            VaultItem::new(
+                id,
+                id,
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            )
+        }
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(item("Alpha"));
+        view.vault.items.push(item("Beta"));
+        view.start_search();
+        view.push_query("Zq");
+        let confirmed = finish_search_from_row_click(&mut view, false);
+        assert!(!view.searching);
+        assert_eq!(confirmed, crate::ui::logic::NO_SEARCH_RESULTS_STATUS);
+
+        // Appending text refines the confirmed query without re-entering
+        // search mode (so `/` can still start a fresh search later).
+        let before = view.rewind_calls;
+        let still_empty = insert_confirmed_query(&mut view, "x", false);
+        assert_eq!(view.query, "Zqx");
+        assert!(!view.searching);
+        assert_eq!(view.visible_items().len(), 0);
+        assert_eq!(still_empty, search_finished_status(0, false));
+        assert_eq!(still_empty, crate::ui::logic::NO_SEARCH_RESULTS_STATUS);
+        assert_eq!(view.rewind_calls, before + 1, "each query edit rewinds");
+
+        // Once the refined query matches, the "0件" message is replaced and
+        // the unsaved marker survives both count branches.
+        let mut found = VaultViewState::new();
+        found.vault.items.push(item("Alpha"));
+        found.vault.items.push(item("Beta"));
+        found.start_search();
+        found.push_query("Bet");
+        finish_search_from_row_click(&mut found, false);
+        let status = insert_confirmed_query(&mut found, "a", false);
+        assert_eq!(found.query, "Beta");
+        assert_eq!(found.visible_items().len(), 1);
+        assert_eq!(status, search_finished_status(1, false));
+        assert!(!status.contains("0件"), "{status}");
+
+        let dirty_empty = insert_confirmed_query(&mut view, "y", true);
+        assert_eq!(dirty_empty, search_finished_status(0, true));
+        assert!(dirty_empty.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
     fn generator_and_settings_panels_keep_up_down_unbound() {
         // Only the vault list and audit panel own a scroll handle; generator
         // and settings must not turn Up/Down into a hidden list selection.
@@ -908,6 +1003,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn page_move_hint_documents_the_fixed_row_count() {
+        // GPUI does not expose the live visible-row count here, so the wording
+        // must promise a fixed step rather than a viewport-sized page.
+        assert_eq!(PAGE_MOVE_ROWS, 10);
+        assert!(
+            PAGE_MOVE_FIXED_ROWS_HINT.contains("固定10行"),
+            "{PAGE_MOVE_FIXED_ROWS_HINT}"
+        );
+        assert!(
+            PAGE_MOVE_FIXED_ROWS_HINT.contains("表示行数"),
+            "{PAGE_MOVE_FIXED_ROWS_HINT}"
+        );
     }
 
     #[::core::prelude::v1::test]

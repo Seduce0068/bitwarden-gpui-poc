@@ -2702,3 +2702,68 @@ fn resolve_host_failure_fails_open_to_an_empty_vector_without_dns() {
         |_| vec![link_local]
     ));
 }
+
+#[test]
+fn unlock_error_display_and_to_string_equal_message_for_every_variant() {
+    use crate::error::BoxedCause;
+
+    // `UnlockError`'s Display impl (auth.rs:696-700) delegates to `message()`
+    // instead of keeping a second rendering. Cover all eight variants,
+    // including the cause-carrying ones whose extra context is only visible
+    // through `status_message()` / `source()` and must not leak into Display.
+    let cases = vec![
+        UnlockError::MissingProtectedKey,
+        UnlockError::UnlockFailed("why".into()),
+        UnlockError::UnlockFailedCause("why".into(), BoxedCause::text("root cause")),
+        UnlockError::ApplySyncFailed("why".into()),
+        UnlockError::ApplySyncFailedCause("why".into(), BoxedCause::text("root cause")),
+        UnlockError::ImportFailed("why".into()),
+        UnlockError::ImportFailedCause("why".into(), BoxedCause::text("root cause")),
+        UnlockError::Other("raw detail".into()),
+    ];
+    assert_eq!(cases.len(), 8);
+
+    for error in cases {
+        let expected = error.message();
+        assert_eq!(format!("{error}"), expected, "{error:?}");
+        assert_eq!(error.to_string(), expected, "{error:?}");
+        // The same string is what PartialEq compares, so no variant can drift
+        // between identity, Display and the status-bar message.
+        assert_eq!(error, UnlockError::Other(expected.clone()));
+    }
+}
+
+#[test]
+fn plain_failed_unlock_variants_have_no_source() {
+    use crate::error::BoxedCause;
+
+    // Only the three `*Cause` variants override `Error::source()`
+    // (auth.rs:702-711); their plain siblings store just a String and must
+    // report None instead of inventing a cause.
+    let plain = [
+        UnlockError::UnlockFailed("why".into()),
+        UnlockError::ApplySyncFailed("why".into()),
+        UnlockError::ImportFailed("why".into()),
+        UnlockError::MissingProtectedKey,
+        UnlockError::Other("raw detail".into()),
+    ];
+    for error in &plain {
+        assert!(
+            std::error::Error::source(error).is_none(),
+            "plain variant must have no source: {error:?}"
+        );
+    }
+
+    // The positive half keeps the assertion meaningful: the cause-carrying
+    // siblings do expose a source with the retained text.
+    let caused = [
+        UnlockError::UnlockFailedCause("why".into(), BoxedCause::text("root cause")),
+        UnlockError::ApplySyncFailedCause("why".into(), BoxedCause::text("root cause")),
+        UnlockError::ImportFailedCause("why".into(), BoxedCause::text("root cause")),
+    ];
+    for error in &caused {
+        let source =
+            std::error::Error::source(error).expect("a *Cause variant must keep its typed cause");
+        assert_eq!(source.to_string(), "root cause", "{error:?}");
+    }
+}

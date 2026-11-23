@@ -403,11 +403,10 @@ fn passphrase_estimate(value: &str) -> Option<u32> {
     let (words, capitalized) = match body.chars().find(|character| !character.is_alphanumeric()) {
         Some(separator_char) => {
             let separator = separator_char.to_string();
+            // A mixed separator needs no dedicated check: `split` leaves the
+            // other separator inside a part, and that part cannot be a word
+            // from the shared list, so the membership test below rejects it.
             let parts: Vec<&str> = body.split(separator.as_str()).collect();
-            // Exactly one repeated separator, not a mixture of different ones.
-            if parts.join(separator.as_str()) != body {
-                return None;
-            }
             let mut capitalized = false;
             let mut parsed = Vec::with_capacity(parts.len());
             for word in parts {

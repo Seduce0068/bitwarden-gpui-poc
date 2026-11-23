@@ -131,6 +131,11 @@ pub(super) enum UiAction {
     FinishSettingsEdit,
     InsertAuthText(String),
     InsertSearchText(String),
+    /// Append printable text to an already-confirmed vault query.
+    ///
+    /// Unlike `InsertSearchText` this does not re-enter search mode: `/` keeps
+    /// starting a fresh search and every vault command key keeps its binding.
+    InsertQueryText(String),
     InsertSettingsText(String),
     BackspaceAuth,
     BackspaceSearch,
@@ -584,6 +589,13 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             "c" => UiAction::SetPanel(Panel::Settings),
             "/" => UiAction::StartSearch,
             "backspace" if ctx.query_nonempty => UiAction::BackspaceQuery,
+            // A confirmed query stays editable with the same insertable-text
+            // rule as the search mode. `/` is matched above, so re-pressing it
+            // still starts a *fresh* search instead of appending a slash, and
+            // every command key above keeps its existing vault binding.
+            _ if ctx.query_nonempty => insertable_text(ctx).map_or(UiAction::None, |text| {
+                text_action(text, UiAction::InsertQueryText)
+            }),
             _ => UiAction::None,
         },
     }

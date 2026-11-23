@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第89弾で 6 件すべてを完了）。
+なし（第90弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第90弾（16 担当・34 回目）の指摘 7 件を完結（2026-11-23）
+  - 検索確定後のクエリ文字追加、PageUp 固定10行の明記、
+    認証編集中 l/m/r の挿入を修正・テスト。
+  - UnlockError Display/source、same_json_type 全型、pop_shared_char、
+    非数値 type、フィルタ＋クエリ AND、kind_counts をテスト。
+  - passphrase の恒偽 join チェックを削除。
+  - CHANGELOG 第87〜89弾、review-report の件数参照を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（858 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第89弾（16 担当・33 回目）の指摘 6 件を完結（2026-11-23）
   - F1 等のキー名が編集モードで文字挿入される問題を修正し、
     監査パネルの F1 重複を解消。

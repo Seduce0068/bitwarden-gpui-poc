@@ -518,6 +518,67 @@ fn backspace_query_requires_a_nonempty_query() {
 }
 
 #[test]
+fn confirmed_query_accepts_printable_text_without_restarting_search() {
+    let mut value = ctx("a");
+    // Without a confirmed query a plain character stays inert, as before.
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    // A confirmed query is editable with the same insertable-text rule as
+    // search mode (keys.rs vault fallback), mirroring BackspaceQuery.
+    value.query_nonempty = true;
+    assert_eq!(classify_key(&value), UiAction::InsertQueryText("a".into()));
+
+    // `/` keeps starting a *fresh* search instead of appending a slash.
+    value.key = "/";
+    assert_eq!(classify_key(&value), UiAction::StartSearch);
+
+    // Backspace keeps its existing confirmed-query action.
+    value.key = "backspace";
+    assert_eq!(classify_key(&value), UiAction::BackspaceQuery);
+}
+
+#[test]
+fn confirmed_query_text_insertion_keeps_command_and_cursor_keys() {
+    let mut value = ctx("x");
+    value.query_nonempty = true;
+    for (key, expected) in [
+        ("l", UiAction::Lock),
+        ("t", UiAction::CycleFilter),
+        ("s", UiAction::CycleSort),
+        ("f", UiAction::ToggleFavorite),
+        ("y", UiAction::CopyTotp),
+        ("p", UiAction::CopySelectedPassword),
+        ("u", UiAction::CopySelectedUsername),
+        ("g", UiAction::OpenAudit),
+        ("n", UiAction::SetPanel(Panel::Generator)),
+        ("c", UiAction::SetPanel(Panel::Settings)),
+        ("up", UiAction::MoveSelection(-1)),
+        ("down", UiAction::MoveSelection(1)),
+        ("pageup", UiAction::MoveSelectionPage(-1)),
+        ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+        ("escape", UiAction::quit_or_warn()),
+        // Control/function/cursor names are never text, even with a query.
+        ("enter", UiAction::None),
+        ("left", UiAction::None),
+        ("f1", UiAction::None),
+    ] {
+        value.key = key;
+        assert_eq!(classify_key(&value), expected, "confirmed/{key}");
+    }
+
+    // Uppercase layout glyphs and IME compositions are appended verbatim.
+    value.key = "a";
+    value.key_char = Some("A");
+    assert_eq!(classify_key(&value), UiAction::InsertQueryText("A".into()));
+    value.key = "unknown";
+    value.key_char = Some("日本語");
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertQueryText("日本語".into())
+    );
+}
+
+#[test]
 fn field_routing_distinguishes_shared_and_credential_fields() {
     use crate::settings::SharedSettingsField;
     use crate::ui::state::{AuthField, SettingsField};
@@ -692,6 +753,39 @@ fn auth_editing_digits_and_enter_are_text_and_confirmation() {
         UiAction::FinishAuthEdit,
         "Enter confirms the field; authentication is a separate action"
     );
+}
+
+#[test]
+fn auth_editing_keeps_l_m_r_as_text() {
+    let mut value = ctx("l");
+    value.screen = Screen::Locked;
+
+    // Outside editing these keys keep their lock-screen bindings: `l` has no
+    // vault to lock here, `m` opens the demo vault and `r` needs a failure.
+    assert_eq!(classify_key(&value), UiAction::None);
+    value.key = "m";
+    assert_eq!(classify_key(&value), UiAction::OpenDemoVault);
+    value.key = "r";
+    assert_eq!(classify_key(&value), UiAction::None);
+    value.login_failed = true;
+    assert_eq!(classify_key(&value), UiAction::RetryLogin);
+
+    // While editing an auth field the same keys are plain text (keys.rs
+    // auth-editing branch), even after a failed login, so a client id, secret
+    // or password may contain them.
+    value.editing_auth = true;
+    for key in ["l", "m", "r"] {
+        value.key = key;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertAuthText(key.into()),
+            "{key} must be inserted while editing an auth field"
+        );
+    }
+
+    // Confirmation is still a dedicated action, not a character.
+    value.key = "enter";
+    assert_eq!(classify_key(&value), UiAction::FinishAuthEdit);
 }
 
 #[test]

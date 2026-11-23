@@ -177,6 +177,33 @@ fn sample() -> Vault {
     vault
 }
 
+/// A vault with one item of each non-note kind whose searchable fields all
+/// contain `alice`, used to pin filter/query intersection and kind counts.
+fn mixed_kinds() -> Vault {
+    let mut vault = Vault::new();
+    vault.items = vec![
+        login("l", "Login", "alice", "pw", "https://example.com"),
+        VaultItem::new(
+            "c",
+            "Card",
+            ItemData::Card(CardData {
+                cardholder_name: "Alice Cardholder".into(),
+                number: "4111111111111234".into(),
+                ..CardData::default()
+            }),
+        ),
+        VaultItem::new(
+            "i",
+            "Identity",
+            ItemData::Identity(IdentityData {
+                first_name: "Alice".into(),
+                ..IdentityData::default()
+            }),
+        ),
+    ];
+    vault
+}
+
 #[test]
 fn kind_round_trips_through_wire_numbers() {
     for kind in [
@@ -258,6 +285,52 @@ fn filter_and_query_narrow_the_view() {
     let by_uri = vault.view(&Filter::All, "example.com", SortKey::NameAsc);
     assert_eq!(by_uri.len(), 1);
     assert_eq!(by_uri[0].id, "2");
+}
+
+#[test]
+fn view_ands_the_filter_and_the_query() {
+    // `Vault::view` (model.rs:977-987) chains two `.filter()` calls: an item
+    // must pass `Filter::accepts` AND match the normalized query. With three
+    // different kinds all matching "alice", the kind filter has to do real
+    // work on top of the query instead of being ignored.
+    let vault = mixed_kinds();
+    let ids = |filter: &Filter, query: &str| -> Vec<String> {
+        vault
+            .view(filter, query, SortKey::NameAsc)
+            .iter()
+            .map(|item| item.id.clone())
+            .collect()
+    };
+
+    assert_eq!(ids(&Filter::All, "alice"), vec!["c", "i", "l"]);
+    assert_eq!(ids(&Filter::Kind(ItemKind::Login), "alice"), vec!["l"]);
+    assert_eq!(ids(&Filter::Kind(ItemKind::Card), "alice"), vec!["c"]);
+    assert_eq!(ids(&Filter::Kind(ItemKind::Identity), "alice"), vec!["i"]);
+    assert!(ids(&Filter::Kind(ItemKind::SshKey), "alice").is_empty());
+
+    // A query that only the filtered-out kinds can answer must produce no
+    // hits: the last four digits are searchable on the card, not the login.
+    assert_eq!(ids(&Filter::All, "1234"), vec!["c"]);
+    assert!(ids(&Filter::Kind(ItemKind::Login), "1234").is_empty());
+    assert!(
+        ids(&Filter::Favorites, "alice").is_empty(),
+        "no favorites here"
+    );
+
+    // The same AND rule holds for the folder and no-folder filters, and the
+    // query alone must still be able to find every item.
+    let mut folder_vault = mixed_kinds();
+    folder_vault.items[0].folder_id = Some("f1".into());
+    let ids = |filter: &Filter, query: &str| -> Vec<String> {
+        folder_vault
+            .view(filter, query, SortKey::NameAsc)
+            .iter()
+            .map(|item| item.id.clone())
+            .collect()
+    };
+    assert_eq!(ids(&Filter::Folder("f1".into()), "alice"), vec!["l"]);
+    assert_eq!(ids(&Filter::NoFolder, "alice"), vec!["c", "i"]);
+    assert!(ids(&Filter::Folder("missing".into()), "alice").is_empty());
 }
 
 #[test]
@@ -1074,7 +1147,47 @@ fn kind_counts_covers_every_kind() {
     assert_eq!(counts.len(), 5);
     assert_eq!(counts[0], (ItemKind::Login, 2));
     assert_eq!(counts[1], (ItemKind::SecureNote, 1));
+    // Card and Identity occupy fixed slots in the returned vector even when
+    // the vault has none (model.rs:954-969).
+    assert_eq!(counts[2], (ItemKind::Card, 0));
+    assert_eq!(counts[3], (ItemKind::Identity, 0));
     assert_eq!(counts[4], (ItemKind::SshKey, 0));
+}
+
+#[test]
+fn kind_counts_counts_card_and_identity_items() {
+    // Non-zero Card/Identity counts must come from the item's `kind()`, not
+    // from its name or data layout. Add a second card and an item of another
+    // kind to prove each bucket counts independently.
+    let mut vault = mixed_kinds();
+    vault.items.push(VaultItem::new(
+        "c2",
+        "Second card",
+        ItemData::Card(CardData::default()),
+    ));
+    vault.items.push(VaultItem::new(
+        "s",
+        "SSH key",
+        ItemData::SshKey(SshKeyData::default()),
+    ));
+
+    let counts = vault.kind_counts();
+    assert_eq!(counts.len(), 5);
+    assert_eq!(counts[0], (ItemKind::Login, 1));
+    assert_eq!(counts[1], (ItemKind::SecureNote, 0));
+    assert_eq!(counts[2], (ItemKind::Card, 2), "both Card items counted");
+    assert_eq!(counts[3], (ItemKind::Identity, 1));
+    assert_eq!(counts[4], (ItemKind::SshKey, 1));
+    assert_eq!(
+        counts.iter().map(|&(_, count)| count).sum::<usize>(),
+        vault.items.len()
+    );
+
+    // Removing the identity drops only its bucket.
+    assert!(vault.remove("i"));
+    let counts = vault.kind_counts();
+    assert_eq!(counts[3], (ItemKind::Identity, 0));
+    assert_eq!(counts[2], (ItemKind::Card, 2));
 }
 
 #[test]

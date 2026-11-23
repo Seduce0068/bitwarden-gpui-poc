@@ -2692,3 +2692,83 @@ fn save_replaces_an_unreadable_file() {
     assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert_ne!(std::fs::read(&path).unwrap(), broken);
 }
+
+#[test]
+fn same_json_type_covers_all_six_tags_and_rejects_cross_tag_pairs() {
+    use serde_json::json;
+
+    // `same_json_type` (settings.rs:528-538) guards the per-field fallback in
+    // `tolerant_struct`: only a value sharing its default's JSON tag may be
+    // trial-parsed. Pin all six positive arms, including two numbers of
+    // different widths (they share the tag; the trial parse rejects overflow).
+    let same_tag = [
+        (json!(null), json!(null)),
+        (json!(true), json!(false)),
+        (json!(1), json!(2)),
+        (json!(1.5), json!(4_000_000_000u64)),
+        (json!("left"), json!("right")),
+        (json!([1]), json!(["two"])),
+        (json!({"a": 1}), json!({"b": "two"})),
+    ];
+    for (left, right) in &same_tag {
+        assert!(super::same_json_type(left, right), "{left} vs {right}");
+    }
+
+    // One representative per tag: every mismatched pair must be rejected.
+    // The tags are distinct, so agreement is exactly the diagonal.
+    let representatives = [
+        json!(null),
+        json!(true),
+        json!(42),
+        json!("text"),
+        json!([]),
+        json!({}),
+    ];
+    for (left_index, left) in representatives.iter().enumerate() {
+        for (right_index, right) in representatives.iter().enumerate() {
+            assert_eq!(
+                super::same_json_type(left, right),
+                left_index == right_index,
+                "{left} vs {right}"
+            );
+        }
+    }
+}
+
+#[test]
+fn pop_shared_char_is_a_no_op_on_empty_and_pops_consecutive_characters() {
+    use crate::settings::SharedSettingsField;
+
+    let mut settings = Settings::default();
+    settings.server_url.clear();
+    settings.email.clear();
+
+    // An empty field stays empty; `String::pop` returns None and does nothing.
+    settings.pop_shared_char(SharedSettingsField::ServerUrl);
+    settings.pop_shared_char(SharedSettingsField::Email);
+    assert_eq!(settings.server_url, "");
+    assert_eq!(settings.email, "");
+
+    // Consecutive pops remove one scalar value each, including a multibyte
+    // character (settings.rs:253-262), and never split a UTF-8 sequence.
+    settings.push_shared_text(SharedSettingsField::ServerUrl, "xyz");
+    settings.push_shared_text(SharedSettingsField::Email, "あい");
+    settings.pop_shared_char(SharedSettingsField::ServerUrl);
+    settings.pop_shared_char(SharedSettingsField::Email);
+    assert_eq!(settings.server_url, "xy");
+    assert_eq!(settings.email, "あ");
+    settings.pop_shared_char(SharedSettingsField::ServerUrl);
+    settings.pop_shared_char(SharedSettingsField::Email);
+    assert_eq!(settings.server_url, "x");
+    assert_eq!(settings.email, "");
+
+    // Popping past the end is a no-op, and the two fields are independent.
+    settings.pop_shared_char(SharedSettingsField::ServerUrl);
+    settings.pop_shared_char(SharedSettingsField::Email);
+    assert_eq!(settings.server_url, "");
+    assert_eq!(settings.email, "");
+    settings.push_shared_text(SharedSettingsField::ServerUrl, "keep");
+    settings.pop_shared_char(SharedSettingsField::Email);
+    assert_eq!(settings.server_url, "keep");
+    assert_eq!(settings.email, "");
+}

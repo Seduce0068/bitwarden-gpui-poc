@@ -32,7 +32,7 @@ pub(super) const MOUSE_WHEEL_SCROLL_ONLY_HINT: &str = "スクロールはマウ�
 /// single-row moves. Kept as one shared constant so the two hints cannot drift
 /// apart.
 pub(super) const LIST_PAGE_AND_EDGE_HINT: &str =
-    "PageUp/PageDown: ページ移動 / Home/End: 先頭/末尾へ移動";
+    "PageUp/PageDown: 固定10行ずつ移動 / Home/End: 先頭/末尾へ移動";
 
 /// Row-navigation keys shared by every panel that renders a selectable list.
 ///

@@ -1519,19 +1519,33 @@ fn passphrase_estimate_rejects_mixed_separators() {
     // The generator emits one repeated non-alphanumeric separator (or none).
     // A phrase joining list words with different separators is not a possible
     // generator output, so the recognizer must return None and let the caller
-    // fall back to the character-pool estimate (health.rs:399-406).
+    // fall back to the character-pool estimate. There is no separate
+    // separator-consistency branch: `split` on the first non-alphanumeric
+    // character leaves the other separator inside a part, and that part is
+    // not a shared-list word, so the existing `WORDS.contains` check rejects
+    // it (passphrase_estimate in health.rs).
     let repeated = format!("{}-{}-{}", WORDS[0], WORDS[1], WORDS[2]);
     let mixed = format!("{}-{}_{}", WORDS[0], WORDS[1], WORDS[2]);
     assert!(
         super::passphrase_estimate(&repeated).is_some(),
         "{repeated}"
     );
+    // Premise of that mechanism: the residual part really is not a word.
+    let residual = format!("{}_{}", WORDS[1], WORDS[2]);
+    assert!(!WORDS.contains(&residual.as_str()), "{residual}");
     assert_eq!(super::passphrase_estimate(&mixed), None, "{mixed}");
     assert_eq!(
         super::passphrase_estimate(&format!("{mixed}7")),
         None,
         "a trailing number must not hide a mixed separator"
     );
+    // The reverse order is rejected the same way: the first separator is now
+    // `_`, so the `-` stays inside the second part.
+    let reversed = format!("{}_{}-{}", WORDS[0], WORDS[1], WORDS[2]);
+    let reversed_residual = format!("{}-{}", WORDS[1], WORDS[2]);
+    assert!(!WORDS.contains(&reversed_residual.as_str()));
+    assert_eq!(super::passphrase_estimate(&reversed), None, "{reversed}");
+
     // A single separator that is not `-` is still accepted.
     let underscored = format!("{}_{}", WORDS[0], WORDS[1]);
     assert!(super::passphrase_estimate(&underscored).is_some());

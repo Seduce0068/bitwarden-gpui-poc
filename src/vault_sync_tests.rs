@@ -2451,3 +2451,65 @@ fn dedup_ties_between_excluded_rows_keep_the_first_row() {
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0]["name"], "new");
 }
+
+#[test]
+fn non_numeric_cipher_types_are_excluded_from_dedup() {
+    use serde_json::json;
+
+    // `cipher_row_is_excluded` (vault_sync.rs:260-268) recognizes a login only
+    // when `type` is the integer 1 (`as_u64() == Some(1)`). openwarden's wire
+    // format has no serde default for `type`, so any other JSON tag fails its
+    // deserialization: a string, bool, null or fractional number is never a
+    // login and must not win an id dedup over an eligible row.
+    let bad_types = [
+        ("string", json!("1")),
+        ("bool", json!(true)),
+        ("null", json!(null)),
+        ("decimal", json!(1.0)),
+    ];
+    for (name, bad_type) in &bad_types {
+        let mut row = json!({
+            "id": "dup",
+            "revisionDate": "2024-06-01T00:00:00Z",
+        });
+        row["type"] = bad_type.clone();
+        assert!(
+            super::cipher_row_is_excluded(&row),
+            "{name} type must be excluded: {row}"
+        );
+    }
+    assert!(!super::cipher_row_is_excluded(&json!({
+        "id": "login",
+        "type": 1,
+    })));
+    // A missing type is excluded by the same `is_some_and` guard.
+    assert!(super::cipher_row_is_excluded(&json!({"id": "untyped"})));
+    // Exclusion is independent of the organization/deleted-date rules.
+    assert!(super::cipher_row_is_excluded(&json!({
+        "id": "org",
+        "type": "1",
+        "organizationId": null,
+    })));
+
+    // End-to-end through the dedup: every malformed type loses to an older
+    // type-1 row with the same id, so openwarden still sees a login for it.
+    for (name, bad_type) in bad_types {
+        let mut malformed = json!({
+            "id": "dup",
+            "revisionDate": "2024-06-01T00:00:00Z",
+        });
+        malformed["type"] = bad_type;
+        let mut value = json!({
+            "ciphers": [
+                {"id": "dup", "type": 1, "revisionDate": "2024-01-01T00:00:00Z",
+                 "name": "login-row"},
+                malformed,
+            ]
+        });
+        super::dedup_ciphers_by_revision(&mut value);
+        let kept = value["ciphers"].as_array().unwrap();
+        assert_eq!(kept.len(), 1, "{name}");
+        assert_eq!(kept[0]["name"], "login-row", "{name}");
+        assert_eq!(kept[0]["type"], json!(1), "{name}");
+    }
+}
