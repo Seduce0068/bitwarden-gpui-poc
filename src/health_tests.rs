@@ -2750,3 +2750,52 @@ fn leading_decoration_does_not_hide_a_repeated_character_run() {
         "{report:?}"
     );
 }
+
+#[test]
+fn whitespace_only_totp_field_counts_as_unset() {
+    // A field containing only whitespace carries no secret: `is_valid_secret`
+    // rejects it and the audit reports `NoTotp`. `has_totp_field` must agree
+    // instead of claiming the field is present (health.rs:717-728), or the UI
+    // badge would contradict the cryptographically unset secret.
+    for (index, blank) in ["", " ", "\t\n", "\u{3000}"].iter().enumerate() {
+        let item = login(
+            &format!("blank-{index}"),
+            "Blank",
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            blank,
+        );
+        assert!(!has_totp_field(&item), "{blank:?} must be unset");
+        assert!(!has_usable_totp(&item), "{blank:?} must be unusable");
+        assert!(!crate::totp::is_valid_secret(blank));
+    }
+
+    let report = report_of(vec![
+        login(
+            "blank",
+            "Blank",
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            "  \t ",
+        ),
+        login(
+            "good",
+            "Good",
+            "tQ8#wLr1!eZ5vKp3$sM7@",
+            "https://b.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+    ]);
+    let blank = report
+        .items
+        .iter()
+        .find(|item| item.id == "blank")
+        .expect("the blank-TOTP login must be reported");
+    assert!(blank.findings.contains(&Finding::NoTotp), "{blank:?}");
+    assert!(
+        !blank.findings.contains(&Finding::TotpUninspectable),
+        "{blank:?}"
+    );
+    assert_eq!(report.logins, 2);
+    assert_eq!(report.with_totp, 1);
+}

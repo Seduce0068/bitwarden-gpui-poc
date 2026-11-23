@@ -3955,3 +3955,86 @@ fn pair_start_zero_without_an_equals_sign_masks_the_whole_authority() {
         "{masked}"
     );
 }
+
+#[test]
+fn numeric_password_question_and_nonempty_text_before_at_is_masked() {
+    // A colon followed only by digits is a port *only* when the text after the
+    // '?' looks like a query parameter. `user:12345?text@host` is userinfo with
+    // a numeric password; treating the '?' as a query delimiter hid the '@'
+    // and leaked the credential (cache.rs:236-290).
+    for (url, expected, secret) in [
+        (
+            "https://user:12345?text@host",
+            "https://[redacted]@host",
+            "12345?text",
+        ),
+        (
+            "https://user:12345?text@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+            "12345?text",
+        ),
+        (
+            "https://user:0000#frag@host:8443/p",
+            "https://[redacted]@host:8443/p",
+            "0000#frag",
+        ),
+        ("user:12345?text@host/p", "[redacted]@host/p", "12345?text"),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        assert!(!super::mask_url_secrets(url).contains(secret), "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        assert!(rendered.contains("[redacted]@"), "{rendered}");
+        // Debug-only masking: the stored URL stays byte-for-byte identical.
+        assert_eq!(cache.server_url, url);
+    }
+
+    // A real `host:port` followed by a `key=value` query '@' stays untouched.
+    for url in ["https://host:8443?email=a@b", "https://host?email=a@b"] {
+        assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_gate_is_checked_before_the_version_gate() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // `load_detailed` applies the private-file permission gate before parsing
+    // and before the version check (cache.rs:938-980). A file that is both
+    // world-readable and stamped with an unknown version must be classified as
+    // unreadable, never as a version mismatch.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wide-and-outdated.json");
+    let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    cache.version += 1;
+    save(&path, &cache).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let error = load_detailed(&path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        "permission gate must win over version mismatch: {error:?}"
+    );
+    assert_eq!(cache_error_message(error), REASON_UNREADABLE);
+}
+
+#[test]
+fn server_mismatch_is_reported_before_the_body_is_parsed() {
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    let mut corrupt = cache.clone();
+    corrupt.body = b"not json".to_vec();
+
+    // `validate` compares the server before parsing the body (cache.rs:1167-1179),
+    // so a wrong server wins even when the body is corrupt too.
+    assert_eq!(
+        validate(&corrupt, "user-1", "https://other.example.com"),
+        Err(SyncCacheError::ServerMismatch)
+    );
+    // Premise: with the server matching, the same body is a parse failure.
+    assert!(matches!(
+        validate(&corrupt, "user-1", "https://vault.example.com"),
+        Err(SyncCacheError::CacheParse(_))
+    ));
+}

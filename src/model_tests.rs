@@ -3444,3 +3444,55 @@ fn mask_uri_embedded_nul_is_not_the_decryption_sentinel() {
         assert!(!masked.contains("SECRET"), "{masked:?}");
     }
 }
+
+#[test]
+fn comparison_key_drops_format_characters_for_search_and_duplicates() {
+    // Unicode Cf code points render nothing, so a name containing one must
+    // compare equal to the plain spelling on every path that shares
+    // `comparison_key` (model.rs:59-90). Leaving the invisible code point in
+    // the key made a plain search query miss an otherwise identical name.
+    for invisible in ['\u{200b}', '\u{2060}', '\u{feff}', '\u{ad}'] {
+        let with_cf = format!("Git{invisible}Hub");
+        assert_eq!(
+            comparison_key(&with_cf),
+            comparison_key("GitHub"),
+            "U+{:04X} was not dropped",
+            invisible as u32
+        );
+        assert!(!comparison_key(&with_cf).contains(invisible));
+    }
+    assert_eq!(comparison_key("\u{200b}"), "");
+    // Idempotence still holds after the drop.
+    let key = comparison_key("Git\u{200b}Hub");
+    assert_eq!(comparison_key(&key), key);
+
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "Git\u{200b}Hub", "u", "p", "https://a.example"));
+    // A plain query must find the item whose stored name carries a Cf char.
+    assert_eq!(
+        vault.view(&Filter::All, "github", SortKey::NameAsc).len(),
+        1
+    );
+    // And a query carrying Cf must find the plain name.
+    let mut plain = Vault::new();
+    plain
+        .items
+        .push(login("2", "GitHub", "u", "p", "https://b.example"));
+    assert_eq!(
+        plain
+            .view(&Filter::All, "Git\u{200b}Hub", SortKey::NameAsc)
+            .len(),
+        1
+    );
+
+    // Duplicate detection groups both spellings under the plain key.
+    vault
+        .items
+        .push(login("3", "GitHub", "u", "p", "https://c.example"));
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "github");
+    assert_eq!(groups[0].1, vec!["1".to_string(), "3".to_string()]);
+}

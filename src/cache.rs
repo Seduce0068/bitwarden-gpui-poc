@@ -244,8 +244,12 @@ fn mask_url_userinfo(url: &str) -> String {
 /// so a later `?`/`#` starts the query. A delimiter with nothing between it
 /// and the '@' is never a query start: it is password decoration, which also
 /// keeps an all-digit password (`https://user:12345?@host`) from looking like
-/// a `host:port` with a query. This keeps `https://host?email=a@b` untouched
-/// while still masking `https://user:pass?x=1@host`.
+/// a `host:port` with a query. The same applies when non-empty password text
+/// follows the delimiter: `https://user:12345?text@host` is userinfo and must
+/// be masked even though `user:12345` looks like `host:port`. A genuine query
+/// carries an assignment (`https://host:8443?email=a@b`) and still wins. This
+/// keeps `https://host?email=a@b` untouched while still masking
+/// `https://user:pass?x=1@host`.
 ///
 /// Bracketed IPv6 hosts need special care: the colons in `[::1]` belong to the
 /// address, not to a `user:password` marker, and `:1]` is not a port. Both
@@ -273,7 +277,28 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
             let host = candidate.split(&['/', '?', '#'][..]).next().unwrap_or("");
             host_with_optional_port_ok(host)
         });
-        !has_userinfo_colon || host_complete
+        // Keep the existing decision whenever a userinfo marker or an earlier
+        // completed host already classifies the delimiter.
+        if has_userinfo_colon || host_complete {
+            return !has_userinfo_colon || host_complete;
+        }
+        // No marker at all: the head is a bare host or a `host:8443` port. A
+        // genuine query/fragment parameter carries an assignment (`key=value`).
+        // Without one, an all-digit colon is a numeric password
+        // (`user:12345?text@host`), so the '@' is the userinfo separator and
+        // must be masked rather than dismissed as a query '@'.
+        if before[delimiter + 1..].contains('=') {
+            return true;
+        }
+        // A bare numeric colon in the leading authority is a port and an '@'
+        // after it belongs to the query/fragment (`host:8443#frag@x`). Keep
+        // that classification; only a `user:<digits>` marker (which is not a
+        // port) makes the '@' a userinfo separator.
+        let authority = &head[authority_start(head)..];
+        let user_numeric = authority
+            .strip_prefix("user:")
+            .is_some_and(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()));
+        !user_numeric
     })
 }
 

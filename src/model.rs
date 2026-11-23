@@ -46,6 +46,12 @@ mod unicode_normalize {
     fn fold_once(input: &str) -> String {
         let mut out = String::new();
         for character in nfkd(input).chars() {
+            // Invisible format characters carry no visible identity. Keeping
+            // them in the key made a search for the plain spelling miss a name
+            // that contained one, and split otherwise identical duplicates.
+            if crate::limits::is_format_character(character) {
+                continue;
+            }
             match character {
                 'ß' | 'ẞ' => out.push_str("ss"),
                 'ς' => out.push('σ'),
@@ -58,6 +64,12 @@ mod unicode_normalize {
 
     /// NFKD key with the documented extra case mappings, shared by search,
     /// duplicate-name detection and sorting.
+    ///
+    /// Unicode `Cf` (format) characters are dropped from the key. They render
+    /// nothing, so a name such as `Git\u{200b}Hub` must compare equal to
+    /// `GitHub`: keeping the invisible code point made a plain search query
+    /// miss an otherwise identical name. Dropping it here keeps search,
+    /// duplicate detection and sorting on the same normalized value.
     ///
     /// Lowercasing a decomposed string can surface a code point that NFKD
     /// would decompose again (for example U+01C4 LATIN CAPITAL LETTER DZ WITH

@@ -43,9 +43,9 @@ pub(super) const LIST_PAGE_AND_EDGE_HINT: &str =
 /// without either promising a selection path it does not implement.
 /// `selectable_rows` is the number of rows the user can actually select. With
 /// zero rows these keys would promise a selection path that does not exist, so
-/// the empty case returns `""`; callers then drop the whole hint segment
-/// (including its leading separator). Pure, so the wording can be pinned by
-/// tests without rendering a GPUI window.
+/// the empty case returns `""`; callers then drop only the navigation portion
+/// (including its leading separator) and keep their panel-specific commands.
+/// Pure, so the wording can be pinned by tests without rendering a GPUI window.
 fn row_navigation_keys_hint(selectable_rows: usize) -> String {
     if selectable_rows == 0 {
         String::new()
@@ -54,7 +54,8 @@ fn row_navigation_keys_hint(selectable_rows: usize) -> String {
     }
 }
 
-/// Main vault commands shown next to the row keys in the list header.
+/// Main vault commands shown in the list header: after the row keys when rows
+/// exist, on their own when the vault is empty.
 ///
 /// `ui::keys::classify_key` binds all of these in `Panel::Vault`: `/` starts a
 /// search, `t`/`s` cycle filter and sort, `f` toggles a favorite, `y`/`p`/`u`
@@ -73,15 +74,21 @@ pub(super) const VAULT_MAIN_KEYS_HINT: &str = "/: 検索 / t: フィルタ / s: 
 /// the vault's text-edit mode: while it is active `ui::keys::classify_key`
 /// routes Up/Down/PageUp/PageDown/Home/End nowhere (or inserts them as text)
 /// and the command letters become search text, so the header must not promise
-/// either path. Kept pure so the wording can be pinned by tests without
-/// rendering a GPUI window.
+/// either path.
+///
+/// With zero selectable rows the navigation helper returns `""` because there
+/// is nothing to move to, but the main commands still work: `/` opens search,
+/// `g`/`n`/`c` switch panels and `l`/`Esc` lock or quit. Returning the bare
+/// [`VAULT_MAIN_KEYS_HINT`] keeps those commands discoverable on an empty
+/// vault without advertising row movement or the audit-only `Enter`.
+/// Kept pure so the wording can be pinned by tests without a GPUI window.
 pub(super) fn vault_row_keys_hint(selectable_rows: usize, searching: bool) -> String {
     if searching {
         String::new()
     } else {
         let navigation = row_navigation_keys_hint(selectable_rows);
         if navigation.is_empty() {
-            navigation
+            VAULT_MAIN_KEYS_HINT.to_string()
         } else {
             format!("{navigation} / {VAULT_MAIN_KEYS_HINT}")
         }
@@ -1127,9 +1134,16 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn vault_row_keys_hint_omits_the_audit_only_enter_binding() {
+        // An empty vault still shows the main commands, but no row keys and
+        // no audit-only `Enter` binding.
         let empty = vault_row_keys_hint(0, false);
-        assert!(empty.is_empty(), "{empty}");
+        assert_eq!(empty, VAULT_MAIN_KEYS_HINT, "{empty}");
         assert!(!empty.contains("Enter"), "{empty}");
+        assert!(!empty.contains("↑↓"), "{empty}");
+        assert!(!empty.contains(LIST_PAGE_AND_EDGE_HINT), "{empty}");
+        for key in ["PageUp", "PageDown", "Home", "End"] {
+            assert!(!empty.contains(key), "unexpected {key} in {empty}");
+        }
 
         let hint = vault_row_keys_hint(2, false);
         assert!(hint.contains("↑↓: 行を選択"), "{hint}");
@@ -1192,11 +1206,54 @@ mod tests {
         }
         assert!(!hint.contains("Enter"), "{hint}");
 
-        // Search mode and an empty list keep hiding every key hint: command
-        // letters are search text while editing, and there is no row to move
-        // to when the list is empty.
+        // Search mode still hides every key hint because command letters
+        // become search text. With an empty list only the row keys are
+        // dropped; the same main commands stay visible.
         assert_eq!(vault_row_keys_hint(2, true), "");
-        assert_eq!(vault_row_keys_hint(0, false), "");
+        assert_eq!(vault_row_keys_hint(0, false), VAULT_MAIN_KEYS_HINT);
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_row_keys_hint_keeps_main_commands_when_the_vault_is_empty() {
+        let empty = vault_row_keys_hint(0, false);
+        assert_eq!(empty, VAULT_MAIN_KEYS_HINT, "{empty}");
+
+        // Every primary command stays discoverable with no row to select.
+        for token in [
+            "/: 検索",
+            "t: フィルタ",
+            "s: 並び替え",
+            "f: お気に入り",
+            "y: TOTP をコピー",
+            "p: パスワードをコピー",
+            "u: ユーザー名をコピー",
+            "g: 監査",
+            "n: 生成",
+            "c: 設定",
+            "l: ロック",
+            "Esc: 終了",
+        ] {
+            assert!(empty.contains(token), "missing {token} in {empty}");
+        }
+
+        // Nothing may promise a selectable row or the audit-only `Enter`.
+        assert!(!empty.contains("↑↓"), "{empty}");
+        assert!(!empty.contains(LIST_PAGE_AND_EDGE_HINT), "{empty}");
+        assert!(!empty.contains("行を選択"), "{empty}");
+        for key in ["PageUp", "PageDown", "Home", "End", "Enter"] {
+            assert!(!empty.contains(key), "unexpected {key} in {empty}");
+        }
+        assert!(!empty.contains(" / / "), "{empty}");
+
+        // Search mode remains fully silent: the letters become search text.
+        assert_eq!(vault_row_keys_hint(0, true), "");
+
+        // The non-empty branch keeps its established navigation prefix.
+        let with_rows = vault_row_keys_hint(2, false);
+        assert_eq!(
+            with_rows,
+            format!("{} / {VAULT_MAIN_KEYS_HINT}", row_navigation_keys_hint(2))
+        );
     }
 
     #[::core::prelude::v1::test]

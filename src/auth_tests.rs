@@ -3761,3 +3761,79 @@ fn unlock_error_catch_all_keeps_the_original_status_text_in_other() {
     let caused = AppError::CacheParse(BoxedCause::text("bad json"));
     assert!(std::error::Error::source(&caused).is_some());
 }
+
+#[test]
+fn unlock_error_forward_conversion_pins_the_four_discriminants() {
+    use crate::error::{AppError, BoxedCause};
+
+    // `From<UnlockError> for AppError` (auth.rs:293-312) must land each of the
+    // four unlock families in its own `AppError` variant. `AppError`'s
+    // PartialEq compares only rendered text/detail, so a wrong variant with an
+    // equal message would pass `assert_eq!`; pin the exact discriminant.
+    let families: Vec<(&str, UnlockError, AppError)> = vec![
+        (
+            "missing_protected_key",
+            UnlockError::MissingProtectedKey,
+            AppError::MissingProtectedKey,
+        ),
+        (
+            "unlock_failed",
+            UnlockError::UnlockFailed("detail".into()),
+            AppError::unlock_failed("detail"),
+        ),
+        (
+            "apply_sync_failed",
+            UnlockError::ApplySyncFailed("detail".into()),
+            AppError::apply_sync_failed("detail"),
+        ),
+        (
+            "import_failed",
+            UnlockError::ImportFailed("detail".into()),
+            AppError::import_failed("detail"),
+        ),
+    ];
+    assert_eq!(families.len(), 4);
+    for (name, small, expected) in families {
+        let converted = AppError::from(small);
+        assert_eq!(
+            std::mem::discriminant(&converted),
+            std::mem::discriminant(&expected),
+            "{name}: wrong forward AppError variant"
+        );
+        assert_eq!(converted, expected, "{name}");
+    }
+
+    // The cause-carrying spellings must keep their structured discriminants
+    // too, not collapse to the plain family variant.
+    let caused: Vec<(&str, UnlockError, AppError)> = vec![
+        (
+            "unlock_failed_cause",
+            UnlockError::UnlockFailedCause("detail".into(), BoxedCause::text("io")),
+            AppError::unlock_failed_cause("detail", BoxedCause::text("io")),
+        ),
+        (
+            "apply_sync_failed_cause",
+            UnlockError::ApplySyncFailedCause("detail".into(), BoxedCause::text("io")),
+            AppError::apply_sync_failed_cause("detail", BoxedCause::text("io")),
+        ),
+        (
+            "import_failed_cause",
+            UnlockError::ImportFailedCause("detail".into(), BoxedCause::text("io")),
+            AppError::import_failed_cause("detail", BoxedCause::text("io")),
+        ),
+        (
+            "other",
+            UnlockError::Other("raw".into()),
+            AppError::Other("raw".into()),
+        ),
+    ];
+    for (name, small, expected) in caused {
+        let converted = AppError::from(small);
+        assert_eq!(
+            std::mem::discriminant(&converted),
+            std::mem::discriminant(&expected),
+            "{name}: wrong forward AppError variant"
+        );
+        assert_eq!(converted, expected, "{name}");
+    }
+}

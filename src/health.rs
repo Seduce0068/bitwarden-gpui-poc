@@ -718,9 +718,13 @@ pub fn has_usable_totp(item: &VaultItem) -> bool {
 /// decrypted.
 ///
 /// A decryption failure must not be collapsed into "no TOTP": the login is
-/// known to be 2FA-enabled, only the secret is uninspectable.
+/// known to be 2FA-enabled, only the secret is uninspectable. A field made only
+/// of whitespace, however, has no secret at all: `is_valid_secret` rejects it,
+/// so reporting it as "present" would contradict the `NoTotp` finding and the
+/// `with_totp` counter. Such a field counts as unset.
 pub fn has_totp_field(item: &VaultItem) -> bool {
-    item.totp_secret().is_some_and(|secret| !secret.is_empty())
+    item.totp_secret()
+        .is_some_and(|secret| !secret.trim().is_empty())
 }
 
 /// Audit `vault` with `thresholds` at `now` (Unix seconds).

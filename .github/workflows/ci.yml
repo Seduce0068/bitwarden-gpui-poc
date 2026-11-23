@@ -33,7 +33,7 @@ jobs:
         cargo install cargo-deny --version ${CARGO_DENY_VERSION} --exact --locked
         cargo deny check
         # ドキュメント書式ゲート（共通ワークフローにまだ無いためここで導入）。
-        grep -Fq "cargo install --version ${CARGO_DENY_VERSION}" README.md
+        grep -Fq "cargo install cargo-deny@${CARGO_DENY_VERSION}" README.md
         MARKDOWNLINT_VERSION=0.50.0
         npm install --global markdownlint-cli@${MARKDOWNLINT_VERSION}
         grep -Fq "markdownlint-cli@${MARKDOWNLINT_VERSION}" README.md
