@@ -3841,3 +3841,28 @@ fn passphrase_estimate_folds_invisible_characters_inside_words() {
         "{report:?}"
     );
 }
+
+#[test]
+fn digits_only_common_entries_never_reach_the_common_cap() {
+    // health.rs:399-410 orders the all-digits PIN short-circuit *before* the
+    // `is_common_password` check. Four entries of the COMMON table
+    // (health.rs:625-665) are ASCII digit runs, so their dictionary cap
+    // (~11 bits) is unreachable from `estimate_entropy`: they are scored with
+    // the 10-symbol PIN pool instead. Characterization of current control
+    // flow, not a claim that the PIN score is the desirable one.
+    let common_cap = entropy_bits(2_000, 1).round() as u32;
+    for word in ["123456", "12345678", "123456789", "1234567890"] {
+        assert!(super::is_exact_common_password(word), "{word}");
+        assert!(super::is_common_password(word), "{word}");
+        let pin = estimate_entropy(word);
+        assert_eq!(
+            pin,
+            entropy_bits(10, word.chars().count()).round() as u32,
+            "{word} must be scored by the PIN branch"
+        );
+        assert!(
+            pin > common_cap,
+            "{word}: PIN score {pin} must exceed the unreachable common cap {common_cap}"
+        );
+    }
+}

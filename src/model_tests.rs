@@ -4554,3 +4554,31 @@ fn ssh_fingerprint_rejects_a_non_ascii_blob() {
         canonical
     );
 }
+
+#[test]
+fn ssh_fingerprint_rejects_five_character_base64_blob_with_nonempty_body() {
+    // model.rs:493-502: five base64 characters carry 30 bits, i.e. three full
+    // bytes (01 02 03 for `AQIDA`) plus six leftover bits. `leftover_bits >= 6`
+    // must reject that shape even though the unused accumulator bits are zero
+    // and the decoded body is non-empty. This pins the leftover-bit branch,
+    // not the empty-blob guard or the non-canonical-padding-bit check.
+    assert_eq!(super::ssh_fingerprint::decode(b"AQIDA"), None);
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQIDA fp"),
+        None
+    );
+
+    // Neighbouring lengths still decode: four characters give exactly three
+    // bytes, six characters give four bytes with four leftover zero bits.
+    assert_eq!(
+        super::ssh_fingerprint::decode(b"AQID"),
+        Some(vec![0x01, 0x02, 0x03])
+    );
+    assert_eq!(
+        super::ssh_fingerprint::decode(b"AQIDAA"),
+        Some(vec![0x01, 0x02, 0x03, 0x00])
+    );
+    // A single character leaves six bits *and* an empty body; it hits the same
+    // `leftover_bits >= 6` clause but is rejected for the empty blob as well.
+    assert_eq!(super::ssh_fingerprint::decode(b"A"), None);
+}

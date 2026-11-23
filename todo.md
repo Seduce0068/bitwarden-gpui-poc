@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第132弾で 7 件すべてを完了）。
+なし（第133弾で 4 件すべてを完了）。
 
 ## 完了
 
+- [x] 第133弾（16 担当・77 回目）の指摘 4 件を完結（2026-11-24）
+  - is_sensitive_param_key 部分一致、save の非 sync ボディ、
+    BASE64 5文字、数字 COMMON 到達不能をテスト。
+  - ADR ログに 2026-11-24 を追記。
+  - 起動エージェント: 17 体（補充探索 16 + 実装 1）。
+  - 検証: fmt / check / test（1209 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第132弾（16 担当・76 回目）の指摘 7 件を完結（2026-11-24）
   - passphrase 不可視文字、監査 status 重複、
     クエリ内 scheme-less ユーザー情報を修正。

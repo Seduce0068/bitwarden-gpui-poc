@@ -5046,3 +5046,78 @@ fn scheme_less_userinfo_without_an_assignment_is_masked() {
     let plain = "https://vault.example.com/cb?state=ok@cb.example.com";
     assert_eq!(super::mask_url_secrets(plain), plain);
 }
+
+#[test]
+fn sensitive_param_key_substring_match_masks_innocent_names() {
+    // `is_sensitive_param_key` (cache.rs:463-482) is a case-insensitive
+    // *substring* test, not a token-boundary test. Harmless names that merely
+    // contain a needle (`key`, `code`) are therefore classified as secret too.
+    // Pin this over-match so changing it becomes a deliberate contract change.
+    for key in [
+        "monkey",   // ends with "key"
+        "turkey",   // ends with "key"
+        "keyboard", // starts with "key"
+        "encode",   // contains "code"
+        "decode",   // contains "code"
+        "encoder",  // contains "code"
+        "MonKey",   // case-insensitive "key"
+        "ENCODE",   // case-insensitive "code"
+    ] {
+        assert!(
+            super::is_sensitive_param_key(key),
+            "substring match must flag: {key}"
+        );
+    }
+
+    // The masker applies that classification to rendered diagnostic URLs: the
+    // innocent key's spelling is kept, but its value is redacted. A neighbour
+    // with no sensitive substring is preserved verbatim.
+    assert_eq!(
+        super::mask_url_secrets("https://vault.example.com/x?monkey=A&encode=B&state=ok"),
+        "https://vault.example.com/x?monkey=[redacted]&encode=[redacted]&state=ok"
+    );
+    assert!(!super::is_sensitive_param_key("state"));
+}
+
+#[test]
+fn save_accepts_valid_json_but_non_sync_body() {
+    // `save` (cache.rs:1221-1241) only runs `redact_profile_keys`, which parses
+    // the body as *any* JSON value; it never calls `parse_sync`. A hand-built
+    // cache whose body is valid JSON but not a sync response is therefore
+    // written and loaded successfully, while the very same bytes are refused
+    // by `SyncCache::from_body` (cache.rs:860-875). Pin the boundary between
+    // the write path's JSON-shape check and the constructor's sync-shape check.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("non-sync.json");
+    for body in [
+        br#"{"not":"a sync response"}"#.to_vec(),
+        br#"[]"#.to_vec(),
+        br#"42"#.to_vec(),
+    ] {
+        let cache = SyncCache {
+            version: SyncCache::VERSION,
+            user_id: "user-1".into(),
+            server_url: "https://vault.example.com".into(),
+            body: body.clone(),
+            created_at: Some(1_700_000_000),
+        };
+        save(&path, &cache).unwrap_or_else(|error| panic!("{body:?}: {error}"));
+
+        let loaded = load(&path).expect("a valid JSON body must be written and reloaded");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&loaded.body).unwrap(),
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+        );
+        assert!(
+            loaded.sync().is_err(),
+            "the body is not a sync response: {body:?}"
+        );
+        assert!(
+            matches!(
+                SyncCache::from_body(body.clone(), "https://vault.example.com"),
+                Err(SyncCacheError::CacheParse(_))
+            ),
+            "the constructor must reject what save accepted: {body:?}"
+        );
+    }
+}
