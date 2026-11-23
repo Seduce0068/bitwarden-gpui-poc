@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn nofolder_filter_indexes_address_the_first_visible_row() {
-        // The SshKey -> NoFolder edge of `cycle_filter` (vault_view.rs:180)
+        // The SshKey -> NoFolder edge of `cycle_filter` (vault_view.rs:194-202)
         // must leave a view whose index 0 is the first *no-folder* row in sort
         // order, not the first row of the unfiltered vault.
         let mut state = state_with_items(); // a=Alpha, b=Beta, both with no folder

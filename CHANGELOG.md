@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 全体改善（第117弾 / 2026-11-24）
+
+- 空一覧 Up/Down 反馈、F1 大小文字正規化、
+  cycle_filter の vacuous テストを修正
+- TOTP カバレッジ 0/0 行をテスト
+
 ### 全体改善（第115〜116弾 / 2026-11-24）
 
 - client_secret 一時値の零化、共有 comparison_key、

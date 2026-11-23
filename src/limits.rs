@@ -74,7 +74,7 @@ pub const MIN_STALE_DAYS: i64 = 1;
 /// Maximum stale-item threshold, in days.
 pub const MAX_STALE_DAYS: i64 = 3650;
 
-/// Whether `value` contains a Unicode `Cf` (format) character.
+/// Whether `ch` is a Unicode `Cf` (format) character.
 ///
 /// Zero-width spaces, bidi overrides and similar invisible controls can hide
 /// lookalike addresses or change how an address is rendered, so they are

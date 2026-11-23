@@ -3076,7 +3076,8 @@ fn body_without_profile_id_fails_closed_on_both_validation_paths() {
     // `parse_sync` rejects it, so an envelope naming the right server/account
     // must still fail closed instead of being restored offline. The documented
     // second branch ("the resulting id cannot match a non-empty envelope") is
-    // unreachable because the id is mandatory in the wire format (cache.rs:910-915).
+    // reachable after all: an empty-string id is a present `String` and parses,
+    // but cannot match a real account (see the sibling test below).
     for raw in [
         br#"{"folders":[],"ciphers":[]}"#.as_slice(),
         br#"{"profile":{},"folders":[],"ciphers":[]}"#.as_slice(),
@@ -3108,6 +3109,50 @@ fn body_without_profile_id_fails_closed_on_both_validation_paths() {
                 cached_sync_for_detailed(url, "user-1"),
                 Err(SyncCacheError::CacheParse(_))
             ),
+            "{raw:?}"
+        );
+        assert!(cached_sync_for(url, "user-1").is_none(), "{raw:?}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn empty_profile_id_fails_closed_on_both_validation_paths() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+    let url = "https://vault.example.com";
+
+    // Unlike a *missing* id, an empty-string id is a present `String`: openwarden
+    // accepts it and `parse_sync` succeeds. The account comparison in `validate`
+    // and in `cached_sync_for_detailed` is therefore the only guard, and an
+    // envelope naming a real account must fail closed on both paths.
+    for raw in [
+        br#"{"profile":{"id":""},"folders":[],"ciphers":[]}"#.as_slice(),
+        br#"{"Profile":{"Id":""},"Ciphers":[]}"#.as_slice(),
+    ] {
+        let cache = SyncCache {
+            version: SyncCache::VERSION,
+            user_id: "user-1".to_string(),
+            server_url: url.to_string(),
+            body: raw.to_vec(),
+            created_at: None,
+        };
+
+        // Pin the premise: parsing succeeds with an empty id, so the rejection
+        // below is an account mismatch, not a parse failure.
+        assert_eq!(cache.sync().unwrap().user_id(), "", "{raw:?}");
+        assert_eq!(
+            validate(&cache, "user-1", url),
+            Err(SyncCacheError::UserMismatch),
+            "{raw:?}"
+        );
+
+        save_default(&cache).unwrap();
+        assert_eq!(
+            cached_sync_for_detailed(url, "user-1").err(),
+            Some(SyncCacheError::UserMismatch),
             "{raw:?}"
         );
         assert!(cached_sync_for(url, "user-1").is_none(), "{raw:?}");

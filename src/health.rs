@@ -705,9 +705,13 @@ fn is_common_password(lower: &str) -> bool {
 
 /// Whether `item` has a TOTP field that can actually produce a code.
 ///
-/// This is the single source of truth for the TOTP badge in the list, the
-/// `Report::with_totp` counter and the per-item `NoTotp` finding, so those
-/// three views cannot drift apart. A field that exists but could not be
+/// This is the helper called directly by the TOTP badge in the list and by
+/// [`Report::with_totp`] in [`audit`], so those two views cannot drift apart.
+/// The per-item [`Finding::NoTotp`] is *not* derived from this helper:
+/// `audit_item` first routes an undecryptable field to
+/// `Finding::TotpUninspectable`, then emits `NoTotp` from
+/// `!is_valid_secret(totp)`, the same validity predicate used here (see
+/// [`crate::totp::is_valid_secret`]). A field that exists but could not be
 /// decrypted is not usable (see [`has_totp_field`]).
 pub fn has_usable_totp(item: &VaultItem) -> bool {
     item.totp_secret()

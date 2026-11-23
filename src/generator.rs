@@ -302,7 +302,7 @@ impl Strength {
 /// the `Strength` label and the audit on the same side of the 40-bit boundary,
 /// this estimate is rounded to whole bits whenever the rounding would change
 /// the bucket — that is, for any alphabet whose unrounded value lands in
-/// `[WEAK_BITS - 1, WEAK_BITS)` (39.5…40 bits). A 12-digit decimal password
+/// `[WEAK_BITS - 1, WEAK_BITS)` (39…40 bits). A 12-digit decimal password
 /// (39.86… bits) and a seven-character mixed-case password (39.90… bits) both
 /// round to exactly 40, so the meter says `Fair` just as the audit does.
 /// Mixed-class alphabets *away* from the boundary keep the unrounded estimate

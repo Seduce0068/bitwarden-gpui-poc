@@ -751,7 +751,7 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
         .iter()
         .find(|folder| folder.id == "f-bad")
         .unwrap();
-    // The placeholder must not expose the internal folder id (vault_sync.rs:371-375).
+    // The placeholder must not expose the internal folder id (vault_sync.rs:379-383).
     assert_eq!(bad.name, "(復号できませんでした)");
     assert!(!bad.name.contains("f-bad"), "{:?}", bad.name);
     // The id is still available for filtering and lookup.
@@ -760,7 +760,7 @@ fn undecryptable_folder_name_is_placeholdered_without_discarding_vault() {
 
 #[test]
 fn folder_name_text_covers_ok_none_placeholder_and_the_reachable_branches() {
-    // `folder_name_text` (vault_sync.rs:368-382) maps the otherwise unreachable
+    // `folder_name_text` (vault_sync.rs:371-385) maps the otherwise unreachable
     // `Ok(None)` result to the "(名前なし)" placeholder. The helper exists so
     // this defensive arm can be pinned without a fake `openwarden::Vault`.
     let missing = super::folder_name_text(Ok(None));
@@ -770,6 +770,14 @@ fn folder_name_text_covers_ok_none_placeholder_and_the_reachable_branches() {
         "a missing folder name must not be reported as a decryption failure"
     );
     assert_eq!(undecryptable, "(復号できませんでした)");
+    // `Ok(Some(""))` is a present but empty decrypted name, not an unknown id:
+    // the helper returns it verbatim and invents no placeholder for it.
+    let empty = super::folder_name_text(Ok(Some(openwarden::SecretString::from(String::new()))));
+    assert_eq!(empty, "");
+    assert_ne!(
+        empty, missing,
+        "an empty name must not become the unknown-id placeholder"
+    );
     let decrypted = openwarden::SecretString::from("Work".to_string());
     let name = super::folder_name_text(Ok(Some(decrypted)));
     assert_eq!(name, "Work");

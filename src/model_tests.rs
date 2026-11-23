@@ -3208,6 +3208,22 @@ fn vault_item_metadata_wrong_types_and_missing_fields_are_rejected() {
     }
     // `folder_id` is an `Option<String>` and is allowed to be absent (it
     // deserializes to `None`), so it is excluded from the missing-field cases.
+    // Pin that behaviour with a real assertion instead of relying on the
+    // comment: this is the only metadata field serde may leave unset.
+    let mut without_folder = valid.clone();
+    without_folder
+        .as_object_mut()
+        .expect("a serialized VaultItem is an object")
+        .remove("folder_id");
+    let restored: VaultItem = serde_json::from_value(without_folder).unwrap();
+    assert_eq!(restored.folder_id, None);
+    assert_eq!(
+        restored,
+        VaultItem {
+            folder_id: None,
+            ..item.clone()
+        }
+    );
     // `data` is the tagged kind-specific payload with no serde default, so it
     // is required like the metadata fields above.
     for field in ["id", "name", "favorite", "notes", "revision_date", "data"] {
