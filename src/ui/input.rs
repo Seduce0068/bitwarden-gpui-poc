@@ -22,10 +22,15 @@ pub(super) const FOCUS_RECOVERY_KEY: &str = "f1";
 
 /// Whether `key` is the dedicated focus-recovery key.
 ///
-/// Kept as a pure helper so the invariant that this key is inert in the normal
-/// key classification can be exercised without a GPUI window.
+/// Backends report function keys with differing ASCII case (`"f1"` or `"F1"`),
+/// so the comparison normalises ASCII case while staying deliberately narrow:
+/// non-ASCII lookalikes and other key names never recover focus. The global
+/// observer in `install_focus_recovery` passes `event.keystroke.key` straight
+/// through, so an exact comparison silently disabled recovery on uppercase
+/// backends. Kept as a pure helper so the invariant that this key is inert in
+/// the normal key classification can be exercised without a GPUI window.
 pub(super) fn is_focus_recovery_key(key: &str) -> bool {
-    key == FOCUS_RECOVERY_KEY
+    key.eq_ignore_ascii_case(FOCUS_RECOVERY_KEY)
 }
 
 /// Number of rows a single `PageUp`/`PageDown` press moves.
@@ -2183,9 +2188,14 @@ mod tests {
     fn focus_recovery_key_is_recognised() {
         assert!(is_focus_recovery_key(FOCUS_RECOVERY_KEY));
         assert!(is_focus_recovery_key("f1"));
-        assert!(!is_focus_recovery_key("F1"));
+        // Function-key names arrive in either ASCII case from different
+        // backends; both must reach the observer's recovery branch.
+        assert!(is_focus_recovery_key("F1"));
         assert!(!is_focus_recovery_key("f2"));
+        assert!(!is_focus_recovery_key("F2"));
         assert!(!is_focus_recovery_key(""));
+        // ASCII-only normalisation: a fullwidth lookalike is not the key.
+        assert!(!is_focus_recovery_key("Ｆ１"));
     }
 
     #[::core::prelude::v1::test]
@@ -2222,6 +2232,12 @@ mod tests {
         let mut with_char = context(Screen::Unlocked, Panel::Vault, FOCUS_RECOVERY_KEY);
         with_char.key_char = Some("\u{f1}");
         assert_eq!(classify_key(&with_char), UiAction::None);
+
+        // Recognising uppercase ASCII case in the observer must not change
+        // classification: the echoed name stays inert in every mode.
+        let mut upper = context(Screen::Unlocked, Panel::Vault, "F1");
+        upper.key_char = Some("F1");
+        assert_eq!(classify_key(&upper), UiAction::None);
 
         // Sanity check: the helper only fires for the dedicated key, and a
         // normal command key stays classified as before.

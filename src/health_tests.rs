@@ -424,7 +424,27 @@ fn evidence_text_reports_when_there_is_no_login() {
     assert_eq!(report.examined, 0);
     assert_eq!(report.logins, 0);
     assert_eq!(report.totp_coverage(), 0.0);
-    assert!(report.to_text().contains("Vault 健全性レポート"));
+    let text = report.to_text();
+    assert!(text.contains("Vault 健全性レポート"), "{text}");
+    assert!(text.contains("TOTP 設定済み: 0/0 (0%)\n"), "{text}");
+}
+
+#[test]
+fn evidence_text_reports_zero_totp_coverage_when_items_are_not_logins() {
+    // A vault may hold non-login items while `logins` stays 0. The coverage
+    // line must still be rendered with a zero denominator (health.rs:261-266),
+    // not skipped or turned into a NaN/infinity percentage.
+    let mut card = VaultItem::new("1", "Visa", ItemData::Card(CardData::default()));
+    card.revision_date = NOW;
+    let report = report_of(vec![card]);
+    assert_eq!(report.examined, 1);
+    assert_eq!(report.items.len(), 1);
+    assert_eq!(report.logins, 0);
+    assert_eq!(report.with_totp, 0);
+    assert_eq!(report.totp_coverage(), 0.0);
+    let text = report.to_text();
+    assert!(text.contains("Vault 健全性レポート"), "{text}");
+    assert!(text.contains("TOTP 設定済み: 0/0 (0%)\n"), "{text}");
 }
 
 #[test]

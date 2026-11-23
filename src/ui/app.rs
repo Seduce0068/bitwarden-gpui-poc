@@ -1087,6 +1087,18 @@ impl BitwardenApp {
         cx.notify();
     }
 
+    /// Announce an Up/Down/PageUp/PageDown press that has no row to move to.
+    ///
+    /// `next_index_in` returns `None` only for an empty visible vault list —
+    /// the same dead-key case that `move_selection_to_edge` already reports for
+    /// Home/End. Reusing [`crate::ui::input::no_rows_status`] keeps one wording
+    /// and one unsaved-marker contract for every list key. The decision is a
+    /// pure helper because `move_selection` itself needs a GPUI `Context`,
+    /// which these unit tests cannot construct.
+    fn empty_vault_move_status(dirty: bool) -> String {
+        crate::ui::input::no_rows_status(dirty)
+    }
+
     /// Move the vault selection, or the audit highlight while that panel is up.
     ///
     /// Both key paths dispatch `MoveSelection`; routing by the effective panel
@@ -1100,6 +1112,12 @@ impl BitwardenApp {
         }
         let visible = self.view.visible_items();
         let Some(next) = self.view.next_index_in(&visible, delta) else {
+            // An empty list has no next index for any relative key. Without an
+            // explicit status the whole keypress was silently dropped and
+            // looked dead to keyboard users; `report_keyboard_selection` finds
+            // no selected row here, so this announcement is not overwritten.
+            self.status = Self::empty_vault_move_status(self.settings_dirty);
+            cx.notify();
             return;
         };
         let id = visible[next].id.clone();
@@ -2606,6 +2624,38 @@ mod tests {
         );
         assert!(unsaved_quit_warning_status().contains("未保存の設定変更があります"));
         assert!(unsaved_quit_warning_status().contains("w: 保存 / d: 破棄"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn empty_vault_move_announces_the_blocked_key() {
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        // The branch that installs the status is reachable exactly when the
+        // visible list has no rows, for every relative key and direction.
+        let mut view = VaultViewState::new();
+        for delta in [1, -1, 10, -10] {
+            assert_eq!(view.next_index(delta), None, "delta {delta}");
+        }
+        view.vault.items.push(VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        assert_eq!(view.next_index(1), Some(0), "a row makes moves possible");
+
+        for dirty in [false, true] {
+            let status = BitwardenApp::empty_vault_move_status(dirty);
+            assert_eq!(status, crate::ui::input::no_rows_status(dirty));
+            assert!(status.contains("行がありません"), "{status}");
+            assert_eq!(
+                status.contains("[未保存の設定変更があります]"),
+                dirty,
+                "{status}"
+            );
+        }
     }
 
     #[::core::prelude::v1::test]

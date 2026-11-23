@@ -420,7 +420,6 @@ mod tests {
         use Filter::*;
 
         let mut state = state_with_items();
-        state.selected_id = Some("a".into());
         let stages = vec![
             Favorites,
             Kind(ItemKind::Login),
@@ -433,12 +432,21 @@ mod tests {
         ];
         let mut before = state.rewind_calls;
         for expected in stages {
+            // Re-arm before every press. `cycle_filter` clears the selection,
+            // so arming it only once before the loop left the assertion below
+            // vacuous from the second stage onward: it could not detect a
+            // regression that stopped clearing the selection. With a fresh
+            // selection at each press, every stage now exercises the contract.
+            state.selected_id = Some("a".into());
             state.cycle_filter();
             assert_eq!(
                 state.filter, expected,
                 "cycle_filter must advance through every filter stage"
             );
-            assert_eq!(state.selected_id, None, "each stage clears the selection");
+            assert_eq!(
+                state.selected_id, None,
+                "{expected:?} must clear a freshly armed selection"
+            );
             assert_eq!(state.rewind_calls, before + 1, "each stage rewinds once");
             before = state.rewind_calls;
         }

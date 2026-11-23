@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第115〜116弾 / 2026-11-24）
+
+- client_secret 一時値の零化、共有 comparison_key、
+  確定クエリ空時の案内を修正
+- 空一覧 Home/End 反馈、count-only status の誤案内を修正
+- KDF 上限／default 成功経路、BlockedServerUrl 入口、
+  special mode bits、空パスワード監査、不可視判定同一性をテスト
+
 ### 全体改善（第113〜114弾 / 2026-11-24）
 
 - AuthError catch-all 代表ファミリ、at_is_in_query 恒真式、

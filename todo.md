@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第116弾で 6 件すべてを完了）。
+なし（第117弾で 4 件すべてを完了）。
 
 ## 完了
 
+- [x] 第117弾（16 担当・61 回目）の指摘 4 件を完結（2026-11-24）
+  - 空一覧 Up/Down 反馈、F1 大小文字正規化、
+    cycle_filter vacuous テストを修正。
+  - TOTP カバレッジ 0/0 行をテスト。
+  - CHANGELOG に第115〜116弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1115 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第116弾（16 担当・60 回目）の指摘 6 件を完結（2026-11-24）
   - 空一覧の Home/End 反馈、count-only status の誤案内を修正。
   - KdfPolicy::default 成功経路、BlockedServerUrl 入口、
