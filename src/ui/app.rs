@@ -300,6 +300,42 @@ pub(super) fn totp_detail_text(secret: &str, generated: String, error: Option<St
     }
 }
 
+/// TOTP cell of a login detail row.
+///
+/// A blank or invisible-only (`Cf`) secret is *absent*, not malformed: sending
+/// it to code generation would show `コード生成失敗` instead of the "なし"
+/// placeholder. `generate` stays lazy so generation is skipped for absent
+/// secrets and the branch can be tested without a GPUI-backed `TotpState`.
+pub(super) fn totp_code_text(
+    secret: &str,
+    generate: impl FnOnce(&str) -> String,
+    error: Option<String>,
+) -> String {
+    if is_visually_empty(secret) {
+        "なし".to_string()
+    } else {
+        totp_detail_text(secret, generate(secret), error)
+    }
+}
+
+/// URI cell of a login detail row.
+///
+/// `mask_uri` reports `(不正な URI)` when its input cannot be parsed, which is
+/// also what an empty string produces. An absent URI is not an invalid one, so
+/// blank and invisible-only values keep the "なし" placeholder instead.
+pub(super) fn login_uri_text(uris: &[crate::model::LoginUri]) -> String {
+    uris.first().map_or_else(
+        || "なし".to_string(),
+        |uri| {
+            if is_visually_empty(&uri.uri) {
+                "なし".to_string()
+            } else {
+                crate::model::mask_uri(&uri.uri)
+            }
+        },
+    )
+}
+
 /// Key guidance shared by every transition into the locked screen.
 ///
 /// `lock()` and the idle ticker both leave the user on the same lock screen,
@@ -319,7 +355,7 @@ fn lock_guidance() -> String {
 /// the one actually configured; the leftover seconds are therefore appended
 /// whenever the value is not a whole minute. Kept pure so the wording can be
 /// tested without a GPUI window.
-fn idle_lock_minutes_text(idle_lock_seconds: u64) -> String {
+pub(super) fn idle_lock_minutes_text(idle_lock_seconds: u64) -> String {
     let minutes = idle_lock_seconds / 60;
     let seconds = idle_lock_seconds % 60;
     if seconds == 0 {
@@ -1074,20 +1110,14 @@ impl BitwardenApp {
                 totp: secret,
                 uris,
             } => {
-                let code = if secret.trim().is_empty() {
-                    "なし".to_string()
-                } else {
-                    let generated = self.totp_text(&secret);
-                    totp_detail_text(&secret, generated, self.totp.error_message())
-                };
+                let error = self.totp.error_message();
+                let code = totp_code_text(&secret, |secret| self.totp_text(secret), error);
                 let password_label = if crate::vault_sync::is_undecryptable_password(&password) {
                     "復号不可".to_string()
                 } else {
                     format!("{}文字", password.chars().count())
                 };
-                let uri = uris
-                    .first()
-                    .map_or("なし".into(), |uri| crate::model::mask_uri(&uri.uri));
+                let uri = login_uri_text(&uris);
                 join_detail_fields(
                     &base,
                     &[
@@ -2351,6 +2381,55 @@ mod tests {
         assert!(!is_visually_empty(" alice "));
         // A visible character next to a Cf is still real content.
         assert!(!is_visually_empty("alice\u{200b}"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn totp_code_text_treats_cf_only_secret_as_absent() {
+        fn generated(_secret: &str) -> String {
+            "123456".to_string()
+        }
+
+        // A blank secret used to be caught by `trim()`; a Cf-only one was not
+        // and reached code generation. Both must now render the placeholder.
+        // A failure reason is supplied to prove it is not consulted either.
+        let error = Some("理由".to_string());
+        assert_eq!(totp_code_text("", generated, error.clone()), "なし");
+        assert_eq!(totp_code_text("  \t ", generated, error.clone()), "なし");
+        assert_eq!(
+            totp_code_text("\u{200b}\u{feff}\u{202e}", generated, error),
+            "なし"
+        );
+
+        // A real secret still generates a code and still reports failures.
+        assert_eq!(
+            totp_code_text("JBSWY3DPEHPK3PXP", generated, None),
+            "123456"
+        );
+        assert_eq!(
+            totp_code_text("JBSWY3DPEHPK3PXP", generated, Some("理由".into())),
+            "コード生成失敗（不正な TOTP secret: 理由）"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn login_uri_text_shows_none_for_absent_uris() {
+        use crate::model::LoginUri;
+
+        // No URI at all.
+        assert_eq!(login_uri_text(&[]), "なし");
+        // Empty, whitespace-only and invisible-only values are absent, not
+        // invalid: `mask_uri` would otherwise report `(不正な URI)` for them.
+        assert_eq!(login_uri_text(&[LoginUri::new("")]), "なし");
+        assert_eq!(login_uri_text(&[LoginUri::new("  \t ")]), "なし");
+        assert_eq!(
+            login_uri_text(&[LoginUri::new("\u{200b}\u{feff}\u{202e}")]),
+            "なし"
+        );
+        // A real URI is still masked to scheme + host.
+        assert_eq!(
+            login_uri_text(&[LoginUri::new("https://user:token@example.com/secret")]),
+            "https://example.com"
+        );
     }
 
     #[::core::prelude::v1::test]

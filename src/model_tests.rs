@@ -1603,7 +1603,7 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
 
 #[test]
 fn page_matching_ties_use_the_folded_name_key_then_the_id() {
-    // `matches_page` shares the `compare` tiebreak (model.rs:985-1005,1084-1087):
+    // `matches_page` shares the `compare` tiebreak (model.rs:990-1010,1092-1102):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
     let page = "https://example.com/shared";
@@ -2949,8 +2949,9 @@ fn identity_email_phone_and_card_brand_are_in_the_search_haystack() {
 #[test]
 fn known_type_tags_with_missing_or_malformed_payloads_are_rejected() {
     // `ItemData` is internally tagged `type` (model.rs:581-611). A known tag
-    // alone must not be enough: every payload field is required and typed, so
-    // dropping one or replacing it with a wrong scalar must fail to load.
+    // alone must not be enough: every payload field of every variant is
+    // required and typed, so dropping any one or replacing it with a wrong
+    // scalar must fail to load. The table below covers all five variants.
     let valid: Vec<serde_json::Value> = vec![
         serde_json::to_value(ItemData::Login {
             username: "alice".into(),
@@ -2994,31 +2995,80 @@ fn known_type_tags_with_missing_or_malformed_payloads_are_rejected() {
         );
     }
 
-    for (tag, field) in [
-        ("login", "password"),
-        ("secure_note", "text"),
-        ("card", "number"),
-        ("identity", "email"),
-        ("ssh_key", "fingerprint"),
+    // Every payload field of every variant is listed here. The key-set check
+    // below makes a newly added field fail this test until it is added to the
+    // table, so "all fields" cannot silently become "one field per variant".
+    for (tag, fields) in [
+        ("login", &["username", "password", "totp", "uris"][..]),
+        ("secure_note", &["text"][..]),
+        (
+            "card",
+            &[
+                "cardholder_name",
+                "brand",
+                "number",
+                "exp_month",
+                "exp_year",
+                "code",
+            ][..],
+        ),
+        (
+            "identity",
+            &[
+                "first_name",
+                "last_name",
+                "email",
+                "phone",
+                "address",
+                "company",
+            ][..],
+        ),
+        ("ssh_key", &["public_key", "private_key", "fingerprint"][..]),
     ] {
-        let mut value = valid
+        let base = valid
             .iter()
             .find(|value| value["type"].as_str() == Some(tag))
             .unwrap_or_else(|| panic!("no valid fixture for {tag}"))
             .clone();
-        assert_eq!(value["type"].as_str(), Some(tag));
-
-        value.as_object_mut().unwrap().remove(field);
-        assert!(
-            serde_json::from_value::<ItemData>(value.clone()).is_err(),
-            "missing {field} under {tag} must be rejected: {value}"
+        assert_eq!(base["type"].as_str(), Some(tag));
+        let object = base.as_object().expect("payload fixture is an object");
+        let present: Vec<&str> = object
+            .keys()
+            .map(String::as_str)
+            .filter(|key| *key != "type")
+            .collect();
+        assert_eq!(
+            fields.len(),
+            present.len(),
+            "{tag}: the field table must cover every payload field: {present:?}"
         );
+        for field in present {
+            assert!(
+                fields.contains(&field),
+                "{tag}: {field} is missing from the field table"
+            );
+        }
 
-        value[field] = serde_json::json!(42);
-        assert!(
-            serde_json::from_value::<ItemData>(value).is_err(),
-            "wrong type for {field} under {tag} must be rejected"
-        );
+        for &field in fields {
+            let mut missing = base.clone();
+            missing
+                .as_object_mut()
+                .expect("payload fixture is an object")
+                .remove(field);
+            assert!(
+                serde_json::from_value::<ItemData>(missing.clone()).is_err(),
+                "missing {field} under {tag} must be rejected: {missing}"
+            );
+
+            // `42` is the wrong scalar for every field here, including the
+            // `zeroizing_*_serde` adapters and the `uris` vector.
+            let mut wrong = base.clone();
+            wrong[field] = serde_json::json!(42);
+            assert!(
+                serde_json::from_value::<ItemData>(wrong).is_err(),
+                "wrong type for {field} under {tag} must be rejected"
+            );
+        }
     }
 }
 
@@ -3075,7 +3125,7 @@ fn vault_item_metadata_wrong_types_and_missing_fields_are_rejected() {
 #[test]
 fn match_options_allow_regex_reaches_both_matches_page_entry_points() {
     // `LoginUri::matches` already pins `allow_regex`; the two `matches_page`
-    // wrappers (model.rs:750-752 and 990-1005) must forward the same options
+    // wrappers (model.rs:750-752 and 990-1010) must forward the same options
     // instead of silently using `MatchOptions::default()`.
     let item = VaultItem::new(
         "regex-page",

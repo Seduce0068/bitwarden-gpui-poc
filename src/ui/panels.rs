@@ -137,6 +137,25 @@ pub(super) fn settings_panel_key_hint(editing: bool) -> String {
     }
 }
 
+/// Timeout summary line shown in the settings panel.
+///
+/// The auto-lock value must use exactly the wording of the idle-lock status in
+/// `app.rs`: a plain `idle_lock_seconds / 60` silently dropped the leftover
+/// seconds, so 90 s was shown as "1 分" even though the lock fires at 1分30秒.
+/// Pure so the rendered text can be pinned without a GPUI window.
+pub(super) fn settings_timeout_summary_line(
+    idle_lock_seconds: u64,
+    login_timeout_seconds: u64,
+    clipboard_restore_seconds: u64,
+) -> String {
+    format!(
+        "自動ロック: {}（i/u） / ログイン制限: {} 秒（3/4） / 復元: {} 秒（5/6）",
+        crate::ui::app::idle_lock_minutes_text(idle_lock_seconds),
+        login_timeout_seconds,
+        clipboard_restore_seconds
+    )
+}
+
 /// Colour for a finding's severity on an unselected audit row.
 fn severity_color(severity: Severity) -> u32 {
     match severity {
@@ -584,12 +603,16 @@ pub(super) fn settings_panel<'a>(
             "監査閾値: 弱パスワード < {} bit / 更新が古い: {} 日以上",
             settings.thresholds.weak_bits, settings.thresholds.stale_days
         )))
-        .child(div().text_sm().text_color(rgb(0xa6adc8)).child(format!(
-            "自動ロック: {} 分（i/u） / ログイン制限: {} 秒（3/4） / 復元: {} 秒（5/6）",
-            settings.idle_lock_seconds / 60,
-            settings.login_timeout_seconds,
-            settings.clipboard_restore_seconds
-        )))
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(0xa6adc8))
+                .child(settings_timeout_summary_line(
+                    settings.idle_lock_seconds,
+                    settings.login_timeout_seconds,
+                    settings.clipboard_restore_seconds,
+                )),
+        )
         .child(
             div()
                 .text_xs()
@@ -735,6 +758,31 @@ mod tests {
         );
         assert!(password.contains("長さ: 20"), "{password}");
         assert!(passphrase.contains("単語数: 4"), "{passphrase}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_timeout_summary_uses_the_shared_idle_lock_wording() {
+        // A whole minute keeps the compact spelling, with no doubled "分".
+        assert_eq!(
+            settings_timeout_summary_line(300, 45, 60),
+            "自動ロック: 5分（i/u） / ログイン制限: 45 秒（3/4） / 復元: 60 秒（5/6）"
+        );
+        // A fractional minute keeps its leftover seconds instead of being
+        // truncated by integer division, matching `idle_lock_minutes_text`.
+        let line = settings_timeout_summary_line(90, 45, 60);
+        assert_eq!(
+            line,
+            format!(
+                "自動ロック: {}（i/u） / ログイン制限: 45 秒（3/4） / 復元: 60 秒（5/6）",
+                crate::ui::app::idle_lock_minutes_text(90)
+            )
+        );
+        assert!(line.contains("1分30秒"), "{line}");
+        assert!(!line.contains("1 分"), "{line}");
+        assert_eq!(
+            settings_timeout_summary_line(0, 1, 2),
+            "自動ロック: 0分（i/u） / ログイン制限: 1 秒（3/4） / 復元: 2 秒（5/6）"
+        );
     }
 
     #[::core::prelude::v1::test]

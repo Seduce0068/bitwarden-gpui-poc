@@ -329,27 +329,27 @@ fn host_with_optional_port_ok(host: &str) -> bool {
 }
 
 /// Whether a decoded value looks like a nested authority carrying userinfo.
-///
-/// A nested URL is normally detected by `?`, `#` or `//` (see
-/// [`mask_param_pairs`]). A scheme-less authority such as
-/// `user:secret@host/path` has none of those, so its `@` with a `user:password`
-/// marker before it and a plausible host after it is the signal here. The
-/// check stays narrow on purpose: a harmless `state=a@b` has no userinfo colon
-/// and is left verbatim in the diagnostic URL.
+/// A scheme-less `user:secret@host/path` has no `?`, `#` or `//`, so its `@`
+/// and a plausible host are the signal. Numeric-only secrets count too:
+/// after the `@` the digits cannot be a port. `state=a@b` has no colon.
 fn nested_authority_with_userinfo(value: &str) -> bool {
     value.match_indices('@').any(|(at, _)| {
         let before = &value[..at];
         let after = &value[at + 1..];
-        let has_userinfo = before
+        let host = after.split(&['/', '?', '#'][..]).next().unwrap_or("");
+        if !host_with_optional_port_ok(host) {
+            return false;
+        }
+        before
             .split(&['?', '#'][..])
             .next_back()
             .is_some_and(|part| {
-                part.split_once(':').is_some_and(|(_, secret)| {
-                    !secret.is_empty() && !secret.bytes().all(|byte| byte.is_ascii_digit())
+                part.split_once(':').is_some_and(|(user, secret)| {
+                    // Digits alone normally mean a port, but a following
+                    // '@' + host makes `user:12345@host` userinfo.
+                    !user.is_empty() && !secret.is_empty()
                 })
-            });
-        let host = after.split(&['/', '?', '#'][..]).next().unwrap_or("");
-        has_userinfo && host_with_optional_port_ok(host)
+            })
     })
 }
 

@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第101弾で 7 件すべてを完了）。
+なし（第102弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第102弾（16 担当・46 回目）の指摘 6 件を完結（2026-11-23）
+  - スキーム無し authority の数字パスワード、Unicode/full-width 空白
+    link-local URL、ParseFailed バリアント固定を修正・テスト。
+  - 設定パネルの端数秒、TOTP/URI の Cf 空判定、通常行クリック status、
+    Updated の id 差し替え、全ペイロード型検証を修正・テスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（979 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第101弾（16 担当・45 回目）の指摘 7 件を完結（2026-11-23）
   - all-same の前後装飾、数字のみ userinfo マスク、Cf-only 重複名を修正。
   - 検索中行クリック status、copy 判定の Cf、ページキー、

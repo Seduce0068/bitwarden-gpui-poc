@@ -2892,3 +2892,86 @@ fn falsy_non_null_organization_and_deleted_fields_still_exclude_a_cipher() {
     assert_eq!(kept[0]["name"], "eligible");
     assert_eq!(kept[1]["name"], "eligible2");
 }
+
+#[test]
+fn updated_branch_replaces_only_the_item_with_the_matching_id() {
+    // The `Updated` branch finds the row to replace by id
+    // (`items.iter_mut().find(...)`, vault_sync.rs:738-740). With several ids
+    // in the same vault, only the duplicated id may be refreshed: siblings
+    // keep their own revision, decrypted fields and position in the model.
+    let target = "updated-target";
+    let mut old = encrypted_login(target, "OLD_TARGET_PASSWORD", REAL_TOTP);
+    old["revisionDate"] = serde_json::json!("2024-01-01T00:00:00Z");
+    let mut newer = encrypted_login(target, "NEW_TARGET_PASSWORD", REAL_TOTP);
+    newer["revisionDate"] = serde_json::json!("2024-03-01T00:00:00Z");
+    let mut before = encrypted_login("before-keep", "BEFORE_PASSWORD", REAL_TOTP);
+    before["revisionDate"] = serde_json::json!("2024-02-01T00:00:00Z");
+    let mut after = encrypted_login("after-keep", "AFTER_PASSWORD", REAL_TOTP);
+    after["revisionDate"] = serde_json::json!("2024-04-01T00:00:00Z");
+
+    // Raw rows bypass `parse_sync`'s pre-dedup so the `Updated` branch is
+    // actually reached; field readers still resolve by id to the first row.
+    let vault = unlocked_vault_raw(&[before, old, newer, after]);
+    let (mut model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+
+    assert_eq!(model.items.len(), 3, "only the duplicate id collapses");
+    let ids: Vec<&str> = model.items.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(ids, vec!["before-keep", target, "after-keep"]);
+
+    let older_rev = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    let newer_rev = parse_revision(Some("2024-03-01T00:00:00Z")).unwrap();
+    let before_rev = parse_revision(Some("2024-02-01T00:00:00Z")).unwrap();
+    let after_rev = parse_revision(Some("2024-04-01T00:00:00Z")).unwrap();
+    for (id, revision) in [
+        ("before-keep", before_rev),
+        (target, newer_rev),
+        ("after-keep", after_rev),
+    ] {
+        assert_eq!(
+            model.item(id).expect("imported item").revision_date,
+            revision,
+            "{id} kept the wrong revision"
+        );
+    }
+    assert_eq!(
+        model.item("before-keep").unwrap().password(),
+        Some("BEFORE_PASSWORD")
+    );
+    assert_eq!(
+        model.item(target).unwrap().password(),
+        Some("OLD_TARGET_PASSWORD"),
+        "raw duplicates resolve fields by id to the first row"
+    );
+    assert_eq!(
+        model.item("after-keep").unwrap().password(),
+        Some("AFTER_PASSWORD")
+    );
+
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: "before-keep".into(),
+                revision: before_rev,
+            },
+            ImportAudit::Added {
+                id: target.into(),
+                revision: older_rev,
+            },
+            ImportAudit::Updated {
+                id: target.into(),
+                old_revision: older_rev,
+                new_revision: newer_rev,
+            },
+            ImportAudit::Added {
+                id: "after-keep".into(),
+                revision: after_rev,
+            },
+        ]
+    );
+
+    // Removing the refreshed id leaves exactly the two siblings behind.
+    assert!(model.remove(target));
+    let remaining: Vec<&str> = model.items.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(remaining, vec!["before-keep", "after-keep"]);
+}

@@ -3384,3 +3384,54 @@ fn sync_fallback_uses_the_cause_message_when_its_source_is_empty() {
             if detail.as_str() == "キャッシュが有効期限を過ぎています（同期に失敗しました）"
     ));
 }
+
+#[test]
+fn link_local_urls_with_unicode_internal_whitespace_are_blocked() {
+    // Unicode whitespace in the path, query or userinfo is percent-encoded by
+    // `Url::parse` and never moves the host out of a link-local range. Both the
+    // network-capable classifier (literal / metadata hosts need no DNS here)
+    // and the offline subset used by `validate_config` must reject these.
+    for value in [
+        "http://169.254.169.254/\u{3000}latest/meta-data",
+        "http://169.254.169.254/latest?q=\u{3000}value",
+        "http://user\u{3000}pass@169.254.169.254/",
+        "http://[fe80::1]/\u{3000}path",
+        "http://metadata.google.internal/\u{3000}latest",
+    ] {
+        assert!(is_blocked_server_url(value), "{value:?}");
+        assert!(is_blocked_server_url_without_dns(value), "{value:?}");
+
+        let mut config = config();
+        config.server_url = value.into();
+        assert_eq!(
+            validate_config(&config),
+            Err(AuthError::BlockedServerUrl),
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
+fn padded_link_local_urls_are_blocked_after_the_caller_trims_them() {
+    // `validate_config` and `authenticate_inner` both pass
+    // `server_url.trim()` to the classifier (auth.rs:632,1003), so Rust's
+    // Unicode-aware trim removes U+3000 padding before `Url::parse` sees it.
+    // Padding must never let a metadata endpoint through validation.
+    for padded in [
+        " \thttp://169.254.169.254\u{3000}",
+        "\u{3000}http://[fe80::1]\t",
+        "  http://metadata.google.internal  ",
+    ] {
+        let trimmed = padded.trim();
+        assert!(is_blocked_server_url(trimmed), "{padded:?}");
+        assert!(is_blocked_server_url_without_dns(trimmed), "{padded:?}");
+
+        let mut config = config();
+        config.server_url = padded.into();
+        assert_eq!(
+            validate_config(&config),
+            Err(AuthError::BlockedServerUrl),
+            "{padded:?}"
+        );
+    }
+}

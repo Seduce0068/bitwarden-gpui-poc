@@ -1044,10 +1044,13 @@ fn corrupt_primary_does_not_silently_fall_back_to_legacy() {
     std::fs::create_dir_all(new.parent().unwrap()).unwrap();
     write_fixture(&new, b"not json");
 
-    assert_eq!(
+    // `AppError`'s PartialEq compares rendered messages, so an `assert_eq!`
+    // against the plain `ParseFailed` passed for the actual, cause-carrying
+    // variant. Pin the exact variant with `matches!` instead.
+    assert!(matches!(
         load_with_fallback(&new, &old).err(),
-        Some(CacheLoadError::ParseFailed)
-    );
+        Some(CacheLoadError::ParseFailedCause(_))
+    ));
 }
 
 #[test]
@@ -3785,4 +3788,63 @@ fn all_digit_password_with_a_question_or_hash_is_masked() {
     ] {
         assert_eq!(super::mask_url_userinfo(url), url, "{url}");
     }
+}
+
+#[test]
+fn numeric_only_password_in_a_scheme_less_nested_authority_is_masked() {
+    // A nested value `user:12345@host` has none of the `?`, `#` or `//` that
+    // normally trigger recursion. The old authority detector rejected every
+    // all-digit colon value as a `host:port`, so this credential reached Debug
+    // verbatim. Once '@' and a plausible host are present, the digits are a
+    // password, not a port (cache.rs:331-354).
+    for value in [
+        "user:12345@cb.example.com/done",
+        "/user:12345@cb.example.com/done",
+        "user:9876543210@cb.example.com",
+    ] {
+        assert!(
+            super::nested_authority_with_userinfo(value),
+            "must take the nested-authority path: {value}"
+        );
+    }
+    // Controls: without an '@' the digit colon is a port, and without a colon
+    // the '@' is harmless. Neither may start the recursive masker.
+    assert!(!super::nested_authority_with_userinfo("host:8443/path"));
+    assert!(!super::nested_authority_with_userinfo("a@b"));
+
+    let url = "https://vault.example.com/login?next=user:12345@cb.example.com/done";
+    let masked = super::mask_url_secrets(url);
+    assert!(!masked.contains("12345"), "{masked}");
+    assert!(
+        masked.contains("next=[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+
+    // Percent-encoded and leading-slash spellings reach the same recursion.
+    let encoded = "https://vault.example.com/login?next=user%3A12345%40cb.example.com%2Fdone";
+    let masked = super::mask_url_secrets(encoded);
+    assert!(!masked.contains("12345"), "{masked}");
+    assert!(
+        masked.contains("[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+
+    let slashed = "https://vault.example.com/login?next=/user:12345@cb.example.com/done";
+    let masked = super::mask_url_secrets(slashed);
+    assert!(!masked.contains("12345"), "{masked}");
+    assert!(
+        masked.contains("next=/[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+
+    // The same path is used by `Debug`; the stored URL stays byte-for-byte
+    // identical for the server-mismatch check.
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("12345"), "{rendered}");
+    assert!(
+        rendered.contains("[redacted]@cb.example.com/done"),
+        "{rendered}"
+    );
+    assert_eq!(cache.server_url, url);
 }
