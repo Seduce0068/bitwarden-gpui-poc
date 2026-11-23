@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第87弾で 6 件すべてを完了）。
+なし（第88弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第88弾（16 担当・32 回目）の指摘 5 件を完結（2026-11-23）
+  - Vault 一覧ヘッダから監査専用の Enter 案内を除去し、
+    Alt + 物理キーの契約を doc/テストで整合。
+  - resolve_host 失敗、巨大 float 飽和、読み取り不能ファイル置換、
+    キャッシュ save のサイズ検証、パスワード内 '/'、
+    空 folders の恒真アサーション、Updated old_revision=0 を修正・テスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（831 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第87弾（16 担当・31 回目）の指摘 6 件を完結（2026-11-23）
   - 空一覧で行選択キーを出さない共通ヘルパを一覧ヘッダへ配線。
   - parse 失敗 URL の第2防壁、File::open エラー、既定 server_url、

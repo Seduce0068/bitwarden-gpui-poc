@@ -115,6 +115,17 @@ fn is_scheme(text: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
 }
 
+/// Whether `text` contains a `user:secret`-style marker.
+///
+/// A colon followed by a non-empty, non-all-digits value distinguishes userinfo
+/// from a `host:8443` port. Used to tell an unescaped '/' inside a password
+/// from the path separator that closes the authority.
+fn has_userinfo_colon(text: &str) -> bool {
+    text.split_once(':').is_some_and(|(_, value)| {
+        !value.is_empty() && !value.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
 /// Render a server URL for `Debug`, dropping any URL-embedded userinfo.
 ///
 /// A URL such as `https://user:pass@vault.example.com` must not leak the
@@ -129,18 +140,47 @@ fn is_scheme(text: &str) -> bool {
 /// whole pre-path text: a password may contain `@`, but an `@` in a query or
 /// fragment (`https://host?email=a@b`) is not userinfo. A `?`/`#` before the
 /// delimiter can be an unescaped character in the password, so it does not by
-/// itself terminate the authority ([`at_is_in_query`] decides). [`authority_start`]
-/// keeps `://` confined to a leading scheme, so a nested URL in a query cannot
-/// move the scan into the query.
+/// itself terminate the authority ([`at_is_in_query`] decides). The same holds
+/// for an unescaped `/` in the password: a `/` preceded by a `user:secret`
+/// marker and followed by an `@` with a plausible host does not close the
+/// authority either. [`authority_start`] keeps `://` confined to a leading
+/// scheme, so a nested URL in a query cannot move the scan into the query.
 fn mask_url_userinfo(url: &str) -> String {
     let scheme_end = authority_start(url);
-    // A path separator always closes the authority. '?'/'#' are *not* used as
-    // the boundary here: an unescaped one inside a password would hide the real
-    // delimiter and leave the credential in the diagnostic URL.
-    let path_start = url[scheme_end..]
+    // A path separator normally closes the authority. '?'/'#' are *not* used
+    // as the boundary: an unescaped one inside a password would hide the real
+    // delimiter. The same applies to an unescaped '/': when the text before it
+    // carries a `user:secret` marker and a plausible separator followed by a
+    // host comes after it, that '/' is part of the password, so extend the
+    // authority to the next path separator before scanning for userinfo.
+    let mut path_start = url[scheme_end..]
         .find('/')
         .map(|at| scheme_end + at)
         .unwrap_or(url.len());
+    while path_start < url.len() {
+        if !has_userinfo_colon(&url[scheme_end..path_start]) {
+            break;
+        }
+        // Only an '@' before a real query/fragment boundary can be the
+        // authority delimiter; one inside `?email=a@b` is data, not userinfo.
+        let tail = &url[path_start..];
+        let boundary = tail.find(&['?', '#'][..]).unwrap_or(tail.len());
+        let Some(relative_at) = tail[..boundary].find('@') else {
+            break;
+        };
+        let at = path_start + relative_at;
+        let host = url[at + 1..]
+            .split(&['/', '?', '#'][..])
+            .next()
+            .unwrap_or("");
+        if !host_with_optional_port_ok(host) {
+            break;
+        }
+        path_start = url[at + 1..]
+            .find('/')
+            .map(|relative| at + 1 + relative)
+            .unwrap_or(url.len());
+    }
     let scan = &url[scheme_end..path_start];
 
     // The userinfo separator is the last '@' that belongs to the authority.
@@ -861,10 +901,28 @@ pub fn load(path: impl AsRef<std::path::Path>) -> Option<SyncCache> {
 /// used for writes: an old config-dir file is left in place and simply stops
 /// being read once a cache-dir file exists.
 ///
+/// A body larger than [`MAX_CACHE_BODY_BYTES`] is refused before any file is
+/// touched, mirroring the read-side check in [`load_detailed`]: writing a body
+/// this build would immediately reject on load can only waste disk space and
+/// hide a runaway sync response. `save_default` inherits the same guard via
+/// `save_to_path`.
+///
 /// # Errors
 ///
-/// Returns `std::io::Error` on filesystem or serialization failure.
+/// Returns `std::io::Error` on filesystem or serialization failure, with
+/// [`std::io::ErrorKind::InvalidInput`] when the body exceeds
+/// [`MAX_CACHE_BODY_BYTES`].
 pub fn save(path: impl AsRef<std::path::Path>, cache: &SyncCache) -> Result<(), std::io::Error> {
+    if cache.body.len() > MAX_CACHE_BODY_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "cache body of {} bytes exceeds MAX_CACHE_BODY_BYTES ({})",
+                cache.body.len(),
+                MAX_CACHE_BODY_BYTES
+            ),
+        ));
+    }
     let path = path.as_ref();
     let contents = serde_json::to_vec_pretty(cache)?;
     crate::private_file::write_private(path, &contents)

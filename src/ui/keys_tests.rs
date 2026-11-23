@@ -409,6 +409,49 @@ fn alt_produced_text_is_inserted() {
 }
 
 #[test]
+fn alt_single_character_physical_key_without_key_char_is_inserted_while_editing() {
+    // `typed_text` falls back to a one-character physical `key` when no glyph
+    // is reported, so Alt+S with `key_char: None` still inserts "s" in every
+    // text-editing mode. A composed `key_char` is not required by the guard.
+    let mut value = ctx("s");
+    value.key_char = None;
+    value.modifiers.alt = true;
+
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::InsertSearchText("s".into()));
+
+    value.searching = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    assert_eq!(
+        classify_key(&value),
+        UiAction::InsertSettingsText("s".into())
+    );
+
+    value.editing_settings = false;
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    assert_eq!(classify_key(&value), UiAction::InsertAuthText("s".into()));
+
+    // The same keystroke in a command panel stays inert: Alt never leaks a
+    // printable physical key into a vault or generator command.
+    value.editing_auth = false;
+    value.screen = Screen::Unlocked;
+    value.panel = Panel::Vault;
+    assert_eq!(classify_key(&value), UiAction::None);
+    value.panel = Panel::Generator;
+    assert_eq!(classify_key(&value), UiAction::None);
+
+    // A multi-character key name has no printable fallback and stays inert
+    // even while editing, which is the other half of the guard's contract.
+    value.key = "backspace";
+    value.panel = Panel::Vault;
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    assert_eq!(classify_key(&value), UiAction::None);
+}
+
+#[test]
 fn space_key_name_inserts_a_space() {
     let mut value = ctx("space");
     value.searching = true;

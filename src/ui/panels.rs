@@ -34,21 +34,48 @@ pub(super) const MOUSE_WHEEL_SCROLL_ONLY_HINT: &str = "スクロールはマウ�
 pub(super) const LIST_PAGE_AND_EDGE_HINT: &str =
     "PageUp/PageDown: ページ移動 / Home/End: 先頭/末尾へ移動";
 
-/// Row-selection keys for a panel that renders a selectable row list.
+/// Row-navigation keys shared by every panel that renders a selectable list.
 ///
-/// This is the shared "common hint" tail: the audit detail line already uses
-/// it, and the vault list header should use it too, so the two panels cannot
-/// drift apart. It bundles Up/Down, the shared page/edge keys and `Enter` into
-/// one string. `selectable_rows` is the number of rows the user can actually
-/// select. With zero rows these keys would promise a selection path that does
-/// not exist, so the empty case returns `""`; callers then drop the whole hint
-/// segment (including its leading separator). Pure, so the wording can be
-/// pinned by tests without rendering a GPUI window.
-pub(super) fn row_selection_keys_hint(selectable_rows: usize) -> String {
+/// This bundles Up/Down and the shared page/edge keys, but deliberately not
+/// `Enter`: the audit panel binds `Enter` to focus a finding while the vault
+/// panel has no `enter` binding at all (`ui::keys::classify_key`). Keeping the
+/// navigation portion in one helper lets both panels advertise the same keys
+/// without either promising a selection path it does not implement.
+/// `selectable_rows` is the number of rows the user can actually select. With
+/// zero rows these keys would promise a selection path that does not exist, so
+/// the empty case returns `""`; callers then drop the whole hint segment
+/// (including its leading separator). Pure, so the wording can be pinned by
+/// tests without rendering a GPUI window.
+fn row_navigation_keys_hint(selectable_rows: usize) -> String {
     if selectable_rows == 0 {
         String::new()
     } else {
-        format!("↑↓: 行を選択 / {LIST_PAGE_AND_EDGE_HINT} / Enter: 対象を選択")
+        format!("↑↓: 行を選択 / {LIST_PAGE_AND_EDGE_HINT}")
+    }
+}
+
+/// Row keys for the vault list: navigation only, with no `Enter` promise.
+///
+/// `Enter` is bound only in the audit panel, so the vault header must not
+/// advertise it. The navigation wording is byte-for-byte the audit variant's
+/// prefix; only the trailing `Enter` segment is omitted. Kept pure so the
+/// wording can be pinned by tests without rendering a GPUI window.
+pub(super) fn vault_row_keys_hint(selectable_rows: usize) -> String {
+    row_navigation_keys_hint(selectable_rows)
+}
+
+/// Row-selection keys for the audit panel, including `Enter`.
+///
+/// The audit detail line uses this variant because `enter` focuses the
+/// highlighted finding there. It reuses the private `row_navigation_keys_hint`
+/// so its navigation portion cannot drift from the vault header's. Pure, so the
+/// wording can be pinned by tests without rendering a GPUI window.
+pub(super) fn row_selection_keys_hint(selectable_rows: usize) -> String {
+    let navigation = row_navigation_keys_hint(selectable_rows);
+    if navigation.is_empty() {
+        navigation
+    } else {
+        format!("{navigation} / Enter: 対象を選択")
     }
 }
 
@@ -199,10 +226,11 @@ pub(super) fn totp_badge(item: &crate::model::VaultItem) -> TotpBadge {
 ///
 /// The row-selection keys only describe a real path when the report has rows.
 /// On an empty report they promised keys that select nothing, so that case now
-/// shows an explicit empty state instead. The non-empty branch reuses
-/// [`row_selection_keys_hint`], the same shared helper the vault list header
-/// uses, so the two panels cannot drift apart. Kept pure so the wording can be
-/// tested without rendering a GPUI window.
+/// shows an explicit empty state instead. The non-empty branch uses
+/// [`row_selection_keys_hint`], which keeps `Enter` because the audit panel
+/// binds it; the vault header uses [`vault_row_keys_hint`] instead because
+/// `Enter` is inert there. Both share the navigation wording. Kept pure so the
+/// wording can be tested without rendering a GPUI window.
 pub(super) fn audit_panel_detail_line(report: &Report, dirty: bool) -> String {
     let base = format!(
         "{} TOTP 設定済み: {}/{} ({:.0}%)",
@@ -968,6 +996,28 @@ mod tests {
         // The bundled hint must stay a strict superset of the shared constant.
         let expected_prefix = format!("↑↓: 行を選択 / {LIST_PAGE_AND_EDGE_HINT}");
         assert!(hint.starts_with(expected_prefix.as_str()), "{hint}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_row_keys_hint_omits_the_audit_only_enter_binding() {
+        let empty = vault_row_keys_hint(0);
+        assert!(empty.is_empty(), "{empty}");
+        assert!(!empty.contains("Enter"), "{empty}");
+
+        let hint = vault_row_keys_hint(2);
+        assert!(hint.contains("↑↓: 行を選択"), "{hint}");
+        assert!(hint.contains(LIST_PAGE_AND_EDGE_HINT), "{hint}");
+        assert!(!hint.contains("Enter"), "{hint}");
+        assert!(!hint.contains("対象を選択"), "{hint}");
+        for key in ["PageUp", "PageDown", "Home", "End"] {
+            assert!(hint.contains(key), "missing {key} in {hint}");
+        }
+
+        // The audit variant keeps the legacy wording verbatim: the vault hint
+        // is its prefix and the `Enter` segment is the only difference.
+        let audit = row_selection_keys_hint(2);
+        assert!(audit.starts_with(hint.as_str()), "{audit} vs {hint}");
+        assert_eq!(audit, format!("{hint} / Enter: 対象を選択"));
     }
 
     #[::core::prelude::v1::test]

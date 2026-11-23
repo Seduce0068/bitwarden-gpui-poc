@@ -1170,7 +1170,10 @@ fn oversized_cache_body_is_rejected_after_parsing() {
         body: vec![b'x'; MAX_CACHE_BODY_BYTES + 1],
         created_at: None,
     };
-    save(&path, &cache).unwrap();
+    // `save` now refuses an over-large body, so place the hand-crafted envelope
+    // on disk directly to exercise the *read-side* post-parse check. The
+    // write-side guard is pinned by `save_rejects_an_oversized_body`.
+    write_fixture(&path, &serde_json::to_vec(&cache).unwrap());
     assert!(matches!(
         load_detailed(&path),
         Err(CacheLoadError::CacheTooLarge)
@@ -2782,4 +2785,77 @@ fn percent_decode_advances_by_whole_non_ascii_characters() {
     assert_eq!(super::percent_decode("%41あ%42"), "AあB");
     // A multibyte character between incomplete escapes keeps both literal.
     assert_eq!(super::percent_decode("%2あ%"), "%2あ%");
+}
+
+#[test]
+fn save_rejects_an_oversized_body_without_touching_the_file() {
+    // `save` (cache.rs:867+) now mirrors the read-side body cap: an oversized
+    // body is refused before serialization or any filesystem write, so a file
+    // this build could never load is never created.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.json");
+    let oversized = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: vec![b'x'; MAX_CACHE_BODY_BYTES + 1],
+        created_at: None,
+    };
+
+    let error = save(&path, &oversized).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.to_string().contains("MAX_CACHE_BODY_BYTES"),
+        "{error}"
+    );
+    assert!(!path.exists(), "an oversized cache must not be persisted");
+
+    // Control: a normal body still saves and loads. The exact numeric boundary
+    // of the same cap is already pinned by
+    // `from_body_rejects_an_oversized_raw_body` on the `from_body` side.
+    let normal = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    assert!(normal.body.len() <= MAX_CACHE_BODY_BYTES);
+    save(&path, &normal).unwrap();
+    assert_eq!(load_detailed(&path).unwrap(), normal);
+}
+
+#[test]
+fn unescaped_slash_in_a_password_is_masked_before_the_path_boundary() {
+    // An unescaped '/' is legal inside userinfo. Stopping the authority at the
+    // first '/' used to leave the password tail in a diagnostic URL. The
+    // `user:secret` marker plus an `@` with a plausible host after the '/'
+    // identifies such a slash as part of the password (cache.rs:145-192).
+    for (url, expected) in [
+        (
+            "https://user:p/ss@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+        ),
+        (
+            "https://user:p/a/b@vault.example.com:8443/path?state=ok",
+            "https://[redacted]@vault.example.com:8443/path?state=ok",
+        ),
+        (
+            "user:p/ss@vault.example.com",
+            "[redacted]@vault.example.com",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains("p/ss"), "{rendered}");
+        assert!(!rendered.contains("p/a/b"), "{rendered}");
+        assert!(
+            rendered.contains("[redacted]@vault.example.com"),
+            "{rendered}"
+        );
+        assert_eq!(cache.server_url, url, "masking is Debug-only");
+    }
+
+    // A '/' in an ordinary path still closes the authority: an '@' in its
+    // query must not be promoted to a userinfo separator.
+    let plain = "https://vault.example.com/path?q=a@b";
+    assert_eq!(super::mask_url_userinfo(plain), plain);
+    // A numeric port before the '/' is not a password marker either.
+    let with_port = "https://vault.example.com:8443/path?email=a@b";
+    assert_eq!(super::mask_url_userinfo(with_port), with_port);
 }

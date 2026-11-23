@@ -1972,10 +1972,19 @@ fn duplicate_folder_ids_are_collapsed_before_apply_sync() {
         .map(|row| row["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, vec!["first", "no-id", "numeric-id", "other"]);
-    assert_eq!(
-        super::dedup_folders_by_id(&mut serde_json::json!({"folders": []})),
-        (),
-        "an empty folder list is a no-op"
+    // Compare the *value* before and after: asserting that the function's
+    // `()` return equals `()` would be true for any behaviour, including one
+    // that scrambled the empty list.
+    let mut empty = serde_json::json!({"folders": []});
+    let before = empty.clone();
+    super::dedup_folders_by_id(&mut empty);
+    assert_eq!(empty, before, "an empty folder list is a no-op");
+    assert!(
+        empty["folders"]
+            .as_array()
+            .expect("folders stays an array")
+            .is_empty(),
+        "the empty list must still be empty"
     );
 }
 
@@ -2217,6 +2226,44 @@ fn revision_dates_accept_zero_utc_offsets_in_both_signs() {
     assert_eq!(
         parse_revision(Some("2023-11-14T22:13:20.999-00:00")),
         Some(utc)
+    );
+}
+
+#[test]
+fn updated_audit_records_zero_old_revision_for_an_undated_first_row() {
+    // A first row whose `revisionDate` is missing gets UNKNOWN_REVISION (0).
+    // A later duplicate with a real revision must therefore emit
+    // `Updated { old_revision: 0, .. }` (vault_sync.rs:634-671): the audit
+    // reports the sentinel actually stored for the replaced row, not an
+    // invented timestamp. The `unwrap_or(UNKNOWN_REVISION)` lookup fallback on
+    // that branch stays unreachable because the Added arm always inserts the
+    // id into `revisions` first; this test pins the observable zero path.
+    let id = "unknown-old-revision";
+    let mut undated = cipher(id, "2024-01-01T00:00:00Z");
+    undated
+        .as_object_mut()
+        .expect("cipher fixture must be an object")
+        .remove("revisionDate");
+    let new_revision = parse_revision(Some("2024-02-01T00:00:00Z")).unwrap();
+    let vault = unlocked_vault_raw(&[undated, cipher(id, "2024-02-01T00:00:00Z")]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].revision_date, new_revision);
+    assert_eq!(crate::model::UNKNOWN_REVISION, 0);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: crate::model::UNKNOWN_REVISION,
+            },
+            ImportAudit::Updated {
+                id: id.to_string(),
+                old_revision: crate::model::UNKNOWN_REVISION,
+                new_revision,
+            },
+        ]
     );
 }
 

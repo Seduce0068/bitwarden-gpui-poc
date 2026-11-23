@@ -98,8 +98,9 @@ fn vault_detail_row(count: usize, detail: String) -> Option<String> {
 ///
 /// `PageUp`/`PageDown` and `Home`/`End` move the vault selection just like
 /// Up/Down (see `ui::keys::classify_key`), so the header advertises them next
-/// to the row-move key. Kept pure so the wording can be tested without a GPUI
-/// window.
+/// to the row-move key. `Enter` is bound only in the audit panel and is inert
+/// in the vault panel, so it is deliberately left out of this header. Kept
+/// pure so the wording can be tested without a GPUI window.
 fn vault_list_header_text(
     count: usize,
     total: usize,
@@ -108,7 +109,7 @@ fn vault_list_header_text(
     query: &str,
     searching: bool,
 ) -> String {
-    let row_keys = crate::ui::panels::row_selection_keys_hint(count);
+    let row_keys = crate::ui::panels::vault_row_keys_hint(count);
     let row_suffix = if row_keys.is_empty() {
         String::new()
     } else {
@@ -673,6 +674,26 @@ mod tests {
         assert!(
             searching.contains(crate::ui::panels::LIST_PAGE_AND_EDGE_HINT),
             "{searching}"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_header_never_promises_the_audit_only_enter_key() {
+        // `enter` is inert in the vault panel (`ui::keys::classify_key`); the
+        // old shared hint advertised it here anyway. Every row count must now
+        // omit both the key name and the audit-only "select target" phrase.
+        for count in [0, 1, 3] {
+            let header = vault_list_header_text(count, 7, "すべて", "名前 ↑", "", false);
+            assert!(!header.contains("Enter"), "count={count}: {header}");
+            assert!(!header.contains("対象を選択"), "count={count}: {header}");
+        }
+
+        // The remaining navigation wording is unchanged.
+        let header = vault_list_header_text(2, 7, "すべて", "名前 ↑", "", false);
+        assert!(header.contains("↑↓: 行を選択"), "{header}");
+        assert!(
+            header.contains(crate::ui::panels::LIST_PAGE_AND_EDGE_HINT),
+            "{header}"
         );
     }
 }

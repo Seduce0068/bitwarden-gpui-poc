@@ -17,6 +17,13 @@
 //!   force that call to fail. The flag tests below pin the observable data
 //!   contract at the `AuthenticatedVault` boundary only, not the assignment
 //!   itself.
+//! * `resolve_host` (auth.rs:529-534) takes no injected resolver, so an
+//!   arbitrary DNS outage cannot be forced from this test module without a
+//!   production change. Its failure arm is nevertheless deterministic: a host
+//!   containing an interior NUL is rejected by `ToSocketAddrs` before any
+//!   resolver call, so the empty-vector fail-open can be pinned without real
+//!   DNS. A genuine "server name exists but does not resolve" answer stays a
+//!   known, untestable constraint here.
 
 use std::net::IpAddr;
 
@@ -2617,4 +2624,34 @@ fn every_unparseable_or_unsupported_url_is_invalid_server_url() {
             "{blank:?}"
         );
     }
+}
+
+#[test]
+fn resolve_host_failure_fails_open_to_an_empty_vector_without_dns() {
+    // `resolve_host` (auth.rs:529-534) returns an empty vector when
+    // `to_socket_addrs` fails. Injecting a failing resolver is impossible from
+    // this module (no seam), and relying on an unresolvable public name would
+    // make the test depend on real DNS. An interior NUL is rejected while the
+    // `&str` is converted to a C string, i.e. before any resolver call, so the
+    // error arm is exercised deterministically and offline.
+    let malformed = "not\0a-host.example.com";
+    assert!(super::resolve_host(malformed).is_empty());
+
+    // Fail-open semantics: an empty answer contains no link-local address, so
+    // the classifier does not block the URL. The injected-resolver path pins
+    // the same policy a real lookup would use after this empty vector.
+    assert!(!is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| Vec::new()
+    ));
+    assert!(!is_blocked_server_url_without_dns(
+        "https://vault.example.com"
+    ));
+    // A non-empty link-local answer still blocks, so the assertions above are
+    // about the empty-answer policy rather than a disabled SSRF guard.
+    let link_local: IpAddr = "169.254.169.254".parse().unwrap();
+    assert!(is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| vec![link_local]
+    ));
 }

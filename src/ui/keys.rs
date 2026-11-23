@@ -233,7 +233,10 @@ pub(super) struct KeyContext<'a> {
 /// Text produced by a keystroke, if any.
 ///
 /// `key_char` is preferred because it carries IME-composed and layout-specific
-/// characters; `key` is only the ASCII/physical equivalent.
+/// characters; `key` is only the ASCII/physical equivalent. When no glyph is
+/// reported, a single-character physical `key` (or the `space` key name) is the
+/// fallback — this is what lets Alt+<letter> insert text with `key_char: None`,
+/// and it is what the Alt guard in `classify_key` actually tests.
 fn typed_text<'a>(ctx: &KeyContext<'a>) -> Option<&'a str> {
     if let Some(text) = ctx.key_char {
         if !text.is_empty() {
@@ -320,8 +323,12 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
         return UiAction::None;
     }
     // Alt alone may still produce a printable layout character (e.g. Option+S
-    // -> "ß"). Allow it only while editing text and only when it produced one;
-    // in command panels Alt+key must stay inert.
+    // -> "ß"), but `typed_text` also falls back to a single-character physical
+    // `key` (and the `space` name) when no glyph is reported. The real contract
+    // is therefore: allow Alt only while editing text and only when there is
+    // insertable text — a bare one-character physical key counts even with
+    // `key_char` absent. Multi-character key names stay inert, and in command
+    // panels every Alt+key stays inert.
     if ctx.modifiers.alt && !(editing_text && typed_text(ctx).is_some()) {
         return UiAction::None;
     }

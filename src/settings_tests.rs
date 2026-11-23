@@ -2628,3 +2628,67 @@ fn default_server_url_is_pinned_to_the_bitwarden_cloud_endpoint() {
     Settings::default().save(&path).unwrap();
     assert_eq!(Settings::load(&path).server_url, EXPECTED);
 }
+
+#[test]
+fn finite_huge_float_schema_version_saturates_to_u64_max() {
+    use serde_json::json;
+
+    // `version_from_float` casts integral finite floats with `as u64`, which
+    // saturates at u64::MAX (settings.rs:478-486). A very large but finite
+    // marker must therefore stay on the future side of every guard, just like
+    // infinity, instead of wrapping into a "compatible" small version.
+    let huge = 1e300_f64;
+    assert!(huge.is_finite());
+    assert_eq!(super::version_from_float(huge), Some(u64::MAX));
+    assert_eq!(super::schema_version_of(Some(&json!(huge))), Some(u64::MAX));
+    // The string spelling reaches the same float helper after `parse::<u64>`
+    // fails (settings.rs:497-511).
+    assert_eq!(
+        super::schema_version_of(Some(&json!("1e300"))),
+        Some(u64::MAX)
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let original = br#"{"schema_version":1e300,"email":"huge@example.com"}"#.to_vec();
+    std::fs::write(&path, &original).unwrap();
+
+    assert_eq!(super::file_schema_version(&path), Some(u64::MAX));
+    assert_eq!(Settings::load_detailed(&path).unwrap(), Settings::default());
+    // Both write paths refuse to replace a file whose marker they cannot
+    // understand, so the saturated sentinel protects the original bytes.
+    assert!(Settings::default().save(&path).is_err());
+    let id = generate_device_id().unwrap();
+    assert!(Settings::save_device_id_only(&path, &id).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn save_replaces_an_unreadable_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // Invalid UTF-8 makes `read_bounded_settings_text` fail with ReadFailed
+    // (settings.rs:383-401). `file_schema_version` deliberately collapses that
+    // to "no marker", and `save` refuses only *future* markers, so an
+    // unreadable file must be replaced with the sanitized struct rather than
+    // being preserved like a future-version file.
+    let broken = b"{\"schema_version\":1,\"email\":\"\xff\"}".to_vec();
+    std::fs::write(&path, &broken).unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path).err(),
+        Some(SettingsLoadError::ReadFailed)
+    );
+    assert_eq!(super::file_schema_version(&path), None);
+
+    Settings {
+        email: "new@example.com".to_string(),
+        ..Default::default()
+    }
+    .save(&path)
+    .expect("save must replace an unreadable file");
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "new@example.com");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_ne!(std::fs::read(&path).unwrap(), broken);
+}
