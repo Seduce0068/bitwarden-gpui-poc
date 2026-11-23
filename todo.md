@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第108弾で 6 件すべてを完了）。
+なし（第109弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第109弾（16 担当・53 回目）の指摘 7 件を完結（2026-11-23）
+  - 監査行ラベルの Cf 名プレースホルダ、数値パスワード＋?key=value
+    の URL マスク、client_id/secret の trim→クランプ、
+    Cf 認証情報、監査の Cf 空名を修正。
+  - IPv4-compatible メタデータ IP、小数秒 dedup、
+    expires_within 境界をテスト。
+  - README/ADR のキャッシュ定義を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1058 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第108弾（16 担当・52 回目）の指摘 6 件を完結（2026-11-23）
   - クランプ境界の feedback、調整 status への値表示、
     検索ヘッダの不可視クエリを修正。

@@ -368,8 +368,8 @@ impl From<AppError> for UnlockError {
 // keep the existing `crate::auth::MAX_*` call sites (including the lock-screen
 // input state) source-compatible.
 pub(crate) use crate::limits::{
-    has_format_character, truncate_to_limit, DEFAULT_LOGIN_TIMEOUT, MAX_EMAIL_LEN,
-    MAX_SERVER_URL_LEN,
+    has_format_character, is_format_character, truncate_to_limit, DEFAULT_LOGIN_TIMEOUT,
+    MAX_EMAIL_LEN, MAX_SERVER_URL_LEN,
 };
 pub use crate::limits::{MAX_CLIENT_ID_LEN, MAX_CLIENT_SECRET_LEN, MAX_MASTER_PASSWORD_LEN};
 
@@ -403,9 +403,35 @@ pub fn clamp_auth_config(config: &mut AuthConfig) {
     // "alice@example.com"). Trimming first keeps the address intact.
     config.email = config.email.trim().to_string();
     truncate_to_limit(&mut config.email, MAX_EMAIL_LEN);
+    // The two credential fields used to be capped *before* trimming, unlike
+    // the URL and email above. `api_key_from` and `user_id_from_client_id`
+    // trim them before use, so padding was consuming part of the length budget
+    // and could cut the tail off an otherwise at-limit id or secret. Trim
+    // first, then cap: the retained text is the real credential and clamping
+    // stays idempotent.
+    config.client_id = config.client_id.trim().to_string();
     truncate_to_limit(&mut config.client_id, MAX_CLIENT_ID_LEN);
+    let trimmed_secret = config.client_secret.expose_secret().trim().to_string();
+    if trimmed_secret.len() != config.client_secret.expose_secret().len() {
+        // Replace the buffer (and zeroize the padded original) only when a
+        // trim is actually needed; an in-bounds secret keeps its allocation.
+        config.client_secret = SecretString::from(trimmed_secret);
+    }
     truncate_secret_to_limit(&mut config.client_secret, MAX_CLIENT_SECRET_LEN);
     truncate_secret_to_limit(&mut config.master_password, MAX_MASTER_PASSWORD_LEN);
+}
+
+/// Whether a credential field carries no visible content.
+///
+/// `str::trim()` removes Unicode whitespace but not `Cf` format characters, so
+/// a value made only of a zero-width space (a common paste artifact) renders
+/// blank in the UI yet passes an emptiness check. Reuse the same rule as the
+/// email and TOTP guards: whitespace and `Cf` are invisible, one visible
+/// character makes the field present.
+fn credential_is_blank(value: &str) -> bool {
+    value
+        .chars()
+        .all(|ch| ch.is_whitespace() || is_format_character(ch))
 }
 
 /// A minimal structural check: at most `MAX_EMAIL_LEN` characters, exactly
@@ -488,6 +514,11 @@ fn is_blocked_metadata_ip(ip: IpAddr) -> bool {
         IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
         IpAddr::V4(_) => ip,
     };
+    // Known constraint: IPv4-*compatible* IPv6 (`::a.b.c.d`) is not unwrapped
+    // above, so a metadata address in that spelling — link-local or the
+    // non-link-local Alibaba entry — is not recognized on any classifier path.
+    // See the note on `is_link_local_ip` and the regression test
+    // `ipv4_compatible_metadata_addresses_are_a_documented_blind_spot_in_every_path`.
     is_link_local_ip(ip) || BLOCKED_METADATA_IPS.contains(&ip)
 }
 
@@ -688,10 +719,10 @@ pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
     if config.server_url.trim().is_empty() {
         return Err(AuthError::MissingField("server_url"));
     }
-    if config.client_id.trim().is_empty() {
+    if credential_is_blank(&config.client_id) {
         return Err(AuthError::MissingField("client_id"));
     }
-    if config.client_secret.expose_secret().trim().is_empty() {
+    if credential_is_blank(config.client_secret.expose_secret()) {
         return Err(AuthError::MissingField("client_secret"));
     }
     if config.email.trim().is_empty() {

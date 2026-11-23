@@ -566,3 +566,28 @@ fn one_and_two_digit_codes_are_left_ungrouped() {
         assert!(!code.grouped().contains(' '), "digits={digits}");
     }
 }
+
+#[test]
+fn expires_within_is_inclusive_at_the_remaining_seconds_boundary() {
+    // `Code::expires_within` uses `<=` (totp.rs:66-69): a code whose remaining
+    // time equals the threshold is inside the window, one second more is not.
+    // With the default 30s period, remaining = 30 - (t % 30).
+    for (time, remaining) in [(24u64, 6u64), (25, 5), (26, 4), (29, 1)] {
+        let code = code_at(RFC_SECRET, time).unwrap();
+        assert_eq!(code.remaining(), remaining, "t={time}");
+        assert!(
+            code.expires_within(remaining),
+            "t={time}: the boundary itself must be included"
+        );
+        assert!(
+            !code.expires_within(remaining - 1),
+            "t={time}: one second short of the boundary"
+        );
+    }
+    // The two ends of the period: a fresh code is inside a full-period
+    // warning, and a code one second from rollover is inside a one-second one.
+    assert!(code_at(RFC_SECRET, 0).unwrap().expires_within(30));
+    assert!(code_at(RFC_SECRET, 29).unwrap().expires_within(1));
+    assert!(!code_at(RFC_SECRET, 24).unwrap().expires_within(5));
+    assert!(!code_at(RFC_SECRET, 0).unwrap().expires_within(29));
+}

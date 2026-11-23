@@ -96,7 +96,12 @@ pub struct SyncCache {
     /// must treat the on-disk URL as sensitive whenever a credential-bearing
     /// URL can reach [`SyncCache::from_body`] or a hand-built `SyncCache`.
     /// `Debug` masks the value via `mask_url_secrets`, but masking is a
-    /// presentation-only concern and never rewrites the stored string. Restore
+    /// presentation-only concern and never rewrites the stored string. Raw,
+    /// unescaped control characters (for example a newline or NUL inside a
+    /// password) are likewise persisted: serde encodes them as JSON escapes so
+    /// the file stays one parseable value, but the credential text is still on
+    /// disk. The `Debug` masker removes the whole userinfo, so such characters
+    /// cannot split a log line and expose the tail of the secret. Restore
     /// also compares [`Self::user_id`] with the account id derived from the API
     /// key's `client_id`, so a cache from another account on the same server is
     /// no longer accepted. Callers must not log or persist the URL via another
@@ -262,7 +267,9 @@ fn mask_url_userinfo(url: &str) -> String {
 /// decoration rather than a `key=value` query. A genuine query carries an
 /// assignment with a non-empty key (`https://host:8443?email=a@b`) and still
 /// wins. This keeps `https://host?email=a@b` untouched while still masking
-/// `https://user:pass?x=1@host`.
+/// `https://user:pass?x=1@host`. A non-canonical numeric password wins over the
+/// assignment, so `https://user:12345?key=value@host` is masked as well instead
+/// of being mistaken for a query whose value contains an '@'.
 ///
 /// Bracketed IPv6 hosts need special care: the colons in `[::1]` belong to the
 /// address, not to a `user:password` marker, and `:1]` is not a port. Both
@@ -295,6 +302,20 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
         if has_userinfo_colon || host_complete {
             return !has_userinfo_colon || host_complete;
         }
+        // A canonical numeric colon in the leading authority is a port and an
+        // '@' after it belongs to the query/fragment (`host:8443#frag@x`). Keep
+        // that classification; a non-canonical digit run (five or more digits,
+        // or a leading zero) is a numeric password whatever the username is,
+        // so the '@' is the userinfo separator and must be masked. The username
+        // is deliberately not matched against a hardcoded name such as `user`.
+        // This decision must precede the query-assignment heuristic below: a
+        // numeric password followed by `?key=value@host` otherwise looks like a
+        // genuine query and leaks the credential through `Debug`.
+        let authority = &head[authority_start(head)..];
+        let numeric_password = numeric_password_colon(authority);
+        if numeric_password {
+            return false;
+        }
         // No marker at all: the head is a bare host or a `host:8443` port. A
         // genuine query/fragment parameter carries an assignment with a
         // non-empty key (`key=value`). A bare '=' directly before the '@'
@@ -304,17 +325,7 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
         let has_assignment = query_tail
             .split_once('=')
             .is_some_and(|(key, _)| !key.is_empty());
-        if has_assignment {
-            return true;
-        }
-        // A canonical numeric colon in the leading authority is a port and an
-        // '@' after it belongs to the query/fragment (`host:8443#frag@x`). Keep
-        // that classification; a non-canonical digit run (five or more digits,
-        // or a leading zero) is a numeric password whatever the username is,
-        // so the '@' is the userinfo separator and must be masked. The username
-        // is deliberately not matched against a hardcoded name such as `user`.
-        let authority = &head[authority_start(head)..];
-        !numeric_password_colon(authority)
+        has_assignment || !numeric_password
     })
 }
 

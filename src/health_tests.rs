@@ -2931,3 +2931,59 @@ fn steam_and_otpauth_secrets_count_toward_audit_coverage() {
         "{missing_report:?}"
     );
 }
+
+#[test]
+fn cf_only_names_use_the_unnamed_finding_and_placeholder() {
+    // `trim()` does not remove Unicode Cf, so a name made only of zero-width
+    // space / bidi controls rendered blank while escaping both the `Unnamed`
+    // finding and the "(名称未設定)" placeholder. Both now share the model's
+    // `is_visually_empty` rule with the TOTP badge and search paths.
+    for (index, name) in [
+        "\u{200b}",
+        "\u{feff}\u{200d}",
+        " \u{200b}\t\u{2060} ",
+        "\u{ad}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("cf-name-{index}");
+        let mut item = login(
+            &id,
+            name,
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            "GEZDGNBVGY3TQOJQ",
+        );
+        item.revision_date = NOW;
+        let report = report_of(vec![item]);
+        let reported = report
+            .items
+            .iter()
+            .find(|entry| entry.id == id)
+            .expect("the unnamed item must be reported");
+        assert_eq!(reported.name, "(名称未設定)", "name={name:?}");
+        assert!(
+            reported.findings.contains(&Finding::Unnamed),
+            "name={name:?}"
+        );
+        assert!(report.to_text().contains("(名称未設定)"), "name={name:?}");
+    }
+
+    // Control: a visible character alongside Cf is a real name and must not
+    // be reported as unnamed.
+    let mut named = login(
+        "cf-visible-name",
+        "\u{200b}GitHub",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    );
+    named.revision_date = NOW;
+    let report = report_of(vec![named]);
+    assert!(
+        !report.items.iter().any(|item| item.id == "cf-visible-name"),
+        "a name with visible text is not unnamed: {:?}",
+        report.items
+    );
+}

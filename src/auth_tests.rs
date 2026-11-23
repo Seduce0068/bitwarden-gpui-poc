@@ -3880,3 +3880,140 @@ fn unlock_error_forward_conversion_pins_the_four_discriminants() {
         assert_eq!(converted, expected, "{name}");
     }
 }
+
+#[test]
+fn credential_length_ceiling_is_applied_after_trimming() {
+    // `api_key_from`, `user_id_from_client_id` and `validate_config` all trim
+    // the credentials before use, so the cap must count the trimmed text
+    // (auth.rs:391+). Padding previously consumed part of the budget and cut
+    // the tail off an otherwise at-limit id or secret.
+    let id = format!("user.{}", "i".repeat(MAX_CLIENT_ID_LEN - "user.".len()));
+    assert_eq!(id.chars().count(), MAX_CLIENT_ID_LEN);
+    let secret = "s".repeat(MAX_CLIENT_SECRET_LEN);
+
+    let mut padded = config();
+    padded.client_id = format!(" \t{id}\n");
+    padded.client_secret = SecretString::from(format!(" \t{secret}\n"));
+    assert!(padded.client_id.chars().count() > MAX_CLIENT_ID_LEN);
+    assert!(padded.client_secret.expose_secret().chars().count() > MAX_CLIENT_SECRET_LEN);
+    clamp_auth_config(&mut padded);
+    assert_eq!(padded.client_id, id);
+    assert_eq!(padded.client_secret.expose_secret(), secret);
+    assert_eq!(validate_config(&padded), Ok(()));
+
+    // One visible character past the ceiling is still dropped from the tail,
+    // and the retained prefix is the real credential rather than the padding.
+    let mut over = config();
+    over.client_id = format!(" {id}x  ");
+    over.client_secret = SecretString::from(format!(" {secret}x  "));
+    clamp_auth_config(&mut over);
+    assert_eq!(over.client_id, id);
+    assert_eq!(over.client_secret.expose_secret(), secret);
+    assert_eq!(validate_config(&over), Ok(()));
+
+    // Re-applying the clamp is a no-op, and the API key built from the clamped
+    // config carries the same trimmed credential.
+    let before_id = over.client_id.clone();
+    let before_secret = over.client_secret.expose_secret().to_string();
+    clamp_auth_config(&mut over);
+    assert_eq!(over.client_id, before_id);
+    assert_eq!(over.client_secret.expose_secret(), before_secret);
+    let key = super::api_key_from(&padded);
+    assert_eq!(key.client_id, id);
+    assert_eq!(key.client_secret.expose_secret(), secret);
+}
+
+#[test]
+fn cf_only_credentials_are_rejected_as_missing() {
+    // `str::trim()` does not remove Unicode Cf, so a credential made only of
+    // zero-width spaces used to pass the emptiness check and reach the server.
+    for invisible in ["\u{200b}", "\u{feff}", "\u{200d}\u{2060}", " \u{ad}\t"] {
+        let mut by_id = config();
+        by_id.client_id = invisible.to_string();
+        assert_eq!(
+            validate_config(&by_id),
+            Err(AuthError::MissingField("client_id")),
+            "client_id={invisible:?}"
+        );
+
+        let mut by_secret = config();
+        by_secret.client_secret = SecretString::from(invisible.to_string());
+        assert_eq!(
+            validate_config(&by_secret),
+            Err(AuthError::MissingField("client_secret")),
+            "client_secret={invisible:?}"
+        );
+    }
+
+    // Clamping does not turn an invisible-only value into a present credential.
+    let mut clamped = config();
+    clamped.client_id = "\u{200b}".to_string();
+    clamp_auth_config(&mut clamped);
+    assert_eq!(
+        validate_config(&clamped),
+        Err(AuthError::MissingField("client_id"))
+    );
+
+    // Controls: visible text around a Cf character is still present, and an
+    // ordinary whitespace-only value keeps its existing classification.
+    let mut present = config();
+    present.client_id = "\u{200b}user.1234\u{200b}".to_string();
+    assert_eq!(validate_config(&present), Ok(()));
+    let mut whitespace = config();
+    whitespace.client_secret = SecretString::from(" \t\n".to_string());
+    assert_eq!(
+        validate_config(&whitespace),
+        Err(AuthError::MissingField("client_secret"))
+    );
+}
+
+#[test]
+fn ipv4_compatible_metadata_addresses_are_a_documented_blind_spot_in_every_path() {
+    use std::net::Ipv4Addr;
+
+    // `::a.b.c.d` (IPv4-compatible) is distinct from `::ffff:a.b.c.d`
+    // (IPv4-mapped). The guard only unwraps the mapped form, so both the
+    // link-local and the non-link-local metadata addresses in compatible form
+    // stay invisible to the literal, DNS-answer and classifier paths. Pin that
+    // as a known constraint rather than claiming a boundary that does not hold.
+    for compatible in [
+        "::a9fe:a9fe".parse::<IpAddr>().unwrap(), // 169.254.169.254
+        "::6464:64c8".parse::<IpAddr>().unwrap(), // 100.100.100.200
+    ] {
+        let IpAddr::V6(v6) = compatible else {
+            panic!("premise: a compatible IPv6 literal")
+        };
+        assert_eq!(v6.to_ipv4_mapped(), None, "{compatible}");
+        let octets = v6.octets();
+        let embedded = Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]);
+        assert!(
+            super::is_blocked_metadata_ip(IpAddr::V4(embedded)),
+            "premise: the trailing 32 bits are a metadata address: {embedded}"
+        );
+        assert!(!is_link_local_ip(compatible), "{compatible}");
+        assert!(!super::is_blocked_metadata_ip(compatible), "{compatible}");
+        assert!(
+            !is_blocked_server_url_with(&format!("http://[{compatible}]"), |_| Vec::new()),
+            "{compatible}"
+        );
+        assert!(
+            !is_blocked_server_url_with("http://vault.example.com", |_| vec![compatible]),
+            "{compatible}"
+        );
+    }
+
+    // Control: the IPv4-mapped spelling of the same addresses is blocked on
+    // both the literal and the resolver path.
+    for mapped in ["::ffff:169.254.169.254", "::ffff:100.100.100.200"] {
+        let ip: IpAddr = mapped.parse().unwrap();
+        assert!(super::is_blocked_metadata_ip(ip), "{mapped}");
+        assert!(
+            is_blocked_server_url_with(&format!("http://[{mapped}]"), |_| Vec::new()),
+            "{mapped}"
+        );
+        assert!(
+            is_blocked_server_url_with("http://vault.example.com", |_| vec![ip]),
+            "{mapped}"
+        );
+    }
+}

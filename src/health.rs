@@ -763,10 +763,10 @@ pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
             findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity()));
             report.items.push(ItemReport {
                 id: item.id.clone(),
-                // `audit_item` flags a name whose `trim()` is empty, so the
-                // report must show the same placeholder for a whitespace-only
-                // name instead of rendering the invisible raw value.
-                name: if item.name.trim().is_empty() {
+                // `audit_item` flags a name with no visible content, so the
+                // report must show the same placeholder for a whitespace/Cf-
+                // only name instead of rendering the invisible raw value.
+                name: if is_visually_empty(&item.name) {
                     "(名称未設定)".to_string()
                 } else {
                     item.name.clone()
@@ -793,7 +793,10 @@ fn audit_item(
     passwords: &HashMap<&str, Vec<&str>>,
     findings: &mut Vec<Finding>,
 ) {
-    if item.name.trim().is_empty() {
+    // Share the model's `is_visually_empty` rule with the placeholder in
+    // `audit`: whitespace and Unicode `Cf` render nothing, so a zero-width-
+    // space-only name is just as unnamed as an empty one.
+    if is_visually_empty(&item.name) {
         findings.push(Finding::Unnamed);
     }
 

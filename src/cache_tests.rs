@@ -4132,3 +4132,83 @@ fn server_url_credentials_are_persisted_verbatim_in_the_cache_envelope() {
     assert!(on_disk.contains("ON_DISK_TOKEN"), "{on_disk}");
     assert_eq!(load_detailed(&path).unwrap().server_url, url);
 }
+
+#[test]
+fn numeric_password_with_a_key_value_query_and_at_sign_is_masked() {
+    // `at_is_in_query` used to return "in query" as soon as a `?key=value`
+    // assignment appeared before the '@', even when the leading authority was
+    // a non-canonical numeric password. The whole credential then reached
+    // `Debug` unmasked. The numeric-password check now runs first, so a
+    // `user:<digits>?key=value@host` authority keeps its userinfo separator
+    // (cache.rs:298+).
+    for (url, expected, secret) in [
+        (
+            "https://user:12345?key=value@host",
+            "https://[redacted]@host",
+            "12345?key=value",
+        ),
+        (
+            "user:98765?token=abc@host:8443/p",
+            "[redacted]@host:8443/p",
+            "98765?token=abc",
+        ),
+        (
+            "https://bob:01234?state=ok@host/path?note=keep",
+            "https://[redacted]@host/path?note=keep",
+            "01234?state=ok",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        let masked = super::mask_url_secrets(url);
+        assert!(!masked.contains(secret), "leaked {secret}: {masked}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        assert!(rendered.contains("[redacted]@"), "{rendered}");
+        // Debug-only masking: the stored URL stays byte-for-byte identical.
+        assert_eq!(cache.server_url, url);
+    }
+
+    // A canonical port plus a real query still keeps its '@' in the query and
+    // is copied through unchanged; only non-canonical digit runs are passwords.
+    for url in ["https://host:8443?email=a@b", "https://host?x=1@host"] {
+        assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+}
+
+#[test]
+fn raw_control_characters_in_the_server_url_are_masked_and_escaped_on_disk() {
+    // These are literal control bytes, not `%XX` escapes, so the
+    // `percent_decode` control-escape rule does not apply. `Debug` must drop
+    // the whole userinfo: a newline or NUL inside a password must not split a
+    // log line or expose its tail. The envelope still stores the exact string.
+    let url = "https://alice:RAW\nSECRET\rWITH\0NUL@vault.example.com/path?state=ok";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    assert_eq!(cache.server_url, url);
+
+    let rendered = format!("{cache:?}");
+    for secret in ["RAW", "SECRET", "WITH", "NUL"] {
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+    }
+    assert!(!rendered.contains('\n'), "{rendered:?}");
+    assert!(!rendered.contains('\r'), "{rendered:?}");
+    assert!(!rendered.contains('\0'), "{rendered:?}");
+    assert!(
+        rendered.contains("[redacted]@vault.example.com/path?state=ok"),
+        "{rendered}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("control-url-cache.json");
+    save(&path, &cache).unwrap();
+    let on_disk = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    // serde escapes the raw control bytes in the JSON string, so the
+    // credential text is still present (escaped) on disk; masking never
+    // rewrites the stored field.
+    assert!(
+        on_disk.contains("RAW\\nSECRET\\rWITH\\u0000NUL"),
+        "{on_disk:?}"
+    );
+    assert!(!on_disk.contains("RAW\nSECRET"), "{on_disk:?}");
+    assert_eq!(load_detailed(&path).unwrap().server_url, url);
+}

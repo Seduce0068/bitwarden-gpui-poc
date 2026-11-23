@@ -5,7 +5,7 @@ use gpui_kit::StatefulInteractiveElement;
 use gpui_kit::*;
 
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
-use crate::health::{has_totp_field, has_usable_totp, Report, Severity};
+use crate::health::{has_totp_field, has_usable_totp, ItemReport, Report, Severity};
 use crate::settings::Settings;
 use crate::ui::logic::{settings_hint, unsaved_marker, FOCUS_RECOVERY_HINT};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
@@ -230,6 +230,23 @@ pub(super) fn audit_row_label(text: &str, selected: bool) -> String {
     }
 }
 
+/// Compose the text drawn for one audit row, before the selection marker.
+///
+/// `health::audit` normally replaces a blank `ItemReport.name` with the shared
+/// placeholder, but a report can also be assembled directly (tests, other
+/// callers) with a visually empty name. Routing the name through
+/// `item_name_text` here applies the same `is_visually_empty` rule as the vault
+/// list and detail rows, so a Cf-only name cannot render as `"[高]  (Login)"`.
+/// Pure so the contract can be tested without a GPUI window.
+fn audit_row_text(item: &ItemReport) -> String {
+    format!(
+        "[{}] {} ({})",
+        item.worst().map_or("?", Severity::label),
+        crate::ui::app::item_name_text(&item.name),
+        item.kind.label()
+    )
+}
+
 /// The status of a TOTP badge in the vault list.
 ///
 /// Uses the public health predicates added for this purpose so the list, the
@@ -385,15 +402,7 @@ pub(super) fn audit_panel<'a, V: 'static>(
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(color)
-                        .child(audit_row_label(
-                            &format!(
-                                "[{}] {} ({})",
-                                item.worst().map_or("?", Severity::label),
-                                item.name,
-                                item.kind.label()
-                            ),
-                            is_selected,
-                        )),
+                        .child(audit_row_label(&audit_row_text(item), is_selected)),
                 )
                 .children(item.findings.iter().map(|finding| {
                     let severity = finding.severity();
@@ -1285,6 +1294,47 @@ mod tests {
         assert_eq!(audit_row_label(base, true), format!("▶ {base}"));
         assert!(audit_row_label(base, true).starts_with("▶ "));
         assert_ne!(audit_row_label(base, true), audit_row_label(base, false));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_row_text_replaces_visually_empty_names_with_placeholder() {
+        let placeholder = crate::ui::app::ITEM_NAME_PLACEHOLDER;
+        // Whitespace-only and Cf-only names both render as blank. The report
+        // may arrive with such a name directly, so the label must not expose it.
+        for raw in ["", " \t ", "\u{200b}", "\u{feff}\u{202e}", " \u{200b} "] {
+            let item = ItemReport {
+                id: "item-cf".into(),
+                name: raw.into(),
+                kind: crate::model::ItemKind::Login,
+                findings: Vec::new(),
+            };
+            let text = audit_row_text(&item);
+            assert!(
+                text.contains(placeholder),
+                "expected placeholder for {raw:?}, got {text:?}"
+            );
+            if !raw.is_empty() {
+                assert!(!text.contains(raw), "raw name leaked into {text:?}");
+            }
+            assert!(text.starts_with("[?] "), "{text}");
+            assert!(text.ends_with(" (ログイン)"), "{text}");
+            // The marker is applied on top of the resolved text in both states.
+            assert_eq!(audit_row_label(&text, false), text);
+            assert_eq!(audit_row_label(&text, true), format!("▶ {text}"));
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_row_text_keeps_visible_names_and_report_severity() {
+        let item = ItemReport {
+            id: "item-visible".into(),
+            name: " alice ".into(),
+            kind: crate::model::ItemKind::Login,
+            findings: vec![crate::health::Finding::ReusedPassword { count: 2 }],
+        };
+        let text = audit_row_text(&item);
+        assert_eq!(text, "[高]  alice  (ログイン)");
+        assert!(!text.contains(crate::ui::app::ITEM_NAME_PLACEHOLDER));
     }
 
     #[::core::prelude::v1::test]

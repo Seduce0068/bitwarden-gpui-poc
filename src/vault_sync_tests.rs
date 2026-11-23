@@ -3107,3 +3107,61 @@ fn updated_audit_advances_from_one_negative_revision_to_another() {
         ]
     );
 }
+
+#[test]
+fn fractional_second_revisions_tie_and_the_first_row_wins_dedup() {
+    // `parse_revision` ignores the fractional second (vault_sync.rs:539-551),
+    // so two wire timestamps inside the same whole second collapse to one
+    // `i64`. `dedup_ciphers_by_revision` only replaces a row on a strictly
+    // greater revision (vault_sync.rs:275-285), so the earlier *row* survives
+    // even when its fraction is older. That is a documented tie outcome, not
+    // a lost id or a crash; the importer reports the dropped row as `Ignored`.
+    let revision = parse_revision(Some("2024-05-01T00:00:00Z")).unwrap();
+    assert_eq!(
+        parse_revision(Some("2024-05-01T00:00:00.100Z")),
+        Some(revision)
+    );
+    assert_eq!(
+        parse_revision(Some("2024-05-01T00:00:00.900Z")),
+        Some(revision)
+    );
+    assert_ne!(
+        parse_revision(Some("2024-05-01T00:00:01.000Z")),
+        Some(revision)
+    );
+
+    let id = "fractional-tie";
+    let mut earlier_fraction = encrypted_login(id, "EARLIER_FRACTION_PASSWORD", REAL_TOTP);
+    earlier_fraction["revisionDate"] = serde_json::json!("2024-05-01T00:00:00.100Z");
+    let mut later_fraction = encrypted_login(id, "LATER_FRACTION_PASSWORD", REAL_TOTP);
+    later_fraction["revisionDate"] = serde_json::json!("2024-05-01T00:00:00.900Z");
+
+    // Production path: `parse_sync` pre-dedups, so only one cipher reaches the
+    // importer and the first row's decrypted fields are kept.
+    let vault = unlocked_vault(&[earlier_fraction.clone(), later_fraction.clone()]);
+    let model = import_logins(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1, "the duplicate id must be collapsed");
+    let item = model.item(id).expect("the id must survive");
+    assert_eq!(item.revision_date, revision);
+    assert_eq!(item.password(), Some("EARLIER_FRACTION_PASSWORD"));
+    assert_ne!(item.password(), Some("LATER_FRACTION_PASSWORD"));
+
+    // The raw path makes the audit classification observable: the second row
+    // is `Ignored` (equal revision), not `Clipped` (regressed revision).
+    let raw = unlocked_vault_raw(&[earlier_fraction, later_fraction]);
+    let (model, audit) = import_logins_with_audit(&raw).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision,
+            },
+            ImportAudit::Ignored {
+                id: id.to_string(),
+                revision,
+            },
+        ]
+    );
+}
