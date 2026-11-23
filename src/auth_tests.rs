@@ -5,19 +5,19 @@
 //! Three production branches deliberately have no injection seam; these notes
 //! record the limit instead of claiming coverage that the tests cannot give.
 //!
-//! * The DNS re-check in `authenticate_inner` (auth.rs:962-971) calls
+//! * The DNS re-check in `authenticate_inner` (auth.rs:994-997) calls
 //!   `is_blocked_server_url`, whose resolver is the concrete `resolve_host`.
 //!   The injected resolver of `is_blocked_server_url_with` is exercised by the
 //!   classifier tests below, but `authenticate_inner` does not accept that
 //!   seam, so the production re-check cannot be forced to see a link-local
 //!   answer without a real lookup or a production code change. `localhost` is
 //!   used to touch the real resolver with only the local hosts file.
-//! * The `from_cache = true` assignment (auth.rs:1009-1028) lives after
+//! * The `from_cache = true` assignment (auth.rs:1035-1054) lives after
 //!   `Client::sync_body` in the private async login path; there is no seam to
 //!   force that call to fail. The flag tests below pin the observable data
 //!   contract at the `AuthenticatedVault` boundary only, not the assignment
 //!   itself.
-//! * `resolve_host` (auth.rs:529-534) takes no injected resolver, so an
+//! * `resolve_host` (auth.rs:555-560) takes no injected resolver, so an
 //!   arbitrary DNS outage cannot be forced from this test module without a
 //!   production change. Its failure arm is nevertheless deterministic: a host
 //!   containing an interior NUL is rejected by `ToSocketAddrs` before any
@@ -314,7 +314,7 @@ fn dns_answers_are_checked_for_link_local_addresses() {
 #[test]
 fn real_resolver_branch_is_exercised_with_localhost_only() {
     // `resolve_host` is the only network-touching branch of the SSRF guard
-    // (auth.rs:525-542). `localhost` resolves from the local hosts file, so
+    // (auth.rs:555-560). `localhost` resolves from the local hosts file, so
     // this test needs no external DNS; loopback is deliberately allowed.
     let resolved = super::resolve_host("localhost");
     assert!(!resolved.is_empty(), "localhost must resolve locally");
@@ -435,7 +435,7 @@ fn email_validation_enforces_the_254_character_ceiling() {
 #[test]
 fn email_length_ceiling_is_applied_after_trimming() {
     // `valid_email` trims before counting characters (auth.rs:372-375), and
-    // `validate_config` delegates to it with the raw field (auth.rs:592).
+    // `validate_config` delegates to it with the raw field (auth.rs:618).
     // Padding must therefore be ignored at the MAX_EMAIL_LEN boundary, not
     // counted as part of the address.
     let suffix = "@example.com";
@@ -561,7 +561,7 @@ fn secret_clamp_never_splits_a_utf8_character() {
 fn secret_clamp_is_a_no_op_when_the_value_fits() {
     // `char_boundary_at` returns None for a value at or under the limit, so
     // truncate_secret_to_limit returns before replacing the buffer
-    // (auth.rs:349-355). The same SecretString instance and its contents must
+    // (auth.rs:347-353). The same SecretString instance and its contents must
     // survive unchanged — in particular, no zeroizing of an in-bounds secret.
     let mut secret = SecretString::from("short-secret".to_string());
     super::truncate_secret_to_limit(&mut secret, 100);
@@ -626,7 +626,7 @@ fn cache_restore_failure_uses_the_generic_cache_wording() {
     use crate::error::{AppError, OTHER_ERROR_MESSAGE};
 
     // `cache_restore_failure` delegates classification to the cache layer
-    // (auth.rs:876-886). A failure with no dedicated reason keeps the sync
+    // (auth.rs:902-912). A failure with no dedicated reason keeps the sync
     // family and the cache layer's generic fallback text
     // (cache.rs:820-831); it must neither collapse to a bare `Sync` status nor
     // be mislabelled as corruption. Pin the exact user-visible wording.
@@ -674,7 +674,7 @@ fn cache_too_large_message_reaches_the_status_bar() {
 fn user_mismatch_cache_error_reaches_the_status_bar() {
     // The cache layer's `UserMismatch` reason must not collapse into the plain
     // Sync status: `cache_restore_failure` wraps it in `AuthError::Other`
-    // (auth.rs:876-886).
+    // (auth.rs:902-912).
     let error = cache_restore_failure(AppError::UserMismatch);
     assert!(matches!(&error, AuthError::Other(text) if text.contains("別のアカウント")));
     assert_eq!(
@@ -743,7 +743,7 @@ fn auth_error_other_keeps_its_text_until_the_ui_boundary() {
     // kept when converting to `AppError`. The reverse conversion cannot keep
     // an owned String because `AuthError::Other` holds `&'static str`, so it
     // falls back to the generic message rather than mislabelling the failure
-    // as a known family (auth.rs:198, 239).
+    // as a known family (auth.rs:200, 244).
     let error = AuthError::Other("unexpected OS RNG failure");
     assert_eq!(error.message(), "unexpected OS RNG failure");
     assert_eq!(error.to_string(), "unexpected OS RNG failure");
@@ -764,7 +764,7 @@ fn auth_error_other_keeps_its_text_until_the_ui_boundary() {
 
 #[test]
 fn unlock_detail_does_not_add_a_second_prefix_when_text_has_no_suffix() {
-    // `unlock_detail` strips prefix+suffix as a pair (auth.rs:250-255). A
+    // `unlock_detail` strips prefix+suffix as a pair (auth.rs:255-260). A
     // legacy message that carries the prefix but was truncated before the
     // closing `）` must be kept verbatim: splitting the two operations would
     // strip the prefix alone and then re-add it, producing a doubled prefix.
@@ -1125,7 +1125,7 @@ fn kdf_rejection_is_reflexive_and_keeps_its_detail() {
 #[test]
 fn kdf_rejected_detail_renders_the_same_family_message() {
     // `message()` ignores the retained detail for every Detail variant
-    // (auth.rs:119-135), so the KDF family text is identical with and without
+    // (auth.rs:120-138), so the KDF family text is identical with and without
     // one; only `status_message()` is allowed to differ.
     let plain = AuthError::KdfRejected;
     let detailed = AuthError::KdfRejectedDetail("policy: iterations 1000".into());
@@ -1152,7 +1152,7 @@ fn kdf_rejected_detail_renders_the_same_family_message() {
 
 #[test]
 fn unparseable_urls_never_consult_the_resolver() {
-    // `Url::parse` fails before the host classifier runs (auth.rs:501-503), so
+    // `Url::parse` fails before the host classifier runs (auth.rs:525-527), so
     // a resolver that panics proves no DNS path was reached. The plain
     // network-free entry point must agree and return false for the same input.
     for value in ["not a url", "://bad", "https://exa mple.com", ""] {
@@ -1195,7 +1195,7 @@ fn missing_cache_plus_sync_failure_reports_only_the_sync_cause() {
 #[test]
 fn sync_fallback_adopts_the_cause_message_when_there_is_no_source() {
     // `AppError::Other` has no `Error::source()`. `sync_fallback_failure`
-    // (auth.rs:926-933) must then render `cause.message()` instead of dropping
+    // (auth.rs:952-981) must then render `cause.message()` instead of dropping
     // the discarded sync reason entirely.
     let fallback = cache_restore_failure(AppError::CacheExpired);
     let combined =
@@ -1289,7 +1289,7 @@ fn empty_detail_variants_do_not_add_empty_parentheses() {
 fn unlock_error_other_round_trips_through_app_error() {
     // `UnlockError` owns its detail, unlike `AuthError::Other`'s `&'static
     // str`, so both directions of the conversion keep the original text
-    // (auth.rs:260-319).
+    // (auth.rs:262-321).
     let detail = "unexpected unlock backend failure";
     let small = UnlockError::Other(detail.to_string());
     assert_eq!(small.message(), detail);
@@ -1315,7 +1315,7 @@ fn unlock_error_other_round_trips_through_app_error() {
 
 #[test]
 fn urls_without_a_host_fail_open_in_the_ssrf_classifier() {
-    // `Url::host()` is None for cannot-be-a-base schemes (auth.rs:504-519).
+    // `Url::host()` is None for cannot-be-a-base schemes (auth.rs:528-543).
     // The classifier deliberately returns false for them; the separate
     // `ServerUrls::self_hosted` validation is what rejects such URLs as a
     // server base. No DNS may be consulted on the host-less path.
@@ -1339,7 +1339,7 @@ fn urls_without_a_host_fail_open_in_the_ssrf_classifier() {
 #[test]
 fn hostless_urls_fail_open_in_the_classifier_but_are_rejected_by_self_hosted() {
     // The SSRF classifier has no host to inspect for cannot-be-a-base schemes
-    // and deliberately returns false (auth.rs:495-518). That fail-open is only
+    // and deliberately returns false (auth.rs:521-543). That fail-open is only
     // safe because the *server base* parser closes the path: `self_hosted`
     // rejects every host-less URL, so `validate_config` still refuses it.
     // Pinning both halves stops either layer from silently becoming the sole
@@ -1393,8 +1393,8 @@ fn legacy_unlock_details_lose_only_the_status_decoration_on_a_round_trip() {
 
     // The legacy (non-structured) AppError variants store a fully formatted
     // status message. `unlock_detail` must remove exactly that prefix/suffix
-    // so the round trip through UnlockError keeps the raw detail (auth.rs:250,
-    // 297-310); the modern constructors already store the raw detail.
+    // so the round trip through UnlockError keeps the raw detail (auth.rs:255,
+    // 295-315); the modern constructors already store the raw detail.
     for (app, expected_detail, formatted) in [
         (
             AppError::UnlockFailed("復号キーを取得できません（bad key）".into()),
@@ -1470,7 +1470,7 @@ fn authenticate_with_timeout_clamps_a_copy_and_leaves_the_caller_untouched() {
     // An empty client id fails validation deterministically on the clamped
     // copy, so this test never touches the network. All other fields are
     // deliberately over-long: if the function clamped `config` in place they
-    // would be shortened, which this assertion forbids (auth.rs:840-846).
+    // would be shortened, which this assertion forbids (auth.rs:866-872).
     let mut original = config();
     original.server_url = "http://127.0.0.1:8080".into();
     original.client_id.clear();
@@ -1490,7 +1490,7 @@ fn authenticate_with_timeout_clamps_a_copy_and_leaves_the_caller_untouched() {
 
 /// A locally generated protected key plus a keyless sync body. `Session` has
 /// no public setter for these values, so the `unlock_and_import_with` seam
-/// (auth.rs:720-783) supplies them directly to the four failure branches.
+/// (auth.rs:747-810) supplies them directly to the four failure branches.
 fn unlock_fixture() -> (MasterKey, String, openwarden::SyncData) {
     let master_key = MasterKey::from_bytes([0x11; 32]);
     let stretched = master_key.stretch();
@@ -1599,8 +1599,73 @@ fn unlock_and_import_success_branch_uses_the_real_importer() {
 }
 
 #[test]
+fn unlock_and_import_success_delivers_decrypted_items_to_the_model() {
+    // The existing success test only asserts an empty vault, so it cannot
+    // detect a success branch that silently drops or fails to decrypt items.
+    // Here the login fields are real `EncString` ciphertexts under the user key
+    // sealed in the fixture's protected key; the plaintext must reach `model`.
+    let master_key = MasterKey::from_bytes([0x11; 32]);
+    let stretched = master_key.stretch();
+    let protected = EncString::encrypt(&stretched, &[0x22; 64])
+        .expect("a 64-byte user key must encrypt")
+        .to_string();
+    // `Vault::unlock` decrypts `protected` into exactly these 64 bytes, which
+    // become the user key used for every cipher field (the cipher has no own
+    // `key`, so no per-item key is involved).
+    let user_symmetric = openwarden::SymmetricKey::from_bytes(&[0x22; 64])
+        .expect("a 64-byte user key must be valid");
+    let enc = |plain: &[u8]| {
+        EncString::encrypt(&user_symmetric, plain)
+            .expect("a field must encrypt under the user key")
+            .to_string()
+    };
+    // No `profile.key`: `apply_sync` would compare it with the session's
+    // protected key. The fixture's keyless profile keeps the success path.
+    let body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [],
+        "ciphers": [{
+            "id": "login-1",
+            "type": 1,
+            "name": enc(b"Decrypted Login"),
+            "login": {
+                "username": enc(b"alice@example.com"),
+                "password": enc(b"correct horse battery staple"),
+                "uris": [{ "uri": enc(b"https://example.com") }],
+            },
+            "revisionDate": "2024-01-01T00:00:00Z",
+        }],
+    })
+    .to_string();
+    let sync =
+        crate::vault_sync::parse_sync(body.as_bytes()).expect("an encrypted sync body must parse");
+
+    let vault = super::unlock_and_import_with(
+        &protected,
+        None,
+        &master_key,
+        sync,
+        crate::vault_sync::import_logins,
+    )
+    .expect("a valid protected key and encrypted sync must unlock");
+
+    assert_eq!(
+        vault.items.len(),
+        1,
+        "the decrypted item must reach the model"
+    );
+    let item = &vault.items[0];
+    assert_eq!(item.name, "Decrypted Login");
+    let (username, password, _totp, uris) = item.login().expect("the item is a login");
+    assert_eq!(username, "alice@example.com");
+    assert_eq!(password, "correct horse battery staple");
+    assert_eq!(uris.len(), 1);
+    assert_eq!(uris[0].uri, "https://example.com");
+}
+
+#[test]
 fn public_unlock_and_import_extracts_session_derived_inputs() {
-    // The public entry point (auth.rs:726-742) reads `protected_key` and `kdf`
+    // The public entry point (auth.rs:747-763) reads `protected_key` and `kdf`
     // from the authenticated `Session` and forwards them to the shared helper.
     // `Session::from_token` is the only public constructor that needs no login
     // response; it leaves both fields unset, so the extracted protected key is
@@ -1628,7 +1693,7 @@ fn public_unlock_and_import_extracts_session_derived_inputs() {
 
 #[test]
 fn authenticate_wrapper_matches_the_explicit_default_timeout_on_the_validation_path() {
-    // Honest scope: `authenticate()` (auth.rs:871-876) is a thin wrapper around
+    // Honest scope: `authenticate()` (auth.rs:892-897) is a thin wrapper around
     // `authenticate_with_timeout(..., DEFAULT_LOGIN_TIMEOUT)`. Its timeout
     // argument is not observable from a returned error on a config that reaches
     // the network: proving the watchdog used the default would require waiting
@@ -1677,7 +1742,7 @@ fn the_clamped_copy_is_what_validation_sees() {
 #[test]
 fn whitespace_only_server_url_and_email_are_missing_fields() {
     // `validate_config` checks `.trim().is_empty()` for the two text fields
-    // that live in Settings (auth.rs:582,591). A whitespace-only value is a
+    // that live in Settings (auth.rs:606,615). A whitespace-only value is a
     // missing field, not an InvalidServerUrl / InvalidEmail failure.
     let mut value = config();
     value.server_url = " \t\n\u{3000}".into();
@@ -1720,7 +1785,7 @@ fn observing_import(
 #[test]
 fn unlock_and_import_forwards_the_session_kdf_to_openwarden() {
     // Production takes `kdf` from the live `Session` and passes it to
-    // `unlock_and_import_with` (auth.rs:734-741,754-760). `Session::from_token`
+    // `unlock_and_import_with` (auth.rs:747-763,775-810). `Session::from_token`
     // is the only public constructor needing no login response and leaves kdf
     // unset, so the existing branch tests all use `None`. This test supplies a
     // real `Some(Kdf)` and uses an import stub to observe the KDF that reached
@@ -1748,8 +1813,8 @@ fn apply_sync_failed_cause_round_trips_through_app_error() {
     use crate::error::BoxedCause;
 
     // `UnlockError::ApplySyncFailedCause` becomes the legacy cause-carrying
-    // `AppError`, whose text is fully decorated (auth.rs:269-271). The reverse
-    // conversion strips exactly that decoration (auth.rs:303-306), so the raw
+    // `AppError`, whose text is fully decorated (auth.rs:271-273). The reverse
+    // conversion strips exactly that decoration (auth.rs:305-308), so the raw
     // detail and the typed cause must both survive the round trip.
     let detail = "key changed during apply_sync";
     let small = UnlockError::ApplySyncFailedCause(
@@ -1788,7 +1853,7 @@ fn legacy_apply_sync_cause_text_is_stripped_only_once() {
     use crate::error::BoxedCause;
 
     // The legacy variant stores a formatted message. `unlock_detail` removes
-    // prefix and suffix as a pair (auth.rs:253-258, 303-306); an embedded copy
+    // prefix and suffix as a pair (auth.rs:255-260, 305-308); an embedded copy
     // of the decoration must not be swallowed as well.
     let nested = "同期データを取り込めません（混入）";
     let app = AppError::ApplySyncFailedCause(
@@ -1823,7 +1888,7 @@ fn legacy_apply_sync_cause_text_is_stripped_only_once() {
 fn timeout_error_round_trips_through_app_error() {
     // `Timeout` is one of the plain variants with no detail sibling, so both
     // conversion directions must preserve identity, message and equality
-    // (auth.rs:75-108, 171-197, 203-236).
+    // (auth.rs:52-114, 173-203, 205-247).
     let auth = AuthError::Timeout;
     let app = crate::error::AppError::from(auth.clone());
     assert!(matches!(&app, crate::error::AppError::Timeout));
@@ -1846,7 +1911,7 @@ fn timeout_error_round_trips_through_app_error() {
 
 #[test]
 fn validate_config_reports_the_first_invalid_field_in_a_fixed_order() {
-    // Actual order (auth.rs:579-605): the four MissingField checks for the
+    // Actual order (auth.rs:605-631): the four MissingField checks for the
     // Settings-backed text fields run first, then the structural `valid_email`
     // check, then the master_password MissingField check, then
     // BlockedServerUrl, and finally the URL parser. In particular the
@@ -1963,7 +2028,7 @@ fn unrepresentable_deadline_takes_the_relative_timer_fallback() {
 
     // Both watchdog arms still report Timeout when their timer fires. The
     // relative form is built directly with ZERO so the assertion does not
-    // wait out the sentinel duration (auth.rs:791-829).
+    // wait out the sentinel duration (auth.rs:817-850).
     assert_eq!(
         smol::block_on(login_watchdog(LoginDeadline::Relative(Duration::ZERO))).err(),
         Some(AuthError::Timeout)
@@ -1978,7 +2043,7 @@ fn unrepresentable_deadline_takes_the_relative_timer_fallback() {
 fn user_id_is_derived_from_the_personal_api_key_client_id() {
     // The failed-sync path has no fresh `profile.id` and `Session` exposes no
     // accessor, so the account id for the cache check comes from the API key.
-    // Bitwarden personal client ids are `user.<uuid>` (auth.rs:890-906).
+    // Bitwarden personal client ids are `user.<uuid>` (auth.rs:924-930).
     assert_eq!(
         super::user_id_from_client_id("user.00000000-0000-0000-0000-000000000000"),
         "00000000-0000-0000-0000-000000000000"
@@ -1995,7 +2060,7 @@ fn user_id_is_derived_from_the_personal_api_key_client_id() {
 
 #[test]
 fn auth_error_family_messages_are_fixed() {
-    // `AuthError::message()` (auth.rs:118-138) is what the status bar shows;
+    // `AuthError::message()` (auth.rs:120-138) is what the status bar shows;
     // pin every family so a wording change is an explicit, reviewed edit.
     for (error, expected) in [
         (AuthError::MissingField("email"), "認証情報が未入力です"),
@@ -2047,7 +2112,7 @@ fn auth_error_family_messages_are_fixed() {
 
 #[test]
 fn unlock_error_family_messages_are_fixed() {
-    // `UnlockError::message()` (auth.rs:669-685) is the other status-bar
+    // `UnlockError::message()` (auth.rs:695-709) is the other status-bar
     // vocabulary; pin its wrapping text as well as the AuthError families.
     assert_eq!(
         UnlockError::MissingProtectedKey.message(),
@@ -2070,7 +2135,7 @@ fn unlock_error_family_messages_are_fixed() {
 
 #[test]
 fn unlock_error_equality_is_message_only_so_distinct_variants_can_collide() {
-    // `UnlockError::PartialEq` (auth.rs:686-692) compares only `message()`.
+    // `UnlockError::PartialEq` (auth.rs:712-718) compares only `message()`.
     // Two values of different variants that render the same status text are
     // therefore equal. This characterization test pins that behaviour so a
     // future change to variant-aware equality is an explicit, reviewed edit.
@@ -2118,7 +2183,7 @@ fn unlock_error_equality_is_message_only_so_distinct_variants_can_collide() {
 #[test]
 fn successful_restore_reports_only_the_from_cache_flag() {
     // Known limit (module docs): the production assignment is in
-    // `authenticate_inner` (auth.rs:1009-1028), after `Client::sync_body`.
+    // `authenticate_inner` (auth.rs:1035-1054), after `Client::sync_body`.
     // There is no seam to force that call to fail, so this test does NOT cover
     // the assignment itself; it pins only the observable data contract at the
     // `AuthenticatedVault` boundary. `sync_cause` is consumed only in the
@@ -2216,7 +2281,7 @@ fn sync_detail_round_trips_through_app_error_with_its_cause() {
 
 #[test]
 fn embedded_literal_and_metadata_hosts_normalize_case_and_trailing_dot() {
-    // Both literal rules (auth.rs:458-490) fold the host before matching, so
+    // Both literal rules (auth.rs:468-516) fold the host before matching, so
     // uppercase spellings and a trailing DNS dot cannot slip past the guard.
     for value in [
         "http://169.254.169.254.NIP.IO",
@@ -2300,7 +2365,7 @@ fn sync_fallback_renders_only_the_immediate_source_of_a_deep_cause() {
         super::sync_fallback_failure(cache_restore_failure(AppError::NotFound), Some(cause));
     let status = combined.status_message();
     assert!(status.contains("outer failure"), "{status}");
-    // Documented PoC constraint (auth.rs:914-917): only the first source
+    // Documented PoC constraint (auth.rs:952-981): only the first source
     // level is flattened into the status, so the deeper text stays absent.
     assert!(!status.contains("middle failure"), "{status}");
     assert!(!status.contains("deepest cause"), "{status}");
@@ -2312,7 +2377,7 @@ fn a_successful_cache_restore_has_no_place_to_keep_the_sync_cause() {
 
     // Known limit (module docs): `authenticate_inner` has no seam to force a
     // sync failure, so this cannot drive the production fallback branch. It
-    // pins the current data contract instead: auth.rs:1009-1028 binds
+    // pins the current data contract instead: auth.rs:1035-1054 binds
     // `sync_cause` only for the failure arm, while a successful fallback builds
     // `AuthenticatedVault` from `(sync, true)` and drops the cause. The struct
     // has no field for it, so the success status can only be guided by
@@ -2351,7 +2416,7 @@ fn weak_kdf_is_rejected_by_the_real_derive_and_reaches_the_status_bar() {
     use crate::error::{AppError, BoxedCause};
 
     // Exercise the production KDF guard through openwarden itself
-    // (auth.rs:1030-1035): a below-minimum PBKDF2 count is refused before any
+    // (auth.rs:1055-1061): a below-minimum PBKDF2 count is refused before any
     // key derivation, so this is deterministic and cheap.
     let weak = Kdf::Pbkdf2 { iterations: 5_000 };
     let password = SecretString::from("correct horse".to_string());
@@ -2380,7 +2445,7 @@ fn weak_kdf_is_rejected_by_the_real_derive_and_reaches_the_status_bar() {
 #[test]
 fn embedded_link_local_literals_are_detected_in_non_leading_and_hyphenated_labels() {
     // `hostname_embeds_link_local` scans every four-label window and every
-    // hyphenated label (auth.rs:467-490), not only the leading labels. A
+    // hyphenated label (auth.rs:493-516), not only the leading labels. A
     // wildcard-DNS alias may prefix the literal or put it in the middle of the
     // name, so those spellings must still be blocked without DNS.
     for value in [
@@ -2420,9 +2485,9 @@ fn sync_fallback_strips_the_sync_prefix_from_a_generic_cache_other() {
 
     // An unrelated cache error has no specific reason, so `cache_restore_status`
     // supplies the generic, already-prefixed status that `cache_restore_failure`
-    // wraps in `AuthError::Other` (cache.rs:861-874, auth.rs:876-885).
+    // wraps in `AuthError::Other` (cache.rs:861-874, auth.rs:902-912).
     // `sync_fallback_failure` must strip that family prefix and the surrounding
-    // parentheses before composing the detail (auth.rs:941-953); otherwise the
+    // parentheses before composing the detail (auth.rs:952-981); otherwise the
     // status bar would read "同期に失敗しました（同期に失敗しました（…））".
     let fallback = cache_restore_failure(AppError::Other("unclassified cache failure".into()));
     assert!(matches!(&fallback, AuthError::Other(_)));
@@ -2447,7 +2512,7 @@ fn sync_fallback_strips_the_sync_prefix_from_a_generic_cache_other() {
     ));
 
     // An `Other` without the family prefix is kept verbatim by the `unwrap_or`
-    // of the same strip step (auth.rs:942-944).
+    // of the same strip step (auth.rs:967-974).
     let bare = super::sync_fallback_failure(
         AuthError::Other("未分類の失敗"),
         Some(AppError::Other("no-source reason".into())),
@@ -2465,7 +2530,7 @@ fn plain_auth_errors_convert_forward_to_the_matching_app_error_variant() {
     // `AppError`'s PartialEq compares message + detail only, so equality alone
     // cannot distinguish a wrong plain variant that shares its family text.
     // Discriminants pin the exact arm of the forward conversion
-    // (auth.rs:173-202); source() must stay absent because plain variants carry
+    // (auth.rs:173-203); source() must stay absent because plain variants carry
     // no typed cause.
     let cases: Vec<(&str, AuthError, AppError)> = vec![
         (
@@ -2529,7 +2594,7 @@ fn plain_auth_errors_convert_forward_to_the_matching_app_error_variant() {
 fn plain_app_error_variants_convert_back_to_plain_auth_errors() {
     // The reverse direction (AppError -> AuthError) must map a plain variant
     // to its plain sibling, not to a `Detail` variant or the generic `Other`
-    // fallback (auth.rs:205-246). `AppError` is not Clone, so each case is
+    // fallback (auth.rs:205-247). `AppError` is not Clone, so each case is
     // consumed once and the expected family message is captured up front.
     let cases: Vec<(AppError, AuthError, &str)> = vec![
         (
@@ -2628,7 +2693,7 @@ fn missing_protected_key_round_trips_through_app_error() {
 fn every_unparseable_or_unsupported_url_is_invalid_server_url() {
     // A URL `url::Url` cannot parse, a host-less URL with no authority, and a
     // scheme `self_hosted` refuses all reach the same parser error arm
-    // (auth.rs:601-603). None of these inputs is link-local, so the SSRF
+    // (auth.rs:627-629). None of these inputs is link-local, so the SSRF
     // classifier must not claim them first; none is blank, so the MissingField
     // check must not fire either. Every one must surface as InvalidServerUrl
     // with the parser detail preserved in the small enum.
@@ -2661,7 +2726,7 @@ fn every_unparseable_or_unsupported_url_is_invalid_server_url() {
     }
 
     // The only URL-shaped inputs that are NOT InvalidServerUrl are blank ones:
-    // the earlier field check reports them as missing (auth.rs:580-582).
+    // the earlier field check reports them as missing (auth.rs:606-608).
     for blank in ["", " ", " \t\n\u{3000}"] {
         let mut missing = config();
         missing.server_url = blank.into();
@@ -2675,7 +2740,7 @@ fn every_unparseable_or_unsupported_url_is_invalid_server_url() {
 
 #[test]
 fn resolve_host_failure_fails_open_to_an_empty_vector_without_dns() {
-    // `resolve_host` (auth.rs:529-534) returns an empty vector when
+    // `resolve_host` (auth.rs:555-560) returns an empty vector when
     // `to_socket_addrs` fails. Injecting a failing resolver is impossible from
     // this module (no seam), and relying on an unresolvable public name would
     // make the test depend on real DNS. An interior NUL is rejected while the
@@ -2707,7 +2772,7 @@ fn resolve_host_failure_fails_open_to_an_empty_vector_without_dns() {
 fn unlock_error_display_and_to_string_equal_message_for_every_variant() {
     use crate::error::BoxedCause;
 
-    // `UnlockError`'s Display impl (auth.rs:696-700) delegates to `message()`
+    // `UnlockError`'s Display impl (auth.rs:722-726) delegates to `message()`
     // instead of keeping a second rendering. Cover all eight variants,
     // including the cause-carrying ones whose extra context is only visible
     // through `status_message()` / `source()` and must not leak into Display.
@@ -2738,7 +2803,7 @@ fn plain_failed_unlock_variants_have_no_source() {
     use crate::error::BoxedCause;
 
     // Only the three `*Cause` variants override `Error::source()`
-    // (auth.rs:702-711); their plain siblings store just a String and must
+    // (auth.rs:728-737); their plain siblings store just a String and must
     // report None instead of inventing a cause.
     let plain = [
         UnlockError::UnlockFailed("why".into()),
@@ -2871,7 +2936,7 @@ fn prelogin_cause_converts_forward_to_prelogin_detail() {
 
 #[test]
 fn ipv4_mapped_ipv6_link_local_dns_answers_are_blocked() {
-    // `is_link_local_ip` (auth.rs:440-456) unwraps `::ffff:a.b.c.d` before the
+    // `is_link_local_ip` (auth.rs:450-466) unwraps `::ffff:a.b.c.d` before the
     // fe80::/10 check. A DNS answer in that mapped form must block a name just
     // like a native 169.254.* answer, including when mixed with a public A
     // record (split-horizon / rebinding).
@@ -2907,8 +2972,8 @@ fn ipv4_mapped_ipv6_link_local_dns_answers_are_blocked() {
 
 #[test]
 fn userinfo_does_not_hide_a_blocked_host_from_the_ssrf_classifier() {
-    // The classifier matches on `url.host()` / `url.host_str()` (auth.rs:502-
-    // 515), which exclude userinfo. Credentials in a URL must therefore not
+    // The classifier matches on `url.host()` / `url.host_str()` (auth.rs:528-
+    // 543), which exclude userinfo. Credentials in a URL must therefore not
     // change the literal, metadata-host, wildcard-alias or DNS-answer result.
     for value in [
         "https://user:pass@169.254.169.254/latest/meta-data",
@@ -2944,7 +3009,7 @@ fn userinfo_does_not_hide_a_blocked_host_from_the_ssrf_classifier() {
 
 #[test]
 fn nondecimal_and_ipv6_embedded_link_local_literals_are_a_known_constraint() {
-    // Documented limit of `hostname_embeds_link_local` (auth.rs:471-498):
+    // Documented limit of `hostname_embeds_link_local` (auth.rs:473-516):
     // only dotted/hyphenated *decimal* IPv4 quads are decoded there. A bare
     // non-decimal literal used as the WHOLE host is still normalized by
     // `url::Url`'s WHATWG IPv4 parser before the classifier sees it, so every
@@ -3027,7 +3092,7 @@ fn ipv4_compatible_ipv6_link_local_is_a_known_blind_spot() {
         "premise: not an IPv4-mapped address"
     );
 
-    // Known constraint documented on `is_link_local_ip` (auth.rs:435-456):
+    // Known constraint documented on `is_link_local_ip` (auth.rs:435-466):
     // only `to_ipv4_mapped()` is unwrapped, so the compatible form falls
     // through to the fe80::/10 check and is NOT detected. Pin that behaviour
     // so a future fix is an explicit, reviewed change.

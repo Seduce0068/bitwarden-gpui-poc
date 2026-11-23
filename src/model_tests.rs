@@ -2890,3 +2890,134 @@ fn filter_kind_ssh_key_accepts_and_shows_only_ssh_keys() {
     assert_eq!(matched, vec!["s"]);
     assert_eq!(filter.label(&vault.folders), "SSH鍵");
 }
+
+#[test]
+fn identity_email_phone_and_card_brand_are_in_the_search_haystack() {
+    // `haystacks` (model.rs:784-795) pushes the identity email/phone and the
+    // card brand verbatim. The neighbouring `search_haystacks_cover_kind_specific_fields`
+    // test never named those three fields, so pin them directly here.
+    let identity = VaultItem::new(
+        "i-hay",
+        "Id",
+        ItemData::Identity(IdentityData {
+            first_name: "Ada".into(),
+            last_name: "Lovelace".into(),
+            email: "ADA.IDENTITY@EXAMPLE.COM".into(),
+            phone: "090-1234-5678".into(),
+            ..IdentityData::default()
+        }),
+    );
+    let fields: Vec<String> = identity
+        .haystacks()
+        .iter()
+        .map(|field| field.to_string())
+        .collect();
+    for expected in ["ADA.IDENTITY@EXAMPLE.COM", "090-1234-5678"] {
+        assert!(
+            fields.iter().any(|field| field == expected),
+            "missing {expected:?} from haystack: {fields:?}"
+        );
+    }
+    // The public search path folds case, so the lower-cased email still hits.
+    assert!(identity.matches_query("ada.identity@example.com"));
+    assert!(identity.matches_query("1234-5678"));
+
+    let card = VaultItem::new(
+        "c-hay",
+        "Card",
+        ItemData::Card(CardData {
+            brand: "Mastercard".into(),
+            number: "4111111111111234".into(),
+            ..CardData::default()
+        }),
+    );
+    let fields: Vec<String> = card
+        .haystacks()
+        .iter()
+        .map(|field| field.to_string())
+        .collect();
+    assert!(
+        fields.iter().any(|field| field == "Mastercard"),
+        "card brand missing from haystack: {fields:?}"
+    );
+    assert!(card.matches_query("mastercard"));
+    // The brand is searchable without widening the PAN rule.
+    assert!(card.matches_query("1234"));
+    assert!(!card.matches_query("411111111111"));
+}
+
+#[test]
+fn known_type_tags_with_missing_or_malformed_payloads_are_rejected() {
+    // `ItemData` is internally tagged `type` (model.rs:581-611). A known tag
+    // alone must not be enough: every payload field is required and typed, so
+    // dropping one or replacing it with a wrong scalar must fail to load.
+    let valid: Vec<serde_json::Value> = vec![
+        serde_json::to_value(ItemData::Login {
+            username: "alice".into(),
+            password: Zeroizing::new("pw".into()),
+            totp: Zeroizing::new(String::new()),
+            uris: vec![],
+        })
+        .unwrap(),
+        serde_json::to_value(ItemData::SecureNote {
+            text: "note".into(),
+        })
+        .unwrap(),
+        serde_json::to_value(ItemData::Card(CardData {
+            cardholder_name: "Ada".into(),
+            brand: "Visa".into(),
+            number: "4111111111111234".into(),
+            exp_month: "01".into(),
+            exp_year: "30".into(),
+            code: "123".into(),
+        }))
+        .unwrap(),
+        serde_json::to_value(ItemData::Identity(IdentityData {
+            first_name: "Ada".into(),
+            email: "ada@example.com".into(),
+            ..IdentityData::default()
+        }))
+        .unwrap(),
+        serde_json::to_value(ItemData::SshKey(SshKeyData {
+            public_key: "ssh-ed25519 AQ== fp".into(),
+            private_key: String::new().into(),
+            fingerprint: "SHA256:fp".into(),
+        }))
+        .unwrap(),
+    ];
+    // Sanity: the untouched wire forms all load, so the failures below are
+    // caused by the mutation rather than by an invalid base fixture.
+    for value in &valid {
+        assert!(
+            serde_json::from_value::<ItemData>(value.clone()).is_ok(),
+            "valid payload must load: {value}"
+        );
+    }
+
+    for (tag, field) in [
+        ("login", "password"),
+        ("secure_note", "text"),
+        ("card", "number"),
+        ("identity", "email"),
+        ("ssh_key", "fingerprint"),
+    ] {
+        let mut value = valid
+            .iter()
+            .find(|value| value["type"].as_str() == Some(tag))
+            .unwrap_or_else(|| panic!("no valid fixture for {tag}"))
+            .clone();
+        assert_eq!(value["type"].as_str(), Some(tag));
+
+        value.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<ItemData>(value.clone()).is_err(),
+            "missing {field} under {tag} must be rejected: {value}"
+        );
+
+        value[field] = serde_json::json!(42);
+        assert!(
+            serde_json::from_value::<ItemData>(value).is_err(),
+            "wrong type for {field} under {tag} must be rejected"
+        );
+    }
+}

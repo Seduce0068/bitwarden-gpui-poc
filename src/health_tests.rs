@@ -2387,3 +2387,58 @@ fn dictionary_passwords_gain_exactly_one_bit_for_uppercase() {
     // the +1 bit does not turn a dictionary guess into an acceptable password.
     assert!(estimate_entropy("PASSWORD123") < Thresholds::default().weak_bits);
 }
+
+#[test]
+fn trailing_symbols_do_not_hide_a_repeated_character_run() {
+    // Regression: the all-same body only stripped trailing ASCII digits, so
+    // `aaaaaaaaaa!` kept a non-uniform last code point and escaped the
+    // zero-entropy penalty despite being no harder to guess than `aaaaaaaaaa`.
+    // Trailing non-alphanumeric decoration is now ignored in either order
+    // relative to a digit run; case folding still happens first.
+    for password in [
+        "aaaaaaaaaa!",
+        "AAAAAAAAAA!",
+        "aaaaaaaaaa!!!",
+        "aaaaaaaaaa!1",
+        "aaaaaaaaaa1!",
+        "aAaAaA!",
+        "zzzz!",
+        "あああああ！",
+    ] {
+        assert_eq!(estimate_entropy(password), 0, "{password}");
+    }
+
+    // Only the trailing edge is decoration: an interior symbol keeps the body
+    // varied, and a genuinely mixed run still scores from the character pool.
+    assert!(estimate_entropy("a!aaaa") > 0);
+    assert!(estimate_entropy("aB3!aB3!aB3!") > 0);
+    assert!(estimate_entropy("!@#$%^&*!@#$%^&*") > 0);
+
+    // The two contracts named in the change stay intact: mixed-case folds to
+    // one character, and only digits earn the word-suffix discount.
+    assert_eq!(estimate_entropy("aAaAaA"), 0);
+    assert_eq!(estimate_entropy("aAaAaA1"), 0);
+    let plain = estimate_entropy("sunflower");
+    let digits = estimate_entropy("sunflower42");
+    assert!(digits > plain, "{digits} vs {plain}");
+    assert!(
+        digits < estimate_entropy("sunflower!!"),
+        "only digits get the suffix discount"
+    );
+
+    // The audit path must surface the zero estimate as a WeakPassword finding.
+    let bits = estimate_entropy("aaaaaaaaaa!");
+    let report = report_of(vec![login(
+        "symbol-repeat",
+        "SymbolRepeat",
+        "aaaaaaaaaa!",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}

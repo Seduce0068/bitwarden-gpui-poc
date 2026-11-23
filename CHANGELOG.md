@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 全体改善（第95〜96弾 / 2026-11-23）
+
+- 数値PIN の 1000bit クランプ、IPv4-compatible IPv6 の既知制約、
+  cache pretty 展開の上限非整合を記録
+- vault_sync 行参照 40 箇所、settings_tests 行参照 32 件を修正
+- all-same の大小混在、入力開始 status の未保存マーカー、
+  TOTP 上限の動的化を修正
+- save_default の legacy 不変、Unicode tiebreak、NoFolder 選択、
+  非30秒/非6桁 TOTP 表示をテスト
+
 ### 全体改善（第93〜94弾 / 2026-11-23）
 
 - 監査の all_same／辞書 prefix バイパス、IPv4-mapped IPv6、

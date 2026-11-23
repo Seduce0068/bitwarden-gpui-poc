@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第96弾で 7 件すべてを完了）。
+なし（第97弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第97弾（16 担当・41 回目）の指摘 5 件を完結（2026-11-23）
+  - all-same の末尾記号バイパス、入力 status のマーカー、
+    TOTP 上限動的化を修正。
+  - 復号済みアイテム到達、device_id 救済、空白付き将来版、
+    redact 往復後の復号、行参照 53 件を修正・テスト。
+  - identity/card haystack、ItemData 型違反をテスト。
+  - CHANGELOG に第95〜96弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（926 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第96弾（16 担当・40 回目）の指摘 7 件を完結（2026-11-23）
   - all-same の大小混在、入力開始 status の未保存マーカー、
     TOTP 上限の動的化を修正。

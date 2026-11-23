@@ -1036,6 +1036,77 @@ fn future_schema_keeps_a_valid_device_id() {
 }
 
 #[test]
+fn settings_load_rescues_a_valid_device_id_from_a_future_schema_file() {
+    // The sibling test exercises `load_detailed`; the public `Settings::load`
+    // wrapper is what the UI actually calls. It must expose the same device-id
+    // rescue: an opaque local UUID survives the wholesale future-schema
+    // fallback while every schema-governed field falls back to defaults.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let valid = generate_device_id().unwrap();
+    let future = CURRENT_SCHEMA_VERSION + 1;
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"schema_version":{future},"email":"future@example.com","server_url":"https://future.example","device_id":"{valid}"}}"#
+        ),
+    )
+    .unwrap();
+
+    let loaded = Settings::load(&path);
+    assert_eq!(loaded.device_id, valid, "opaque id must survive via load()");
+    assert_eq!(loaded.email, "", "schema-governed fields still fall back");
+    assert_eq!(loaded.server_url, Settings::default().server_url);
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+
+    // A malformed id is dropped on the same public path, so no invalid value
+    // can be reused by `ensure_device_id` after a future-schema load.
+    std::fs::write(
+        &path,
+        format!(r#"{{"schema_version":{future},"device_id":"not-a-uuid"}}"#),
+    )
+    .unwrap();
+    assert!(Settings::load(&path).device_id.is_empty());
+}
+
+#[test]
+fn numeric_string_schema_markers_are_trimmed_before_classification() {
+    // `schema_version_of` (settings.rs:502-508) trims a string marker before
+    // parsing it. A future version written with surrounding whitespace must
+    // still be classified as future, not downgraded to a legacy/current file.
+    let future = CURRENT_SCHEMA_VERSION + 1;
+    for marker in [format!("  {future}  "), format!("\t{future}\n")] {
+        assert_eq!(
+            super::schema_version_of(Some(&serde_json::json!(marker))),
+            Some(u64::from(future)),
+            "{marker:?}"
+        );
+    }
+
+    // Through the file loader the same padded marker reaches the future-version
+    // guard: schema-governed fields are discarded, but the opaque device id is
+    // rescued exactly as for an unpadded numeric marker.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let valid = generate_device_id().unwrap();
+    let padded = format!("\t{future}\n");
+    let body = serde_json::json!({
+        "schema_version": padded,
+        "email": "padded@example.com",
+        "device_id": valid,
+    });
+    std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+
+    assert_eq!(super::file_schema_version(&path), Some(u64::from(future)));
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.device_id, valid);
+    assert_eq!(loaded.email, "");
+    assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+    // The public wrapper agrees, since it delegates to the same parser.
+    assert_eq!(Settings::load(&path).device_id, valid);
+}
+
+#[test]
 fn future_schema_drops_non_string_device_ids() {
     // A future file can carry a valid `device_id` through the wholesale
     // fallback (settings.rs:860-871), but the rescue accepts only a JSON

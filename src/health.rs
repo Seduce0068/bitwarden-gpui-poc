@@ -359,16 +359,19 @@ pub fn estimate_entropy(password: &str) -> u32 {
     // repeated character; checking the original code points let it dodge the
     // zero score.
     let lower = password.to_lowercase();
-    // A bare run of one character scores zero. A trailing digit run must not
-    // hide such a run: `aaaaaaaaaa1` is no harder to guess than `aaaaaaaaaa`,
-    // because an attacker tries each character together with each suffix.
-    // The body is the folded value with any trailing ASCII digit run removed;
-    // when there is no digit suffix the whole folded value is the body, so a
-    // mixed-case run is caught too. Only an ASCII digit suffix is stripped
-    // here, so non-ASCII digits keep the wide-pool path and an all-digit value
-    // has an empty body and still takes the numeric-PIN branch below. The
-    // word-suffix discount stays suffix-only (`strip_trailing_digits`).
-    let body = strip_trailing_digits(&lower).unwrap_or(&lower);
+    // A bare run of one character scores zero. Trailing decoration must not
+    // hide such a run: `aaaaaaaaaa1` and `aaaaaaaaaa!` are no harder to guess
+    // than `aaaaaaaaaa`, because an attacker tries each repeated character
+    // together with each suffix. The body is the folded value with trailing
+    // non-alphanumeric symbols and ASCII digit runs removed, in either order
+    // (see `strip_trailing_decoration`); with no decoration the whole folded
+    // value is the body, so a mixed-case run is caught too. Only ASCII digits
+    // are stripped from the digit end, so non-ASCII digits keep the wide-pool
+    // path; an all-digit value is left intact and still takes the numeric-PIN
+    // branch below. The word-suffix discount stays suffix-only and keeps using
+    // `strip_trailing_digits` on the full folded value, so a symbol-suffixed
+    // word still takes the raw character-pool estimate.
+    let body = strip_trailing_decoration(&lower);
     let all_same_body = {
         let mut body_chars = body.chars();
         match body_chars.next() {
@@ -513,6 +516,34 @@ fn word_capitalization(word: &str, lower: &str) -> Option<bool> {
 fn strip_trailing_digits(value: &str) -> Option<&str> {
     let trimmed = value.trim_end_matches(|c: char| c.is_ascii_digit());
     (trimmed.len() != value.len() && !trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Strip trailing decoration for the all-same check only.
+///
+/// A repeated-character run followed by `!` (or any other non-alphanumeric
+/// symbol, before or after an ASCII digit run) is no harder to guess than the
+/// bare run, so the decoration must not hide the zero-entropy penalty. Only the
+/// trailing edge is removed; interior symbols remain part of the body. The
+/// digit step delegates to `strip_trailing_digits`, which leaves an all-digit
+/// value intact so the numeric-PIN branch in `estimate_entropy` still sees it.
+fn strip_trailing_decoration(value: &str) -> &str {
+    let mut current = value;
+    loop {
+        let no_symbols = current.trim_end_matches(|c: char| !c.is_alphanumeric());
+        // Keep the value when it is entirely decoration: an all-symbol run is
+        // still a uniform body, and the original-code-point check above scores
+        // it the same way.
+        let after_symbols = if no_symbols.is_empty() {
+            current
+        } else {
+            no_symbols
+        };
+        let after_digits = strip_trailing_digits(after_symbols).unwrap_or(after_symbols);
+        if after_digits.len() == current.len() {
+            return after_digits;
+        }
+        current = after_digits;
+    }
 }
 
 /// The longest `"password"`-prefixed value still treated as a dictionary guess

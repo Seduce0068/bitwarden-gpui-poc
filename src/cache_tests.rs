@@ -1325,17 +1325,40 @@ fn group_or_world_access_is_refused_on_read() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn oversized_world_readable_file_keeps_its_size_classification() {
-    // The size gate runs before the permission gate, so callers still get the
-    // specific "too large" reason rather than a generic unreadable status.
+    use std::os::unix::fs::PermissionsExt;
+
+    // The size gate runs before the permission gate (cache.rs:923-941), so an
+    // oversized file keeps its "too large" reason even when its mode would
+    // otherwise be refused. Set the mode explicitly: relying on `std::fs::write`
+    // and the ambient umask would silently create 0600 under a restrictive
+    // umask, making the world-readable premise false.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cache.json");
     std::fs::write(&path, vec![b'x'; (MAX_CACHE_BYTES + 1) as usize]).unwrap();
-    assert!(matches!(
-        load_detailed(&path),
-        Err(CacheLoadError::CacheTooLarge)
-    ));
+
+    for mode in [0o600u32, 0o644] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert!(
+            matches!(load_detailed(&path), Err(CacheLoadError::CacheTooLarge)),
+            "mode {mode:04o}: the size gate must win over the permission gate"
+        );
+    }
+
+    // Control at the very same 0644 mode: a normally sized file IS refused by
+    // the private-file check. This proves the permission gate is active and
+    // the assertions above are about priority, not a disabled check.
+    let normal = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&path, &normal).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let error = load_detailed(&path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        "mode 0644 must be unreadable for a normal-sized file: {error:?}"
+    );
+    assert_eq!(cache_error_message(error), REASON_UNREADABLE);
 }
 
 #[test]
@@ -3224,6 +3247,79 @@ fn save_redacts_profile_keys_at_the_write_boundary() {
         std::io::ErrorKind::InvalidData
     );
     assert!(!invalid_path.exists());
+}
+
+#[test]
+fn redacted_round_trip_keeps_encrypted_logins_decryptable() {
+    // Redaction runs twice on this path (`from_body` and `save`). Both passes
+    // remove key fields; neither may damage the ciphertext of a login whose
+    // fields are encrypted directly under the user key (no per-item key, which
+    // would itself be redacted). The on-disk copy must still decrypt.
+    let user_bytes = [0x1au8; 64];
+    let symmetric =
+        openwarden::SymmetricKey::from_bytes(&user_bytes).expect("a 64-byte symmetric key");
+    let enc = |plain: &[u8]| {
+        openwarden::EncString::encrypt(&symmetric, plain)
+            .expect("a field must encrypt")
+            .to_string()
+    };
+    let raw = serde_json::json!({
+        "profile": {
+            "id": "user-1",
+            "key": "PROFILE_KEY_MUST_BE_STRIPPED",
+            "privateKey": "PRIVATE_KEY_MUST_BE_STRIPPED",
+        },
+        "folders": [],
+        "ciphers": [{
+            "id": "login-1",
+            "type": 1,
+            "name": enc(b"Redacted Login"),
+            "login": {
+                "username": enc(b"alice@example.com"),
+                "password": enc(b"correct horse battery staple"),
+                "uris": [{ "uri": enc(b"https://example.com") }],
+            },
+            "revisionDate": "2024-01-01T00:00:00Z",
+            "key": "CIPHER_KEY_MUST_BE_STRIPPED",
+        }],
+    });
+
+    let cache = SyncCache::from_body(raw.to_string().into_bytes(), "https://vault.example.com")
+        .expect("a keyless copy of the body must still be valid sync JSON");
+    let stored = String::from_utf8(cache.body.clone()).unwrap();
+    for secret in [
+        "PROFILE_KEY_MUST_BE_STRIPPED",
+        "PRIVATE_KEY_MUST_BE_STRIPPED",
+        "CIPHER_KEY_MUST_BE_STRIPPED",
+    ] {
+        assert!(!stored.contains(secret), "leaked {secret}: {stored}");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sync-cache.json");
+    save(&path, &cache).unwrap();
+    let loaded = load_detailed(&path).unwrap();
+    assert_eq!(loaded, cache, "the redaction at save must be idempotent");
+
+    // Decrypt from the reloaded envelope, not from the caller's original body.
+    let sync = loaded.sync().expect("the redacted body must still parse");
+    let user_key = openwarden::UserKey::from_bytes(&user_bytes).unwrap();
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(user_key, state);
+    vault.apply_sync(sync).expect("the keyless sync must apply");
+    let model = crate::vault_sync::import_logins(&vault).expect("the login must decrypt");
+
+    assert_eq!(model.items.len(), 1);
+    let item = &model.items[0];
+    assert_eq!(item.name, "Redacted Login");
+    let (username, password, _totp, uris) = item.login().expect("the item is a login");
+    assert_eq!(username, "alice@example.com");
+    assert_eq!(password, "correct horse battery staple");
+    assert_eq!(uris.len(), 1);
+    assert_eq!(uris[0].uri, "https://example.com");
 }
 
 #[test]
