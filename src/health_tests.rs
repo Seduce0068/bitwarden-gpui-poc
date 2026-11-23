@@ -34,6 +34,21 @@ fn empty_password_has_no_entropy() {
 }
 
 #[test]
+fn mixed_case_single_character_runs_get_the_all_same_penalty() {
+    // The all-same check folds case first: `aAaAaA` is one repeated
+    // character, not six independent draws from a mixed-case pool. Testing
+    // the original code points let it keep a positive score.
+    for password in ["aAaAaA", "AaAaAa", "aAaAaA1", "AaAaAa42"] {
+        assert_eq!(estimate_entropy(password), 0, "{password}");
+    }
+    // A genuine mixed run still scores from the character pool, and the
+    // separate word + trailing-digit discount is untouched by the folded
+    // all-same check.
+    assert!(estimate_entropy("aAbBcC") > 0);
+    assert!(estimate_entropy("sunflower42") > estimate_entropy("sunflower"));
+}
+
+#[test]
 fn longer_and_wider_passwords_score_higher() {
     let short = estimate_entropy("aB3!");
     let long = estimate_entropy("aB3!aB3!aB3!aB3!");

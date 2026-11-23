@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第95弾で 8 件すべてを完了）。
+なし（第96弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第96弾（16 担当・40 回目）の指摘 7 件を完結（2026-11-23）
+  - all-same の大小混在、入力開始 status の未保存マーカー、
+    TOTP 上限の動的化を修正。
+  - save_default の legacy 不変、サイズ/バージョン優先順位、
+    Unicode tiebreak、非既定メタデータ往復、NoFolder 選択、
+    非30秒/非6桁 TOTP 表示をテスト。
+  - settings_tests 行参照 32 件、README 期限説明を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（919 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第95弾（16 担当・39 回目）の指摘 8 件を完結（2026-11-23）
   - 数値PIN の 1000bit クランプ、IPv4-compatible IPv6 の
     既知制約、非10進 IPv4 全体ホスト、トップレベル u64 型不一致、

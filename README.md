@@ -145,8 +145,10 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 - 保存先: `$XDG_CACHE_HOME/bitwarden-gpui-poc/sync-cache.json`
   （未設定時は `$HOME/.cache/bitwarden-gpui-poc/sync-cache.json`）。
   旧設定ディレクトリ配下のファイルは読み取り専用のフォールバック
-- 有効期限: 取得時刻から 7 日。期限切れは復元に使わず理由を表示する
-  （現行ビルドは書き出さないため、既存ファイルが対象）
+- 有効期限: バージョン付きキャッシュは取得時刻から 7 日で、期限切れは
+  復元に使わず理由を表示する（現行ビルドは書き出さないため、対象は
+  既存ファイル）。ただし旧ビルドの無印キャッシュは best-effort で
+  許可され、期限切れでも復元対象になり得る
 - フィールド: `version`（スキーマ版数）、`user_id`、`server_url`、
   `body`（暗号化済み同期 JSON の生バイト）、`created_at`（Unix 秒）
 - `profile.key` / `privateKey` は保存前に除去し、復号鍵・マスターパスワード・

@@ -354,23 +354,28 @@ pub fn estimate_entropy(password: &str) -> u32 {
     let raw = entropy_bits(pool, chars.len());
 
     // Patterns that shrink the real search space. Fold once so the all-same
-    // check and the dictionary checks below see the same characters.
+    // check and the dictionary checks below see the same characters. Folding
+    // case first is what makes a mixed-case run such as `aAaAaA` count as one
+    // repeated character; checking the original code points let it dodge the
+    // zero score.
     let lower = password.to_lowercase();
     // A bare run of one character scores zero. A trailing digit run must not
     // hide such a run: `aaaaaaaaaa1` is no harder to guess than `aaaaaaaaaa`,
     // because an attacker tries each character together with each suffix.
-    // Only an ASCII digit suffix is stripped here, so non-ASCII digits keep
-    // the wide-pool path and an all-digit value has an empty body and still
-    // takes the numeric-PIN branch below. The word-suffix discount remains
-    // suffix-only (`strip_trailing_digits`).
-    let repeated_body = strip_trailing_digits(&lower);
-    let all_same_body = repeated_body.is_some_and(|body| {
+    // The body is the folded value with any trailing ASCII digit run removed;
+    // when there is no digit suffix the whole folded value is the body, so a
+    // mixed-case run is caught too. Only an ASCII digit suffix is stripped
+    // here, so non-ASCII digits keep the wide-pool path and an all-digit value
+    // has an empty body and still takes the numeric-PIN branch below. The
+    // word-suffix discount stays suffix-only (`strip_trailing_digits`).
+    let body = strip_trailing_digits(&lower).unwrap_or(&lower);
+    let all_same_body = {
         let mut body_chars = body.chars();
         match body_chars.next() {
             Some(first) => body_chars.all(|c| c == first),
             None => false,
         }
-    });
+    };
     if chars.iter().all(|c| *c == chars[0]) || all_same_body {
         return 0;
     }

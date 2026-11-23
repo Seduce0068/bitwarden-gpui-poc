@@ -1862,7 +1862,7 @@ mod tests {
         // The modes cleared by `set_panel` all install the "入力中:" prefix;
         // without this assertion the test would pass without exercising the
         // stale-status bug.
-        assert!(crate::ui::input::text_edit_start_status().contains("入力中"));
+        assert!(crate::ui::input::text_edit_start_status(false).contains("入力中"));
 
         // With no edit mode active the caller keeps its existing status.
         for panel in [

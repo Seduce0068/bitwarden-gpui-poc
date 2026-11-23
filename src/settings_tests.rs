@@ -59,7 +59,7 @@ fn debug_masks_email_and_server_url() {
 
     // An empty email is rendered as an empty string, not as the redaction
     // marker: the guard in `Settings`'s Debug is on `email.is_empty()`
-    // (settings.rs:329-336), matching the empty-URL branch above.
+    // (settings.rs:349-356), matching the empty-URL branch above.
     let empty_email = Settings {
         email: String::new(),
         ..Default::default()
@@ -145,7 +145,7 @@ fn sanitized_clamps_the_remaining_threshold_bounds() {
     use crate::limits::{MAX_STALE_DAYS, MIN_WEAK_BITS};
 
     // The opposite ends from `sanitized_clamps_editable_fields`: a too-small
-    // weak_bits and an over-large stale_days (settings.rs:606-613).
+    // weak_bits and an over-large stale_days (settings.rs:706-713).
     let settings = Settings {
         thresholds: crate::health::Thresholds {
             weak_bits: 0,
@@ -249,7 +249,7 @@ fn invalid_utf8_is_a_read_failure_not_a_parse_failure() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     // `read_to_string` rejects an invalid UTF-8 sequence with an io error
-    // (settings.rs:733-738), so the file is unreadable rather than bad JSON.
+    // (settings.rs:391-396), so the file is unreadable rather than bad JSON.
     // The classification must stay ReadFailed all the way to the UI enum.
     std::fs::write(&path, b"{\"email\":\"\xff\"}").unwrap();
     let error = Settings::load_detailed(&path).unwrap_err();
@@ -672,7 +672,7 @@ fn malformed_stored_device_id_is_replaced_on_next_sync() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     // Write the legacy value as raw JSON: `Settings::save` calls `sanitized()`
-    // (settings.rs:632-638) and would clear the id *before* writing, so it
+    // (settings.rs:930-943) and would clear the id *before* writing, so it
     // cannot exercise the read-time sanitization under test here. Every other
     // field falls back to its serde default, which is exactly the shape of a
     // hand-edited or older settings file.
@@ -761,7 +761,7 @@ fn shared_field_edits_are_owned_by_settings() {
 #[test]
 fn settings_load_error_messages_are_pinned() {
     // These four strings are shown verbatim in the status bar; changing one
-    // silently would break the UI wording contract (settings.rs:228-239).
+    // silently would break the UI wording contract (settings.rs:286-297).
     assert_eq!(
         SettingsLoadError::NotFound.message(),
         "設定ファイルが未作成です（既定値を使用）"
@@ -796,7 +796,7 @@ fn save_device_id_only_aborts_on_a_read_failed_file() {
     let dir = tempfile::tempdir().unwrap();
     // A directory cannot be read as a settings file: File::open succeeds but
     // read_to_string fails with EISDIR, which `read_bounded_settings_text`
-    // classifies as ReadFailed (settings.rs:318-336). No other load failure
+    // classifies as ReadFailed (settings.rs:383-401). No other load failure
     // (malformed / oversized) is accepted on the id-only write path.
     let path = dir.path();
     let id = generate_device_id().unwrap();
@@ -825,7 +825,7 @@ fn save_device_id_only_reports_a_failed_final_write() {
     std::fs::write(&path, original).unwrap();
 
     // Reading and parsing still succeed; a read-only parent stops the final
-    // `write_private` (settings.rs:752) before it can create its temporary
+    // `write_private` (settings.rs:798) before it can create its temporary
     // file (private_file.rs:47). This isolates the write failure from the
     // read/parse abort cases above.
     let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
@@ -948,7 +948,7 @@ fn sanitized_clamps_length_and_words_at_both_ends() {
 fn infinite_and_huge_schema_markers_are_future_versions() {
     // `version_from_float` maps positive infinity to u64::MAX so a crafted
     // marker cannot be mistaken for a legacy/current schema; negative
-    // infinity stays on the legacy side (settings.rs:323-331).
+    // infinity stays on the legacy side (settings.rs:478-486).
     assert_eq!(super::version_from_float(f64::INFINITY), Some(u64::MAX));
     assert_eq!(super::version_from_float(f64::NEG_INFINITY), None);
     assert_eq!(super::version_from_float(f64::NAN), None);
@@ -1038,7 +1038,7 @@ fn future_schema_keeps_a_valid_device_id() {
 #[test]
 fn future_schema_drops_non_string_device_ids() {
     // A future file can carry a valid `device_id` through the wholesale
-    // fallback (settings.rs:786-793), but the rescue accepts only a JSON
+    // fallback (settings.rs:860-871), but the rescue accepts only a JSON
     // string. Numbers, arrays and objects are not opaque UUIDs: stringifying
     // them would send a malformed identifier to the server, so each must yield
     // the empty id that triggers `ensure_device_id`'s regeneration.
@@ -1095,7 +1095,7 @@ fn save_device_id_only_preserves_nested_settings() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     // The id-only path re-reads the file and stamps the schema before writing
-    // (settings.rs:639-677). Nested objects must survive that read-modify-write
+    // (settings.rs:775-799). Nested objects must survive that read-modify-write
     // just like the flat fields; only `device_id` and `schema_version` change.
     std::fs::write(
         &path,
@@ -1149,7 +1149,7 @@ fn save_device_id_only_creates_a_file_when_none_exists() {
 #[test]
 fn save_device_id_only_stores_an_invalid_id_verbatim() {
     // Known constraint pinned by this test: the id-only writer does not call
-    // `is_valid_device_id` (settings.rs:732-754). Only the reuse/sanitize paths
+    // `is_valid_device_id` (settings.rs:775-799). Only the reuse/sanitize paths
     // reject a malformed value, so a direct caller can persist one unchanged.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
@@ -1278,7 +1278,7 @@ fn load_advisories_reports_future_version_and_unknown_keys() {
 #[test]
 fn every_serialized_settings_field_is_in_the_known_key_list() {
     // `KNOWN` in `load_advisories` is maintained by hand next to `Settings`'s
-    // serde fields (settings.rs:331-365). A new field missing from that list
+    // serde fields (settings.rs:129-161, 424-435). A new field missing from that list
     // would be reported as an unknown key on every load, so pin the subset
     // relation through the public advisory output.
     let dir = tempfile::tempdir().unwrap();
@@ -1311,7 +1311,7 @@ fn load_advisories_is_empty_when_the_file_cannot_be_read() {
     // `File::open` on a directory succeeds but `read_to_string` fails with
     // EISDIR, which `read_bounded_settings_text` classifies as ReadFailed.
     // The advisory scan shares that reader and collapses the failure to
-    // "no metadata" (settings.rs:371-374).
+    // "no metadata" (settings.rs:409-412).
     assert!(load_advisories(dir.path()).is_empty());
     assert_eq!(super::file_schema_version(dir.path()), None);
 
@@ -1333,7 +1333,7 @@ fn wrong_typed_nested_leaf_recovers_without_a_nested_advisory() {
     let path = dir.path().join("settings.json");
     // One bad leaf in each nested object must fall back to that field's
     // default while its correctly typed siblings survive
-    // (settings.rs:502-543, 804-861). Advisory scanning only inspects
+    // (settings.rs:547-581, 872-889). Advisory scanning only inspects
     // top-level keys, so the recovery stays silent.
     std::fs::write(
         &path,
@@ -1502,7 +1502,7 @@ fn file_schema_version_ignores_oversized_files() {
 fn save_replaces_a_corrupt_or_oversized_file() {
     // `save` refuses only a *future* schema. Missing, unreadable, oversized and
     // malformed files are all replaced with the sanitized struct, matching the
-    // load fallbacks (settings.rs:692-721).
+    // load fallbacks (settings.rs:822-827).
     for original in [
         b"not json".to_vec(),
         vec![b' '; MAX_SETTINGS_BYTES as usize + 2],
@@ -1562,7 +1562,7 @@ fn load_advisories_skips_an_oversized_file_even_with_a_future_marker() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     // The marker is right at the start, but the file is one byte past the cap:
-    // the advisory pass must not parse it (settings.rs:238-250).
+    // the advisory pass must not parse it (settings.rs:383-401).
     let mut body = br#"{"schema_version":999,"email":"e@example.com"}"#.to_vec();
     body.resize(MAX_SETTINGS_BYTES as usize + 1, b' ');
     std::fs::write(&path, &body).unwrap();
@@ -1669,7 +1669,7 @@ fn sanitized_uses_the_ui_email_format_policy() {
 
     // The UI path (push_shared_text) strips a leading ZWSP run and rejects any
     // other `Cf` wholesale. sanitized() must agree, otherwise load() can store
-    // an address the login form rejects forever (settings.rs:537,143-158).
+    // an address the login form rejects forever (settings.rs:191-216, 683-687).
     let leading = Settings {
         email: "\u{200b}\u{200c}alice@example.com".into(),
         ..Default::default()
@@ -1736,7 +1736,7 @@ fn ensure_device_id_without_a_path_only_uses_memory() {
 #[test]
 fn deterministic_uppercase_device_id_variant_is_accepted_and_reused() {
     // A fixed literal keeps this branch deterministic: no CSPRNG draw is
-    // needed to build an uppercase variant (settings.rs:514-530).
+    // needed to build an uppercase variant (settings.rs:632-648).
     const UPPER: &str = "A1B2C3D4-1234-4ABC-8DEF-0123456789AB";
     assert_eq!(UPPER.len(), 36);
     assert_eq!(UPPER.as_bytes()[14], b'4');
@@ -1762,7 +1762,7 @@ fn deterministic_uppercase_device_id_variant_is_accepted_and_reused() {
 #[test]
 fn uppercase_variant_nibbles_a_and_b_are_accepted_deterministically() {
     // Fixed literals keep the A/B variant branch deterministic: no CSPRNG
-    // draw can be relied on to produce those nibbles (settings.rs:519-535).
+    // draw can be relied on to produce those nibbles (settings.rs:632-648).
     const UPPER_A: &str = "A1B2C3D4-1234-4ABC-ADEF-0123456789AB";
     const UPPER_B: &str = "A1B2C3D4-1234-4ABC-BDEF-0123456789AB";
     for id in [UPPER_A, UPPER_B] {
@@ -1802,7 +1802,7 @@ fn every_leading_200b_to_200f_character_is_stripped_from_email() {
 
     // U+200C (ZWNJ) used to be rejected unless U+200B came first; the doc
     // promises the whole U+200B..U+200F run is tolerated at the start
-    // (settings.rs:116-139).
+    // (settings.rs:95-107, 191-200).
     for prefix in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{200e}', '\u{200f}'] {
         let mut settings = Settings::default();
         settings.email.clear();
@@ -1840,7 +1840,7 @@ fn sanitized_clamps_idle_and_login_timeouts_at_the_upper_bound() {
     use crate::limits::{MAX_IDLE_LOCK_SECONDS, MAX_LOGIN_TIMEOUT_SECONDS};
 
     // The sibling test pins the lower ends; these two `.clamp()` calls
-    // (settings.rs:597-602) must also reject values above the UI maxima.
+    // (settings.rs:689-694) must also reject values above the UI maxima.
     let settings = Settings {
         idle_lock_seconds: MAX_IDLE_LOCK_SECONDS + 1,
         login_timeout_seconds: MAX_LOGIN_TIMEOUT_SECONDS + 1,
@@ -1869,7 +1869,7 @@ fn sanitized_clamps_idle_and_login_timeouts_at_the_upper_bound() {
 
 #[test]
 fn default_path_is_a_stable_settings_json_under_the_config_directory() {
-    // `default_path` caches its result in a OnceLock (settings.rs:705-711), so
+    // `default_path` caches its result in a OnceLock (settings.rs:805-811), so
     // every UI call site in one process observes the same location.
     let first = Settings::default_path();
     assert_eq!(first, Settings::default_path(), "path must be cached");
@@ -1899,7 +1899,7 @@ fn default_path_is_a_stable_settings_json_under_the_config_directory() {
 fn leading_zero_width_run_followed_by_another_cf_is_rejected_wholesale() {
     use crate::settings::SharedSettingsField;
 
-    // Only a leading U+200B..U+200F run is tolerated (settings.rs:116-144).
+    // Only a leading U+200B..U+200F run is tolerated (settings.rs:95-107, 201-216).
     // A different format character after that run, or a zero-width one after
     // the first visible character, rejects the whole value instead of
     // filtering characters in place — both on the UI input path and on load.
@@ -1935,7 +1935,7 @@ fn tolerant_struct_returns_defaults_for_non_object_input() {
     // The per-field fallback only makes sense for a JSON object. If the
     // initial deserialization fails because the value is a scalar or an array,
     // `tolerant_struct` returns T::default() without attempting a field walk
-    // (settings.rs:461-467).
+    // (settings.rs:547-556).
     for input in [
         serde_json::Value::Null,
         serde_json::Value::Bool(true),
@@ -1953,7 +1953,7 @@ fn tolerant_struct_returns_defaults_for_non_object_input() {
 fn load_advisories_ignores_unknown_keys_nested_in_known_objects() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
-    // Only top-level keys are inspected (settings.rs:328-329, 368-372): an
+    // Only top-level keys are inspected (settings.rs:440-448): an
     // unknown key inside a known object is left to the per-field tolerance.
     std::fs::write(
         &path,
@@ -2068,7 +2068,7 @@ fn integral_float_zero_is_the_legacy_marker_not_current() {
     // Decision: `0.0` is an explicit legacy marker (0), never a claim to be
     // the current schema. serde cannot coerce a JSON float into the u32
     // field, so without the raw-marker fallback `tolerant_struct` would leave
-    // the default (1) and silently promote the file (settings.rs:807-825).
+    // the default (1) and silently promote the file (settings.rs:894-905).
     assert_eq!(super::schema_version_of(Some(&json!(0.0))), Some(0));
     let loaded = Settings::parse_settings(
         r#"{"schema_version":0.0,"email":"zero@example.com","idle_lock_seconds":123}"#,
@@ -2191,7 +2191,7 @@ fn save_reports_an_io_failure_without_touching_the_destination() {
 
 #[test]
 fn load_advisories_messages_match_exactly() {
-    // The two advisory strings are user-facing status text (settings.rs:349-404).
+    // The two advisory strings are user-facing status text (settings.rs:449-468).
     // Pin them verbatim: a `contains` check would let a wording regression or
     // a missing key list slip through unnoticed.
     let dir = tempfile::tempdir().unwrap();
@@ -2218,7 +2218,7 @@ fn load_advisories_messages_match_exactly() {
 #[test]
 fn multibyte_utf8_at_the_read_limit_is_classified_by_char_boundaries() {
     // `read_bounded_settings_text` takes MAX_SETTINGS_BYTES + 1 bytes and then
-    // compares the decoded string's length (settings.rs:327-334). A multibyte
+    // compares the decoded string's length (settings.rs:392-399). A multibyte
     // character straddling that *take* boundary leaves an incomplete UTF-8
     // sequence, so `read_to_string` fails and the file is ReadFailed. When the
     // boundary falls between characters, MAX+1 decodable bytes are read and
@@ -2290,7 +2290,7 @@ fn load_detailed_ignores_unknown_top_level_keys() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     // `tolerant_struct` skips keys absent from the default struct
-    // (settings.rs:521-526). `load_advisories` still warns about them, but the
+    // (settings.rs:564-570). `load_advisories` still warns about them, but the
     // loader itself must keep the known fields and never fail on the extra key.
     std::fs::write(
         &path,
@@ -2336,7 +2336,7 @@ fn hand_edited_generator_bounds_are_clamped_to_the_limits_constants() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     // Both values are well-typed `usize` in the JSON, so per-field tolerance
-    // keeps them and `sanitized()` (settings.rs:660-667) clamps them on load.
+    // keeps them and `sanitized()` (settings.rs:698-705) clamps them on load.
     std::fs::write(
         &path,
         br#"{
@@ -2369,7 +2369,7 @@ fn hand_edited_generator_bounds_are_clamped_to_the_limits_constants() {
 #[test]
 fn every_known_key_maps_to_a_real_settings_field() {
     // The reverse of `every_serialized_settings_field_is_in_the_known_key_list`:
-    // KNOWN is pub(crate) (settings.rs:394-415), so read the live list instead
+    // KNOWN is pub(crate) (settings.rs:414-435), so read the live list instead
     // of a hand-copied mirror that could drift from the production constant.
     // Otherwise a hand-written file containing only valid fields would produce
     // a spurious "unknown key" advisory.
@@ -2462,7 +2462,7 @@ fn push_shared_text_truncates_multibyte_input_on_a_utf8_boundary() {
 
 #[test]
 fn save_writes_a_sanitized_device_id_without_mutating_self() {
-    // `save` clones through `sanitized()` (settings.rs:911-915), so a malformed
+    // `save` clones through `sanitized()` (settings.rs:930-943), so a malformed
     // stored id must be cleared on disk even though the in-memory value stays.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");

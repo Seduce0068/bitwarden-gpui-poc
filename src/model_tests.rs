@@ -1131,6 +1131,45 @@ fn sort_key_kind_orders_by_wire_number_then_name_and_has_a_label() {
 }
 
 #[test]
+fn kind_and_recently_modified_tiebreaks_use_unicode_comparison_keys() {
+    // Once the primary key ties (same kind, or same revision), `compare`
+    // reuses the folded name + id ordering. Full-width and ASCII spellings
+    // must order by their NFKD/lowercase key, not by raw UTF-8 bytes.
+    let mut vault = Vault::new();
+    let item = |id: &str, name: &str, revision: i64| {
+        let mut value = login(id, name, "u", "p", "https://example.test");
+        value.revision_date = revision;
+        value
+    };
+    vault.items = vec![
+        item("id-1", "Ｚ", 100), // full-width Z -> key "z"
+        item("id-2", "A", 100),
+        item("id-3", "ａ", 100), // full-width a -> key "a"
+        item("id-4", "a", 100),
+    ];
+
+    // Guard the premise: raw byte order would be A < a < Ｚ < ａ, which is not
+    // the stored order and not the folded-key order asserted below.
+    let raw: Vec<&str> = vault.items.iter().map(|item| item.name.as_str()).collect();
+    let mut raw_sorted = raw.clone();
+    raw_sorted.sort_unstable();
+    assert_ne!(raw_sorted, raw, "fixture must distinguish raw from folded");
+
+    let ids = |sort| -> Vec<&str> {
+        vault
+            .view(&Filter::All, "", sort)
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect()
+    };
+    // All four items are logins and share one revision, so both keys reduce
+    // to the same folded-name + id tiebreak.
+    let expected = vec!["id-2", "id-3", "id-4", "id-1"];
+    assert_eq!(ids(SortKey::Kind), expected, "{:?}", raw_sorted);
+    assert_eq!(ids(SortKey::RecentlyModified), expected, "{:?}", raw_sorted);
+}
+
+#[test]
 fn match_type_numbers_map_to_the_enum() {
     let uri = LoginUri {
         uri: "https://example.com".into(),
@@ -1447,6 +1486,32 @@ fn login_secret_serde_round_trip_keeps_debug_redacted() {
     let debug = format!("{restored:?}");
     assert!(!debug.contains("super-secret-pw"), "{debug}");
     assert!(!debug.contains("JBSWY3DPEHPK3PXP"), "{debug}");
+}
+
+#[test]
+fn non_default_vault_item_metadata_survives_a_serde_round_trip() {
+    let mut item = login("meta-1", "Metadata", "alice", "p", "https://example.test");
+    item.folder_id = Some("folder-42".to_string());
+    item.favorite = true;
+    item.notes = Zeroizing::new("recovery-code-7X".to_string());
+    item.revision_date = 1_700_000_123;
+
+    let json = serde_json::to_string(&item).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["folder_id"], serde_json::json!("folder-42"));
+    assert_eq!(value["favorite"], serde_json::json!(true));
+    assert_eq!(value["notes"], serde_json::json!("recovery-code-7X"));
+    assert_eq!(value["revision_date"], serde_json::json!(1_700_000_123));
+
+    let restored: VaultItem = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, item);
+    assert_eq!(restored.folder_id.as_deref(), Some("folder-42"));
+    assert!(restored.favorite);
+    assert_eq!(restored.notes.as_str(), "recovery-code-7X");
+    assert_eq!(restored.revision_date, 1_700_000_123);
+    // A second serialization must be byte-identical: the Zeroizing-backed
+    // secret adapter neither drops nor rewrites any metadata field.
+    assert_eq!(serde_json::to_string(&restored).unwrap(), json);
 }
 
 #[test]

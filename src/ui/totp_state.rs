@@ -592,4 +592,45 @@ mod tests {
         state.clear();
         assert!(state.matches_secret(""));
     }
+
+    #[test]
+    fn display_supports_otpauth_uri_with_custom_period_and_digits() {
+        let mut state = TotpState::new();
+        // RFC 6238 SHA-1 vector: counter 1 produces the 8-digit code
+        // "94287082". With `period=60` that counter spans t=60..119, so t=119
+        // leaves one second (the default 30s period would already be in a new
+        // window at that instant).
+        let uri = format!("otpauth://totp/example?secret={SECRET}&issuer=Demo&period=60&digits=8");
+        let shown = state.display(&uri, 119);
+        assert_eq!(shown, "9428 7082 (あと1秒) / まもなく期限切れ", "{shown}");
+        assert_eq!(state.current_code(), Some("94287082"));
+        assert_eq!(state.error_message(), None);
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(119));
+
+        // A bare secret keeps the defaults (30 seconds, 6 digits), which shows
+        // that the URI really changed both parameters, not just the label.
+        let plain = state.display(SECRET, 40);
+        assert_eq!(plain, "287 082 (あと20秒)", "{plain}");
+        assert_eq!(state.current_code(), Some("287082"));
+
+        // The custom period also drives freshness: t=120 starts a new
+        // 60-second window, so the cached snapshot is resampled and reports
+        // 60 seconds rather than the default 30.
+        let custom = state.display(&uri, 120);
+        assert!(
+            custom.contains("あと60秒"),
+            "period=60 must be honoured: {custom}"
+        );
+        assert!(!custom.contains("まもなく期限切れ"), "{custom}");
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(120));
+        let code = state
+            .current_code()
+            .expect("the otpauth URI must still produce a code");
+        assert_eq!(code.len(), 8, "{code}");
+        assert!(code.bytes().all(|byte| byte.is_ascii_digit()), "{code}");
+        assert!(
+            custom.starts_with(&format!("{} {}", &code[..4], &code[4..])),
+            "eight digits are grouped as two groups of four: {custom}"
+        );
+    }
 }

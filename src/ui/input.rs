@@ -91,10 +91,14 @@ pub(super) fn cycle_sort(view: &mut crate::ui::vault_view::VaultViewState) {
 /// This status owns the shared "入力中:" arrow-key guidance for all three
 /// editing modes (auth, search, settings); the settings panel deliberately
 /// draws only its settings-specific inline hint so the prefix appears once.
-/// Keeping it in one pure helper makes the wording testable without a GPUI
-/// window.
-pub(super) fn text_edit_start_status() -> String {
-    format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
+/// Entering a mode is a transient edit, not a save, so `dirty` must keep the
+/// persistent unsaved marker visible. Keeping it in one pure helper makes both
+/// the wording and the marker contract testable without a GPUI window.
+pub(super) fn text_edit_start_status(dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved(
+        &format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定"),
+        dirty,
+    )
 }
 
 /// Status after confirming a settings field with Enter/Escape.
@@ -335,12 +339,12 @@ impl BitwardenApp {
                 // Changing credentials invalidates any in-flight attempt.
                 self.login_generation.invalidate();
                 self.auth.set_field(Some(field));
-                self.status = text_edit_start_status();
+                self.status = text_edit_start_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::EditSettingsField(field) => {
                 self.editing = Some(field);
-                self.status = text_edit_start_status();
+                self.status = text_edit_start_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::FinishAuthEdit => {
@@ -465,7 +469,7 @@ impl BitwardenApp {
                 // `vault_view::tests::start_search_discards_a_previous_query_and_its_selection`.
                 self.view.start_search();
                 self.sync_totp_to_selection();
-                self.status = text_edit_start_status();
+                self.status = text_edit_start_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::SaveSettings => self.save_settings(cx),
@@ -643,13 +647,32 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn text_edit_start_status_explains_arrow_key_ownership() {
-        let status = text_edit_start_status();
+        let status = text_edit_start_status(false);
         assert!(status.contains("矢印キー"), "{status}");
         assert!(status.contains("GPUI"), "{status}");
         assert_eq!(
             status,
             format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn text_edit_start_status_keeps_the_unsaved_marker() {
+        let clean = text_edit_start_status(false);
+        assert_eq!(
+            clean,
+            format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
+        );
+        assert!(!clean.contains("[未保存"), "{clean}");
+
+        // All three callers (EditAuthField, EditSettingsField, StartSearch)
+        // install this status while editing. Entering a mode is not a save, so
+        // the persistent warning must survive just like on any other transient
+        // status.
+        let dirty = text_edit_start_status(true);
+        assert_eq!(dirty, crate::ui::app::status_with_unsaved(&clean, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+        assert!(dirty.contains("入力中"), "{dirty}");
     }
 
     #[::core::prelude::v1::test]
@@ -773,7 +796,7 @@ mod tests {
     fn confirming_auth_or_search_clears_the_editing_status() {
         // The start statuses really do carry the "入力中" prefix; otherwise
         // this test would pass without exercising the stale-status bug.
-        assert!(text_edit_start_status().contains("入力中"));
+        assert!(text_edit_start_status(false).contains("入力中"));
         assert!(crate::ui::logic::auth_hint(true).contains("入力中"));
 
         for dirty in [false, true] {

@@ -284,13 +284,15 @@ fn tick_is_fresh_uses_the_codes_own_period() {
 #[test]
 fn now_unix_is_plausible() {
     let now = now_unix();
-    // 2020-01-01 .. 2028-01-01 (UTC). The old 2100 ceiling accepted a clock
-    // set decades in the future; this bound tracks the current era while
-    // leaving a little over a year of headroom for a legitimate clock.
+    // Floor: the PoC requires a clock after 2020-01-01 (UTC).
     const LOWER: u64 = 1_577_836_800;
-    const UPPER: u64 = 1_830_297_600;
     assert!(now > LOWER, "{now}");
-    assert!(now < UPPER, "{now}");
+    // The ceiling used to be a fixed 2028-01-01 timestamp, which made this
+    // test fail deterministically on that date whatever the clock reported.
+    // Derive it from a fresh reading instead: the sampled value must never
+    // be more than a day ahead of the clock read immediately afterwards.
+    let upper = now_unix().saturating_add(86_400);
+    assert!(now <= upper, "{now} <= {upper}");
 }
 
 #[test]

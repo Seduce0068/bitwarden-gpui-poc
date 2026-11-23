@@ -916,6 +916,75 @@ fn legacy_cache_is_read_but_never_rewritten() {
     assert_eq!(load_with_fallback(&new, &old), Ok(legacy));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn save_default_never_rewrites_the_legacy_path() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let cache_home = root.path().join("xdg-cache-home");
+    let config_home = root.path().join("xdg-config-home");
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &config_home);
+
+    let primary = default_path().expect("a cache directory from XDG_CACHE_HOME");
+    let legacy = legacy_path().expect("a config directory from XDG_CONFIG_HOME");
+    assert_ne!(primary, legacy, "the two locations must be distinct");
+
+    let old = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&legacy, &old).unwrap();
+    let legacy_bytes = std::fs::read(&legacy).unwrap();
+
+    let replacement = SyncCache {
+        user_id: "user-2".to_string(),
+        ..old.clone()
+    };
+    save_default(&replacement).unwrap();
+
+    // The new cache lands under the cache directory and becomes the one that
+    // loads; the config-dir file is left byte-for-byte untouched, with its
+    // original account still intact.
+    assert_eq!(load_detailed(&primary).unwrap(), replacement);
+    assert_eq!(std::fs::read(&legacy).unwrap(), legacy_bytes);
+    assert_eq!(load_detailed(&legacy).unwrap(), old);
+}
+
+#[test]
+fn size_limit_beats_version_mismatch_in_load_detailed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized-and-outdated.json");
+
+    // A file that is both past MAX_CACHE_BYTES and stamped with an unknown
+    // version must be classified by the size gate: it runs before parsing, so
+    // the wrong version is never even inspected.
+    let mut payload =
+        br#"{"version":999,"user_id":"user-1","server_url":"https://vault.example.com","body":[],"created_at":null}"#.to_vec();
+    payload.resize(MAX_CACHE_BYTES as usize + 1, b' ');
+    std::fs::write(&path, &payload).unwrap();
+    assert!(matches!(
+        load_detailed(&path),
+        Err(CacheLoadError::CacheTooLarge)
+    ));
+
+    // The same priority holds at the post-parse body-size gate: an oversized
+    // body is rejected as too large even though the version also mismatches.
+    // Build the envelope directly because `save` refuses an oversized body.
+    let mut envelope =
+        br#"{"version":999,"user_id":"user-1","server_url":"https://vault.example.com","body":["#
+            .to_vec();
+    for index in 0..=MAX_CACHE_BODY_BYTES {
+        if index > 0 {
+            envelope.push(b',');
+        }
+        envelope.push(b'0');
+    }
+    envelope.extend_from_slice(br#"],"created_at":null}"#);
+    write_fixture(&path, &envelope);
+    assert!(matches!(
+        load_detailed(&path),
+        Err(CacheLoadError::CacheTooLarge)
+    ));
+}
+
 #[test]
 fn corrupt_primary_does_not_silently_fall_back_to_legacy() {
     let root = tempfile::tempdir().unwrap();

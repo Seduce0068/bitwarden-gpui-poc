@@ -747,6 +747,73 @@ mod tests {
     }
 
     #[test]
+    fn nofolder_filter_indexes_address_the_first_visible_row() {
+        // The SshKey -> NoFolder edge of `cycle_filter` (vault_view.rs:180)
+        // must leave a view whose index 0 is the first *no-folder* row in sort
+        // order, not the first row of the unfiltered vault.
+        let mut state = state_with_items(); // a=Alpha, b=Beta, both with no folder
+
+        // This filed row sorts before every no-folder row, so a buggy index
+        // that addresses the whole vault would silently select it.
+        let mut filed = VaultItem::new(
+            "f",
+            "Aaa Filed",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        );
+        filed.folder_id = Some("folder-1".into());
+        state.vault.items.push(filed);
+        state.vault.items.push(VaultItem::new(
+            "n",
+            "Aaa Loose",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+
+        let all_ids: Vec<&str> = state
+            .visible_items()
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+        assert_eq!(all_ids, vec!["f", "n", "a", "b"]);
+
+        // Reach NoFolder through the cycle, as the keyboard path does.
+        state.filter = Filter::Kind(ItemKind::SshKey);
+        state.cycle_filter();
+        assert_eq!(state.filter, Filter::NoFolder);
+
+        let visible = state.visible_items();
+        let visible_ids: Vec<&str> = visible.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(visible_ids, vec!["n", "a", "b"]);
+        let visible_len = visible.len();
+
+        // Index 0 is the head of the visible list, and a filed id is not
+        // addressable at all: no silent fallback to row 0.
+        assert!(state.select_index(0));
+        assert_eq!(state.selected_id.as_deref(), Some("n"));
+        assert_eq!(
+            state.select_id("f"),
+            None,
+            "a filed id must not fall back to the visible head"
+        );
+        assert_eq!(state.selected_id.as_deref(), Some("n"));
+
+        // Down from the head follows the filtered list, skipping the filed row.
+        let visible = state.visible_items();
+        let next = state.next_index_in(&visible, 1).expect("rows remain");
+        assert_eq!(visible[next].id, "a");
+
+        // An index past the visible list is ignored even though the unfiltered
+        // vault still holds four rows.
+        let before = state.rewind_calls;
+        assert!(!state.select_index(visible_len));
+        assert_eq!(state.selected_id.as_deref(), Some("n"));
+        assert_eq!(state.rewind_calls, before, "selection-only must not rewind");
+    }
+
+    #[test]
     fn start_search_discards_a_previous_query_and_its_selection() {
         // The production `UiAction::StartSearch` branch calls the same helper,
         // so this single test covers both the test-only caller and the app.
