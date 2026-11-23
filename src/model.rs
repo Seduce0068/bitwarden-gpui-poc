@@ -833,12 +833,25 @@ impl VaultItem {
     /// `Vault::view` already trims and normalizes the query, but this is a
     /// public method and callers may pass raw user input, so `needle` is
     /// trimmed here too. `comparison_key` is idempotent, so the double
-    /// normalization on the `view()` path cannot change the result.
+    /// normalization on the `view()` path cannot change the result. A blank
+    /// needle matches every item; a non-blank needle that folds to an empty
+    /// key (only invisible `Cf` characters) matches none, so an invisible
+    /// paste cannot silently widen the result to the whole vault.
     pub fn matches_query(&self, needle: &str) -> bool {
-        let needle = comparison_key(needle.trim());
+        let trimmed = needle.trim();
+        let key = comparison_key(trimmed);
+        if key.is_empty() {
+            // A genuinely blank or whitespace-only needle is contained in
+            // every haystack, which is the documented "show everything"
+            // behaviour. A *non-blank* needle made only of invisible Unicode
+            // `Cf` characters folds to the same empty key after `comparison_key`
+            // drops them; letting it fall through would make a format-only
+            // query match every item. It must match nothing instead.
+            return needle.trim().is_empty();
+        }
         self.haystacks()
             .iter()
-            .any(|field| comparison_key(field.as_ref()).contains(needle.as_str()))
+            .any(|field| comparison_key(field.as_ref()).contains(key.as_str()))
     }
 }
 
@@ -1001,13 +1014,35 @@ impl Vault {
     }
 
     /// The items passing `filter` and matching `query`, in `sort` order.
+    ///
+    /// A blank (or whitespace-only) query keeps every filtered item visible.
+    /// A non-blank query whose normalized key is empty — for example one made
+    /// entirely of Unicode `Cf` format characters, which `comparison_key`
+    /// drops — matches nothing instead of every item.
     pub fn view(&self, filter: &Filter, query: &str, sort: SortKey) -> Vec<&VaultItem> {
-        let needle = comparison_key(query.trim());
+        let trimmed = query.trim();
+        let needle = comparison_key(trimmed);
         let mut matched: Vec<&VaultItem> = self
             .items
             .iter()
             .filter(|item| filter.accepts(item))
-            .filter(|item| needle.is_empty() || item.matches_query(&needle))
+            .filter(|item| {
+                if trimmed.is_empty() {
+                    // Blank/whitespace-only query: keep the long-standing
+                    // "every item is visible" behaviour.
+                    true
+                } else if query
+                    .chars()
+                    .all(|ch| ch.is_whitespace() || crate::limits::is_format_character(ch))
+                {
+                    // Non-blank but invisible-only (e.g. U+200B): folding
+                    // dropped every character, so this is not a blank query
+                    // and must not fall through to the empty-needle branch.
+                    false
+                } else {
+                    item.matches_query(&needle)
+                }
+            })
             .collect();
         matched.sort_by(|a, b| compare(a, b, sort));
         matched

@@ -349,6 +349,29 @@ pub(super) fn totp_code_text(
     }
 }
 
+/// Status when the selected TOTP value is visually absent on the copy path.
+///
+/// The detail row already renders a blank or Unicode `Cf`-only secret as
+/// "なし" through [`totp_code_text`]. Feeding that same value to code
+/// generation reports a parse failure instead, so copying must short-circuit
+/// on the same [`is_visually_empty`] rule. Composing here also keeps the
+/// persistent unsaved marker on the resulting status.
+pub(super) fn totp_copy_absent_status(dirty: bool) -> String {
+    status_with_unsaved(
+        "コピーできる TOTP がありません（一覧では「なし」と表示されます）",
+        dirty,
+    )
+}
+
+/// Copy-side counterpart of [`totp_code_text`]'s empty check.
+///
+/// `Some` is the status to show when the secret has no visible content;
+/// `None` means it is a real generation target. Pure so the copy rule can be
+/// tested without a GPUI-backed `TotpState`.
+pub(super) fn totp_copy_absent_status_for(secret: &str, dirty: bool) -> Option<String> {
+    is_visually_empty(secret).then(|| totp_copy_absent_status(dirty))
+}
+
 /// URI cell of a login detail row.
 ///
 /// `mask_uri` reports `(不正な URI)` when its input cannot be parsed, which is
@@ -1422,6 +1445,38 @@ mod tests {
             totp_detail_text("JBSWY3DPEHPK3PXP", "123 456 (あと20秒)".to_string(), None),
             "123 456 (あと20秒)"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn totp_copy_uses_the_detail_rows_invisible_secret_rule() {
+        // A blank, whitespace-only and Unicode Cf-only secret all render as
+        // "なし" in the detail row. The copy path must skip generation for the
+        // same values instead of surfacing a bogus parse failure.
+        for secret in ["", "  \t", "\u{200b}", "\u{202e}"] {
+            assert!(is_visually_empty(secret), "precondition: {secret:?}");
+            assert_eq!(
+                totp_code_text(secret, |_| panic!("an absent secret must not be generated")),
+                "なし",
+                "{secret:?}"
+            );
+            for dirty in [false, true] {
+                let status = totp_copy_absent_status_for(secret, dirty)
+                    .expect("an absent secret must be skipped on copy");
+                assert_eq!(status, totp_copy_absent_status(dirty), "{secret:?}");
+                assert!(status.contains("TOTP"), "{status}");
+                assert!(status.contains("なし"), "{status}");
+                assert_eq!(
+                    status.contains("[未保存の設定変更があります]"),
+                    dirty,
+                    "{status}"
+                );
+            }
+        }
+
+        // A visible secret stays a generation target in both marker states.
+        for dirty in [false, true] {
+            assert_eq!(totp_copy_absent_status_for("JBSWY3DPEHPK3PXP", dirty), None);
+        }
     }
 
     #[::core::prelude::v1::test]

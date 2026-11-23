@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第105〜106弾 / 2026-11-23）
+
+- 空名行選択 status、F キー範囲外、catch-all、Mc 空白名、
+  埋め込み NUL、README の cargo-deny コマンドを修正
+- 数字パスワード＋'?' の URL マスク、空一覧の主要キー案内、
+  comparison_key の Cf 除去、空白のみ TOTP の未設定扱いを修正
+- CI の cargo-deny README 突き合わせを修正
+
 ### 全体改善（第104弾 / 2026-11-23）
 
 - IPv4-mapped メタデータ IP のブロック、Windows ACL 主張の是正、

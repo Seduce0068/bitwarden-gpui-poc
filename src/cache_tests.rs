@@ -4038,3 +4038,97 @@ fn server_mismatch_is_reported_before_the_body_is_parsed() {
         Err(SyncCacheError::CacheParse(_))
     ));
 }
+
+#[test]
+fn numeric_password_under_an_arbitrary_username_is_masked() {
+    // `at_is_in_query` used to recognize only the literal `user:` prefix, so a
+    // numeric password under any other username was dismissed as a
+    // `host:port` plus query text and leaked through Debug (cache.rs:257+).
+    for (url, expected, secret) in [
+        (
+            "https://alice:12345?text@host",
+            "https://[redacted]@host",
+            "12345?text",
+        ),
+        (
+            "alice:9876543210#frag@host:8443/p",
+            "[redacted]@host:8443/p",
+            "9876543210#frag",
+        ),
+        (
+            "https://bob:0000?text@host/path",
+            "https://[redacted]@host/path",
+            "0000?text",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        assert!(!super::mask_url_secrets(url).contains(secret), "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        assert!(rendered.contains("[redacted]@"), "{rendered}");
+        // Debug-only masking: the stored URL stays byte-for-byte identical.
+        assert_eq!(cache.server_url, url);
+    }
+
+    // Canonical host:port spellings keep their query/fragment classification.
+    for url in [
+        "https://host:8443#frag@x",
+        "https://vault.example.com:8443#frag@x",
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+}
+
+#[test]
+fn trailing_equals_in_a_numeric_password_is_not_a_query_assignment() {
+    // A '=' directly before the '@' has no parameter name and no value: it is
+    // password decoration, not a `key=value` query. Treating it as a genuine
+    // assignment left the whole numeric credential visible in Debug output.
+    let scan = "alice:12345?=@host";
+    let at = scan.rfind('@').expect("an '@' after the trailing '='");
+    assert!(!super::at_is_in_query(scan, at));
+
+    for (url, expected, secret) in [
+        (
+            "https://alice:12345?=@host",
+            "https://[redacted]@host",
+            "12345?=",
+        ),
+        (
+            "https://alice:12345?==@host/path",
+            "https://[redacted]@host/path",
+            "12345?==",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        assert_eq!(cache.server_url, url);
+    }
+
+    // A real `key=value` assignment after the '?' still wins: the '@' belongs
+    // to the query and the URL is copied through unchanged.
+    for url in ["https://host:8443?email=a@b", "https://host?x=1@host"] {
+        assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+}
+
+#[test]
+fn server_url_credentials_are_persisted_verbatim_in_the_cache_envelope() {
+    // Documented on `SyncCache::server_url` and `save`: Debug masks the URL,
+    // but the envelope on disk keeps the credential-bearing string as-is.
+    let url = "https://alice:ON_DISK_SECRET@vault.example.com:8443/path?token=ON_DISK_TOKEN";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    assert_eq!(cache.server_url, url);
+    assert!(!format!("{cache:?}").contains("ON_DISK_SECRET"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("credential-url-cache.json");
+    save(&path, &cache).unwrap();
+    let on_disk = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    assert!(on_disk.contains("ON_DISK_SECRET"), "{on_disk}");
+    assert!(on_disk.contains("ON_DISK_TOKEN"), "{on_disk}");
+    assert_eq!(load_detailed(&path).unwrap().server_url, url);
+}

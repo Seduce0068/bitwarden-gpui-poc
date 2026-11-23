@@ -5,7 +5,8 @@
 
 use crate::ui::app::BitwardenApp;
 use crate::ui::keys::{
-    classify_key, KeyContext, KeyModifiers, SelectionEdge, UiAction, TEXT_EDIT_ARROW_KEYS_HINT,
+    classify_key, GeneratorOption, KeyContext, KeyModifiers, SelectionEdge, UiAction,
+    TEXT_EDIT_ARROW_KEYS_HINT,
 };
 use crate::ui::state::Panel;
 use gpui_kit::*;
@@ -310,6 +311,28 @@ pub(super) fn no_generated_copy_status(kind: &str, dirty: bool) -> String {
     crate::ui::app::status_with_unsaved(&crate::ui::logic::no_generated_status(kind), dirty)
 }
 
+/// Final composer for statuses written by the copy/generation helpers.
+///
+/// `ui::actions` owns those helpers and writes a plain base status; it cannot
+/// depend on this module, so the dispatcher applies the persistent unsaved
+/// marker once the action has run. An already present marker is stripped first
+/// so the composition stays correct if a helper starts writing one later.
+pub(super) fn action_status_with_unsaved(status: &str, dirty: bool) -> String {
+    let base = status
+        .strip_suffix(crate::ui::app::unsaved_status_suffix(true))
+        .unwrap_or(status);
+    crate::ui::app::status_with_unsaved(base, dirty)
+}
+
+/// Status after a generator option actually changed the stored settings.
+///
+/// The action helper in `ui::actions` writes its own text, which the dispatcher
+/// replaces with this standard settings status so the persistent unsaved
+/// marker survives and the wording matches the other adjustment keys.
+pub(super) fn generator_adjust_status(dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved("生成設定を変更しました（w: 保存 / d: 破棄）", dirty)
+}
+
 /// Status after `+`/`-` adjusts the audit thresholds.
 ///
 /// `refresh_audit` intentionally keeps the settings panel's own status (see
@@ -343,6 +366,24 @@ impl<T: PartialEq> Adjustment<T> {
             value: after,
         }
     }
+}
+
+/// Whether a generator key would actually change a stored value.
+///
+/// `keys::apply_generator_key` clamps `LengthUp`/`LengthDown`, so pressing `+`
+/// at the maximum leaves both lengths as they were. Like [`Adjustment::new`]
+/// for the settings keys, the dispatcher must derive "changed" from the
+/// before/after values: a clamped step must neither announce a change nor mark
+/// the settings unsaved. Applying the same pure helper to a clone is
+/// deterministic, so the real action can still own the state mutation.
+pub(super) fn generator_key_changes(
+    settings: &crate::settings::Settings,
+    option: GeneratorOption,
+) -> bool {
+    let mut candidate = settings.clone();
+    crate::ui::keys::apply_generator_key(&mut candidate, option);
+    candidate.password_generator != settings.password_generator
+        || candidate.passphrase_generator != settings.passphrase_generator
 }
 
 impl BitwardenApp {
@@ -394,6 +435,48 @@ impl BitwardenApp {
             self.status = status;
             cx.notify();
         }
+    }
+
+    /// Run a copy/generation helper from `ui::actions`, then keep the unsaved
+    /// marker on the status it wrote. The helper owns the clipboard and
+    /// generator work; this dispatcher owns marker composition.
+    fn run_status_action<F>(&mut self, cx: &mut Context<Self>, action: F)
+    where
+        F: FnOnce(&mut Self, &mut Context<Self>),
+    {
+        let dirty = self.settings_dirty;
+        action(self, &mut *cx);
+        self.status = action_status_with_unsaved(&self.status, dirty);
+        cx.notify();
+    }
+
+    /// Copy the selected TOTP code with the detail row's "なし" rule.
+    ///
+    /// A blank or Unicode `Cf`-only secret has no visible content, so copying
+    /// must not send it to generation and report a parse failure. No selection
+    /// keeps its own status, exactly like `ui::actions::copy_totp`.
+    fn copy_totp_with_status(&mut self, cx: &mut Context<Self>) {
+        let secret = {
+            let visible = self.view.visible_items();
+            crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible)
+                .map(|index| visible[index].totp_secret().unwrap_or("").to_string())
+        };
+        let Some(secret) = secret else {
+            self.status = crate::ui::app::status_with_unsaved(
+                crate::ui::logic::no_selection_status(),
+                self.settings_dirty,
+            );
+            cx.notify();
+            return;
+        };
+        if let Some(status) =
+            crate::ui::app::totp_copy_absent_status_for(&secret, self.settings_dirty)
+        {
+            self.status = status;
+            cx.notify();
+            return;
+        }
+        self.run_status_action(cx, Self::copy_totp);
     }
 
     pub(super) fn key_down(
@@ -549,11 +632,11 @@ impl BitwardenApp {
                 self.status = audit_unavailable_status(self.settings_dirty);
                 cx.notify();
             }
-            UiAction::GeneratePassword => self.generate_password(cx),
-            UiAction::GeneratePassphrase => self.generate_passphrase(cx),
+            UiAction::GeneratePassword => self.run_status_action(cx, Self::generate_password),
+            UiAction::GeneratePassphrase => self.run_status_action(cx, Self::generate_passphrase),
             UiAction::CopyPassword => {
                 if let Some(value) = self.generator.last_password.clone() {
-                    self.copy_to_clipboard(&value, cx);
+                    self.run_status_action(cx, |this, cx| this.copy_to_clipboard(&value, cx));
                 } else {
                     self.status = no_generated_copy_status("パスワード", self.settings_dirty);
                     cx.notify();
@@ -561,15 +644,19 @@ impl BitwardenApp {
             }
             UiAction::CopyPassphrase => {
                 if let Some(value) = self.generator.last_passphrase.clone() {
-                    self.copy_to_clipboard(&value, cx);
+                    self.run_status_action(cx, |this, cx| this.copy_to_clipboard(&value, cx));
                 } else {
                     self.status = no_generated_copy_status("パスフレーズ", self.settings_dirty);
                     cx.notify();
                 }
             }
-            UiAction::CopyTotp => self.copy_totp(cx),
-            UiAction::CopySelectedPassword => self.copy_selected_field(true, cx),
-            UiAction::CopySelectedUsername => self.copy_selected_field(false, cx),
+            UiAction::CopyTotp => self.copy_totp_with_status(cx),
+            UiAction::CopySelectedPassword => {
+                self.run_status_action(cx, |this, cx| this.copy_selected_field(true, cx))
+            }
+            UiAction::CopySelectedUsername => {
+                self.run_status_action(cx, |this, cx| this.copy_selected_field(false, cx))
+            }
             UiAction::CycleFilter => self.cycle_filter(cx),
             UiAction::CycleSort => {
                 cycle_sort(&mut self.view);
@@ -646,7 +733,13 @@ impl BitwardenApp {
                     cx.notify();
                 }
             }
-            UiAction::Generator(option) => self.toggle_generator(option, cx),
+            UiAction::Generator(option) => {
+                if generator_key_changes(&self.settings, option) {
+                    self.toggle_generator(option, cx);
+                    self.status = generator_adjust_status(self.settings_dirty);
+                    cx.notify();
+                }
+            }
             // `index` is the render-position index emitted by `ui::render`'s
             // row click, NOT a stable item id. `select_index` resolves it
             // against the current `visible_items()` snapshot and the same
@@ -1655,5 +1748,65 @@ mod tests {
             classify_key(&context(Screen::Unlocked, Panel::Vault, "l")),
             UiAction::Lock
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn action_status_with_unsaved_keeps_the_marker_without_doubling_it() {
+        let base = "クリップボードにコピーしました（30秒後に復元）";
+        assert_eq!(action_status_with_unsaved(base, false), base);
+        let dirty = action_status_with_unsaved(base, true);
+        assert_eq!(dirty, crate::ui::app::status_with_unsaved(base, true));
+        assert_eq!(
+            action_status_with_unsaved(&dirty, true),
+            dirty,
+            "an already composed marker must not be appended twice"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_key_changes_detects_clamped_boundaries() {
+        let mut settings = crate::settings::Settings::default();
+
+        // `+` at the maximum and `-` at the minimum are clamped to identical
+        // values, so the dispatcher must skip the change announcement.
+        settings.password_generator.length = crate::limits::MAX_PASSWORD_LENGTH;
+        settings.passphrase_generator.words = crate::limits::MAX_PASSPHRASE_WORDS;
+        assert!(!generator_key_changes(&settings, GeneratorOption::LengthUp));
+        assert!(generator_key_changes(
+            &settings,
+            GeneratorOption::LengthDown
+        ));
+
+        settings.password_generator.length = crate::limits::MIN_PASSWORD_LENGTH;
+        settings.passphrase_generator.words = crate::limits::MIN_PASSPHRASE_WORDS;
+        assert!(!generator_key_changes(
+            &settings,
+            GeneratorOption::LengthDown
+        ));
+        assert!(generator_key_changes(&settings, GeneratorOption::LengthUp));
+
+        // Every toggle still changes a stored value, at any boundary.
+        for option in [
+            GeneratorOption::Lowercase,
+            GeneratorOption::Uppercase,
+            GeneratorOption::Digits,
+            GeneratorOption::Symbols,
+            GeneratorOption::AvoidAmbiguous,
+            GeneratorOption::Capitalize,
+            GeneratorOption::IncludeNumber,
+            GeneratorOption::Separator,
+        ] {
+            assert!(generator_key_changes(&settings, option), "{option:?}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_adjust_status_keeps_the_unsaved_marker() {
+        let clean = generator_adjust_status(false);
+        assert_eq!(clean, "生成設定を変更しました（w: 保存 / d: 破棄）");
+        assert!(!clean.contains("[未保存"), "{clean}");
+        let dirty = generator_adjust_status(true);
+        assert_eq!(dirty, crate::ui::app::status_with_unsaved(&clean, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
     }
 }

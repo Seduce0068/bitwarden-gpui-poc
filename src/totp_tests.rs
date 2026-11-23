@@ -523,3 +523,46 @@ fn openwarden_rejections_keep_their_source_in_invalid_cause() {
     assert!(matches!(&early, TotpError::Invalid), "{early:?}");
     assert!(std::error::Error::source(&early).is_none());
 }
+
+#[test]
+fn steam_uri_form_is_accepted_and_rendered_without_regrouping() {
+    // `code_at` delegates the `steam://` form to openwarden; the wrapper must
+    // not rewrite it into an otpauth URI or pad/truncate the five-character
+    // Steam alphabet output. A letter-bearing code is left ungrouped by
+    // `Code::grouped` (totp.rs:71-82) because it is not all digits.
+    const STEAM: &str = "steam://GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    assert!(is_valid_secret(STEAM));
+    for time in [0u64, 59, 1_234_567_890] {
+        let code = code_at(STEAM, time).unwrap();
+        assert_eq!(code.code().len(), 5, "t={time}");
+        assert!(code
+            .code()
+            .chars()
+            .all(|ch| "23456789BCDFGHJKMNPQRTVWXY".contains(ch)));
+        assert_eq!(code.period(), 30);
+        assert!(code.remaining() <= code.period());
+        let tick = Tick::sample(STEAM, time);
+        assert!(tick.code.is_some());
+        assert_eq!(tick.error, None);
+        assert_eq!(tick.at, time);
+    }
+    // The fixed RFC vector keeps the exact expected code pinned.
+    assert_eq!(code_at(STEAM, 59).unwrap().code(), "PV9M4");
+}
+
+#[test]
+fn one_and_two_digit_codes_are_left_ungrouped() {
+    // `Code::grouped` returns the raw code unchanged when its length is at
+    // most three (totp.rs:71-82). The 1..=10 `digits` range therefore has a
+    // no-op grouping tail below the split threshold, which the three-digit
+    // sibling test does not reach.
+    for digits in [1u8, 2] {
+        let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&digits={digits}&period=30");
+        let code = code_at(&uri, 59).unwrap();
+        let raw = code.code().to_string();
+        assert_eq!(raw.len(), digits as usize, "digits={digits}");
+        assert!(raw.chars().all(|ch| ch.is_ascii_digit()), "{raw}");
+        assert_eq!(code.grouped(), raw, "digits={digits}");
+        assert!(!code.grouped().contains(' '), "digits={digits}");
+    }
+}

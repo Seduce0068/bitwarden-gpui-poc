@@ -742,3 +742,46 @@ fn the_40_bit_weak_boundary_agrees_with_the_health_audit() {
     );
     assert_eq!(Strength::from_bits(f64::from(WEAK_BITS)), Strength::Fair);
 }
+
+#[test]
+fn mixed_class_weak_boundary_is_rounded_to_match_the_audit() {
+    // A mixed-class alphabet whose unrounded estimate lands in
+    // [39, 40) used to be labelled Weak by the meter while the audit rounded
+    // the same value up to 40 and accepted it. Both surfaces now round in
+    // that window, while lengths away from the boundary keep the exact
+    // generator estimate.
+    let settings = PasswordSettings {
+        length: 7,
+        lowercase: true,
+        uppercase: true,
+        digits: false,
+        symbols: false,
+        ..PasswordSettings::default()
+    };
+    let raw = entropy_bits(settings.alphabet().chars().count(), settings.length);
+    assert!(
+        raw < f64::from(WEAK_BITS) && raw >= f64::from(WEAK_BITS) - 1.0,
+        "{raw}"
+    );
+    let bits = password_entropy(&settings);
+    assert_eq!(bits, f64::from(WEAK_BITS), "unrounded {raw}");
+    assert_eq!(Strength::from_bits(bits), Strength::Fair);
+    assert_eq!(crate::health::estimate_entropy("AbCdEfG"), WEAK_BITS);
+    assert_eq!(
+        crate::health::password_strength("AbCdEfG"),
+        (WEAK_BITS, Strength::Fair)
+    );
+
+    // The next lower and higher lengths stay on their original sides.
+    let six = PasswordSettings {
+        length: 6,
+        ..settings.clone()
+    };
+    let eight = PasswordSettings {
+        length: 8,
+        ..settings
+    };
+    assert!((password_entropy(&six) - entropy_bits(52, 6)).abs() < 1e-9);
+    assert!((password_entropy(&eight) - entropy_bits(52, 8)).abs() < 1e-9);
+    assert_eq!(Strength::from_bits(password_entropy(&six)), Strength::Weak);
+}

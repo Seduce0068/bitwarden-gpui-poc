@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第106弾で 6 件すべてを完了）。
+なし（第107弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第107弾（16 担当・51 回目）の指摘 8 件を完結（2026-11-23）
+  - コピー／生成 status の未保存マーカー、Cf のみ TOTP のコピー判定、
+    クランプ境界の生成キーを修正。
+  - URL マスクのユーザー名ハードコード、混合クラス 40bit 境界、
+    ハイフン位置、u32 幅超過、Cf 検索、TOTP Debug を修正・テスト。
+  - 同一ホスト重複 URI、steam://、1〜2桁 grouped をテスト。
+  - CHANGELOG に第105〜106弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1037 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第106弾（16 担当・50 回目）の指摘 6 件を完結（2026-11-23）
   - 数字パスワード＋'?'＋テキスト＋'@' の URL マスク、
     空一覧の主要キー案内、comparison_key の Cf 除去、

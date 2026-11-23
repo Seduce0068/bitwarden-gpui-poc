@@ -3496,3 +3496,97 @@ fn comparison_key_drops_format_characters_for_search_and_duplicates() {
     assert_eq!(groups[0].0, "github");
     assert_eq!(groups[0].1, vec!["1".to_string(), "3".to_string()]);
 }
+
+#[test]
+fn format_only_query_does_not_match_every_item() {
+    // `comparison_key` drops Unicode Cf, so a query made only of invisible
+    // characters folds to the empty key. That must NOT be confused with a
+    // blank query, which is the "show all" sentinel in both `matches_query`
+    // and `Vault::view` (model.rs:831-842, 1003-1014).
+    let item = login("1", "GitHub", "u", "p", "https://example.com");
+    let vault = Vault {
+        items: vec![item],
+        folders: Vec::new(),
+    };
+
+    // Premise: a genuinely blank query still returns everything.
+    assert_eq!(vault.view(&Filter::All, "", SortKey::NameAsc).len(), 1);
+    assert_eq!(vault.view(&Filter::All, "   ", SortKey::NameAsc).len(), 1);
+
+    for invisible in [
+        "\u{200b}",
+        "\u{2060}",
+        "\u{feff}",
+        "\u{ad}",
+        " \u{200b}\u{200d} ",
+    ] {
+        // Whitespace mixed with Cf folds to a whitespace-only key; the
+        // matchers treat both invisible-only forms as "no visible needle".
+        assert!(comparison_key(invisible).trim().is_empty(), "{invisible:?}");
+        assert!(
+            !vault.items[0].matches_query(invisible),
+            "a Cf-only needle must not match all fields: {invisible:?}"
+        );
+        assert!(
+            vault
+                .view(&Filter::All, invisible, SortKey::NameAsc)
+                .is_empty(),
+            "a Cf-only query must not show every item: {invisible:?}"
+        );
+        // The filter is still applied: no items even when the filter would
+        // otherwise accept them all.
+        assert!(vault
+            .view(&Filter::Kind(ItemKind::Login), invisible, SortKey::NameAsc)
+            .is_empty());
+    }
+
+    // A query with visible characters alongside Cf still searches normally.
+    assert_eq!(
+        vault
+            .view(&Filter::All, "\u{200b}github\u{200d}", SortKey::NameAsc)
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn item_data_debug_pins_the_empty_totp_branch() {
+    // The manual `ItemData` Debug (model.rs:640-664) renders an unset TOTP as
+    // `totp: ""` and any non-empty value as `[redacted]`. Exercise the branch
+    // directly on the payload, not only through `VaultItem`'s wrapper.
+    let data = ItemData::Login {
+        username: "u".into(),
+        password: Zeroizing::new("pw".into()),
+        totp: Zeroizing::new(String::new()),
+        uris: vec![],
+    };
+    let empty = format!("{data:?}");
+    assert!(empty.contains("totp: \"\""), "{empty}");
+    assert!(!empty.contains("totp: \"[redacted]\""), "{empty}");
+
+    // Whitespace is a non-empty value: it takes the redacted branch, so no
+    // part of it reaches the log line.
+    let blank = ItemData::Login {
+        username: "u".into(),
+        password: Zeroizing::new("pw".into()),
+        totp: Zeroizing::new("   ".into()),
+        uris: vec![],
+    };
+    let blank_debug = format!("{blank:?}");
+    assert!(
+        blank_debug.contains("totp: \"[redacted]\""),
+        "{blank_debug}"
+    );
+    assert!(!blank_debug.contains("   \""), "{blank_debug}");
+
+    let set = ItemData::Login {
+        username: "u".into(),
+        password: Zeroizing::new("pw".into()),
+        totp: Zeroizing::new("JBSWY3DPEHPK3PXP".into()),
+        uris: vec![],
+    };
+    let populated = format!("{set:?}");
+    assert!(populated.contains("totp: \"[redacted]\""), "{populated}");
+    assert!(!populated.contains("JBSWY3DPEHPK3PXP"), "{populated}");
+    assert!(!populated.contains("totp: \"\""), "{populated}");
+}

@@ -3472,3 +3472,83 @@ fn settings_load_error_never_carries_a_source() {
         assert!(std::error::Error::source(&app).is_none(), "{app:?}");
     }
 }
+
+#[test]
+fn hyphen_positions_outside_the_uuid_template_are_rejected() {
+    // `is_valid_device_id` checks bytes 8/13/18/23 (settings.rs:632-648).
+    // Moving a hyphen to any other index keeps the length and the hex digits
+    // intact, so only the position rule can reject the value. Every shifted
+    // spelling must be cleared by `sanitized()` instead of being reused.
+    const VALID: &str = "A1B2C3D4-1234-4ABC-8DEF-0123456789AB";
+    const POSITIONS: [usize; 4] = [8, 13, 18, 23];
+    assert!(is_valid_device_id(VALID), "fixture must be valid");
+
+    for &source in &POSITIONS {
+        for target in [0usize, 1, 7, 9, 12, 14, 19, 24, 35] {
+            if POSITIONS.contains(&target) {
+                continue;
+            }
+            let mut bytes = VALID.as_bytes().to_vec();
+            bytes.swap(source, target);
+            let shifted = std::str::from_utf8(&bytes).unwrap();
+            assert!(
+                !is_valid_device_id(shifted),
+                "hyphen {source} -> {target}: {shifted}"
+            );
+            let safe = Settings {
+                device_id: shifted.to_string(),
+                ..Default::default()
+            }
+            .sanitized();
+            assert!(safe.device_id.is_empty(), "sanitize must drop {shifted}");
+        }
+    }
+
+    // Control: the untouched canonical spelling stays reusable.
+    let valid = Settings {
+        device_id: VALID.to_string(),
+        ..Default::default()
+    };
+    assert_eq!(valid.sanitized().device_id, VALID);
+}
+
+#[test]
+fn positive_schema_markers_beyond_u32_width_are_future_versions() {
+    // `schema_version` is a u32 (settings.rs:120), but `schema_version_of`
+    // reads the raw marker as u64/f64 (settings.rs:471-511). A positive
+    // integer wider than u32 must therefore be classified as a future version
+    // on every path, never downgraded to a "compatible" legacy marker.
+    const BEYOND_U32: &str = "4294967296"; // u32::MAX + 1
+    assert_eq!(
+        super::schema_version_of(Some(&serde_json::json!(4_294_967_296u64))),
+        Some(4_294_967_296)
+    );
+    assert_eq!(
+        super::schema_version_of(Some(&serde_json::json!(BEYOND_U32))),
+        Some(4_294_967_296)
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    for marker in [BEYOND_U32, "18446744073709551615"] {
+        let original = format!(
+            r#"{{"schema_version":{marker},"email":"wide@example.com","idle_lock_seconds":123}}"#
+        );
+        std::fs::write(&path, &original).unwrap();
+        assert!(super::file_schema_version(&path).is_some());
+        assert_eq!(Settings::load_detailed(&path).unwrap(), Settings::default());
+        assert!(load_advisories(&path)
+            .iter()
+            .any(|notice| notice.contains("未対応")));
+        assert!(Settings::default().save(&path).is_err());
+        let id = generate_device_id().unwrap();
+        assert!(Settings::save_device_id_only(&path, &id).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    // A float wider than u32 but finite still saturates on the same side.
+    assert_eq!(
+        super::version_from_float(4_294_967_296.0),
+        Some(4_294_967_296)
+    );
+}

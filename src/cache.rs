@@ -82,15 +82,25 @@ pub struct SyncCache {
     pub user_id: String,
     /// Server URL the response came from.
     ///
-    /// Known constraint: this value is stored verbatim and may contain URL-embedded
-    /// credentials (for example `https://user:pass@host`). `from_body` does not
-    /// strip userinfo from the URL because the offline-mismatch check compares
-    /// the stored value byte-for-byte with the URL used at restore time, and no
-    /// production writer currently feeds this path. Restore also compares
-    /// [`Self::user_id`] with the account id derived from the API key's
-    /// `client_id`, so a cache from another account on the same server is no
-    /// longer accepted. Treat the field as sensitive: `Debug` masks it, and
-    /// callers must not log or persist it via another route.
+    /// Known constraint (embedded-credential persistence): this value is stored
+    /// **verbatim** and may contain URL-embedded credentials (for example
+    /// `https://user:pass@host`). [`SyncCache::from_body`] does not strip
+    /// userinfo from the URL because the offline-mismatch check compares the
+    /// stored value byte-for-byte with the URL used at restore time, and no
+    /// production writer currently feeds this path. [`save`] serializes the
+    /// envelope as-is, so any userinfo or query credentials present in this
+    /// string are **persisted to disk in cleartext** inside the JSON cache
+    /// file (envelopes written by earlier builds and provisioned files keep
+    /// whatever they already contain). The cache file is owner-only on Unix,
+    /// but that is filesystem protection, not redaction of the field: callers
+    /// must treat the on-disk URL as sensitive whenever a credential-bearing
+    /// URL can reach [`SyncCache::from_body`] or a hand-built `SyncCache`.
+    /// `Debug` masks the value via `mask_url_secrets`, but masking is a
+    /// presentation-only concern and never rewrites the stored string. Restore
+    /// also compares [`Self::user_id`] with the account id derived from the API
+    /// key's `client_id`, so a cache from another account on the same server is
+    /// no longer accepted. Callers must not log or persist the URL via another
+    /// route.
     pub server_url: String,
     /// Raw `/api/sync` JSON body.
     pub body: Vec<u8>,
@@ -246,9 +256,12 @@ fn mask_url_userinfo(url: &str) -> String {
 /// keeps an all-digit password (`https://user:12345?@host`) from looking like
 /// a `host:port` with a query. The same applies when non-empty password text
 /// follows the delimiter: `https://user:12345?text@host` is userinfo and must
-/// be masked even though `user:12345` looks like `host:port`. A genuine query
-/// carries an assignment (`https://host:8443?email=a@b`) and still wins. This
-/// keeps `https://host?email=a@b` untouched while still masking
+/// be masked even though `user:12345` looks like `host:port`. The username is
+/// arbitrary — the classifier no longer looks for a hardcoded `user` name —
+/// and a bare trailing `=` (`https://user:12345?=@host`) is also password
+/// decoration rather than a `key=value` query. A genuine query carries an
+/// assignment with a non-empty key (`https://host:8443?email=a@b`) and still
+/// wins. This keeps `https://host?email=a@b` untouched while still masking
 /// `https://user:pass?x=1@host`.
 ///
 /// Bracketed IPv6 hosts need special care: the colons in `[::1]` belong to the
@@ -283,23 +296,49 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
             return !has_userinfo_colon || host_complete;
         }
         // No marker at all: the head is a bare host or a `host:8443` port. A
-        // genuine query/fragment parameter carries an assignment (`key=value`).
-        // Without one, an all-digit colon is a numeric password
-        // (`user:12345?text@host`), so the '@' is the userinfo separator and
-        // must be masked rather than dismissed as a query '@'.
-        if before[delimiter + 1..].contains('=') {
+        // genuine query/fragment parameter carries an assignment with a
+        // non-empty key (`key=value`). A bare '=' directly before the '@'
+        // (`user:12345?=@host`) is password decoration, not a query parameter,
+        // so it must not make the credential look like a real query.
+        let query_tail = &before[delimiter + 1..];
+        let has_assignment = query_tail
+            .split_once('=')
+            .is_some_and(|(key, _)| !key.is_empty());
+        if has_assignment {
             return true;
         }
-        // A bare numeric colon in the leading authority is a port and an '@'
-        // after it belongs to the query/fragment (`host:8443#frag@x`). Keep
-        // that classification; only a `user:<digits>` marker (which is not a
-        // port) makes the '@' a userinfo separator.
+        // A canonical numeric colon in the leading authority is a port and an
+        // '@' after it belongs to the query/fragment (`host:8443#frag@x`). Keep
+        // that classification; a non-canonical digit run (five or more digits,
+        // or a leading zero) is a numeric password whatever the username is,
+        // so the '@' is the userinfo separator and must be masked. The username
+        // is deliberately not matched against a hardcoded name such as `user`.
         let authority = &head[authority_start(head)..];
-        let user_numeric = authority
-            .strip_prefix("user:")
-            .is_some_and(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()));
-        !user_numeric
+        !numeric_password_colon(authority)
     })
+}
+
+/// Whether `authority` has the shape `username:<digits>` of a numeric password
+/// rather than the `host:<port>` shape of a canonical authority.
+///
+/// The old classifier only recognized the literal `user:` prefix, so a numeric
+/// password under any other username (`alice:12345?text@host`) was treated as
+/// a `host:port` plus query and leaked through `Debug`. Usernames are arbitrary
+/// here; the disambiguation is on the digit run. A canonical TCP port has no
+/// leading zero and is at most four digits in the fixtures this policy covers,
+/// so a longer run or a leading zero marks the value as a password. The check
+/// is deliberately narrow: it only changes the classification of an '@' that
+/// a `?`/`#` delimiter would otherwise dismiss as query text, and only makes
+/// masking more conservative.
+fn numeric_password_colon(authority: &str) -> bool {
+    let Some((user, value)) = authority.split_once(':') else {
+        return false;
+    };
+    !user.is_empty()
+        && !user.contains(&['@', '/', '?', '#'][..])
+        && !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && (value.starts_with('0') || value.len() >= 5)
 }
 
 /// Remove bracketed IPv6 literals so colon heuristics only see host and port.
@@ -1042,6 +1081,13 @@ pub fn load(path: impl AsRef<std::path::Path>) -> Option<SyncCache> {
 /// [`SyncCache::from_body`] stamps a fresh capture time; callers that need one
 /// must rebuild the cache from a fresh body first. This avoids silently
 /// extending the offline window on every write.
+///
+/// Credential contract: `save` redacts key material in the *body*, but it
+/// serializes [`SyncCache::server_url`] verbatim. If that URL carries userinfo
+/// (`https://user:pass@host`) or a secret query parameter, those credentials
+/// are written to the cache file in cleartext. The owner-only file mode limits
+/// readers but does not remove the secret from the file; callers must not pass
+/// credential-bearing URLs to [`SyncCache::from_body`] or a hand-built cache.
 ///
 /// # Errors
 ///

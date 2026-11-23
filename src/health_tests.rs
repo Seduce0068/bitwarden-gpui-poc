@@ -2200,11 +2200,14 @@ fn mixed_capitalization_adds_the_passphrase_bonus_only_once() {
 #[test]
 fn duplicate_http_uris_on_one_host_are_counted_twice_today() {
     // Characterization of the current behaviour, not a desired invariant:
-    // `audit_item` pushes one `InsecureUri` per URI entry (health.rs:725-747)
+    // `audit_item` pushes one `InsecureUri` per URI entry (health.rs:857-879)
     // without deduplicating by host, so two http URIs on the same host produce
     // two findings. `Report::total_findings`/`count_of` count both; `affected`
-    // stays item-scoped. Pinning the double count makes a future dedup an
-    // explicit, reviewed change.
+    // stays item-scoped. This was reconsidered in R2 and deliberately left
+    // as-is: every insecure entry is worth reporting, and deduplicating by the
+    // masked host would need a new rule (how to merge different ports/paths)
+    // plus a UI wording change. Pinning the double count keeps that decision
+    // explicit and makes any future dedup a reviewed change.
     let mut item = VaultItem::new(
         "dup-http",
         "Duplicate HTTP",

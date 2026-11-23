@@ -297,15 +297,16 @@ impl Strength {
 
 /// The entropy of a drawn password, for the strength meter.
 ///
-/// For a digits-only alphabet without the ambiguous-character filter this
-/// mirrors the health audit's numeric-PIN model, which rounds the same
-/// `entropy_bits(10, len)` value to whole bits
-/// (`crate::health::estimate_entropy`). Without that mirror a 12-digit decimal
-/// password is 39.86… bits here, so `Strength::from_bits` calls it `Weak`
-/// while the UI prints "40 bit" and the audit's rounded 40 bits are no longer
-/// below its weak threshold. Rounding only this category keeps all three
-/// surfaces on the same side of the 40-bit boundary; mixed-class alphabets
-/// keep the unrounded estimate used by the rest of the generator contract.
+/// The health audit rounds its estimate to whole bits before comparing it
+/// with `weak_bits` (`crate::health::estimate_entropy`). To keep the meter,
+/// the `Strength` label and the audit on the same side of the 40-bit boundary,
+/// this estimate is rounded to whole bits whenever the rounding would change
+/// the bucket — that is, for any alphabet whose unrounded value lands in
+/// `[WEAK_BITS - 1, WEAK_BITS)` (39.5…40 bits). A 12-digit decimal password
+/// (39.86… bits) and a seven-character mixed-case password (39.90… bits) both
+/// round to exactly 40, so the meter says `Fair` just as the audit does.
+/// Mixed-class alphabets *away* from the boundary keep the unrounded estimate
+/// used by the rest of the generator contract.
 ///
 /// Known constraint (digits only + `avoid_ambiguous`): the estimate is still
 /// computed from [`PasswordSettings::alphabet`]'s real size — 8 symbols after
@@ -319,7 +320,12 @@ impl Strength {
 /// must leave `avoid_ambiguous` off for digit-only passwords.
 pub fn password_entropy(settings: &PasswordSettings) -> f64 {
     let bits = entropy_bits(settings.alphabet().chars().count(), settings.length);
-    if !settings.lowercase && !settings.uppercase && settings.digits && !settings.symbols {
+    let digits_only =
+        !settings.lowercase && !settings.uppercase && settings.digits && !settings.symbols;
+    // Rounding outside the boundary window would change the displayed number
+    // without changing the bucket; keep the generator's exact estimate there.
+    let at_weak_boundary = bits >= f64::from(WEAK_BITS) - 1.0 && bits < f64::from(WEAK_BITS);
+    if digits_only || at_weak_boundary {
         bits.round()
     } else {
         bits
@@ -373,7 +379,7 @@ mod strength_alignment_tests {
     }
 
     #[test]
-    fn mixed_alphabets_keep_the_unrounded_estimate() {
+    fn mixed_alphabets_keep_the_unrounded_estimate_away_from_the_boundary() {
         // The existing `generator_tests.rs` contract for non-digit settings is
         // exact equality with `entropy_bits`; pin it here too so a future
         // broadening of the rounding cannot silently change those values.
@@ -392,5 +398,49 @@ mod strength_alignment_tests {
         };
         let expected = entropy_bits(avoid.alphabet().chars().count(), avoid.length);
         assert!((password_entropy(&avoid) - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mixed_case_at_the_weak_boundary_agrees_with_the_audit() {
+        // Seven A-Z/a-z characters give 7 * log2(52) = 39.90… bits. The raw
+        // value is below 40, but the audit rounds it to 40 whole bits and
+        // therefore treats the password as acceptable. The meter must round in
+        // the same window so the label and the audit no longer disagree.
+        let settings = PasswordSettings {
+            length: 7,
+            lowercase: true,
+            uppercase: true,
+            digits: false,
+            symbols: false,
+            ..PasswordSettings::default()
+        };
+        let raw = entropy_bits(settings.alphabet().chars().count(), settings.length);
+        assert!(
+            raw < f64::from(WEAK_BITS) && raw >= f64::from(WEAK_BITS) - 1.0,
+            "{raw}"
+        );
+        let bits = password_entropy(&settings);
+        assert_eq!(bits, f64::from(WEAK_BITS));
+        assert_eq!(Strength::from_bits(bits), Strength::Fair);
+
+        let pin = "AbCdEfG";
+        assert_eq!(crate::health::estimate_entropy(pin), WEAK_BITS);
+        assert_eq!(
+            crate::health::password_strength(pin),
+            (WEAK_BITS, Strength::from_bits(bits)),
+            "meter and audit must agree at the mixed-class boundary"
+        );
+
+        // One character shorter stays Weak on both sides.
+        let short = PasswordSettings {
+            length: 6,
+            ..settings
+        };
+        assert!(password_entropy(&short) < f64::from(WEAK_BITS));
+        assert_eq!(
+            Strength::from_bits(password_entropy(&short)),
+            Strength::Weak
+        );
+        assert_eq!(crate::health::estimate_entropy("AbCdEf"), 34);
     }
 }
