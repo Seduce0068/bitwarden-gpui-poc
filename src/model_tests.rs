@@ -3550,6 +3550,140 @@ fn format_only_query_does_not_match_every_item() {
 }
 
 #[test]
+fn invisible_only_names_and_needles_share_the_view_rule() {
+    // `is_visually_empty` (model.rs:100-110) is the shared "no visible content"
+    // rule. Needles and names made only of whitespace + Unicode Cf must be
+    // blank everywhere, including Cf separated by *internal* whitespace:
+    // checking only `comparison_key().is_empty()` left a single space in the
+    // key and let such a needle match every item.
+    let invisible = [
+        "\u{200b}",
+        "\u{2060}",
+        "\u{feff}",
+        "\u{ad}",
+        "\u{200b} \u{200d}",
+        " \u{2060}\t\u{feff} ",
+        "\u{ad} \u{200f}",
+    ];
+    for value in invisible {
+        assert!(super::is_visually_empty(value), "{value:?}");
+    }
+    assert!(!super::is_visually_empty("GitHub"));
+    assert!(
+        !super::is_visually_empty("\u{200b}GitHub"),
+        "visible letters remain"
+    );
+
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("1", "GitHub", "u", "p", "https://a.example"));
+    for value in invisible {
+        assert!(
+            !vault.items[0].matches_query(value),
+            "Cf/whitespace-only needle matched everything: {value:?}"
+        );
+        assert!(
+            vault.view(&Filter::All, value, SortKey::NameAsc).is_empty(),
+            "Cf/whitespace-only query showed an item: {value:?}"
+        );
+    }
+    // A genuinely blank needle keeps the "show everything" contract on both
+    // paths, so the assertions above are about invisibility, not a dead matcher.
+    for blank in ["", " ", " \t\u{3000}\n "] {
+        assert!(vault.items[0].matches_query(blank), "{blank:?}");
+        assert_eq!(
+            vault.view(&Filter::All, blank, SortKey::NameAsc).len(),
+            1,
+            "{blank:?}"
+        );
+    }
+
+    // Two invisible-only names do not form a duplicate group even with Cf
+    // separated by whitespace, while a real pair still groups under the
+    // Cf-free key.
+    let mut names = Vault::new();
+    names.items.push(login(
+        "a",
+        "\u{200b} \u{200d}",
+        "u",
+        "p",
+        "https://a.example",
+    ));
+    names.items.push(login(
+        "b",
+        " \u{2060}\t\u{feff} ",
+        "u",
+        "p",
+        "https://b.example",
+    ));
+    let groups = names.duplicate_names();
+    assert!(groups.is_empty(), "{groups:?}");
+    names
+        .items
+        .push(login("c", "Git\u{200b}Hub", "u", "p", "https://c.example"));
+    names
+        .items
+        .push(login("d", "github", "u", "p", "https://d.example"));
+    let groups = names.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "github");
+    assert_eq!(groups[0].1, vec!["c".to_string(), "d".to_string()]);
+}
+
+#[test]
+fn cf_free_key_is_shared_by_search_duplicates_and_sort() {
+    let cf_name = "Git\u{200b}Hub";
+    let plain_name = "GitHub";
+    assert_eq!(comparison_key(cf_name), comparison_key(plain_name));
+    assert_eq!(comparison_key(cf_name), "github");
+    assert!(!super::is_visually_empty(cf_name));
+
+    let mut vault = Vault::new();
+    // Insert the plain spelling first: sorting must follow the folded key and
+    // its id tiebreak, not insertion order.
+    vault
+        .items
+        .push(login("b", plain_name, "u", "p", "https://b.example"));
+    vault
+        .items
+        .push(login("a", cf_name, "u", "p", "https://a.example"));
+
+    // Search and the public matcher use the same Cf-free key.
+    for query in ["github", "Git\u{200b}Hub", "GIT\u{2060}HUB"] {
+        assert_eq!(
+            vault.view(&Filter::All, query, SortKey::NameAsc).len(),
+            2,
+            "{query:?}"
+        );
+        for item in &vault.items {
+            assert!(item.matches_query(query), "{query:?}");
+        }
+    }
+
+    // Duplicate detection groups both spellings under that key.
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "github");
+    assert_eq!(groups[0].1, vec!["b".to_string(), "a".to_string()]);
+
+    // Sorting reuses the same key: the names tie, so the id decides; the
+    // descending order reverses only that tie.
+    let asc: Vec<&str> = vault
+        .view(&Filter::All, "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(asc, vec!["a", "b"]);
+    let desc: Vec<&str> = vault
+        .view(&Filter::All, "", SortKey::NameDesc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(desc, vec!["b", "a"]);
+}
+
+#[test]
 fn item_data_debug_pins_the_empty_totp_branch() {
     // The manual `ItemData` Debug (model.rs:640-664) renders an unset TOTP as
     // `totp: ""` and any non-empty value as `[redacted]`. Exercise the branch

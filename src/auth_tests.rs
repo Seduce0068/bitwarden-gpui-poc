@@ -553,6 +553,49 @@ fn email_length_ceiling_is_applied_after_trimming() {
 }
 
 #[test]
+fn server_url_length_ceiling_is_applied_after_trimming() {
+    // `validate_config` / `authenticate_inner` trim the URL before parsing it,
+    // but the clamp used to count characters first (auth.rs:391-402). Padding
+    // must be removed before the cap, otherwise an at-limit URL with a stray
+    // trailing newline loses its tail and becomes a different endpoint.
+    let prefix = "https://vault.example.com/";
+    let base = format!("{prefix}{}", "p".repeat(MAX_SERVER_URL_LEN - prefix.len()));
+    assert_eq!(base.chars().count(), MAX_SERVER_URL_LEN);
+
+    // A short padded URL is trimmed even when the cap is not reached.
+    let mut short = config();
+    short.server_url = "  https://vault.example.com\t".to_string();
+    clamp_auth_config(&mut short);
+    assert_eq!(short.server_url, "https://vault.example.com");
+    assert_eq!(validate_config(&short), Ok(()));
+
+    // Exactly at the ceiling after trimming: the whole URL survives, even
+    // though the raw field is longer than the cap because of the padding.
+    let mut at_limit = config();
+    at_limit.server_url = format!(" \t{base}\n");
+    assert!(at_limit.server_url.chars().count() > MAX_SERVER_URL_LEN);
+    clamp_auth_config(&mut at_limit);
+    assert_eq!(at_limit.server_url, base);
+    assert_eq!(at_limit.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(validate_config(&at_limit), Ok(()));
+
+    // One character past the ceiling after trimming is still truncated, and
+    // the retained text is the original prefix (Unicode padding is ignored).
+    let too_long = format!("{base}x");
+    let mut clamped = config();
+    clamped.server_url = format!("\u{3000}{too_long}  ");
+    clamp_auth_config(&mut clamped);
+    assert_eq!(clamped.server_url, base);
+    assert_eq!(clamped.server_url.chars().count(), MAX_SERVER_URL_LEN);
+    assert_eq!(validate_config(&clamped), Ok(()));
+
+    // Re-applying the cap is a no-op.
+    let before = clamped.server_url.clone();
+    clamp_auth_config(&mut clamped);
+    assert_eq!(clamped.server_url, before);
+}
+
+#[test]
 fn clamp_caps_every_field_without_reporting_an_error() {
     let mut value = AuthConfig {
         server_url: format!(

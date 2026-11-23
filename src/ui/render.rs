@@ -94,6 +94,22 @@ fn vault_detail_row(count: usize, detail: String) -> Option<String> {
     (count > 0).then_some(detail)
 }
 
+/// Query text drawn in the vault header.
+///
+/// A plain `query.is_empty()` check let whitespace-only and invisible-only
+/// (`Cf`, for example a zero-width space or bidi override) queries through
+/// verbatim, leaving a blank-looking search field. Reuse the same visual
+/// emptiness rule as the list row and detail line while keeping the existing
+/// "(なし)" placeholder. Kept pure so the output can be tested without a GPUI
+/// window.
+fn vault_search_query_text(query: &str) -> &str {
+    if crate::ui::app::is_visually_empty(query) {
+        "(なし)"
+    } else {
+        query
+    }
+}
+
 /// Header text above the vault list.
 ///
 /// `PageUp`/`PageDown` and `Home`/`End` move the vault selection just like
@@ -120,7 +136,7 @@ fn vault_list_header_text(
     };
     format!(
         "Vault: {count} / {total} 件  |  フィルタ: {filter_label}  |  並び: {sort_label}  |  検索: {}{}{row_suffix}",
-        if query.is_empty() { "(なし)" } else { query },
+        vault_search_query_text(query),
         if searching { " _" } else { "" },
     )
 }
@@ -720,6 +736,34 @@ mod tests {
             "row keys are inert while searching: {searching}"
         );
         assert!(!searching.contains("↑↓"), "{searching}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_header_hides_invisible_only_queries() {
+        assert_eq!(vault_search_query_text(""), "(なし)");
+        assert_eq!(vault_search_query_text("  \t "), "(なし)");
+        assert_eq!(
+            vault_search_query_text("\u{200b}\u{feff}\u{202e}"),
+            "(なし)"
+        );
+        // A query with any visible character is still drawn verbatim.
+        assert_eq!(vault_search_query_text(" alice "), " alice ");
+        assert_eq!(vault_search_query_text("alice\u{200b}"), "alice\u{200b}");
+
+        for query in ["", "  ", "\u{200b}", "\u{200b}\u{feff}"] {
+            let header = vault_list_header_text(3, 7, "すべて", "名前 ↑", query, false);
+            assert!(header.contains("検索: (なし)"), "{query:?}: {header}");
+            // A whitespace-only query is still printed verbatim by the
+            // header (it is visually blank), so only assert the Cf case.
+            if query.contains('\u{200b}') {
+                assert!(!header.contains(query), "raw invisible query: {header}");
+            }
+        }
+
+        let visible = vault_list_header_text(3, 7, "すべて", "名前 ↑", "abc", true);
+        assert!(visible.contains("検索: abc _"), "{visible}");
+        let processing = vault_list_header_text(3, 7, "すべて", "名前 ↑", "\u{200b}", true);
+        assert!(processing.contains("検索: (なし) _"), "{processing}");
     }
 
     #[::core::prelude::v1::test]

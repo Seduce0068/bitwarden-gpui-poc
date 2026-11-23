@@ -389,6 +389,12 @@ fn truncate_secret_to_limit(value: &mut SecretString, limit: usize) {
 /// and email live in `Settings`, so their caps are enforced here rather than in
 /// `AuthState`, which owns only the three credential fields.
 pub fn clamp_auth_config(config: &mut AuthConfig) {
+    // `validate_config` and `authenticate_inner` both trim the server URL
+    // before parsing it (auth.rs:682, 700-705, 1071-1081). Apply the same
+    // normalization before capping: counting surrounding padding used to cut
+    // the tail off an otherwise valid at-limit URL, silently turning it into
+    // a different endpoint. Trimming first keeps the URL intact.
+    config.server_url = config.server_url.trim().to_string();
     truncate_to_limit(&mut config.server_url, MAX_SERVER_URL_LEN);
     // `valid_email` trims before it counts characters. Apply the same
     // normalization before capping: counting surrounding padding used to cut

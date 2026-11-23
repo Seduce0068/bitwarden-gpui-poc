@@ -481,6 +481,59 @@ fn three_duplicate_rows_chain_a_clipped_then_an_updated_decision() {
 }
 
 #[test]
+fn updated_revisions_insert_chains_into_later_duplicate_decisions() {
+    // The `Updated` arm writes the accepted revision back into `revisions`
+    // (vault_sync.rs:745) so later duplicates compare against the newest
+    // accepted value, not the original `Added` one. Four rows pin both
+    // downstream branches: the third row is clipped against B (not A), and
+    // the fourth records `Updated { old_revision: B, .. }` (not A). Dropping
+    // that insert would emit a second `Updated { old_revision: A, .. }` for
+    // both later rows.
+    let id = "chain-updated-insert";
+    let feb = parse_revision(Some("2024-02-01T00:00:00Z")).unwrap();
+    let mar = parse_revision(Some("2024-03-01T00:00:00Z")).unwrap();
+    let apr = parse_revision(Some("2024-04-01T00:00:00Z")).unwrap();
+    let may = parse_revision(Some("2024-05-01T00:00:00Z")).unwrap();
+    let vault = unlocked_vault_raw(&[
+        cipher(id, "2024-02-01T00:00:00Z"),
+        cipher(id, "2024-04-01T00:00:00Z"),
+        cipher(id, "2024-03-01T00:00:00Z"),
+        cipher(id, "2024-05-01T00:00:00Z"),
+    ]);
+
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1, "all four rows collapse to one item");
+    assert_eq!(
+        model.items[0].revision_date, may,
+        "the newest revision wins"
+    );
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: feb,
+            },
+            ImportAudit::Updated {
+                id: id.to_string(),
+                old_revision: feb,
+                new_revision: apr,
+            },
+            ImportAudit::Clipped {
+                id: id.to_string(),
+                old_revision: apr,
+                new_revision: mar,
+            },
+            ImportAudit::Updated {
+                id: id.to_string(),
+                old_revision: apr,
+                new_revision: may,
+            },
+        ]
+    );
+}
+
+#[test]
 fn duplicate_with_same_revision_is_ignored() {
     let id = "rev-3";
     let revision = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();

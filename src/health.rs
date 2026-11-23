@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::generator::{entropy_bits, Strength, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE, WEAK_BITS};
-use crate::model::{FingerprintVerify, ItemKind, Vault, VaultItem};
+use crate::model::{is_visually_empty, FingerprintVerify, ItemKind, Vault, VaultItem};
 use crate::totp::is_valid_secret;
 // Layering note: `health` depends on `vault_sync` (the openwarden bridge)
 // although the bridge is conceptually a lower, import-side layer. This
@@ -718,13 +718,15 @@ pub fn has_usable_totp(item: &VaultItem) -> bool {
 /// decrypted.
 ///
 /// A decryption failure must not be collapsed into "no TOTP": the login is
-/// known to be 2FA-enabled, only the secret is uninspectable. A field made only
-/// of whitespace, however, has no secret at all: `is_valid_secret` rejects it,
-/// so reporting it as "present" would contradict the `NoTotp` finding and the
-/// `with_totp` counter. Such a field counts as unset.
+/// known to be 2FA-enabled, only the secret is uninspectable. A field with no
+/// visible content, however, has no secret at all: `is_valid_secret` rejects
+/// whitespace and Unicode `Cf` format characters alike, so reporting such a
+/// field as "present" would contradict the `NoTotp` finding and the
+/// `with_totp` counter. The shared `is_visually_empty` rule also covers `Cf`
+/// mixed with whitespace, so the badge, the finding and the counter agree.
 pub fn has_totp_field(item: &VaultItem) -> bool {
     item.totp_secret()
-        .is_some_and(|secret| !secret.trim().is_empty())
+        .is_some_and(|secret| !is_visually_empty(secret))
 }
 
 /// Audit `vault` with `thresholds` at `now` (Unix seconds).

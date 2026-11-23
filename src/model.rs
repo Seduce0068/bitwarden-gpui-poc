@@ -97,6 +97,19 @@ mod unicode_normalize {
 }
 pub(crate) use unicode_normalize::comparison_key;
 
+/// Whether `value` carries no visible content.
+///
+/// Whitespace and Unicode `Cf` (format) characters render nothing, whether
+/// they sit at the edges or between visible letters. This is the same rule the
+/// UI uses for empty-looking text; search, duplicate detection and the TOTP
+/// badge share it so an invisible-only value is not mistaken for a present
+/// one (for example a Cf-only TOTP field or a zero-width-space name).
+pub(crate) fn is_visually_empty(value: &str) -> bool {
+    value
+        .chars()
+        .all(|ch| ch.is_whitespace() || crate::limits::is_format_character(ch))
+}
+
 /// Sentinel for a missing or unparsable revision date.
 ///
 /// Kept as a named constant so callers outside this module do not depend on
@@ -832,22 +845,24 @@ impl VaultItem {
     ///
     /// `Vault::view` already trims and normalizes the query, but this is a
     /// public method and callers may pass raw user input, so `needle` is
-    /// trimmed here too. `comparison_key` is idempotent, so the double
-    /// normalization on the `view()` path cannot change the result. A blank
-    /// needle matches every item; a non-blank needle that folds to an empty
-    /// key (only invisible `Cf` characters) matches none, so an invisible
-    /// paste cannot silently widen the result to the whole vault.
+    /// checked with the same `is_visually_empty` rule as `view`. A blank
+    /// needle matches every item; one made only of whitespace and invisible
+    /// `Cf` characters matches none, so an invisible paste cannot silently
+    /// widen the result to the whole vault. `comparison_key` is idempotent, so
+    /// the double normalization on the `view()` path cannot change the result.
     pub fn matches_query(&self, needle: &str) -> bool {
         let trimmed = needle.trim();
+        // Share the visibility test with `view`: a Cf-only needle with an
+        // internal space still folds to a non-empty key (" "), so checking
+        // only `comparison_key().is_empty()` would let it match every item.
+        if is_visually_empty(needle) {
+            return trimmed.is_empty();
+        }
         let key = comparison_key(trimmed);
         if key.is_empty() {
-            // A genuinely blank or whitespace-only needle is contained in
-            // every haystack, which is the documented "show everything"
-            // behaviour. A *non-blank* needle made only of invisible Unicode
-            // `Cf` characters folds to the same empty key after `comparison_key`
-            // drops them; letting it fall through would make a format-only
-            // query match every item. It must match nothing instead.
-            return needle.trim().is_empty();
+            // Defensive: a non-blank needle with no visible key must not widen
+            // the result set either.
+            return false;
         }
         self.haystacks()
             .iter()
@@ -1016,9 +1031,10 @@ impl Vault {
     /// The items passing `filter` and matching `query`, in `sort` order.
     ///
     /// A blank (or whitespace-only) query keeps every filtered item visible.
-    /// A non-blank query whose normalized key is empty — for example one made
-    /// entirely of Unicode `Cf` format characters, which `comparison_key`
-    /// drops — matches nothing instead of every item.
+    /// A non-blank query with no visible content — for example one made only
+    /// of whitespace and Unicode `Cf` format characters — matches nothing
+    /// instead of every item. `is_visually_empty` is the shared rule used by
+    /// search, duplicate detection and the TOTP badge.
     pub fn view(&self, filter: &Filter, query: &str, sort: SortKey) -> Vec<&VaultItem> {
         let trimmed = query.trim();
         let needle = comparison_key(trimmed);
@@ -1031,13 +1047,12 @@ impl Vault {
                     // Blank/whitespace-only query: keep the long-standing
                     // "every item is visible" behaviour.
                     true
-                } else if query
-                    .chars()
-                    .all(|ch| ch.is_whitespace() || crate::limits::is_format_character(ch))
-                {
-                    // Non-blank but invisible-only (e.g. U+200B): folding
-                    // dropped every character, so this is not a blank query
-                    // and must not fall through to the empty-needle branch.
+                } else if is_visually_empty(query) {
+                    // Non-blank but invisible-only (e.g. U+200B on its own, or
+                    // Cf separated by internal whitespace): this is not a blank
+                    // query and must not fall through to the empty-needle
+                    // branch. The same rule guards `matches_query` and
+                    // `duplicate_names`.
                     false
                 } else {
                     item.matches_query(&needle)
@@ -1127,21 +1142,19 @@ impl Vault {
     /// Duplicate names (NFKD-equivalent and case-insensitive), each with its
     /// item ids. Blank names are ignored: an unnamed item is not a duplicate
     /// of every other unnamed item. A name made only of invisible Unicode
-    /// `Cf` characters (for example a zero-width space) counts as blank too:
-    /// it has no visible identity, so two such items must not be reported as
-    /// duplicates of each other. The same applies to a name made only of
-    /// Unicode marks (`Mn`/`Me`, such as a combining accent or an enclosing
-    /// circle): with no base character they render as decoration, not as a
-    /// name. A mark following an ordinary base letter stays significant.
+    /// `Cf` characters (for example a zero-width space) counts as blank too,
+    /// including when whitespace sits between the format characters; the
+    /// shared `is_visually_empty` rule decides, so two such items must not
+    /// be reported as duplicates of each other. The same applies to a name
+    /// made only of Unicode marks (`Mn`/`Me`/`Mc`, such as a combining accent
+    /// or an enclosing circle): with no base character they render as
+    /// decoration, not as a name. A mark following an ordinary base letter
+    /// stays significant.
     pub fn duplicate_names(&self) -> Vec<(String, Vec<String>)> {
         let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for item in &self.items {
             let key = comparison_key(item.name.trim());
-            if key.is_empty()
-                || key.chars().all(|ch| {
-                    crate::limits::is_format_character(ch) || unicode_normalize::is_mark(ch)
-                })
-            {
+            if is_visually_empty(&item.name) || key.chars().all(unicode_normalize::is_mark) {
                 continue;
             }
             match groups.iter_mut().find(|(name, _)| *name == key) {

@@ -281,23 +281,32 @@ pub(super) fn insert_confirmed_query(
 /// leaving whatever the last action had written on screen. `unit` is `分` for
 /// the idle auto-lock timeout (`i`/`u`, which moves in one-minute steps, see
 /// [`crate::ui::logic::adjust_idle_lock`]) and `秒数` for the genuinely
-/// seconds-based `3`-`6` fields. Kept pure so the wording can be tested
+/// seconds-based `3`-`6` fields. `value_text` is the post-adjustment value in
+/// that same unit, so the status reports the new setting instead of only
+/// saying that something changed. Kept pure so the wording can be tested
 /// without a GPUI window.
-pub(super) fn time_adjust_status(unit: &str, dirty: bool) -> String {
+pub(super) fn time_adjust_status(unit: &str, value_text: &str, dirty: bool) -> String {
     crate::ui::app::status_with_unsaved(
-        &format!("{unit}を変更しました（w: 保存 / d: 破棄）"),
+        &format!("{unit}を変更しました: {value_text}（w: 保存 / d: 破棄）"),
         dirty,
     )
 }
 
 /// Status after `i`/`u` adjusts the minute-based idle auto-lock timeout.
-pub(super) fn idle_lock_adjust_status(dirty: bool) -> String {
-    time_adjust_status("分", dirty)
+///
+/// The stored value is seconds while the settings panel shows minutes, so the
+/// panel's formatter is reused rather than truncating a non-whole minute.
+pub(super) fn idle_lock_adjust_status(idle_lock_seconds: u64, dirty: bool) -> String {
+    time_adjust_status(
+        "分",
+        &crate::ui::app::idle_lock_minutes_text(idle_lock_seconds),
+        dirty,
+    )
 }
 
 /// Status after `3`-`6` adjusts a seconds-based settings field.
-pub(super) fn seconds_adjust_status(dirty: bool) -> String {
-    time_adjust_status("秒数", dirty)
+pub(super) fn seconds_adjust_status(seconds: u64, dirty: bool) -> String {
+    time_adjust_status("秒数", &format!("{seconds}秒"), dirty)
 }
 
 /// Status after trying to copy a value the generator has not produced yet.
@@ -324,23 +333,75 @@ pub(super) fn action_status_with_unsaved(status: &str, dirty: bool) -> String {
     crate::ui::app::status_with_unsaved(base, dirty)
 }
 
+/// Description of the generator value changed by `option`.
+///
+/// Read from the settings *after* the key was applied so the status can name
+/// the new value, not just announce that a change happened. Length keys move
+/// two values at once (see `keys::apply_generator_key`), so both are reported;
+/// toggles report the affected flag and `Separator` reuses the panel's label.
+/// Kept pure so the wording can be tested without a GPUI window.
+pub(super) fn generator_value_text(
+    settings: &crate::settings::Settings,
+    option: GeneratorOption,
+) -> String {
+    use GeneratorOption::*;
+    let password = &settings.password_generator;
+    let passphrase = &settings.passphrase_generator;
+    let enabled = |value: bool| if value { "有効" } else { "無効" };
+    match option {
+        LengthUp | LengthDown => format!(
+            "パスワード {} 文字 / パスフレーズ {} 語",
+            password.length, passphrase.words
+        ),
+        Lowercase => format!("英小文字: {}", enabled(password.lowercase)),
+        Uppercase => format!("英大文字: {}", enabled(password.uppercase)),
+        Digits => format!("数字: {}", enabled(password.digits)),
+        Symbols => format!("記号: {}", enabled(password.symbols)),
+        AvoidAmbiguous => format!(
+            "紛らわしい文字を除外: {}",
+            enabled(password.avoid_ambiguous)
+        ),
+        Capitalize => format!("先頭大文字: {}", enabled(passphrase.capitalize)),
+        IncludeNumber => format!("数字を含める: {}", enabled(passphrase.include_number)),
+        Separator => format!(
+            "区切り: {}",
+            crate::ui::panels::separator_label(&passphrase.separator)
+        ),
+    }
+}
+
 /// Status after a generator option actually changed the stored settings.
 ///
 /// The action helper in `ui::actions` writes its own text, which the dispatcher
 /// replaces with this standard settings status so the persistent unsaved
 /// marker survives and the wording matches the other adjustment keys.
-pub(super) fn generator_adjust_status(dirty: bool) -> String {
-    crate::ui::app::status_with_unsaved("生成設定を変更しました（w: 保存 / d: 破棄）", dirty)
+/// `value_text` carries the post-adjustment value from
+/// [`generator_value_text`].
+pub(super) fn generator_adjust_status(value_text: &str, dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved(
+        &format!("生成設定を変更しました: {value_text}（w: 保存 / d: 破棄）"),
+        dirty,
+    )
 }
 
 /// Status after `+`/`-` adjusts the audit thresholds.
 ///
 /// `refresh_audit` intentionally keeps the settings panel's own status (see
 /// `audit_refresh_status_for_panel`), so the threshold keys need their own
-/// feedback just like the other settings-adjustment keys. Kept pure so the
-/// wording can be tested without a GPUI window.
-pub(super) fn threshold_adjust_status(dirty: bool) -> String {
-    crate::ui::app::status_with_unsaved("監査閾値を変更しました（w: 保存 / d: 破棄）", dirty)
+/// feedback just like the other settings-adjustment keys. Both post-adjustment
+/// threshold values are included so the user can see what the new limits are.
+/// Kept pure so the wording can be tested without a GPUI window.
+pub(super) fn threshold_adjust_status(
+    thresholds: crate::health::Thresholds,
+    dirty: bool,
+) -> String {
+    crate::ui::app::status_with_unsaved(
+        &format!(
+            "監査閾値を変更しました: 弱パスワード < {} bit / 更新が古い: {} 日以上（w: 保存 / d: 破棄）",
+            thresholds.weak_bits, thresholds.stale_days
+        ),
+        dirty,
+    )
 }
 
 /// Outcome of a clamped settings adjustment.
@@ -349,8 +410,10 @@ pub(super) fn threshold_adjust_status(dirty: bool) -> String {
 /// boundary can leave the stored value identical to the previous one. In that
 /// case the caller must not announce "変更しました" nor mark the settings
 /// unsaved: `changed` is derived from the before/after values, not from the
-/// key that was pressed. Factored out here (rather than inline in the GPUI
-/// dispatcher) so the boundary contract is testable without a GPUI window.
+/// key that was pressed. It must still announce the clamp boundary (see
+/// [`clamp_boundary_status`]) so the keypress is not silently dropped.
+/// Factored out here (rather than inline in the GPUI dispatcher) so the
+/// boundary contract is testable without a GPUI window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Adjustment<T> {
     /// Value to store back into the settings.
@@ -374,8 +437,9 @@ impl<T: PartialEq> Adjustment<T> {
 /// at the maximum leaves both lengths as they were. Like [`Adjustment::new`]
 /// for the settings keys, the dispatcher must derive "changed" from the
 /// before/after values: a clamped step must neither announce a change nor mark
-/// the settings unsaved. Applying the same pure helper to a clone is
-/// deterministic, so the real action can still own the state mutation.
+/// the settings unsaved, but must report the boundary instead. Applying the
+/// same pure helper to a clone is deterministic, so the real action can still
+/// own the state mutation.
 pub(super) fn generator_key_changes(
     settings: &crate::settings::Settings,
     option: GeneratorOption,
@@ -384,6 +448,62 @@ pub(super) fn generator_key_changes(
     crate::ui::keys::apply_generator_key(&mut candidate, option);
     candidate.password_generator != settings.password_generator
         || candidate.passphrase_generator != settings.passphrase_generator
+}
+
+/// The clamp bound a key press pushed against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ClampEdge {
+    Upper,
+    Lower,
+}
+
+/// Which bound a settings delta pushes towards.
+///
+/// All adjustment keys move by a single step in the sign's direction, so a
+/// clamped positive step has hit the upper bound and a clamped negative step
+/// the lower one.
+pub(super) fn clamp_edge_for_delta(delta: i32) -> ClampEdge {
+    if delta > 0 {
+        ClampEdge::Upper
+    } else {
+        ClampEdge::Lower
+    }
+}
+
+/// Only the length keys can be clamped; every generator toggle always changes
+/// a value, so it can never reach this status.
+pub(super) fn generator_clamp_edge(option: GeneratorOption) -> Option<ClampEdge> {
+    match option {
+        GeneratorOption::LengthUp => Some(ClampEdge::Upper),
+        GeneratorOption::LengthDown => Some(ClampEdge::Lower),
+        _ => None,
+    }
+}
+
+/// Status for a settings key whose value was already at its clamp bound.
+///
+/// A clamped key leaves every stored value untouched, but staying silent made
+/// the keypress look dropped. The message names the bound and the affected
+/// setting while preserving the persistent unsaved marker (earlier edits may
+/// still be pending). It deliberately does not mark the settings dirty.
+pub(super) fn clamp_boundary_status(label: &str, edge: ClampEdge, dirty: bool) -> String {
+    let base = match edge {
+        ClampEdge::Upper => format!("{label}は既に上限です（これ以上増やせません）"),
+        ClampEdge::Lower => format!("{label}は既に下限です（これ以上減らせません）"),
+    };
+    crate::ui::app::status_with_unsaved(&base, dirty)
+}
+
+pub(super) fn threshold_boundary_status(delta: i32, dirty: bool) -> String {
+    clamp_boundary_status("監査閾値", clamp_edge_for_delta(delta), dirty)
+}
+
+pub(super) fn idle_lock_boundary_status(delta: i32, dirty: bool) -> String {
+    clamp_boundary_status("自動ロック", clamp_edge_for_delta(delta), dirty)
+}
+
+pub(super) fn seconds_boundary_status(label: &str, delta: i32, dirty: bool) -> String {
+    clamp_boundary_status(label, clamp_edge_for_delta(delta), dirty)
 }
 
 impl BitwardenApp {
@@ -684,10 +804,6 @@ impl BitwardenApp {
                 let adjustment =
                     Adjustment::new(before, crate::ui::logic::adjust_thresholds(before, delta));
                 self.settings.thresholds = adjustment.value;
-                // A clamped step changes nothing: leave the status and the
-                // persistent unsaved marker exactly as they were. In
-                // particular, skip `refresh_audit`, which can overwrite the
-                // status with an audit-row description on other panels.
                 if adjustment.changed {
                     self.mark_settings_dirty();
                     self.refresh_audit();
@@ -695,7 +811,15 @@ impl BitwardenApp {
                     // the refresh keeps the previous status, and on other
                     // panels this feedback must win over an audit-row
                     // description.
-                    self.status = threshold_adjust_status(self.settings_dirty);
+                    self.status =
+                        threshold_adjust_status(self.settings.thresholds, self.settings_dirty);
+                    cx.notify();
+                } else {
+                    // A clamped step changes nothing: do not mark the settings
+                    // dirty and skip `refresh_audit`, which could overwrite
+                    // the status with an audit-row description on other
+                    // panels. Still explain why the key did nothing.
+                    self.status = threshold_boundary_status(delta, self.settings_dirty);
                     cx.notify();
                 }
             }
@@ -707,7 +831,13 @@ impl BitwardenApp {
                 if adjustment.changed {
                     self.mark_settings_dirty();
                     // `i`/`u` move in minutes, not seconds: report the right unit.
-                    self.status = idle_lock_adjust_status(self.settings_dirty);
+                    self.status = idle_lock_adjust_status(
+                        self.settings.idle_lock_seconds,
+                        self.settings_dirty,
+                    );
+                    cx.notify();
+                } else {
+                    self.status = idle_lock_boundary_status(delta, self.settings_dirty);
                     cx.notify();
                 }
             }
@@ -718,7 +848,14 @@ impl BitwardenApp {
                 self.settings.login_timeout_seconds = adjustment.value;
                 if adjustment.changed {
                     self.mark_settings_dirty();
-                    self.status = seconds_adjust_status(self.settings_dirty);
+                    self.status = seconds_adjust_status(
+                        self.settings.login_timeout_seconds,
+                        self.settings_dirty,
+                    );
+                    cx.notify();
+                } else {
+                    self.status =
+                        seconds_boundary_status("ログイン制限", delta, self.settings_dirty);
                     cx.notify();
                 }
             }
@@ -729,14 +866,26 @@ impl BitwardenApp {
                 self.settings.clipboard_restore_seconds = adjustment.value;
                 if adjustment.changed {
                     self.mark_settings_dirty();
-                    self.status = seconds_adjust_status(self.settings_dirty);
+                    self.status = seconds_adjust_status(
+                        self.settings.clipboard_restore_seconds,
+                        self.settings_dirty,
+                    );
+                    cx.notify();
+                } else {
+                    self.status = seconds_boundary_status("復元", delta, self.settings_dirty);
                     cx.notify();
                 }
             }
             UiAction::Generator(option) => {
                 if generator_key_changes(&self.settings, option) {
                     self.toggle_generator(option, cx);
-                    self.status = generator_adjust_status(self.settings_dirty);
+                    self.status = generator_adjust_status(
+                        &generator_value_text(&self.settings, option),
+                        self.settings_dirty,
+                    );
+                    cx.notify();
+                } else if let Some(edge) = generator_clamp_edge(option) {
+                    self.status = clamp_boundary_status("生成設定", edge, self.settings_dirty);
                     cx.notify();
                 }
             }
@@ -961,13 +1110,13 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn seconds_adjust_status_keeps_save_hint_and_unsaved_marker() {
-        let clean = seconds_adjust_status(false);
-        assert_eq!(clean, "秒数を変更しました（w: 保存 / d: 破棄）");
+        let clean = seconds_adjust_status(31, false);
+        assert_eq!(clean, "秒数を変更しました: 31秒（w: 保存 / d: 破棄）");
         assert!(!clean.contains("[未保存"), "{clean}");
 
         // The seconds-based 3/4 and 5/6 branches mark the settings dirty
         // before writing the status, so the unsaved marker must survive.
-        let dirty = seconds_adjust_status(true);
+        let dirty = seconds_adjust_status(31, true);
         assert_eq!(
             dirty,
             crate::ui::app::status_with_unsaved(clean.as_str(), true)
@@ -978,11 +1127,11 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn idle_lock_adjust_status_reports_minutes_not_seconds() {
-        let clean = idle_lock_adjust_status(false);
-        assert_eq!(clean, "分を変更しました（w: 保存 / d: 破棄）");
+        let clean = idle_lock_adjust_status(360, false);
+        assert_eq!(clean, "分を変更しました: 6分（w: 保存 / d: 破棄）");
         assert!(!clean.contains("秒"), "{clean}");
 
-        let dirty = idle_lock_adjust_status(true);
+        let dirty = idle_lock_adjust_status(360, true);
         assert_eq!(
             dirty,
             crate::ui::app::status_with_unsaved(clean.as_str(), true)
@@ -992,10 +1141,10 @@ mod tests {
 
         // The 3-6 fields really are seconds-based and keep their wording.
         assert_eq!(
-            seconds_adjust_status(false),
-            "秒数を変更しました（w: 保存 / d: 破棄）"
+            seconds_adjust_status(31, false),
+            "秒数を変更しました: 31秒（w: 保存 / d: 破棄）"
         );
-        assert!(!seconds_adjust_status(false).contains("分を変更"));
+        assert!(!seconds_adjust_status(31, false).contains("分を変更"));
     }
 
     #[::core::prelude::v1::test]
@@ -1004,7 +1153,7 @@ mod tests {
             let ctx = context(Screen::Unlocked, Panel::Settings, key);
             assert_eq!(classify_key(&ctx), UiAction::AdjustIdleLock(delta));
             assert!(
-                idle_lock_adjust_status(true).contains("分を変更しました"),
+                idle_lock_adjust_status(360, true).contains("分を変更しました"),
                 "{key} must report minutes, not seconds"
             );
         }
@@ -1012,12 +1161,19 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn threshold_adjust_status_reports_the_change_and_unsaved_marker() {
-        let clean = threshold_adjust_status(false);
-        assert_eq!(clean, "監査閾値を変更しました（w: 保存 / d: 破棄）");
+        let thresholds = crate::health::Thresholds {
+            weak_bits: 45,
+            stale_days: 395,
+        };
+        let clean = threshold_adjust_status(thresholds, false);
+        assert_eq!(
+            clean,
+            "監査閾値を変更しました: 弱パスワード < 45 bit / 更新が古い: 395 日以上（w: 保存 / d: 破棄）"
+        );
         assert!(!clean.contains("[未保存"), "{clean}");
 
         // The branch marks the settings dirty before writing the status.
-        let dirty = threshold_adjust_status(true);
+        let dirty = threshold_adjust_status(thresholds, true);
         assert_eq!(dirty, crate::ui::app::status_with_unsaved(&clean, true));
         assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
         assert!(dirty.contains("w: 保存 / d: 破棄"), "{dirty}");
@@ -1040,7 +1196,7 @@ mod tests {
 
         // At a bound the clamp returns the stored value unchanged, so the
         // dispatcher must skip both the "変更しました" status and the unsaved
-        // marker.
+        // marker; it reports the boundary instead.
         let idle_before = crate::limits::MIN_IDLE_LOCK_MINUTES * 60;
         let idle = Adjustment::new(idle_before, adjust_idle_lock(idle_before, -1));
         assert!(!idle.changed, "idle {idle_before} - 1 is clamped");
@@ -1801,12 +1957,135 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn generator_adjust_status_keeps_the_unsaved_marker() {
-        let clean = generator_adjust_status(false);
-        assert_eq!(clean, "生成設定を変更しました（w: 保存 / d: 破棄）");
+    fn generator_adjust_status_shows_the_new_value_and_unsaved_marker() {
+        let mut settings = crate::settings::Settings::default();
+        crate::ui::keys::apply_generator_key(&mut settings, GeneratorOption::LengthUp);
+        let value = generator_value_text(&settings, GeneratorOption::LengthUp);
+        assert_eq!(value, "パスワード 21 文字 / パスフレーズ 5 語");
+
+        let clean = generator_adjust_status(&value, false);
+        assert_eq!(
+            clean,
+            "生成設定を変更しました: パスワード 21 文字 / パスフレーズ 5 語（w: 保存 / d: 破棄）"
+        );
         assert!(!clean.contains("[未保存"), "{clean}");
-        let dirty = generator_adjust_status(true);
+        let dirty = generator_adjust_status(&value, true);
         assert_eq!(dirty, crate::ui::app::status_with_unsaved(&clean, true));
         assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn adjusted_values_are_included_in_time_and_threshold_statuses() {
+        assert!(seconds_adjust_status(1, false).contains("1秒"));
+        assert_ne!(
+            seconds_adjust_status(1, false),
+            seconds_adjust_status(2, false)
+        );
+        assert!(idle_lock_adjust_status(90, false).contains("1分30秒"));
+
+        let thresholds = crate::health::Thresholds {
+            weak_bits: 50,
+            stale_days: 400,
+        };
+        let status = threshold_adjust_status(thresholds, false);
+        assert!(status.contains("50 bit"), "{status}");
+        assert!(status.contains("400 日"), "{status}");
+        assert_ne!(
+            status,
+            threshold_adjust_status(
+                crate::health::Thresholds {
+                    weak_bits: 55,
+                    stale_days: 400
+                },
+                false
+            )
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_value_text_describes_each_option_after_the_change() {
+        let mut settings = crate::settings::Settings::default();
+        for (option, expected) in [
+            (GeneratorOption::Lowercase, "英小文字: 無効"),
+            (GeneratorOption::Uppercase, "英大文字: 無効"),
+            (GeneratorOption::Digits, "数字: 無効"),
+            (GeneratorOption::Symbols, "記号: 無効"),
+            (
+                GeneratorOption::AvoidAmbiguous,
+                "紛らわしい文字を除外: 有効",
+            ),
+            (GeneratorOption::Capitalize, "先頭大文字: 無効"),
+            (GeneratorOption::IncludeNumber, "数字を含める: 有効"),
+            (GeneratorOption::Separator, "区切り: ."),
+        ] {
+            crate::ui::keys::apply_generator_key(&mut settings, option);
+            assert_eq!(
+                generator_value_text(&settings, option),
+                expected,
+                "{option:?}"
+            );
+        }
+
+        settings.passphrase_generator.separator = String::new();
+        assert_eq!(
+            generator_value_text(&settings, GeneratorOption::Separator),
+            "区切り: (なし)"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn clamp_boundary_status_names_the_bound_and_keeps_the_marker() {
+        for (edge, named, other) in [
+            (ClampEdge::Upper, "上限", "下限"),
+            (ClampEdge::Lower, "下限", "上限"),
+        ] {
+            let clean = clamp_boundary_status("自動ロック", edge, false);
+            assert!(clean.contains(named), "{clean}");
+            assert!(!clean.contains(other), "{clean}");
+            assert!(!clean.contains("[未保存"), "{clean}");
+
+            let dirty = clamp_boundary_status("自動ロック", edge, true);
+            assert_eq!(dirty, crate::ui::app::status_with_unsaved(&clean, true));
+            assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+        }
+
+        assert_eq!(clamp_edge_for_delta(1), ClampEdge::Upper);
+        assert_eq!(clamp_edge_for_delta(-1), ClampEdge::Lower);
+        assert_eq!(
+            threshold_boundary_status(1, false),
+            clamp_boundary_status("監査閾値", ClampEdge::Upper, false)
+        );
+        assert_eq!(
+            idle_lock_boundary_status(-1, false),
+            clamp_boundary_status("自動ロック", ClampEdge::Lower, false)
+        );
+        assert_eq!(
+            seconds_boundary_status("復元", 1, false),
+            clamp_boundary_status("復元", ClampEdge::Upper, false)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn generator_clamp_edge_only_comes_from_the_length_keys() {
+        assert_eq!(
+            generator_clamp_edge(GeneratorOption::LengthUp),
+            Some(ClampEdge::Upper)
+        );
+        assert_eq!(
+            generator_clamp_edge(GeneratorOption::LengthDown),
+            Some(ClampEdge::Lower)
+        );
+        for option in [
+            GeneratorOption::Lowercase,
+            GeneratorOption::Uppercase,
+            GeneratorOption::Digits,
+            GeneratorOption::Symbols,
+            GeneratorOption::AvoidAmbiguous,
+            GeneratorOption::Capitalize,
+            GeneratorOption::IncludeNumber,
+            GeneratorOption::Separator,
+        ] {
+            assert_eq!(generator_clamp_edge(option), None, "{option:?}");
+        }
     }
 }

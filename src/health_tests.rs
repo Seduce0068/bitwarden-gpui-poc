@@ -2802,3 +2802,132 @@ fn whitespace_only_totp_field_counts_as_unset() {
     assert_eq!(report.logins, 2);
     assert_eq!(report.with_totp, 1);
 }
+
+#[test]
+fn cf_only_totp_field_counts_as_unset() {
+    // `has_totp_field` now shares the model's `is_visually_empty` rule: a field
+    // made only of Unicode Cf (with or without whitespace) renders nothing and
+    // carries no secret, so it must agree with `NoTotp` and `with_totp`.
+    for (index, blank) in [
+        "\u{200b}",
+        "\u{feff}\u{200d}",
+        " \u{200b}\t\u{2060} ",
+        "\u{ad}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let item = login(
+            &format!("cf-{index}"),
+            "Cf",
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://a.example",
+            blank,
+        );
+        assert!(!has_totp_field(&item), "{blank:?}");
+        assert!(!has_usable_totp(&item), "{blank:?}");
+        assert!(!crate::totp::is_valid_secret(blank), "{blank:?}");
+    }
+
+    // Controls: an undecryptable marker is still a present field (2FA is
+    // known to be configured), and a real base32 secret is present and usable.
+    let marked = login(
+        "marked",
+        "Marked",
+        "wU8$kRl3#aS0yM7&tD2!",
+        "https://b.example",
+        UNDECRYPTABLE_TOTP,
+    );
+    assert!(has_totp_field(&marked));
+    assert!(!has_usable_totp(&marked));
+    let good = login(
+        "good",
+        "Good",
+        "tQ8#wLr1!eZ5vKp3$sM7@",
+        "https://c.example",
+        "GEZDGNBVGY3TQOJQ",
+    );
+    assert!(has_totp_field(&good));
+    assert!(has_usable_totp(&good));
+
+    let report = report_of(vec![
+        login(
+            "cf",
+            "Cf",
+            "vT7#kQm2!zR9wP4$xL8@",
+            "https://d.example",
+            "\u{200b} \u{200d}",
+        ),
+        good,
+    ]);
+    let cf = report
+        .items
+        .iter()
+        .find(|item| item.id == "cf")
+        .expect("the Cf-only login must be reported");
+    assert!(cf.findings.contains(&Finding::NoTotp), "{cf:?}");
+    assert!(!cf.findings.contains(&Finding::TotpUninspectable), "{cf:?}");
+    assert_eq!(report.logins, 2);
+    assert_eq!(report.with_totp, 1);
+}
+
+#[test]
+fn steam_and_otpauth_secrets_count_toward_audit_coverage() {
+    // The audit counts a login as configured when `is_valid_secret` accepts
+    // its field. openwarden supports `steam://`, `otpauth://` and bare base32;
+    // cover the two URI forms here so coverage cannot silently shrink to the
+    // bare form only.
+    const STEAM: &str = "steam://GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const OTPAUTH: &str =
+        "otpauth://totp/Example:alice@example.com?secret=GEZDGNBVGY3TQOJQ&issuer=Example";
+
+    let steam = login(
+        "steam",
+        "Steam",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        STEAM,
+    );
+    let otpauth = login(
+        "otpauth",
+        "Otpauth",
+        "wU8$kRl3#aS0yM7&tD2!",
+        "https://b.example",
+        OTPAUTH,
+    );
+    let missing = login(
+        "missing",
+        "Missing",
+        "tQ8#wLr1!eZ5vKp3$sM7@",
+        "https://c.example",
+        "",
+    );
+
+    assert!(crate::totp::is_valid_secret(STEAM));
+    assert!(crate::totp::is_valid_secret(OTPAUTH));
+    assert!(has_totp_field(&steam));
+    assert!(has_totp_field(&otpauth));
+    assert!(has_usable_totp(&steam));
+    assert!(has_usable_totp(&otpauth));
+
+    let report = report_of(vec![steam, otpauth, missing]);
+    assert_eq!(report.logins, 3);
+    assert_eq!(report.with_totp, 2);
+    assert!((report.totp_coverage() - 2.0 / 3.0).abs() < 1e-6);
+    for id in ["steam", "otpauth"] {
+        assert!(
+            !report.items.iter().any(|item| item.id == id),
+            "a login with a usable {id} secret must be clean: {:?}",
+            report.items
+        );
+    }
+    let missing_report = report
+        .items
+        .iter()
+        .find(|item| item.id == "missing")
+        .expect("the unset login must be reported");
+    assert!(
+        missing_report.findings.contains(&Finding::NoTotp),
+        "{missing_report:?}"
+    );
+}
