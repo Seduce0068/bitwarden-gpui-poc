@@ -436,8 +436,10 @@ pub fn clamp_auth_config(config: &mut AuthConfig) {
 /// let them through for credentials even though [`valid_email`] rejects them.
 /// One visible character makes the field present. All three credential fields
 /// (`client_id`, `client_secret`, `master_password`) share this rule so they
-/// cannot disagree about what "missing" means.
-fn credential_is_blank(value: &str) -> bool {
+/// cannot disagree about what "missing" means. Crate-visible so the model's
+/// `is_visually_empty` can be compared with it directly in a test rather than
+/// only through `validate_config`.
+pub(crate) fn credential_is_blank(value: &str) -> bool {
     value
         .chars()
         .all(|ch| ch.is_whitespace() || ch.is_control() || is_format_character(ch))

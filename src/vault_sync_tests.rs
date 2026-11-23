@@ -3260,3 +3260,36 @@ fn revision_dates_reject_fullwidth_digits() {
         assert_eq!(parse_revision(Some(value)), None, "{value}");
     }
 }
+
+#[test]
+fn missing_password_field_imports_an_empty_password_audited_as_weak() {
+    // `openwarden::Vault::password` returns `Ok(None)` for a login with no
+    // password field; `login_item` maps that arm to an empty password
+    // (vault_sync.rs:470-477) instead of an undecryptable marker. The health
+    // audit scores the empty password with zero bits, i.e. as a weak password,
+    // and must not count it as uninspectable (health.rs:810-828).
+    let id = "no-password";
+    let vault = unlocked_vault(&[cipher(id, "2024-01-01T00:00:00Z")]);
+    let model = import_logins(&vault).expect("a login without a password must import");
+    let item = model.item(id).expect("the imported login");
+    assert_eq!(item.password(), Some(""));
+    assert!(!is_undecryptable_password(item.password().unwrap()));
+
+    let report = crate::health::audit(
+        &model,
+        crate::health::Thresholds::default(),
+        i64::try_from(TOTP_AT).unwrap(),
+    );
+    let entry = report
+        .items
+        .iter()
+        .find(|entry| entry.id == id)
+        .expect("the login must appear in the report");
+    assert!(entry
+        .findings
+        .contains(&crate::health::Finding::WeakPassword { bits: 0 }));
+    assert!(!entry
+        .findings
+        .contains(&crate::health::Finding::PasswordUninspectable));
+    assert_eq!(report.password_uninspectable(), 0);
+}

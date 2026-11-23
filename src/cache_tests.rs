@@ -1424,6 +1424,41 @@ fn group_or_world_access_is_refused_on_read() {
 
 #[cfg(unix)]
 #[test]
+fn special_mode_bits_do_not_change_the_permission_verdict() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // The read-side gate masks only `0o066` (cache.rs:1040-1049), so setuid,
+    // setgid and sticky bits are deliberately ignored: an owner-only file that
+    // carries any of them stays readable. The same bits combined with a
+    // group/other bit are still refused.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("special-bits.json");
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&path, &cache).unwrap();
+
+    for mode in [0o4600u32, 0o2600, 0o1600, 0o6600] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        let applied = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(
+            applied & 0o7000,
+            mode & 0o7000,
+            "mode {mode:04o} was not applied"
+        );
+        assert_eq!(load_detailed(&path).unwrap(), cache, "mode {mode:04o}");
+    }
+
+    for mode in [0o4660u32, 0o2660, 0o1604] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        let error = load_detailed(&path).unwrap_err();
+        assert!(
+            matches!(&error, CacheLoadError::ReadFailedCause(_)),
+            "mode {mode:04o} must still be refused: {error:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn oversized_world_readable_file_keeps_its_size_classification() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -4409,5 +4444,29 @@ fn query_delimiter_without_an_assignment_is_still_in_query() {
     ));
     for url in ["https://host#frag@x", "https://host:8443#frag@x"] {
         assert_eq!(super::mask_url_userinfo(url), url, "{url}");
+    }
+}
+
+#[test]
+fn from_body_stores_empty_and_malformed_server_urls_verbatim() {
+    // `SyncCache::from_body` (cache.rs:793-808) copies `server_url` verbatim: it
+    // validates neither syntax nor the SSRF policy. An empty or malformed URL
+    // is therefore a stored-value property, not a constructor error, and
+    // `validate` keeps comparing it byte-for-byte (cache.rs:1256-1268).
+    for url in [
+        "",
+        "   ",
+        "not a url",
+        "http://169.254.169.254",
+        "ftp://vault.example.com",
+    ] {
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        assert_eq!(cache.server_url, url, "the URL must not be rewritten");
+        assert!(cache.sync().is_ok());
+        assert_eq!(validate(&cache, "user-1", url), Ok(()));
+        assert_eq!(
+            validate(&cache, "user-1", "https://other.example.com"),
+            Err(SyncCacheError::ServerMismatch)
+        );
     }
 }

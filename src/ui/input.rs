@@ -77,6 +77,24 @@ pub(super) fn edge_move_delta(
     Some(target as isize - index.min(last) as isize)
 }
 
+/// Base text of the status written when an edge key is pressed on an empty list.
+///
+/// [`edge_move_delta`] returns `None` for a zero-length list, so the dispatcher
+/// has no selection to move. Without an explicit status the whole keypress was
+/// silently dropped and looked dead to keyboard users. The wording names the
+/// missing rows rather than pretending a move happened, and mirrors the other
+/// transient statuses by preserving the persistent unsaved marker.
+pub(super) const NO_ROWS_MESSAGE: &str = "行がありません（移動できません）";
+
+/// Status for a `Home`/`End` press on an empty list.
+///
+/// Kept pure so the wording and the unsaved-marker contract can be tested
+/// without a GPUI window. Both the vault and the audit branch of
+/// `move_selection_to_edge` use it whenever [`edge_move_delta`] yields `None`.
+pub(super) fn no_rows_status(dirty: bool) -> String {
+    crate::ui::app::status_with_unsaved(NO_ROWS_MESSAGE, dirty)
+}
+
 /// View-level effect of the `CycleSort` action.
 ///
 /// Factored out of `apply_action` so the selection-drop and scroll-rewind
@@ -146,24 +164,27 @@ pub(super) fn auth_edit_finished_status(dirty: bool) -> String {
     text_edit_finished_status(crate::ui::logic::auth_hint(false), dirty)
 }
 
-/// Normal vault status restored by `FinishSearch`.
+/// Count-only vault status restored after a confirmed search.
 ///
 /// Confirming a search clears the selection and rewinds the list (see
 /// `VaultViewState::finish_search`), so the restored status matches the detail
 /// line's "nothing selected" state instead of claiming a selection survives.
 /// With zero matches that generic prompt would point at a row that does not
 /// exist, so the confirmed result count selects a dedicated message instead.
-/// The query is *kept*, and the vault panel still binds `Backspace` and typed
-/// text to re-edit it, so the status also names those keys (see
-/// [`crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT`]).
 ///
-/// This count-only form keeps the hinted wording for callers that cannot see
-/// the query (for example `ui::app::panel_transition_status_after_edit`).
-/// Callers that own a `VaultViewState` must use
-/// [`search_finished_status_for_view`] so an emptied query does not keep
-/// pointing at re-edit keys that are no longer bound to it.
+/// This form is for callers that only know the result count (for example
+/// `ui::app::panel_transition_status_after_edit`). The count alone cannot tell
+/// whether a confirmed query still exists: once Backspace removes its last
+/// character the re-edit keys are no longer bound, so a count-only caller must
+/// not advertise [`crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT`]. Callers that
+/// own a `VaultViewState` use [`search_finished_status_for_view`], the single
+/// view-derived composer that adds the hint only while the query is non-empty.
+///
+/// Kept as the count-only entry point for cross-module callers; the allowance
+/// covers a future caller switching to the view-derived form entirely.
+#[allow(dead_code)]
 pub(super) fn search_finished_status(result_count: usize, dirty: bool) -> String {
-    search_finished_status_with_query(true, result_count, dirty)
+    search_finished_status_with_query(false, result_count, dirty)
 }
 
 /// Query-aware form of [`search_finished_status`].
@@ -575,6 +596,12 @@ impl BitwardenApp {
         if let Some(delta) = delta {
             self.move_selection(delta, cx);
             self.report_keyboard_selection(cx);
+        } else {
+            // `edge_move_delta` only returns `None` for a zero-length list.
+            // Moving is impossible there, but a keypress must still produce
+            // feedback; otherwise Home/End are the only silent list keys.
+            self.status = no_rows_status(self.settings_dirty);
+            cx.notify();
         }
     }
 
@@ -1314,7 +1341,7 @@ mod tests {
             assert!(!auth.contains("入力中"), "{auth}");
             assert!(auth.contains("F1: フォーカス復帰"), "{auth}");
 
-            let search = search_finished_status(3, dirty);
+            let search = search_finished_status_with_query(true, 3, dirty);
             assert_eq!(
                 search,
                 crate::ui::app::status_with_unsaved(
@@ -1335,7 +1362,7 @@ mod tests {
 
             // A confirmed search with no matches must not ask the user to
             // select a row: the dedicated message keeps the unsaved marker.
-            let empty = search_finished_status(0, dirty);
+            let empty = search_finished_status_with_query(true, 0, dirty);
             assert_eq!(
                 empty,
                 crate::ui::app::status_with_unsaved(
@@ -1362,7 +1389,7 @@ mod tests {
 
         for count in [0, 1, 7] {
             for dirty in [false, true] {
-                let status = search_finished_status(count, dirty);
+                let status = search_finished_status_with_query(true, count, dirty);
                 assert!(
                     status.contains(hint),
                     "count {count}, dirty {dirty}: {status}"
@@ -1403,6 +1430,32 @@ mod tests {
                     without_query.contains("[未保存の設定変更があります]"),
                     dirty,
                     "{without_query}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn count_only_search_status_never_claims_a_reedit_query() {
+        // `panel_transition_status_after_edit` only knows the visible count,
+        // so it calls this count-only wrapper. It must not hard-code "a query
+        // exists": an emptied query no longer binds Backspace/typed text to
+        // re-editing, and the old wrapper kept advertising those keys.
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+        for count in [0, 2] {
+            for dirty in [false, true] {
+                let status = search_finished_status(count, dirty);
+                assert_eq!(
+                    status,
+                    crate::ui::app::status_with_unsaved(
+                        &crate::ui::logic::no_selection_status_for_count(count),
+                        dirty
+                    ),
+                    "count {count}, dirty {dirty}"
+                );
+                assert!(
+                    !status.contains(hint),
+                    "a count-only caller cannot promise re-edit keys: {status}"
                 );
             }
         }
@@ -1508,7 +1561,7 @@ mod tests {
         assert!(!view.searching, "a row click confirms the search");
         assert_eq!(view.query, "Beta", "confirming keeps the query");
         assert_eq!(view.rewind_calls, before + 1);
-        assert_eq!(status, search_finished_status(1, false));
+        assert_eq!(status, search_finished_status_for_view(&view, false));
         assert!(!status.contains("入力中"), "{status}");
 
         // A click that leaves zero matches must show the dedicated message.
@@ -1516,13 +1569,13 @@ mod tests {
         empty.start_search();
         empty.push_query("missing");
         let empty_status = finish_search_from_row_click(&mut empty, false);
-        assert_eq!(empty_status, search_finished_status(0, false));
+        assert_eq!(empty_status, search_finished_status_for_view(&empty, false));
         assert!(empty_status.contains("0件"), "{empty_status}");
         assert!(!empty_status.contains("入力中"), "{empty_status}");
 
         // The unsaved marker survives the confirmation.
         let dirty_status = finish_search_from_row_click(&mut view, true);
-        assert_eq!(dirty_status, search_finished_status(1, true));
+        assert_eq!(dirty_status, search_finished_status_for_view(&view, true));
         assert!(dirty_status.contains("[未保存の設定変更があります]"));
     }
 
@@ -1627,7 +1680,9 @@ mod tests {
         // A plain click that misses changes nothing, so no status is installed.
         assert_eq!(row_click_status(&view, false, None, false), None);
         // While searching, a missed click still keeps the count-based status.
-        let confirmed = Some(search_finished_status(view.visible_items().len(), false));
+        // The real panel path derives the status from the view, not from a
+        // count-only wrapper that would advertise re-edit keys for no query.
+        let confirmed = Some(search_finished_status_for_view(&view, false));
         assert_eq!(
             row_click_status(&view, false, confirmed.clone(), false),
             confirmed
@@ -1840,7 +1895,7 @@ mod tests {
         let still_empty = backspace_confirmed_query(&mut view, false);
         assert_eq!(view.query, "Z");
         assert_eq!(view.visible_items().len(), 0);
-        assert_eq!(still_empty, search_finished_status(0, false));
+        assert_eq!(still_empty, search_finished_status_for_view(&view, false));
         assert_eq!(
             still_empty,
             crate::ui::app::status_with_unsaved(
@@ -1874,7 +1929,7 @@ mod tests {
         // The unsaved marker is preserved in both count branches.
         view.push_query("Zq");
         let dirty_empty = backspace_confirmed_query(&mut view, true);
-        assert_eq!(dirty_empty, search_finished_status(0, true));
+        assert_eq!(dirty_empty, search_finished_status_for_view(&view, true));
         assert!(dirty_empty.contains("[未保存の設定変更があります]"));
         let dirty_found = backspace_confirmed_query(&mut view, true);
         assert_eq!(
@@ -1926,7 +1981,7 @@ mod tests {
         assert_eq!(view.query, "Zqx");
         assert!(!view.searching);
         assert_eq!(view.visible_items().len(), 0);
-        assert_eq!(still_empty, search_finished_status(0, false));
+        assert_eq!(still_empty, search_finished_status_for_view(&view, false));
         assert_eq!(
             still_empty,
             crate::ui::app::status_with_unsaved(
@@ -1951,11 +2006,11 @@ mod tests {
         let status = insert_confirmed_query(&mut found, "a", false);
         assert_eq!(found.query, "Beta");
         assert_eq!(found.visible_items().len(), 1);
-        assert_eq!(status, search_finished_status(1, false));
+        assert_eq!(status, search_finished_status_for_view(&found, false));
         assert!(!status.contains("0件"), "{status}");
 
         let dirty_empty = insert_confirmed_query(&mut view, "y", true);
-        assert_eq!(dirty_empty, search_finished_status(0, true));
+        assert_eq!(dirty_empty, search_finished_status_for_view(&view, true));
         assert!(dirty_empty.contains("[未保存の設定変更があります]"));
     }
 
@@ -2026,6 +2081,42 @@ mod tests {
         assert_eq!(edge_move_delta(Some(1), 5, SelectionEdge::Last), Some(3));
         assert_eq!(edge_move_delta(Some(3), 5, SelectionEdge::Last), Some(1));
         assert_eq!(edge_move_delta(Some(99), 5, SelectionEdge::Last), Some(0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn empty_list_edge_keys_report_no_rows_instead_of_doing_nothing() {
+        // `edge_move_delta` is the whole input to the dispatcher's empty
+        // branch: every zero-length list (vault or audit, selected or not)
+        // yields `None`, which is exactly the case that used to be silent.
+        for edge in [SelectionEdge::First, SelectionEdge::Last] {
+            for current in [None, Some(0), Some(9)] {
+                assert_eq!(
+                    edge_move_delta(current, 0, edge),
+                    None,
+                    "no edge can be reached in an empty list: {edge:?}/{current:?}"
+                );
+            }
+        }
+
+        // The status installed by that branch names the missing rows instead
+        // of claiming a move, and behaves like every other transient status.
+        let clean = no_rows_status(false);
+        assert_eq!(clean, NO_ROWS_MESSAGE);
+        assert!(clean.contains("行がありません"), "{clean}");
+        assert!(!clean.contains("[未保存"), "{clean}");
+
+        for dirty in [false, true] {
+            let status = no_rows_status(dirty);
+            assert_eq!(
+                status,
+                crate::ui::app::status_with_unsaved(NO_ROWS_MESSAGE, dirty)
+            );
+            assert_eq!(
+                status.contains("[未保存の設定変更があります]"),
+                dirty,
+                "{status}"
+            );
+        }
     }
 
     #[::core::prelude::v1::test]

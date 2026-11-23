@@ -4559,3 +4559,75 @@ fn invisible_only_email_is_an_invalid_email_not_a_missing_field() {
         assert_eq!(validate_config(&url), Err(AuthError::InvalidServerUrl));
     }
 }
+
+#[test]
+fn default_kdf_policy_accepts_a_valid_pbkdf2_and_argon2id_derive() {
+    // `authenticate_inner` uses `KdfPolicy::default()` (auth.rs:1199). The two
+    // sibling success tests lower the policy minimums to keep derivation cheap,
+    // so neither pins the real default: exercise it here at its lowest accepted
+    // parameter set (openwarden-0.1.1/src/kdf.rs:99-110).
+    let policy = KdfPolicy::default();
+    let password = SecretString::from("correct horse".to_string());
+    let email = "alice@example.com";
+
+    let pbkdf2 = Kdf::Pbkdf2 {
+        iterations: policy.pbkdf2_min_iterations,
+    };
+    policy
+        .check(&pbkdf2)
+        .expect("the default policy must accept its own PBKDF2 minimum");
+    let from_pbkdf2 = MasterKey::derive(&password, email, &pbkdf2, &policy)
+        .expect("a default-policy PBKDF2 KDF must derive");
+
+    let argon2id = Kdf::Argon2id {
+        iterations: policy.argon2_min_iterations,
+        memory_mib: policy.argon2_min_memory_mib,
+        parallelism: 1,
+    };
+    policy
+        .check(&argon2id)
+        .expect("the default policy must accept its own Argon2id minimum");
+    let from_argon2id = MasterKey::derive(&password, email, &argon2id, &policy)
+        .expect("a default-policy Argon2id KDF must derive");
+
+    // Both arms produce real, distinct keys; a constant stub would fail this.
+    assert_ne!(
+        from_pbkdf2.password_hash(&password).expose_secret(),
+        from_argon2id.password_hash(&password).expose_secret()
+    );
+    assert_eq!(
+        from_pbkdf2.password_hash(&password).expose_secret(),
+        MasterKey::derive(&password, email, &pbkdf2, &policy)
+            .expect("the same PBKDF2 inputs must derive again")
+            .password_hash(&password)
+            .expose_secret(),
+        "the PBKDF2 derive must be deterministic under the default policy"
+    );
+}
+
+#[test]
+fn blocked_server_url_is_returned_by_authenticate_with_timeout() {
+    // `authenticate_with_timeout` validates the clamped copy before starting
+    // the watchdog race (auth.rs:1000-1005), so a link-local URL fails
+    // deterministically: no DNS lookup, no network and no timeout wait.
+    let mut blocked = config();
+    blocked.server_url = "http://169.254.169.254".into();
+    assert_eq!(validate_config(&blocked), Err(AuthError::BlockedServerUrl));
+
+    let error = smol::block_on(authenticate_with_timeout(
+        &blocked,
+        "device",
+        std::time::Duration::ZERO,
+    ))
+    .err();
+    assert_eq!(error.as_ref(), Some(&AuthError::BlockedServerUrl));
+    // Even with a zero-length budget the validation failure wins the race: a
+    // blocked URL must not be misreported as a timeout.
+    assert_ne!(error.as_ref(), Some(&AuthError::Timeout));
+    assert_eq!(
+        error
+            .expect("the blocked URL must carry an error")
+            .message(),
+        "サーバー URL が link-local アドレスを指しています"
+    );
+}

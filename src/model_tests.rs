@@ -4059,3 +4059,82 @@ fn mark_only_queries_match_nothing_under_the_duplicate_name_rule() {
     assert!(!has_no_visible_identity("Caf\u{e9}"));
     assert!(vault.duplicate_names().is_empty());
 }
+
+#[test]
+fn plain_query_finds_a_saved_name_with_surrounding_whitespace() {
+    // `comparison_key` trims only the edges (model.rs:92-103), so a stored name
+    // padded with whitespace still has the same key as its bare spelling and an
+    // ordinary plaintext query finds it through both public search paths.
+    let spaced = login(
+        "spaced",
+        " \t Work Mail \n",
+        "alice",
+        "pw",
+        "https://one.example",
+    );
+    let bare = login("bare", "Work Mail", "bob", "pw", "https://two.example");
+    let vault = Vault {
+        items: vec![spaced, bare],
+        folders: Vec::new(),
+    };
+    assert_eq!(comparison_key(" \t Work Mail \n"), "work mail");
+    assert_eq!(comparison_key("Work Mail"), "work mail");
+
+    for query in [
+        "Work Mail",
+        "work mail",
+        "WORK MAIL",
+        "  work mail  ",
+        "Mail",
+    ] {
+        assert_eq!(
+            vault.view(&Filter::All, query, SortKey::NameAsc).len(),
+            2,
+            "query {query:?}"
+        );
+        for item in &vault.items {
+            assert!(
+                item.matches_query(query),
+                "item {} missed by query {query:?}",
+                item.id
+            );
+        }
+    }
+    // Internal whitespace is part of the key, not a separator to ignore.
+    assert!(!vault.items[0].matches_query("workmail"));
+    assert!(vault
+        .view(&Filter::All, "workmail", SortKey::NameAsc)
+        .is_empty());
+}
+
+#[test]
+fn is_visually_empty_and_auth_credential_is_blank_agree_on_real_values() {
+    // The two rules are meant to be identical (model.rs:118-122 and
+    // auth.rs:440-444). Call both real functions on the same inputs instead of
+    // comparing their source, so a future divergence fails here.
+    for value in [
+        "",
+        " ",
+        " \t\n\u{3000}",
+        "\u{200b}",
+        "\u{feff}",
+        "\u{ad}\u{feff}",
+        "\u{0}",
+        "\u{1f}",
+        "\u{7f}",
+        "\u{80}",
+        "\u{9f}",
+        " \u{200b}\u{0}\t",
+        "\u{0301}",
+        "GitHub",
+        " a ",
+        "a\u{200b}b",
+        "\u{200b}p",
+    ] {
+        assert_eq!(
+            super::is_visually_empty(value),
+            crate::auth::credential_is_blank(value),
+            "blank rules disagree for {value:?}"
+        );
+    }
+}
