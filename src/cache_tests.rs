@@ -379,6 +379,47 @@ fn mask_url_userinfo_handles_missing_userinfo_scheme_and_query_at_signs() {
 }
 
 #[test]
+fn scheme_less_nested_ipv6_authority_userinfo_is_masked() {
+    // A decoded nested value can be a scheme-less authority whose host is a
+    // bracketed IPv6 literal. `authority_start` must skip the leading `/` (or
+    // `//`) instead of treating it as the end of the authority, and the colons
+    // inside `[::1]` must not look like a `user:password` marker or a port
+    // (cache.rs:120-146, 274-330, 376-411).
+    for (url, expected) in [
+        (
+            "/user:SECRET@[::1]:8443/path",
+            "/[redacted]@[::1]:8443/path",
+        ),
+        (
+            "//user:SECRET@[2001:db8::1]/path",
+            "//[redacted]@[2001:db8::1]/path",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        assert!(!super::mask_url_secrets(url).contains("SECRET"), "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains("SECRET"), "{rendered}");
+        assert!(rendered.contains("[redacted]@["), "{rendered}");
+        // Debug masking never rewrites the stored value used by the mismatch
+        // check.
+        assert_eq!(cache.server_url, url);
+    }
+
+    // The same scheme-less IPv6 authority nested in a harmless query value is
+    // masked recursively, while the surrounding key and URL stay traceable.
+    let nested = "https://vault.example.com/?next=/user:NESTED@[::1]/p";
+    assert_eq!(
+        super::mask_url_secrets(nested),
+        "https://vault.example.com/?next=/[redacted]@[::1]/p"
+    );
+    let cache = SyncCache::from_body(body(), nested).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("NESTED"), "{rendered}");
+    assert_eq!(cache.server_url, nested);
+}
+
+#[test]
 fn sensitive_param_keys_cover_pass_pwd_pw_and_credential() {
     // A bare `pass`/`pwd`/`pw`/`credential` key is just as secret as
     // `password`/`api_key`; the case-insensitive substring match must catch

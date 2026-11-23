@@ -153,9 +153,16 @@ pub(super) fn auth_edit_finished_status(dirty: bool) -> String {
 /// line's "nothing selected" state instead of claiming a selection survives.
 /// With zero matches that generic prompt would point at a row that does not
 /// exist, so the confirmed result count selects a dedicated message instead.
+/// The query is *kept*, and the vault panel still binds `Backspace` and typed
+/// text to re-edit it, so the status also names those keys (see
+/// [`crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT`]).
 pub(super) fn search_finished_status(result_count: usize, dirty: bool) -> String {
     text_edit_finished_status(
-        &crate::ui::logic::no_selection_status_for_count(result_count),
+        &format!(
+            "{} / {}",
+            crate::ui::logic::no_selection_status_for_count(result_count),
+            crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+        ),
         dirty,
     )
 }
@@ -1279,7 +1286,11 @@ mod tests {
             assert_eq!(
                 search,
                 crate::ui::app::status_with_unsaved(
-                    &crate::ui::logic::no_selection_status_for_count(3),
+                    &format!(
+                        "{} / {}",
+                        crate::ui::logic::no_selection_status_for_count(3),
+                        crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+                    ),
                     dirty
                 )
             );
@@ -1296,11 +1307,45 @@ mod tests {
             assert_eq!(
                 empty,
                 crate::ui::app::status_with_unsaved(
-                    crate::ui::logic::NO_SEARCH_RESULTS_STATUS,
+                    &format!(
+                        "{} / {}",
+                        crate::ui::logic::NO_SEARCH_RESULTS_STATUS,
+                        crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+                    ),
                     dirty
                 )
             );
             assert!(!empty.contains("項目を選択してください"), "{empty}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn confirmed_search_status_guides_the_requery_keys() {
+        // Enter/Escape keep the query, and the vault panel rebinds Backspace
+        // and typed text to edit it. The restored status must say so for both
+        // the "select a row" and the "no matches" cases, clean or dirty.
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+        assert!(hint.contains("Backspace"));
+        assert!(hint.contains("文字入力"));
+
+        for count in [0, 1, 7] {
+            for dirty in [false, true] {
+                let status = search_finished_status(count, dirty);
+                assert!(
+                    status.contains(hint),
+                    "count {count}, dirty {dirty}: {status}"
+                );
+                assert!(
+                    status
+                        .contains(crate::ui::logic::no_selection_status_for_count(count).as_str()),
+                    "count {count}, dirty {dirty}: {status}"
+                );
+                assert_eq!(
+                    status.contains("[未保存の設定変更があります]"),
+                    dirty,
+                    "{status}"
+                );
+            }
         }
     }
 
@@ -1379,7 +1424,17 @@ mod tests {
         // This is the ordering of `UiAction::SelectRow`: confirm the search,
         // then select the clicked row, then compose the status from the view.
         let stale = finish_search_from_row_click(&mut view, false);
-        assert_eq!(stale, crate::ui::logic::no_selection_status());
+        assert_eq!(
+            stale,
+            crate::ui::app::status_with_unsaved(
+                &format!(
+                    "{} / {}",
+                    crate::ui::logic::no_selection_status(),
+                    crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+                ),
+                false
+            )
+        );
         assert!(view.select_index(0));
         let status = selected_row_click_status(&view, false);
 
@@ -1639,7 +1694,17 @@ mod tests {
         assert_eq!(view.visible_items().len(), 0, "precondition: no matches");
         let confirmed = finish_search_from_row_click(&mut view, false);
         assert!(!view.searching);
-        assert_eq!(confirmed, crate::ui::logic::NO_SEARCH_RESULTS_STATUS);
+        assert_eq!(
+            confirmed,
+            crate::ui::app::status_with_unsaved(
+                &format!(
+                    "{} / {}",
+                    crate::ui::logic::NO_SEARCH_RESULTS_STATUS,
+                    crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+                ),
+                false
+            )
+        );
 
         // One backspace leaves "Z": still zero matches, so the "0件" text is
         // recomputed rather than left stale from the confirmation.
@@ -1648,7 +1713,17 @@ mod tests {
         assert_eq!(view.query, "Z");
         assert_eq!(view.visible_items().len(), 0);
         assert_eq!(still_empty, search_finished_status(0, false));
-        assert_eq!(still_empty, crate::ui::logic::NO_SEARCH_RESULTS_STATUS);
+        assert_eq!(
+            still_empty,
+            crate::ui::app::status_with_unsaved(
+                &format!(
+                    "{} / {}",
+                    crate::ui::logic::NO_SEARCH_RESULTS_STATUS,
+                    crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+                ),
+                false
+            )
+        );
         assert_eq!(view.rewind_calls, before + 1, "each backspace rewinds");
 
         // The next backspace empties the query: the generic selection prompt
@@ -1657,7 +1732,17 @@ mod tests {
         assert_eq!(view.query, "");
         assert_eq!(view.visible_items().len(), 2);
         assert_eq!(status, search_finished_status(2, false));
-        assert_eq!(status, crate::ui::logic::no_selection_status());
+        assert_eq!(
+            status,
+            crate::ui::app::status_with_unsaved(
+                &format!(
+                    "{} / {}",
+                    crate::ui::logic::no_selection_status(),
+                    crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+                ),
+                false
+            )
+        );
         assert!(!status.contains("0件"), "{status}");
 
         // The unsaved marker is preserved in both count branches.
@@ -1692,7 +1777,17 @@ mod tests {
         view.push_query("Zq");
         let confirmed = finish_search_from_row_click(&mut view, false);
         assert!(!view.searching);
-        assert_eq!(confirmed, crate::ui::logic::NO_SEARCH_RESULTS_STATUS);
+        assert_eq!(
+            confirmed,
+            crate::ui::app::status_with_unsaved(
+                &format!(
+                    "{} / {}",
+                    crate::ui::logic::NO_SEARCH_RESULTS_STATUS,
+                    crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+                ),
+                false
+            )
+        );
 
         // Appending text refines the confirmed query without re-entering
         // search mode (so `/` can still start a fresh search later).
@@ -1702,7 +1797,17 @@ mod tests {
         assert!(!view.searching);
         assert_eq!(view.visible_items().len(), 0);
         assert_eq!(still_empty, search_finished_status(0, false));
-        assert_eq!(still_empty, crate::ui::logic::NO_SEARCH_RESULTS_STATUS);
+        assert_eq!(
+            still_empty,
+            crate::ui::app::status_with_unsaved(
+                &format!(
+                    "{} / {}",
+                    crate::ui::logic::NO_SEARCH_RESULTS_STATUS,
+                    crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT
+                ),
+                false
+            )
+        );
         assert_eq!(view.rewind_calls, before + 1, "each query edit rewinds");
 
         // Once the refined query matches, the "0件" message is replaced and

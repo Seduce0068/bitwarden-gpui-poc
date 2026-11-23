@@ -949,6 +949,19 @@ mod tests {
     }
 
     #[test]
+    fn start_search_keeps_the_filter_and_sort_selection() {
+        let mut state = state_with_items();
+        state.filter = crate::model::Filter::Favorites;
+        state.sort = crate::model::SortKey::NameDesc;
+        state.query = "old".into();
+        state.start_search();
+        assert_eq!(state.filter, crate::model::Filter::Favorites);
+        assert_eq!(state.sort, crate::model::SortKey::NameDesc);
+        assert!(state.searching);
+        assert_eq!(state.query, "");
+    }
+
+    #[test]
     fn search_editing_updates_query_and_selection() {
         let mut state = state_with_items();
         state.selected_id = Some("a".into());

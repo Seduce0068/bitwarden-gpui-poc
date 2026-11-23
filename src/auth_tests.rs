@@ -360,6 +360,110 @@ fn whitespace_only_secrets_are_rejected() {
 }
 
 #[test]
+fn invisible_only_credentials_are_rejected_symmetrically() {
+    // `master_password` used to be checked with only `trim().is_empty()`, so a
+    // paste artifact made of Unicode Cf characters passed validation while the
+    // same value in `client_id` / `client_secret` was reported as missing. All
+    // three fields now share `credential_is_blank` (auth.rs:434-438).
+    for invisible in ["\u{200b}", "\u{200d}\u{2060}", "\u{ad}\u{feff}"] {
+        let mut value = config();
+        value.client_id = invisible.to_string();
+        assert_eq!(
+            validate_config(&value),
+            Err(AuthError::MissingField("client_id")),
+            "{invisible:?}"
+        );
+
+        let mut value = config();
+        value.client_secret = SecretString::from(invisible.to_string());
+        assert_eq!(
+            validate_config(&value),
+            Err(AuthError::MissingField("client_secret")),
+            "{invisible:?}"
+        );
+
+        let mut value = config();
+        value.master_password = SecretString::from(invisible.to_string());
+        assert_eq!(
+            validate_config(&value),
+            Err(AuthError::MissingField("master_password")),
+            "{invisible:?}"
+        );
+    }
+    // A single visible character next to an invisible one makes the field
+    // present on every path, so the blank rule does not reject real input.
+    let mut value = config();
+    value.master_password = SecretString::from("\u{200b}p".to_string());
+    assert_eq!(validate_config(&value), Ok(()));
+}
+
+#[test]
+fn control_character_only_credentials_are_rejected_as_blank() {
+    // Cc is not whitespace, so `trim()` alone let NUL / DEL / C1 controls
+    // through. `credential_is_blank` now treats them like whitespace for every
+    // credential field, matching the email guard's Cc rejection.
+    for control in ['\u{0}', '\u{1}', '\u{1f}', '\u{7f}', '\u{80}', '\u{9f}'] {
+        let invisible = control.to_string();
+
+        let mut value = config();
+        value.client_id = invisible.clone();
+        assert_eq!(
+            validate_config(&value),
+            Err(AuthError::MissingField("client_id")),
+            "U+{:04X}",
+            control as u32
+        );
+
+        let mut value = config();
+        value.client_secret = SecretString::from(invisible.clone());
+        assert_eq!(
+            validate_config(&value),
+            Err(AuthError::MissingField("client_secret")),
+            "U+{:04X}",
+            control as u32
+        );
+
+        let mut value = config();
+        value.master_password = SecretString::from(invisible);
+        assert_eq!(
+            validate_config(&value),
+            Err(AuthError::MissingField("master_password")),
+            "U+{:04X}",
+            control as u32
+        );
+    }
+}
+
+#[test]
+fn master_password_padding_is_preserved_for_kdf() {
+    // Unlike `client_secret` (trimmed by `clamp_auth_config` and `api_key_from`),
+    // the master password reaches `MasterKey::derive` verbatim (auth.rs:1184).
+    // Trimming it in the model layer would silently derive a different key.
+    let mut value = config();
+    value.master_password = SecretString::from(" \tcorrect horse\n ".to_string());
+    assert_eq!(
+        validate_config(&value),
+        Ok(()),
+        "padding around visible text is still a present credential"
+    );
+
+    let before = value.master_password.expose_secret().to_string();
+    clamp_auth_config(&mut value);
+    assert_eq!(value.master_password.expose_secret(), before);
+    assert_eq!(validate_config(&value), Ok(()));
+
+    // Re-applying the cap is a no-op for the password as well.
+    clamp_auth_config(&mut value);
+    assert_eq!(value.master_password.expose_secret(), before);
+
+    // The symmetric field is trimmed, which is the point of the contrast.
+    let mut secret = config();
+    secret.client_secret = SecretString::from(" \tsecret\n ".to_string());
+    clamp_auth_config(&mut secret);
+    assert_eq!(secret.client_secret.expose_secret(), "secret");
+}
+
+#[test]
 fn email_validation_rejects_format_characters() {
     // Zero-width space/joiner, word joiner, BOM, bidi controls, Arabic letter
     // mark and soft hyphen are all in the Unicode Cf category.

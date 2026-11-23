@@ -425,13 +425,16 @@ pub fn clamp_auth_config(config: &mut AuthConfig) {
 ///
 /// `str::trim()` removes Unicode whitespace but not `Cf` format characters, so
 /// a value made only of a zero-width space (a common paste artifact) renders
-/// blank in the UI yet passes an emptiness check. Reuse the same rule as the
-/// email and TOTP guards: whitespace and `Cf` are invisible, one visible
-/// character makes the field present.
+/// blank in the UI yet passes an emptiness check. `Cc` control characters that
+/// are not whitespace (NUL, DEL, C1 controls) are invisible too; `trim()` alone
+/// let them through for credentials even though [`valid_email`] rejects them.
+/// One visible character makes the field present. All three credential fields
+/// (`client_id`, `client_secret`, `master_password`) share this rule so they
+/// cannot disagree about what "missing" means.
 fn credential_is_blank(value: &str) -> bool {
     value
         .chars()
-        .all(|ch| ch.is_whitespace() || is_format_character(ch))
+        .all(|ch| ch.is_whitespace() || ch.is_control() || is_format_character(ch))
 }
 
 /// A minimal structural check: at most `MAX_EMAIL_LEN` characters, exactly
@@ -731,7 +734,7 @@ pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
     if !valid_email(&config.email) {
         return Err(AuthError::InvalidEmail);
     }
-    if config.master_password.expose_secret().trim().is_empty() {
+    if credential_is_blank(config.master_password.expose_secret()) {
         return Err(AuthError::MissingField("master_password"));
     }
     if is_blocked_server_url_without_dns(config.server_url.trim()) {

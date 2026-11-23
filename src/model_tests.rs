@@ -385,7 +385,7 @@ fn name_sort_id_tiebreak_is_reversed_only_for_name_desc() {
 #[test]
 fn recently_modified_breaks_equal_revision_ties_by_name_then_id() {
     // `compare` orders `RecentlyModified` by revision descending, then reuses
-    // the un-reversed `name + id` ordering (model.rs:1089-1098). With equal
+    // the un-reversed `name + id` ordering (model.rs:1174-1184). With equal
     // revisions the folded name must win first and the id must break an
     // exactly equal name, regardless of insertion order.
     let mut vault = Vault::new();
@@ -1041,8 +1041,8 @@ fn sort_key_next_cycles_through_all_four_variants() {
 #[test]
 fn view_sorting_uses_comparison_keys_for_names() {
     // `compare()` normalizes both names with `comparison_key` before ordering
-    // (model.rs:1084-1087), and `Vault::view` normalizes the query the same way
-    // (model.rs:972-978). NFD/uppercase spellings must therefore sort and
+    // (model.rs:1174-1184), and `Vault::view` normalizes the query the same way
+    // (model.rs:1039-1041). NFD/uppercase spellings must therefore sort and
     // search identically to their precomposed/lowercase counterparts.
     let mut vault = Vault::new();
     vault
@@ -1603,7 +1603,7 @@ fn upsert_honors_an_explicit_revision_but_preserves_zero() {
 
 #[test]
 fn page_matching_ties_use_the_folded_name_key_then_the_id() {
-    // `matches_page` shares the `compare` tiebreak (model.rs:990-1010,1092-1102):
+    // `matches_page` shares the `compare` tiebreak (model.rs:1067-1087,1174-1184):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
     let page = "https://example.com/shared";
@@ -1785,6 +1785,39 @@ fn unset_or_foreign_format_fingerprints_are_reported_as_mismatch() {
         &format!("  {REFERENCE_FINGERPRINT}  "),
     );
     assert_eq!(padded.verify_fingerprint(), FingerprintVerify::Match);
+}
+
+#[test]
+fn saved_fingerprint_surrounding_whitespace_is_trimmed_on_comparison_only() {
+    // `verify_fingerprint` compares `self.fingerprint.trim()` with the freshly
+    // computed SHA256 value (model.rs:395). A saved fingerprint copied with
+    // leading/trailing padding must still verify, including Unicode whitespace;
+    // the stored field itself is never rewritten by verification.
+    for padded in [
+        format!("  {REFERENCE_FINGERPRINT}"),
+        format!("{REFERENCE_FINGERPRINT}\t"),
+        format!("\u{3000}{REFERENCE_FINGERPRINT}\n"),
+        format!(" \t{REFERENCE_FINGERPRINT}\r\n "),
+    ] {
+        let key = ssh_key(REFERENCE_PUBLIC_KEY, &padded);
+        assert_eq!(
+            key.verify_fingerprint(),
+            FingerprintVerify::Match,
+            "{padded:?}"
+        );
+        assert!(key.fingerprint_matches(), "{padded:?}");
+        assert_eq!(key.fingerprint, padded, "trim is comparison-only");
+    }
+
+    // Interior whitespace is part of the fingerprint and must not be ignored.
+    let interior = format!("{REFERENCE_FINGERPRINT} trailing");
+    let key = ssh_key(REFERENCE_PUBLIC_KEY, &interior);
+    assert_eq!(
+        key.verify_fingerprint(),
+        FingerprintVerify::Mismatch {
+            computed: REFERENCE_FINGERPRINT.to_string(),
+        }
+    );
 }
 
 #[test]

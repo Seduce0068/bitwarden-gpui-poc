@@ -244,14 +244,15 @@ fn join_detail_fields(base: &str, fields: &[String]) -> String {
     parts.join(" | ")
 }
 
-/// Status shown after following an audit finding, in both outcomes.
+/// Status shown after successfully following an audit finding.
 ///
 /// `name` is the finding's display name from the current report (the same text
-/// the keyboard path shows), never the internal item id. Routing both branches
+/// the keyboard path shows), never the internal item id. Routing every branch
 /// through `status_with_unsaved` keeps the persistent "unsaved settings"
 /// warning visible when the user leaves the audit panel. The pure form lets the
 /// contract be tested without a GPUI window (this crate does not enable gpui's
-/// `test-support` feature).
+/// `test-support` feature). A *failed* follow uses
+/// [`audit_focus_missing_status`] instead, which names the internal id.
 pub(super) fn audit_focus_status(name: &str, found: bool, dirty: bool) -> String {
     let base = if found {
         format!("監査の指摘項目を選択しました: {name}")
@@ -259,6 +260,25 @@ pub(super) fn audit_focus_status(name: &str, found: bool, dirty: bool) -> String
         "指摘項目が一覧に見つかりません".to_string()
     };
     status_with_unsaved(&base, dirty)
+}
+
+/// Status shown when a followed audit finding is absent from the vault list.
+///
+/// The generic missing branch of [`audit_focus_status`] leaves the user unable
+/// to tell *which* finding failed. This variant carries the internal item id
+/// so the failed row is identifiable. The id goes through [`item_name_text`]:
+/// an id made only of invisible `Cf` characters must not leave a blank after
+/// the label. Composed through [`status_with_unsaved`] so the unsaved-settings
+/// warning survives leaving the audit panel. Pure so the contract can be
+/// tested without a GPUI window.
+pub(super) fn audit_focus_missing_status(id: &str, dirty: bool) -> String {
+    status_with_unsaved(
+        &format!(
+            "指摘項目が一覧に見つかりません（項目 ID: {}）",
+            item_name_text(id)
+        ),
+        dirty,
+    )
 }
 
 /// Status when `Enter` is pressed in the audit panel with no row highlighted.
@@ -297,7 +317,7 @@ pub(super) fn audit_search_exit_status(
         Some(index) => {
             let name = report
                 .and_then(|report| report.items.get(index))
-                .map(|item| item.name.clone());
+                .map(|item| item_name_text(&item.name).to_string());
             audit_refresh_status(Some(index), len, name.as_deref(), dirty)
         }
         None if report.is_some_and(|report| report.items.is_empty()) => {
@@ -590,7 +610,11 @@ pub(super) fn audit_focus_target<'a>(
     let report = report?;
     let index = report.items.iter().position(|item| item.id == id)?;
     let scroll_index = audit_row_scroll_index(Some(index))?;
-    Some((index, scroll_index, report.items[index].name.as_str()))
+    Some((
+        index,
+        scroll_index,
+        item_name_text(&report.items[index].name),
+    ))
 }
 
 /// Align the audit highlight and scroll to the row identified by `id`.
@@ -615,6 +639,9 @@ pub(super) fn align_audit_focus(
 ///
 /// Uses the same wording as the keyboard move status, so a threshold edit
 /// cannot leave the status bar naming a row that is no longer highlighted.
+/// The name goes through [`item_name_text`], matching the vault list/detail
+/// rows: an invisible-only (`Cf`) finding name must show the shared placeholder
+/// rather than leaving a blank after "監査行 n/m: ".
 pub(super) fn audit_refresh_status(
     index: Option<usize>,
     len: usize,
@@ -627,7 +654,7 @@ pub(super) fn audit_refresh_status(
                 "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）",
                 index + 1,
                 len,
-                name
+                item_name_text(name)
             ),
             dirty,
         ),
@@ -659,7 +686,7 @@ pub(super) fn audit_refresh_status_for(
     let name = clamped.and_then(|index| {
         report
             .and_then(|report| report.items.get(index))
-            .map(|item| item.name.clone())
+            .map(|item| item_name_text(&item.name).to_string())
     });
     Some(audit_refresh_status(clamped, len, name.as_deref(), dirty))
 }
@@ -1011,7 +1038,7 @@ impl BitwardenApp {
             &mut self.audit_scroll_handle,
             &mut self.audit_row_selection,
         )
-        .unwrap_or_else(|| id.clone());
+        .unwrap_or_else(|| item_name_text(&id).to_string());
         if let Some(index) = self.view.select_id(&id) {
             self.view
                 .scroll_handle
@@ -1019,7 +1046,9 @@ impl BitwardenApp {
             self.status = audit_focus_status(&focus_name, true, self.settings_dirty);
         } else {
             self.view.deselect_and_rewind();
-            self.status = audit_focus_status(&focus_name, false, self.settings_dirty);
+            // The followed row is not in the list: name the internal id so the
+            // user knows which finding could not be selected.
+            self.status = audit_focus_missing_status(&id, self.settings_dirty);
         }
         self.sync_totp_to_selection();
         cx.notify();
@@ -1081,7 +1110,7 @@ impl BitwardenApp {
                 "監査行 {}/{}: {}（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）",
                 index + 1,
                 len,
-                item.name
+                item_name_text(&item.name)
             );
             self.status = status_with_unsaved(&base, self.settings_dirty);
         }
@@ -1289,6 +1318,84 @@ mod tests {
         assert_eq!(missing_dirty, status_with_unsaved(&missing_clean, true));
         assert!(missing_dirty.starts_with(&missing_clean));
         assert!(missing_dirty.contains("[未保存の設定変更があります]"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_focus_missing_status_names_the_internal_id() {
+        // A failed follow used to say only "not found", leaving the user with
+        // no way to tell which finding failed.
+        let clean = audit_focus_missing_status("uuid-42", false);
+        assert_eq!(clean, "指摘項目が一覧に見つかりません（項目 ID: uuid-42）");
+        assert!(!clean.contains("[未保存"), "{clean}");
+
+        let dirty = audit_focus_missing_status("uuid-42", true);
+        assert_eq!(dirty, status_with_unsaved(&clean, true));
+        assert!(dirty.starts_with(&clean));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
+
+        // The id goes through the shared display-name helper, so an invisible
+        // id cannot leave a blank after the label.
+        let invisible = audit_focus_missing_status("\u{200b}", false);
+        assert!(invisible.contains(ITEM_NAME_PLACEHOLDER), "{invisible}");
+        assert!(!invisible.contains('\u{200b}'));
+        assert_eq!(
+            invisible,
+            audit_focus_missing_status("", false),
+            "Cf-only and empty ids must render identically"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn audit_statuses_placeholder_invisible_finding_names() {
+        use crate::health::ItemReport;
+        use crate::model::ItemKind;
+
+        let cf_name = "\u{200b}\u{feff}";
+        let report = Report {
+            items: vec![ItemReport {
+                id: "item-cf".into(),
+                name: cf_name.into(),
+                kind: ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 0,
+            logins: 1,
+        };
+
+        // Refresh path (`audit_refresh_status` and its report-aware wrappers).
+        let refresh = audit_refresh_status(Some(0), 1, Some(cf_name), false);
+        assert!(refresh.contains(ITEM_NAME_PLACEHOLDER), "{refresh}");
+        assert!(!refresh.contains(cf_name));
+
+        for status in [
+            audit_search_exit_status(Some(&report), Some(0), false),
+            audit_refresh_status_for(Some(&report), Some(0), false).unwrap(),
+            audit_refresh_status_for_panel(Some(&report), Some(0), false, Panel::Audit).unwrap(),
+        ] {
+            assert!(status.contains(ITEM_NAME_PLACEHOLDER), "{status}");
+            assert!(!status.contains(cf_name), "{status}");
+        }
+
+        // The click/focus path reuses the same display name.
+        let (_, _, name) = audit_focus_target(Some(&report), "item-cf").unwrap();
+        assert_eq!(name, ITEM_NAME_PLACEHOLDER);
+        let focus = audit_focus_status(name, true, false);
+        assert!(focus.contains(ITEM_NAME_PLACEHOLDER), "{focus}");
+
+        // A visible name must keep flowing through unchanged.
+        let visible = Report {
+            items: vec![ItemReport {
+                id: "item-ok".into(),
+                name: "二要素なし".into(),
+                kind: ItemKind::Login,
+                findings: Vec::new(),
+            }],
+            examined: 1,
+            with_totp: 0,
+            logins: 1,
+        };
+        assert!(audit_search_exit_status(Some(&visible), Some(0), false).contains("二要素なし"));
     }
 
     #[::core::prelude::v1::test]

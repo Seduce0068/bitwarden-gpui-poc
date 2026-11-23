@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第109弾で 7 件すべてを完了）。
+なし（第110弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第110弾（16 担当・54 回目）の指摘 6 件を完結（2026-11-23）
+  - 監査 status の内部 ID／Cf 名、確定クエリ再編集案内、
+    arrow キー、master_password の不可視判定を修正。
+  - nested IPv6 authority、fingerprint trim、start_search の
+    filter/sort 保持、同期間 tick.at 不変をテスト。
+  - CHANGELOG 第107〜109弾、ADR ログを反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1071 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第109弾（16 担当・53 回目）の指摘 7 件を完結（2026-11-23）
   - 監査行ラベルの Cf 名プレースホルダ、数値パスワード＋?key=value
     の URL マスク、client_id/secret の trim→クランプ、

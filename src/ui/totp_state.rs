@@ -111,9 +111,13 @@ mod tests {
         assert!(state.has_secret());
         assert!(first.starts_with("287 082"), "{first}");
 
-        // Same period: the cached code is reused.
+        // Same period: the cached code is reused without a new sample (the
+        // cached sample timestamp is unchanged), even though the displayed
+        // countdown text is the same snapshot.
+        let sample_at = state.tick.as_ref().map(|tick| tick.at);
         let second = state.display(SECRET, 50);
         assert_eq!(second, first);
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), sample_at);
 
         state.invalidate();
         let third = state.display(SECRET, 50);

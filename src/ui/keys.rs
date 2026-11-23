@@ -32,6 +32,16 @@ pub(super) enum GeneratorOption {
 pub(super) const TEXT_EDIT_ARROW_KEYS_HINT: &str =
     "入力中: 矢印キーは GPUI のテキスト入力に任せています（キャレット移動を保証するものではありません）";
 
+/// Guidance for the confirmed-query re-edit keys in the vault panel.
+///
+/// Enter/Escape only *confirms* a search; the query is kept and the
+/// `query_nonempty` branches below still accept `Backspace` and typed text.
+/// The status installed by [`crate::ui::input::search_finished_status`] names
+/// those keys so the re-edit path is discoverable; keeping the wording next to
+/// the bindings makes it harder for the two to drift apart.
+pub(super) const CONFIRMED_QUERY_REEDIT_HINT: &str =
+    "Backspace: クエリの末尾を削除 / 文字入力: クエリを再編集";
+
 /// Apply a generator option to its settings.
 ///
 /// `LengthUp`/`LengthDown` change **both** the password length and the
@@ -287,7 +297,7 @@ fn typed_text<'a>(ctx: &KeyContext<'a>) -> Option<&'a str> {
 /// key.
 fn is_non_text_key_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    let bare = lower.strip_prefix("arrow").unwrap_or(&lower);
+    let bare = strip_arrow_prefix(&lower);
     if is_text_cursor_key(&lower) {
         return true;
     }
@@ -359,6 +369,22 @@ fn raw_command_key<'a>(ctx: &KeyContext<'a>) -> &'a str {
         .unwrap_or(ctx.key)
 }
 
+/// Whether a key name uses GPUI's `arrow`-prefixed spelling.
+///
+/// Backends differ: navigation keys arrive either as `arrowup`/`arrowdown` or
+/// as plain `up`/`down`. Checking the physical `ctx.key` case-insensitively
+/// keeps that spelling independent of an echoed `key_char`.
+fn is_arrow_prefixed(name: &str) -> bool {
+    name.get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("arrow"))
+}
+
+/// Drop GPUI's `arrow` prefix so one set of command bindings covers both
+/// spellings. Input must already be lowercased; see [`is_arrow_prefixed`].
+fn strip_arrow_prefix(name: &str) -> &str {
+    name.strip_prefix("arrow").unwrap_or(name)
+}
+
 /// The key name to use for command matching.
 ///
 /// On Linux GPUI lowercases `key` and keeps Shift characters in `key_char`,
@@ -367,13 +393,19 @@ fn raw_command_key<'a>(ctx: &KeyContext<'a>) -> &'a str {
 /// which would otherwise disable every lowercase binding; folding ASCII case
 /// here keeps those bindings working. The one case-sensitive binding is
 /// resolved from [`raw_command_key`] before this fold, so
-/// `CopyPassword`/`CopyPassphrase` stay distinct.
+/// `CopyPassword`/`CopyPassphrase` stay distinct. Arrow-prefixed navigation
+/// names are normalized here, so the audit and vault row matches only need the
+/// plain `up`/`down`/`pageup`/`pagedown`/`home`/`end` spellings.
 fn command_key<'a>(ctx: &KeyContext<'a>) -> Cow<'a, str> {
-    let raw = raw_command_key(ctx);
-    if raw.bytes().all(|byte| !byte.is_ascii_uppercase()) {
-        Cow::Borrowed(raw)
+    let raw = if is_arrow_prefixed(ctx.key) {
+        ctx.key
     } else {
-        Cow::Owned(raw.to_ascii_lowercase())
+        raw_command_key(ctx)
+    };
+    if raw.bytes().all(|byte| !byte.is_ascii_uppercase()) {
+        Cow::Borrowed(strip_arrow_prefix(raw))
+    } else {
+        Cow::Owned(strip_arrow_prefix(&raw.to_ascii_lowercase()).to_string())
     }
 }
 
@@ -388,18 +420,8 @@ fn text_action(text: &str, action: fn(String) -> UiAction) -> UiAction {
 /// future GPUI version (which would otherwise make `insertable_text` insert it).
 fn is_text_cursor_key(key: &str) -> bool {
     matches!(
-        key,
-        "up" | "down"
-            | "left"
-            | "right"
-            | "arrowup"
-            | "arrowdown"
-            | "arrowleft"
-            | "arrowright"
-            | "home"
-            | "end"
-            | "pageup"
-            | "pagedown"
+        strip_arrow_prefix(key),
+        "up" | "down" | "left" | "right" | "home" | "end" | "pageup" | "pagedown"
     )
 }
 
@@ -617,6 +639,8 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             "n" => UiAction::SetPanel(Panel::Generator),
             "c" => UiAction::SetPanel(Panel::Settings),
             "/" => UiAction::StartSearch,
+            // These two confirmed-query branches are the keys named by
+            // `CONFIRMED_QUERY_REEDIT_HINT` in the post-confirm status.
             "backspace" if ctx.query_nonempty => UiAction::BackspaceQuery,
             // A confirmed query stays editable with the same insertable-text
             // rule as the search mode. `/` is matched above, so re-pressing it
@@ -1148,5 +1172,103 @@ mod single_character_text_tests {
             classify_key(&ctx),
             UiAction::InsertSettingsText("日本語".into())
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod r2_ui_110_tests {
+    use super::*;
+
+    fn nav_ctx(key: &str) -> KeyContext<'_> {
+        KeyContext {
+            screen: Screen::Unlocked,
+            panel: Panel::Vault,
+            key,
+            key_char: None,
+            modifiers: KeyModifiers::default(),
+            editing_auth: false,
+            searching: false,
+            editing_settings: false,
+            login_failed: false,
+            has_audit_report: true,
+            query_nonempty: false,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn arrow_prefixed_names_drive_vault_row_movement() {
+        // Backends that spell navigation keys with an `arrow` prefix used to
+        // fall through to `UiAction::None` in both list panels.
+        for (key, delta) in [
+            ("up", -1),
+            ("down", 1),
+            ("arrowup", -1),
+            ("arrowdown", 1),
+            ("ArrowUp", -1),
+            ("ArrowDown", 1),
+        ] {
+            assert_eq!(
+                classify_key(&nav_ctx(key)),
+                UiAction::MoveSelection(delta),
+                "vault/{key}"
+            );
+        }
+
+        // Page/Home/End keep their dedicated actions under the same prefix.
+        assert_eq!(
+            classify_key(&nav_ctx("arrowpageup")),
+            UiAction::MoveSelectionPage(-1)
+        );
+        assert_eq!(
+            classify_key(&nav_ctx("arrowpagedown")),
+            UiAction::MoveSelectionPage(1)
+        );
+        assert_eq!(
+            classify_key(&nav_ctx("arrowhome")),
+            UiAction::MoveSelectionToEdge(SelectionEdge::First)
+        );
+        assert_eq!(
+            classify_key(&nav_ctx("arrowend")),
+            UiAction::MoveSelectionToEdge(SelectionEdge::Last)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn arrow_prefixed_names_drive_audit_row_movement() {
+        let mut ctx = nav_ctx("arrowup");
+        ctx.panel = Panel::Audit;
+        assert_eq!(classify_key(&ctx), UiAction::MoveSelection(-1));
+        ctx.key = "ArrowDown";
+        assert_eq!(classify_key(&ctx), UiAction::MoveSelection(1));
+    }
+
+    #[::core::prelude::v1::test]
+    fn editing_modes_still_delegate_arrow_prefixed_keys() {
+        // Normalizing the command name must not give the text field a new
+        // list-movement binding: editing modes keep delegating to GPUI.
+        for key in ["arrowup", "ArrowDown", "arrowleft"] {
+            let mut ctx = nav_ctx(key);
+            ctx.searching = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "search/{key}");
+
+            ctx.searching = false;
+            ctx.panel = Panel::Settings;
+            ctx.editing_settings = true;
+            assert_eq!(classify_key(&ctx), UiAction::None, "settings/{key}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn confirmed_query_hint_matches_the_reedit_bindings() {
+        let hint = CONFIRMED_QUERY_REEDIT_HINT;
+        assert!(hint.contains("Backspace"), "{hint}");
+        assert!(hint.contains("文字入力"), "{hint}");
+
+        let mut ctx = nav_ctx("backspace");
+        ctx.query_nonempty = true;
+        assert_eq!(classify_key(&ctx), UiAction::BackspaceQuery);
+        ctx.key = "a";
+        assert_eq!(classify_key(&ctx), UiAction::InsertQueryText("a".into()));
     }
 }
