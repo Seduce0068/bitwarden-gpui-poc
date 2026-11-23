@@ -3021,3 +3021,91 @@ fn known_type_tags_with_missing_or_malformed_payloads_are_rejected() {
         );
     }
 }
+
+#[test]
+fn vault_item_metadata_wrong_types_and_missing_fields_are_rejected() {
+    // Sibling of `non_default_vault_item_metadata_survives_a_serde_round_trip`:
+    // the positive case pins the wire names, this one pins that each metadata
+    // field is required and typed. `notes` uses the `zeroizing_string_serde`
+    // adapter, which must reject a non-string just like a plain `String`.
+    let mut item = login(
+        "meta-negative",
+        "Metadata",
+        "alice",
+        "pw",
+        "https://example.test",
+    );
+    item.folder_id = Some("folder-42".into());
+    item.favorite = true;
+    item.notes = Zeroizing::new("recovery-code-7X".into());
+    item.revision_date = 1_700_000_123;
+    let valid = serde_json::to_value(&item).unwrap();
+    assert!(
+        serde_json::from_value::<VaultItem>(valid.clone()).is_ok(),
+        "the untouched fixture must load: {valid}"
+    );
+
+    for (field, wrong) in [
+        ("id", serde_json::json!(42)),
+        ("name", serde_json::json!(42)),
+        ("folder_id", serde_json::json!(42)),
+        ("favorite", serde_json::json!("true")),
+        ("notes", serde_json::json!(42)),
+        ("revision_date", serde_json::json!("1700000123")),
+    ] {
+        let mut value = valid.clone();
+        value[field] = wrong.clone();
+        assert!(
+            serde_json::from_value::<VaultItem>(value).is_err(),
+            "wrong type for {field} must be rejected: {wrong}"
+        );
+    }
+    // `folder_id` is an `Option<String>` and is allowed to be absent (it
+    // deserializes to `None`), so it is excluded from the missing-field cases.
+    for field in ["id", "name", "favorite", "notes", "revision_date"] {
+        let mut value = valid.clone();
+        value.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<VaultItem>(value).is_err(),
+            "missing {field} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn match_options_allow_regex_reaches_both_matches_page_entry_points() {
+    // `LoginUri::matches` already pins `allow_regex`; the two `matches_page`
+    // wrappers (model.rs:750-752 and 990-1005) must forward the same options
+    // instead of silently using `MatchOptions::default()`.
+    let item = VaultItem::new(
+        "regex-page",
+        "Regex Login",
+        ItemData::Login {
+            username: "alice".into(),
+            password: Zeroizing::new("pw".into()),
+            totp: Zeroizing::new(String::new()),
+            uris: vec![LoginUri {
+                uri: r"^https://[a-z]+\.example\.com/login$".into(),
+                match_type: Some(4),
+            }],
+        },
+    );
+    let mut vault = Vault::new();
+    vault.items.push(item.clone());
+
+    let page = "https://app.example.com/login";
+    let strict = openwarden::MatchOptions::default();
+    assert!(!item.matches_page(page, &strict));
+    assert!(vault.matches_page(page, &strict).is_empty());
+
+    let regex = openwarden::MatchOptions {
+        allow_regex: true,
+        ..Default::default()
+    };
+    assert!(item.matches_page(page, &regex));
+    let hits = vault.matches_page(page, &regex);
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].id, "regex-page");
+    // Enabling regex does not make an unrelated page match.
+    assert!(!item.matches_page("https://app.example.com/other", &regex));
+}

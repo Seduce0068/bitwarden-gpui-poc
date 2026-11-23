@@ -128,6 +128,14 @@ pub enum ImportAudit {
 /// original `openwarden` failure as the `Error::source()` of its error.
 pub type SyncError = crate::error::AppError;
 
+/// Maximum raw `/api/sync` body accepted on the live path.
+///
+/// Alias of the cache's [`crate::cache::MAX_CACHE_BODY_BYTES`], so a body the
+/// cache would refuse on either side of the disk is refused on the live path as
+/// well. [`parse_sync`] is the single entry point for live *and* cached bodies,
+/// which keeps the two contracts from drifting apart.
+pub const MAX_SYNC_BODY_BYTES: usize = crate::cache::MAX_CACHE_BODY_BYTES;
+
 /// Parse a `/api/sync` response body, including folder names.
 ///
 /// PascalCase keys are normalized to camelCase, duplicate cipher ids are
@@ -140,8 +148,23 @@ pub type SyncError = crate::error::AppError;
 ///
 /// # Errors
 ///
-/// [`SyncError::InvalidLogin`] when `openwarden` rejects the body.
+/// [`SyncError::InvalidLoginCause`] when the body is larger than
+/// [`MAX_SYNC_BODY_BYTES`], cannot be parsed as JSON, or is rejected by
+/// `openwarden`. The size gate runs first so an oversized body never reaches
+/// the JSON parser; its typed cause carries the byte count and the cap. The
+/// auth layer maps this family to a retryable sync failure.
 pub fn parse_sync(body: &[u8]) -> Result<openwarden::SyncData, SyncError> {
+    if body.len() > MAX_SYNC_BODY_BYTES {
+        let detail = format!(
+            "sync body of {} bytes exceeds MAX_CACHE_BODY_BYTES ({})",
+            body.len(),
+            MAX_SYNC_BODY_BYTES
+        );
+        return Err(SyncError::InvalidLoginCause(
+            detail.clone(),
+            crate::error::BoxedCause::text(detail),
+        ));
+    }
     let mut value: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
         let detail = error.to_string();
         SyncError::InvalidLoginCause(detail.clone(), crate::error::BoxedCause::text(detail))

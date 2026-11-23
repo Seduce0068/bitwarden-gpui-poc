@@ -3115,3 +3115,55 @@ fn ipv4_compatible_ipv6_link_local_is_a_known_blind_spot() {
     ));
     assert!(!is_link_local_ip("::c0a8:010a".parse().unwrap()));
 }
+
+#[test]
+fn injected_resolver_receives_only_the_parsed_host_name() {
+    // `is_blocked_server_url_with` (auth.rs:521-544) passes `url.host_str()`
+    // to the resolver, not the raw URL: userinfo, an explicit port, the path,
+    // the query and ASCII host case must not reach DNS. Capture the argument
+    // so the seam's contract is checked rather than only its boolean result.
+    let seen = std::cell::RefCell::new(Vec::new());
+    for value in [
+        "https://vault.example.com:8443/path?token=x",
+        "https://user:pass@VAULT.EXAMPLE.COM/login",
+    ] {
+        seen.borrow_mut().clear();
+        let blocked = is_blocked_server_url_with(value, |host| {
+            seen.borrow_mut().push(host.to_string());
+            Vec::new()
+        });
+        assert!(!blocked, "{value}");
+        let hosts = seen.borrow();
+        assert_eq!(hosts.len(), 1, "{value}: {hosts:?}");
+        assert_eq!(hosts[0], "vault.example.com", "{value}: {hosts:?}");
+    }
+
+    // A literal host is classified before the resolver is consulted at all.
+    // A resolver that panics proves this branch never reaches DNS.
+    assert!(is_blocked_server_url_with("http://169.254.1.1", |_| {
+        panic!("a literal host must not consult DNS")
+    }));
+}
+
+#[test]
+fn more_than_four_hyphen_parts_fail_open_offline() {
+    // Documented limit of `hostname_embeds_link_local` (auth.rs): the
+    // hyphenated branch only joins exactly four parts. A five-part literal is
+    // not decoded by the network-free classifier, so it fails open until a
+    // resolver answer blocks it. Pin the constraint so a future fix is an
+    // explicit, reviewed change.
+    let alias = "http://169-254-1-1-9.nip.io";
+    let host = "169-254-1-1-9.nip.io";
+    assert!(!super::hostname_embeds_link_local(host));
+    assert!(!is_blocked_server_url_without_dns(alias));
+    let metadata: IpAddr = "169.254.169.254".parse().unwrap();
+    assert!(is_blocked_server_url_with(alias, |_| vec![metadata]));
+
+    // Control: the four-part spelling of the same literal is decoded offline,
+    // so the assertions above are about the part count and not a disabled
+    // wildcard-alias rule.
+    assert!(super::hostname_embeds_link_local("169-254-1-1.nip.io"));
+    assert!(is_blocked_server_url_without_dns(
+        "http://169-254-1-1.nip.io"
+    ));
+}

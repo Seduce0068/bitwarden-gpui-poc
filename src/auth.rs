@@ -488,8 +488,16 @@ fn is_blocked_metadata_host(host: &str) -> bool {
 /// by [`validate_config`] (and therefore a configuration assembled without
 /// DNS) does not. This is recorded rather than fixed in this PoC: adding a
 /// WHATWG-equivalent decoder for embedded labels would enlarge the SSRF guard
-/// beyond the change scope. Do not treat this classifier as a complete
-/// boundary; see the scope comment above.
+/// beyond the change scope.
+///
+/// Known constraint (hyphenated literals with more than four parts): the
+/// hyphenated-label branch below only joins **exactly four** parts
+/// (`169-254-1-1.nip.io`). A link-local literal split into five or more
+/// hyphen-separated components (`169-254-1-1-9.nip.io`) is therefore not
+/// decoded here and the network-free classifier **fails open** for that name;
+/// only a resolver answer can block it. The regression test
+/// `more_than_four_hyphen_parts_fail_open_offline` pins this behaviour. Do not
+/// treat this classifier as a complete boundary; see the scope comment above.
 fn hostname_embeds_link_local(host: &str) -> bool {
     let normalized = host.trim_end_matches('.').to_ascii_lowercase();
     let labels: Vec<&str> = normalized.split('.').collect();

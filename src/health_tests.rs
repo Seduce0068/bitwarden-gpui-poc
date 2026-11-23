@@ -2442,3 +2442,49 @@ fn trailing_symbols_do_not_hide_a_repeated_character_run() {
         "{report:?}"
     );
 }
+
+#[test]
+fn leading_whitespace_and_symbol_dictionary_passwords_take_the_prefix_cap() {
+    // Regression: `is_common_password` only stripped a leading ASCII digit
+    // run, so a short dictionary guess padded with whitespace or symbols at
+    // the front escaped the cap and was scored from the raw character pool.
+    let weak_bits = Thresholds::default().weak_bits;
+    for password in [
+        " password",
+        "!password123",
+        "\t1qwerty",
+        "!1password",
+        "  qwerty123",
+        "【password1", // non-ASCII symbol decoration
+    ] {
+        let lower = password.to_lowercase();
+        assert!(!super::is_exact_common_password(&lower), "{password}");
+        assert!(super::is_common_password(&lower), "{password}");
+        let bits = estimate_entropy(password);
+        assert!(bits < weak_bits, "{password}: {bits} >= {weak_bits}");
+    }
+
+    // The cap still protects long values that merely start with a decorated
+    // prefix: decoration is not counted toward the limit either way.
+    let long = "!passwordVt7#kQm2!zR9wP4$xL8@";
+    assert!(!super::is_common_password(&long.to_lowercase()));
+    assert!(estimate_entropy(long) >= weak_bits, "{long}");
+
+    // End-to-end: with a valid TOTP and HTTPS URI only the weak password can
+    // produce a finding, so the estimate must reach the report verbatim.
+    let password = "!password123";
+    let bits = estimate_entropy(password);
+    let report = report_of(vec![login(
+        "leading-decoration",
+        "Leading decoration",
+        password,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}

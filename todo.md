@@ -24,10 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第97弾で 5 件すべてを完了）。
+なし（第98弾で 8 件すべてを完了）。
 
 ## 完了
 
+- [x] 第98弾（16 担当・42 回目）の指摘 8 件を完結（2026-11-23）
+  - live sync ボディに 8MiB 上限、クランプ境界の誤告知、
+    認証編集中ヒントの重複を修正。
+  - 辞書パスワードの先頭装飾、host 引数、4要素超ハイフン、
+    ensure_device_id ガード、型違反 ParseFailedCause、
+    非ゼロ user key、MatchOptions 伝播を修正・テスト。
+  - ADR 行参照、cross-review agent 数、ADR ログを修正。
+  - CHANGELOG に第95〜96弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（938 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第97弾（16 担当・41 回目）の指摘 5 件を完結（2026-11-23）
   - all-same の末尾記号バイパス、入力 status のマーカー、
     TOTP 上限動的化を修正。

@@ -11,6 +11,7 @@ filter = '''
 filter.matchesAny(finding["secret"], [
   `2\.aWxvdGhlcg==`,
   `テストアカウントのマスターパスワード`,
+  `!password123`,
 ])
 || filter.containsAny(finding["match"], [`2001:db8::1`, `https://user:pass@host`,  `https://u:p@host:8443`, `passwordあいうえお`,
   `secret=GEZDGNBVGY3TQOJQ`,

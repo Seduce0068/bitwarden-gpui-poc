@@ -160,9 +160,15 @@ pub(super) const FOCUS_RECOVERY_HINT: &str = "F1: フォーカス復帰";
 
 /// Hint for the lock screen. While a field is active `1`-`5` insert text and
 /// `Enter` only confirms that field; it never starts authentication.
+///
+/// The status bar already announces the editing state through
+/// `ui::input::text_edit_start_status`, whose text begins with the shared
+/// "入力中:" prefix from `TEXT_EDIT_ARROW_KEYS_HINT`. This inline hint
+/// deliberately starts with the field-specific keys instead, mirroring
+/// `settings_hint`, so the prefix is drawn only once on the lock screen.
 pub(super) fn auth_hint(editing: bool) -> &'static str {
     if editing {
-        "入力中: 1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 確定 / F1: フォーカス復帰"
+        "1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 確定 / F1: フォーカス復帰"
     } else {
         // After Enter/Escape confirms a field this text replaces the "入力中:"
         // status, so it must keep advertising the lock-screen shortcuts that
@@ -458,6 +464,28 @@ mod tests {
         );
         assert!(!editing.contains("矢印キー"), "{editing}");
         assert!(!settings_hint(false).starts_with("入力中:"));
+    }
+
+    #[test]
+    fn auth_inline_hint_does_not_repeat_the_status_bar_editing_prefix() {
+        // `EditAuthField` installs `text_edit_start_status` into the status
+        // bar, while `render.rs` draws this hint inline on the lock screen.
+        // Only the status bar may open with the shared "入力中:" prefix.
+        assert!(crate::ui::keys::TEXT_EDIT_ARROW_KEYS_HINT.starts_with("入力中:"));
+        assert!(crate::ui::input::text_edit_start_status(false).starts_with("入力中:"));
+        let editing = auth_hint(true);
+        assert!(
+            !editing.starts_with("入力中:"),
+            "the inline hint must not repeat the status-bar prefix: {editing}"
+        );
+        assert!(!editing.contains("矢印キー"), "{editing}");
+        assert!(editing.starts_with("1-5 も文字として入力"), "{editing}");
+        assert!(editing.contains("認証はしません"), "{editing}");
+        assert!(editing.contains(FOCUS_RECOVERY_HINT), "{editing}");
+
+        // Restoring the confirmed-field hint is unchanged: it still advertises
+        // the lock-screen commands after Enter/Escape.
+        assert!(auth_hint(false).contains("Enter: 検証して開く"));
     }
 
     #[test]

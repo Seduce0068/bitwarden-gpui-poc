@@ -253,6 +253,31 @@ pub(super) fn threshold_adjust_status(dirty: bool) -> String {
     crate::ui::app::status_with_unsaved("監査閾値を変更しました（w: 保存 / d: 破棄）", dirty)
 }
 
+/// Outcome of a clamped settings adjustment.
+///
+/// Every `logic::adjust_*` helper clamps its result, so pressing a key at a
+/// boundary can leave the stored value identical to the previous one. In that
+/// case the caller must not announce "変更しました" nor mark the settings
+/// unsaved: `changed` is derived from the before/after values, not from the
+/// key that was pressed. Factored out here (rather than inline in the GPUI
+/// dispatcher) so the boundary contract is testable without a GPUI window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Adjustment<T> {
+    /// Value to store back into the settings.
+    pub(super) value: T,
+    /// Whether the adjustment actually moved the value.
+    pub(super) changed: bool,
+}
+
+impl<T: PartialEq> Adjustment<T> {
+    pub(super) fn new(before: T, after: T) -> Self {
+        Self {
+            changed: after != before,
+            value: after,
+        }
+    }
+}
+
 impl BitwardenApp {
     /// Apply `Home`/`End` through the same dispatcher as Up/Down/Page keys.
     ///
@@ -476,39 +501,58 @@ impl BitwardenApp {
             UiAction::DiscardSettings => self.discard_settings(cx),
             UiAction::FocusAuditItem(id) => self.focus_audit_item(&id, cx),
             UiAction::AdjustThreshold(delta) => {
-                self.settings.thresholds =
-                    crate::ui::logic::adjust_thresholds(self.settings.thresholds, delta);
-                self.mark_settings_dirty();
-                self.refresh_audit();
-                // Set the status *after* the refresh: on settings panels the
-                // refresh keeps the previous status, and on other panels this
-                // feedback must win over an audit-row description.
-                self.status = threshold_adjust_status(self.settings_dirty);
-                cx.notify();
+                let before = self.settings.thresholds;
+                let adjustment =
+                    Adjustment::new(before, crate::ui::logic::adjust_thresholds(before, delta));
+                self.settings.thresholds = adjustment.value;
+                // A clamped step changes nothing: leave the status and the
+                // persistent unsaved marker exactly as they were. In
+                // particular, skip `refresh_audit`, which can overwrite the
+                // status with an audit-row description on other panels.
+                if adjustment.changed {
+                    self.mark_settings_dirty();
+                    self.refresh_audit();
+                    // Set the status *after* the refresh: on settings panels
+                    // the refresh keeps the previous status, and on other
+                    // panels this feedback must win over an audit-row
+                    // description.
+                    self.status = threshold_adjust_status(self.settings_dirty);
+                    cx.notify();
+                }
             }
             UiAction::AdjustIdleLock(delta) => {
-                self.settings.idle_lock_seconds =
-                    crate::ui::logic::adjust_idle_lock(self.settings.idle_lock_seconds, delta);
-                self.mark_settings_dirty();
-                // `i`/`u` move in minutes, not seconds: report the right unit.
-                self.status = idle_lock_adjust_status(self.settings_dirty);
-                cx.notify();
+                let before = self.settings.idle_lock_seconds;
+                let adjustment =
+                    Adjustment::new(before, crate::ui::logic::adjust_idle_lock(before, delta));
+                self.settings.idle_lock_seconds = adjustment.value;
+                if adjustment.changed {
+                    self.mark_settings_dirty();
+                    // `i`/`u` move in minutes, not seconds: report the right unit.
+                    self.status = idle_lock_adjust_status(self.settings_dirty);
+                    cx.notify();
+                }
             }
             UiAction::AdjustLoginTimeout(delta) => {
-                self.settings.login_timeout_seconds =
-                    crate::ui::logic::adjust_seconds(self.settings.login_timeout_seconds, delta);
-                self.mark_settings_dirty();
-                self.status = seconds_adjust_status(self.settings_dirty);
-                cx.notify();
+                let before = self.settings.login_timeout_seconds;
+                let adjustment =
+                    Adjustment::new(before, crate::ui::logic::adjust_seconds(before, delta));
+                self.settings.login_timeout_seconds = adjustment.value;
+                if adjustment.changed {
+                    self.mark_settings_dirty();
+                    self.status = seconds_adjust_status(self.settings_dirty);
+                    cx.notify();
+                }
             }
             UiAction::AdjustClipboardRestore(delta) => {
-                self.settings.clipboard_restore_seconds = crate::ui::logic::adjust_seconds(
-                    self.settings.clipboard_restore_seconds,
-                    delta,
-                );
-                self.mark_settings_dirty();
-                self.status = seconds_adjust_status(self.settings_dirty);
-                cx.notify();
+                let before = self.settings.clipboard_restore_seconds;
+                let adjustment =
+                    Adjustment::new(before, crate::ui::logic::adjust_seconds(before, delta));
+                self.settings.clipboard_restore_seconds = adjustment.value;
+                if adjustment.changed {
+                    self.mark_settings_dirty();
+                    self.status = seconds_adjust_status(self.settings_dirty);
+                    cx.notify();
+                }
             }
             UiAction::Generator(option) => self.toggle_generator(option, cx),
             // `index` is the render-position index emitted by `ui::render`'s
@@ -793,11 +837,81 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn clamped_settings_adjustments_are_not_reported_as_changes() {
+        use crate::health::Thresholds;
+        use crate::ui::logic::{adjust_idle_lock, adjust_seconds, adjust_thresholds};
+
+        // At a bound the clamp returns the stored value unchanged, so the
+        // dispatcher must skip both the "変更しました" status and the unsaved
+        // marker.
+        let idle_before = crate::limits::MIN_IDLE_LOCK_MINUTES * 60;
+        let idle = Adjustment::new(idle_before, adjust_idle_lock(idle_before, -1));
+        assert!(!idle.changed, "idle {idle_before} - 1 is clamped");
+        assert_eq!(idle.value, idle_before);
+        let idle = Adjustment::new(idle_before, adjust_idle_lock(idle_before, 1));
+        assert!(
+            idle.changed,
+            "a step away from the bound still changes idle"
+        );
+
+        // Both seconds-based settings share the same 1..=3600 bounds.
+        for (before, delta) in [
+            (crate::limits::MIN_LOGIN_TIMEOUT_SECONDS, -1),
+            (crate::limits::MAX_LOGIN_TIMEOUT_SECONDS, 1),
+        ] {
+            let adj = Adjustment::new(before, adjust_seconds(before, delta));
+            assert!(!adj.changed, "seconds {before} / {delta} is clamped");
+            assert_eq!(adj.value, before);
+        }
+
+        // Both threshold fields clamp at their shared bounds.
+        let at_max = Thresholds {
+            weak_bits: crate::limits::MAX_WEAK_BITS,
+            stale_days: crate::limits::MAX_STALE_DAYS,
+        };
+        let adj = Adjustment::new(at_max, adjust_thresholds(at_max, 1));
+        assert!(!adj.changed);
+        assert_eq!(adj.value, at_max);
+
+        let at_min = Thresholds {
+            weak_bits: crate::limits::MIN_WEAK_BITS,
+            stale_days: crate::limits::MIN_STALE_DAYS,
+        };
+        let adj = Adjustment::new(at_min, adjust_thresholds(at_min, -1));
+        assert!(!adj.changed);
+        assert_eq!(adj.value, at_min);
+    }
+
+    #[::core::prelude::v1::test]
+    fn effective_settings_adjustments_are_reported_as_changes() {
+        use crate::health::Thresholds;
+        use crate::ui::logic::{adjust_idle_lock, adjust_seconds, adjust_thresholds};
+
+        // Guard the positive case too: the fix must not silence real changes.
+        let idle = Adjustment::new(300, adjust_idle_lock(300, 1));
+        assert!(idle.changed);
+        assert_eq!(idle.value, 360);
+
+        for (delta, expected) in [(1, 31), (-1, 29)] {
+            let adj = Adjustment::new(30, adjust_seconds(30, delta));
+            assert!(adj.changed, "delta={delta}");
+            assert_eq!(adj.value, expected);
+        }
+
+        let base = Thresholds::default();
+        let adj = Adjustment::new(base, adjust_thresholds(base, 1));
+        assert!(adj.changed);
+        assert_ne!(adj.value, base);
+    }
+
+    #[::core::prelude::v1::test]
     fn confirming_auth_or_search_clears_the_editing_status() {
-        // The start statuses really do carry the "入力中" prefix; otherwise
-        // this test would pass without exercising the stale-status bug.
+        // The installed status really does carry the "入力中" prefix;
+        // otherwise this test would pass without exercising the stale-status
+        // bug. The inline lock-screen hint deliberately omits that prefix so
+        // it is not drawn twice (see `logic::auth_hint`).
         assert!(text_edit_start_status(false).contains("入力中"));
-        assert!(crate::ui::logic::auth_hint(true).contains("入力中"));
+        assert!(!crate::ui::logic::auth_hint(true).contains("入力中"));
 
         for dirty in [false, true] {
             let auth = auth_edit_finished_status(dirty);

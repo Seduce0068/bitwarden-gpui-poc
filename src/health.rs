@@ -310,8 +310,8 @@ impl Default for Thresholds {
 /// sizes come from the generator's own constants), times its length, with a
 /// penalty for the patterns that make a password far weaker than its pool size
 /// suggests (a single repeated character, including one with a trailing digit
-/// run, an all-digit string, a common word with optional leading digits, or a
-/// short trailing-digit suffix on a word).
+/// run, an all-digit string, a common word with optional leading decoration, or
+/// a short trailing-digit suffix on a word).
 pub fn estimate_entropy(password: &str) -> u32 {
     if password.is_empty() {
         return 0;
@@ -614,29 +614,59 @@ fn is_exact_common_password(lower: &str) -> bool {
     COMMON.contains(&lower)
 }
 
+/// Strip leading decoration for the prefix rules only.
+///
+/// A short dictionary guess padded with whitespace or symbols at the front
+/// (`"!password123"`, `"  1qwerty"`) gains no real entropy: an attacker tries
+/// the common set together with a small amount of decoration. The loop
+/// alternates the symbol and ASCII-digit steps so mixed runs such as
+/// `"!1password"` collapse as well. Symbols are "any non-alphanumeric
+/// character", which covers whitespace and invisible format characters; only
+/// ASCII digits are handled by the digit step, matching
+/// [`strip_trailing_digits`]. When stripping would remove the whole value, the
+/// undecorated-so-far remainder is kept, so a symbol-only or digit-only string
+/// is never turned into an empty prefix candidate.
+fn strip_leading_decoration(value: &str) -> &str {
+    let mut current = value;
+    loop {
+        let no_symbols = current.trim_start_matches(|c: char| !c.is_alphanumeric());
+        let after_symbols = if no_symbols.is_empty() {
+            current
+        } else {
+            no_symbols
+        };
+        let no_digits = after_symbols.trim_start_matches(|c: char| c.is_ascii_digit());
+        let after_digits = if no_digits.is_empty() {
+            after_symbols
+        } else {
+            no_digits
+        };
+        if after_digits.len() == current.len() {
+            return after_digits;
+        }
+        current = after_digits;
+    }
+}
+
 /// Whether a lowercase password looks like a known dictionary guess.
 ///
 /// Two independent branches: exact membership in the common list, or a short
 /// value capped to the `"password"` / `"qwerty"` prefix rule. Keeping them
 /// separate lets a test pin each one without the other masking a regression.
-/// The prefix branch ignores a leading ASCII digit run so `1password` cannot
-/// escape the cap; the exact branch is never stripped (see the function body).
+/// The prefix branch ignores leading decoration (whitespace, symbols and an
+/// ASCII digit run) so `!password`, `  qwerty1` and `1password` cannot escape
+/// the cap; the exact branch is never stripped (see the function body).
 fn is_common_password(lower: &str) -> bool {
     // Exact membership stays verbatim: a leading or trailing character must
     // not turn an unlisted value into a COMMON entry.
     if is_exact_common_password(lower) {
         return true;
     }
-    // A leading ASCII digit run is a guessable decoration, not extra entropy:
-    // `1password` must take the same dictionary cap as `password`. Strip the
-    // leading run only for the prefix rules below; the word-suffix discount in
+    // Leading whitespace/symbol runs are guessable decoration, not entropy:
+    // `"!password123"` is no harder to guess than `"password123"`. Strip them
+    // only for the prefix rules below; the word-suffix discount in
     // `estimate_entropy` stays suffix-only and the exact list stays unstripped.
-    let without_leading = lower.trim_start_matches(|c: char| c.is_ascii_digit());
-    let candidate = if without_leading.is_empty() {
-        lower
-    } else {
-        without_leading
-    };
+    let candidate = strip_leading_decoration(lower);
     // A long random value that merely begins with "password" (or "qwerty")
     // is not a dictionary password. Cap the prefix matches so those values
     // keep their real (high) entropy estimate; see PASSWORD_PREFIX_LIMIT for

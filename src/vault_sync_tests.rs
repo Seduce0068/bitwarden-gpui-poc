@@ -618,21 +618,33 @@ fn folder_name_text_covers_ok_none_placeholder_and_the_reachable_branches() {
     // `folder_name_text` (vault_sync.rs:339-352) maps the otherwise unreachable
     // `Ok(None)` result to the "(名前なし)" placeholder. The helper exists so
     // this defensive arm can be pinned without a fake `openwarden::Vault`.
+    let missing = super::folder_name_text(Ok(None));
+    let undecryptable = super::folder_name_text(Err(openwarden::Error::MalformedEncString));
     assert_eq!(
-        super::folder_name_text(Ok(None)),
-        "(名前なし)",
+        missing, "(名前なし)",
         "a missing folder name must not be reported as a decryption failure"
     );
-    assert_eq!(
-        super::folder_name_text(Err(openwarden::Error::MalformedEncString)),
-        "(復号できませんでした)"
-    );
+    assert_eq!(undecryptable, "(復号できませんでした)");
     let decrypted = openwarden::SecretString::from("Work".to_string());
-    assert_eq!(super::folder_name_text(Ok(Some(decrypted))), "Work");
+    let name = super::folder_name_text(Ok(Some(decrypted)));
+    assert_eq!(name, "Work");
 
-    // None of the placeholders may expose the internal folder id.
-    for placeholder in ["(名前なし)", "(復号できませんでした)"] {
-        assert!(!placeholder.contains("f-bad"), "{placeholder}");
+    // Verify the strings the helper actually produced, plus a real folder row
+    // whose id is "f-bad". A loop over hard-coded literal placeholders is true
+    // by construction and proves nothing about the importer (the previous
+    // version of this assertion was such a tautology).
+    let vault = vault_with_folders(
+        &[serde_json::json!({"id": "f-bad", "name": "not-an-enc-string"})],
+        &[],
+    );
+    let folders = folders_from(&vault).expect("the folder list must be readable");
+    assert_eq!(folders.len(), 1);
+    for folder in &folders {
+        assert_eq!(folder.id, "f-bad");
+        assert!(!folder.name.contains(folder.id.as_str()), "{folder:?}");
+    }
+    for rendered in [missing.as_str(), undecryptable.as_str(), name.as_str()] {
+        assert!(!rendered.contains("f-bad"), "{rendered}");
     }
 }
 
@@ -2711,4 +2723,95 @@ fn non_array_ciphers_and_folders_are_classified_as_invalid_login_end_to_end() {
     let omitted = parse_sync(br#"{"profile":{"id":"user-1"}}"#)
         .expect("omitted keys are defaulted by openwarden");
     assert_eq!(omitted.user_id(), "user-1");
+}
+
+#[test]
+fn oversized_live_sync_body_uses_the_cache_limit_and_a_typed_cause() {
+    use std::error::Error as _;
+
+    // One cap for both paths: `parse_sync` is used by the live login path and
+    // by `SyncCache::sync`, so the cache's limit must be the live limit too.
+    assert_eq!(MAX_SYNC_BODY_BYTES, crate::cache::MAX_CACHE_BODY_BYTES);
+
+    let oversized = vec![b' '; MAX_SYNC_BODY_BYTES + 1];
+    let error = parse_sync(&oversized).unwrap_err();
+    assert!(
+        matches!(error, SyncError::InvalidLoginCause(_, _)),
+        "{error:?}"
+    );
+    assert_eq!(error.message(), "ログイン項目を読み取れませんでした");
+    let source = error
+        .source()
+        .expect("an oversized body must keep a typed cause")
+        .to_string();
+    assert!(source.contains("MAX_CACHE_BODY_BYTES"), "{source}");
+    let oversized_len = (MAX_SYNC_BODY_BYTES + 1).to_string();
+    assert!(source.contains(oversized_len.as_str()), "{source}");
+    // The gate runs before parsing, so the detail is about size, not JSON.
+    assert!(!source.contains("expected value"), "{source}");
+
+    // Inclusive boundary: a valid body padded to exactly the cap still parses.
+    let base = br#"{"profile":{"id":"user-1"},"folders":[],"ciphers":[]}"#;
+    let mut at_limit = base.to_vec();
+    at_limit.resize(MAX_SYNC_BODY_BYTES, b' ');
+    let sync = parse_sync(&at_limit).expect("the exact boundary must be accepted");
+    assert_eq!(sync.user_id(), "user-1");
+}
+
+#[test]
+fn nonzero_user_key_sync_body_imports_decrypted_fields_without_an_item_key() {
+    // The shared `unlocked_vault` helper uses an all-zero user key. This
+    // fixture uses a non-zero key with no `cipher.key`, so a path that
+    // hard-coded the zero key or ignored the user key would lose every field.
+    let user_bytes = [0x5au8; 64];
+    let user_key = openwarden::UserKey::from_bytes(&user_bytes).expect("a non-zero user key");
+    let symmetric = openwarden::SymmetricKey::from_bytes(&user_bytes)
+        .expect("a 64-byte symmetric key from the same bytes");
+    let enc = |plain: &[u8]| {
+        openwarden::EncString::encrypt(&symmetric, plain)
+            .expect("a field must encrypt under the user key")
+            .to_string()
+    };
+    let body = serde_json::json!({
+        "profile": {"id": "user-1"},
+        "folders": [{"id": "f1", "name": enc(b"Work")}],
+        "ciphers": [{
+            "id": "nonzero-user-key",
+            "type": 1,
+            "name": enc(b"Nonzero Key Login"),
+            "login": {
+                "username": enc(b"alice@example.com"),
+                "password": enc(REAL_PASSWORD.as_bytes()),
+                "totp": enc(REAL_TOTP.as_bytes()),
+                "uris": [{"uri": enc(b"https://example.com")}],
+            },
+            "revisionDate": "2024-01-01T00:00:00Z",
+        }],
+    })
+    .to_string();
+    let sync = parse_sync(body.as_bytes()).expect("sync JSON should parse");
+    let state = openwarden::KeyState {
+        protected_key: String::new(),
+        kdf: None,
+    };
+    let mut vault = openwarden::Vault::open(user_key, state);
+    vault.apply_sync(sync).expect("sync should apply");
+    let model = import_logins(&vault).expect("the non-zero user key must decrypt the login");
+
+    assert_eq!(model.folder_name("f1"), Some("Work"));
+    assert_eq!(model.items.len(), 1);
+    let item = model
+        .item("nonzero-user-key")
+        .expect("the login must survive the sync -> import path");
+    assert_eq!(item.name, "Nonzero Key Login");
+    let (username, password, totp, uris) = item.login().expect("the imported item is a login");
+    assert_eq!(username, "alice@example.com");
+    assert_eq!(password, REAL_PASSWORD);
+    assert_eq!(totp, REAL_TOTP);
+    assert_eq!(uris.len(), 1);
+    assert_eq!(uris[0].uri, "https://example.com");
+    assert_eq!(
+        item.revision_date,
+        parse_revision(Some("2024-01-01T00:00:00Z")).unwrap()
+    );
 }

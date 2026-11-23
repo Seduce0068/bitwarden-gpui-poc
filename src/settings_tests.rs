@@ -3076,3 +3076,45 @@ fn bool_and_null_schema_markers_are_legacy() {
         Settings::save_device_id_only(&path, &id).unwrap();
     }
 }
+
+#[test]
+fn ensure_device_id_refuses_to_write_through_a_future_schema_file() {
+    // `ensure_device_id` generates an id and immediately calls
+    // `save_device_id_only`, which checks `file_schema_version` before touching
+    // the file (settings.rs:735-799). A future writer may have changed the
+    // meaning of otherwise familiar keys, so the id-only write must abort no
+    // matter how the marker was encoded, and the rejected id must never be
+    // accepted in memory.
+    for original in [
+        br#"{"schema_version":999,"email":"future@example.com"}"#.as_slice(),
+        br#"{"schema_version":"999","email":"future@example.com"}"#.as_slice(),
+        br#"{"schema_version":2.0,"email":"future@example.com"}"#.as_slice(),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, original).unwrap();
+
+        let mut settings = Settings::default();
+        let error = settings.ensure_device_id(Some(&path)).unwrap_err();
+        assert!(
+            matches!(&error, crate::error::AppError::SettingsSaveCause(_, _)),
+            "{error:?}"
+        );
+        let text = error.to_string();
+        assert!(text.contains("デバイス ID を保存できませんでした"));
+        assert!(text.contains("未対応"), "{text}");
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "the underlying io error must stay reachable"
+        );
+        assert!(
+            settings.device_id.is_empty(),
+            "an id that was not persisted must not be reused"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original.to_vec(),
+            "a future file must never be overwritten"
+        );
+    }
+}

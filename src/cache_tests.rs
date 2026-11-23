@@ -3583,3 +3583,35 @@ fn restore_guard_priority_puts_expiry_before_body_parse_and_body_user_check() {
         Err(SyncCacheError::UserMismatch)
     ));
 }
+
+#[test]
+fn wrong_typed_envelope_fields_are_a_parse_failed_cause() {
+    // A sibling test pins the "not JSON at all" arm of `load_detailed`. This
+    // one pins the same `ParseFailedCause` classification for a syntactically
+    // valid envelope whose fields have the wrong JSON types: serde must reject
+    // the whole value, the parser text must remain reachable through
+    // `Error::source()`, and the status reason must stay "corrupt" rather than
+    // being mislabelled as an outdated version or an oversized body.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wrong-typed-envelope.json");
+    let envelope = br#"{
+        "version": "1",
+        "user_id": 42,
+        "server_url": false,
+        "body": "not-an-array",
+        "created_at": "yesterday"
+    }"#;
+    write_fixture(&path, envelope);
+
+    let error = load_detailed(&path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ParseFailedCause(_)),
+        "{error:?}"
+    );
+    let source = std::error::Error::source(&error)
+        .expect("the serde type error must stay reachable")
+        .to_string();
+    assert!(!source.is_empty());
+    assert_ne!(source, error.message());
+    assert_eq!(cache_error_message(error), REASON_CORRUPT);
+}
