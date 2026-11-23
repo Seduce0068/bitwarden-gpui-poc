@@ -579,6 +579,98 @@ fn confirmed_query_text_insertion_keeps_command_and_cursor_keys() {
 }
 
 #[test]
+fn confirmed_query_text_edges_match_editing_mode_guards() {
+    let mut value = ctx("x");
+    value.query_nonempty = true;
+
+    // `space` is printable, not a key name: it reaches the confirmed query
+    // field through the same `insertable_text` rule as the editing modes.
+    value.key = "space";
+    value.key_char = None;
+    assert_eq!(classify_key(&value), UiAction::InsertQueryText(" ".into()));
+    value.key_char = Some(" ");
+    assert_eq!(classify_key(&value), UiAction::InsertQueryText(" ".into()));
+
+    // An empty glyph falls back to the physical key, exactly as in search,
+    // auth and settings editing.
+    value.key = "x";
+    value.key_char = Some("");
+    assert_eq!(classify_key(&value), UiAction::InsertQueryText("x".into()));
+
+    // Genuine multi-character IME commits are appended verbatim. Use keys that
+    // are not vault commands: command keys keep their own binding even while a
+    // query is confirmed (already covered above).
+    for (key, text) in [("unknown", "日本語"), ("ime", "かな文字")] {
+        value.key = key;
+        value.key_char = Some(text);
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertQueryText(text.into()),
+            "confirmed/ime/{key}"
+        );
+    }
+
+    // A single non-ASCII glyph also wins over the physical ASCII command key,
+    // matching the `ß` behaviour of the search field.
+    value.key = "s";
+    value.key_char = Some("ß");
+    assert_eq!(classify_key(&value), UiAction::InsertQueryText("ß".into()));
+
+    // A confirmed query is NOT one of the editing modes. The Alt guard
+    // therefore suppresses every Alt combination here, unlike search/auth/
+    // settings editing where Alt + printable text still inserts.
+    value.modifiers.alt = true;
+    for (key, key_char) in [
+        ("a", None),
+        ("x", Some("X")),
+        ("space", None),
+        ("unknown", Some("日本語")),
+        ("f1", Some("F1")),
+    ] {
+        value.key = key;
+        value.key_char = key_char;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "confirmed/alt/{key}/{key_char:?}"
+        );
+    }
+    value.modifiers.alt = false;
+
+    // Command-like modifiers, including the macOS Ctrl+Alt AltGr spelling,
+    // stay reserved for the platform: a stray layout glyph must not let them
+    // insert into a confirmed query.
+    for modifiers in [
+        KeyModifiers {
+            control: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            platform: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            function: true,
+            ..Default::default()
+        },
+        KeyModifiers {
+            control: true,
+            alt: true,
+            ..Default::default()
+        },
+    ] {
+        value.modifiers = modifiers;
+        value.key = "c";
+        value.key_char = Some("ç");
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "confirmed/modifiers/{modifiers:?}"
+        );
+    }
+}
+
+#[test]
 fn field_routing_distinguishes_shared_and_credential_fields() {
     use crate::settings::SharedSettingsField;
     use crate::ui::state::{AuthField, SettingsField};
@@ -1418,6 +1510,8 @@ fn function_key_names_are_never_inserted_while_editing() {
         ("f2", Some("F2")),
         ("f12", Some("F12")),
         ("f1", Some("\u{f1}")),
+        // A single layout glyph echoed by F1 must not be inserted either.
+        ("f1", Some("ñ")),
     ] {
         let mut value = ctx(key);
         value.key_char = key_char;
@@ -1453,6 +1547,26 @@ fn function_key_names_are_never_inserted_while_editing() {
             classify_key(&value),
             UiAction::None,
             "settings/alt/{key}/{key_char:?}"
+        );
+
+        // The confirmed-query fallback is not an editing mode, but it shares
+        // `insertable_text`: echoed function-key names must stay inert there
+        // too, with and without Alt.
+        value.modifiers.alt = false;
+        value.editing_settings = false;
+        value.panel = Panel::Vault;
+        value.query_nonempty = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "confirmed/{key}/{key_char:?}"
+        );
+
+        value.modifiers.alt = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::None,
+            "confirmed/alt/{key}/{key_char:?}"
         );
     }
 }

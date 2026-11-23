@@ -2956,3 +2956,73 @@ fn unescaped_slash_in_a_password_is_masked_before_the_path_boundary() {
     let with_port = "https://vault.example.com:8443/path?email=a@b";
     assert_eq!(super::mask_url_userinfo(with_port), with_port);
 }
+
+#[test]
+fn oversized_primary_does_not_fall_back_to_legacy() {
+    // `load_with_fallback` (cache.rs:792-801) falls back to the legacy file
+    // only on `CacheLoadError::NotFound`. A primary that exists but is too
+    // large must keep its own classification, even when a perfectly good
+    // legacy cache sits next to it; silently reviving stale legacy data is
+    // exactly what the migration rule forbids.
+    let root = tempfile::tempdir().unwrap();
+    let new = root.path().join("cache").join("sync-cache.json");
+    let old = root.path().join("config").join("sync-cache.json");
+    std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    let legacy = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&old, &legacy).unwrap();
+    let legacy_bytes = std::fs::read(&old).unwrap();
+
+    // `save` refuses an oversized body, so write the envelope directly. An
+    // 8 MiB `body` stays under MAX_CACHE_BYTES (the file-size gate) and is
+    // rejected by the post-parse body check (cache.rs:907-909) instead.
+    let oversized = SyncCache {
+        body: vec![b'x'; MAX_CACHE_BODY_BYTES + 1],
+        ..legacy.clone()
+    };
+    write_fixture(&new, &serde_json::to_vec(&oversized).unwrap());
+    assert!(matches!(
+        load_with_fallback(&new, &old).err(),
+        Some(CacheLoadError::CacheTooLarge)
+    ));
+    assert_eq!(std::fs::read(&old).unwrap(), legacy_bytes);
+    assert_eq!(load_detailed(&old).unwrap(), legacy);
+
+    // Control: the fallback still applies when the primary is genuinely
+    // absent, so the assertion above is about the size classification rather
+    // than a disabled fallback.
+    std::fs::remove_file(&new).unwrap();
+    assert_eq!(load_with_fallback(&new, &old), Ok(legacy));
+}
+
+#[test]
+fn parse_failed_cause_keeps_the_serde_error_as_source() {
+    // An envelope that is not JSON reaches `load_detailed`'s
+    // `ParseFailedCause` arm (cache.rs:905-906), which must keep the original
+    // serde error reachable through `Error::source()` instead of flattening it
+    // into the family message.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("broken-envelope.json");
+    write_fixture(&path, b"not json");
+
+    let error = load_detailed(&path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ParseFailedCause(_)),
+        "{error:?}"
+    );
+    let source_text = std::error::Error::source(&error)
+        .expect("the serde parse error must stay reachable")
+        .to_string();
+    assert!(
+        !source_text.is_empty(),
+        "the source must carry the parser text"
+    );
+    assert_ne!(source_text, error.message());
+    assert_eq!(cache_error_message(error), REASON_CORRUPT);
+
+    // The plain sibling still reports no source: `source()` is only wired for
+    // the `Cause` variants (error.rs:415-439).
+    let plain = CacheLoadError::ParseFailed;
+    assert!(std::error::Error::source(&plain).is_none());
+    assert_eq!(cache_error_message(plain), REASON_CORRUPT);
+}

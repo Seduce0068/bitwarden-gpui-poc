@@ -21,6 +21,14 @@
 //! after a real sync; today it is exercised only by model tests. The import
 //! layer's own duplicate handling is by cipher **id** (see
 //! [`import_logins_with_audit`]) and is unrelated to name collisions.
+//!
+//! Known constraint: a cipher's `folderId` is copied into the model verbatim
+//! (`login_item`) without checking that the id exists in the same sync body.
+//! A dangling id therefore survives as `VaultItem::folder_id` while
+//! `Vault::folders` has no matching entry; the importer neither drops the login
+//! nor invents a folder for it. The end-to-end behaviour is pinned by
+//! `dangling_folder_id_is_kept_verbatim_without_creating_a_folder` in the test
+//! module; no deeper invariant about orphaned folders is verified here.
 
 use std::collections::{HashMap, HashSet};
 

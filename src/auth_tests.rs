@@ -2767,3 +2767,37 @@ fn plain_failed_unlock_variants_have_no_source() {
         assert_eq!(source.to_string(), "root cause", "{error:?}");
     }
 }
+
+#[test]
+fn plain_auth_error_variants_render_the_same_status_and_family_message() {
+    // `status_message()` (auth.rs:147-162) appends text only for `MissingField`
+    // and for non-empty `Detail` variants. Every plain variant must fall
+    // through to `message()` unchanged, including `Other`'s owned-by-reference
+    // family text. `to_string()` uses the same `message()` (auth.rs:165-169).
+    let plain = [
+        AuthError::InvalidServerUrl,
+        AuthError::BlockedServerUrl,
+        AuthError::InvalidEmail,
+        AuthError::ClientSetup,
+        AuthError::Prelogin,
+        AuthError::Login,
+        AuthError::Sync,
+        AuthError::KdfRejected,
+        AuthError::Timeout,
+        AuthError::Other("unclassified failure"),
+    ];
+    for error in plain {
+        assert_eq!(error.status_message(), error.message(), "{error:?}");
+        assert_eq!(error.status_message(), error.to_string(), "{error:?}");
+    }
+    // The decorated families really do differ, so the assertions above are not
+    // vacuous: a stub that always returned `message()` would fail these two.
+    assert_ne!(
+        AuthError::MissingField("email").status_message(),
+        AuthError::MissingField("email").message()
+    );
+    assert_ne!(
+        AuthError::LoginDetail("invalid_client".into()).status_message(),
+        AuthError::Login.message()
+    );
+}

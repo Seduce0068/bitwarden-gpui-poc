@@ -2544,3 +2544,32 @@ fn card_debug_keeps_expiry_but_masks_secrets() {
         assert!(!debug.contains(secret), "leaked {secret}: {debug}");
     }
 }
+
+#[test]
+fn filter_kind_secure_note_accepts_only_notes_and_labels_them() {
+    // `Filter::Kind(kind)` compares the payload-derived item kind
+    // (model.rs:845-853), and `Filter::label` delegates to `ItemKind::label`
+    // (model.rs:856-867). Secure notes come from fixtures/mock data rather
+    // than the login-only sync importer, so pin the sidebar path explicitly.
+    let vault = sample(); // one SecureNote ("3"), two Logins ("1", "2")
+    let filter = Filter::Kind(ItemKind::SecureNote);
+
+    assert!(filter.accepts(vault.item("3").unwrap()));
+    assert!(!filter.accepts(vault.item("1").unwrap()));
+    assert!(!filter.accepts(vault.item("2").unwrap()));
+    assert_eq!(
+        vault
+            .view(&filter, "", SortKey::NameAsc)
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["3"]
+    );
+
+    // The kind label does not need a folder list, and stays distinct from the
+    // other kinds so a mixed-up match cannot hide behind the same string.
+    assert_eq!(filter.label(&vault.folders), "メモ");
+    assert_eq!(filter.label(&[]), "メモ");
+    assert_eq!(Filter::Kind(ItemKind::Login).label(&[]), "ログイン");
+    assert_eq!(Filter::Kind(ItemKind::Card).label(&[]), "カード");
+}

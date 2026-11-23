@@ -505,3 +505,43 @@ fn missing_generator_fields_are_filled_from_defaults() {
     assert!(partial_passphrase.capitalize);
     assert!(!partial_passphrase.include_number);
 }
+
+#[test]
+fn mandatory_characters_are_shuffled_after_the_fixed_prefix() {
+    // `generate` first pushes one mandatory character per enabled class in a
+    // fixed pool order (generator.rs:104-108), then Fisher-Yates shuffles the
+    // whole buffer (generator.rs:112-115). If that shuffle were removed, every
+    // password here would start with a lowercase letter and the prefix order
+    // would leak into the output. With all four classes enabled a shuffled
+    // first character is lowercase only about a third of the time, so 64 draws
+    // cannot all land there by chance.
+    let settings = PasswordSettings {
+        length: 12,
+        ..PasswordSettings::default()
+    };
+    let mut first_classes = std::collections::HashSet::new();
+    for _ in 0..64 {
+        let password = settings.generate().unwrap();
+        let first = password.chars().next().expect("length >= 1");
+        let class = if LOWERCASE.contains(first) {
+            "lowercase"
+        } else if UPPERCASE.contains(first) {
+            "uppercase"
+        } else if DIGITS.contains(first) {
+            "digits"
+        } else if SYMBOLS.contains(first) {
+            "symbols"
+        } else {
+            panic!("generated character outside the enabled pools: {password}")
+        };
+        first_classes.insert(class);
+    }
+    assert!(
+        first_classes.iter().any(|class| *class != "lowercase"),
+        "without the post-insertion shuffle the first character is always lowercase: {first_classes:?}"
+    );
+    assert!(
+        first_classes.len() > 1,
+        "the first character must not be fixed to one class: {first_classes:?}"
+    );
+}

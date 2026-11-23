@@ -2513,3 +2513,81 @@ fn non_numeric_cipher_types_are_excluded_from_dedup() {
         assert_eq!(kept[0]["type"], json!(1), "{name}");
     }
 }
+
+#[test]
+fn dangling_folder_id_is_kept_verbatim_without_creating_a_folder() {
+    // openwarden's `CipherWire` stores the raw `folderId` as an opaque
+    // `FolderId` (openwarden vault.rs:298, 367) and `login_item` copies it into
+    // the model (vault_sync.rs, `login_item`). Neither layer checks it against the
+    // folder list, so a cipher pointing at a non-existent id still imports:
+    // the id remains on the item and no folder is fabricated. See the module
+    // docs for the recorded constraint.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).unwrap();
+    let folder_name = openwarden::EncString::encrypt(&key, b"Work")
+        .unwrap()
+        .to_string();
+    let mut orphan = cipher("orphan", "2024-01-01T00:00:00Z");
+    orphan["folderId"] = serde_json::json!("ghost-folder");
+    let vault = vault_with_folders(
+        &[serde_json::json!({"id": "f1", "name": folder_name})],
+        &[orphan],
+    );
+
+    let model = import_logins(&vault).expect("a dangling folder id must not abort the import");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].id, "orphan");
+    assert_eq!(model.items[0].folder_id.as_deref(), Some("ghost-folder"));
+    assert_eq!(model.folders.len(), 1, "no folder is invented for the id");
+    assert_eq!(model.folders[0].id, "f1");
+    assert_eq!(model.folder_name("ghost-folder"), None);
+    // The dangling id is still usable by the raw-id filter, which does not
+    // consult `Vault::folders` either.
+    assert!(crate::model::Filter::Folder("ghost-folder".into()).accepts(&model.items[0]));
+}
+
+#[test]
+fn revision_dates_accept_the_four_digit_year_boundaries() {
+    // `parse_revision` reads exactly four year digits (vault_sync.rs,
+    // `parse_revision`) and applies checked arithmetic, so 0000 and 9999 are
+    // the accepted extremes.
+    let min = parse_revision(Some("0000-01-01T00:00:00Z")).expect("year 0000 must parse");
+    let max = parse_revision(Some("9999-12-31T23:59:59Z")).expect("year 9999 must parse");
+    assert!(min < 0, "{min}");
+    assert!(max > 0, "{max}");
+    assert!(max > min);
+
+    // Both boundary years keep their full calendar range: the first and last
+    // instants of each year are distinct and ordered.
+    let min_end = parse_revision(Some("0000-12-31T23:59:59Z")).unwrap();
+    let max_start = parse_revision(Some("9999-01-01T00:00:00Z")).unwrap();
+    assert!(min_end > min);
+    assert!(max > max_start);
+    // Year 0 is a leap year in the proleptic Gregorian calendar used by
+    // `days_from_civil`; year 9999 is not.
+    let year_one = parse_revision(Some("0001-01-01T00:00:00Z")).unwrap();
+    assert_eq!(year_one - min, 366 * 86_400);
+    let year_9998_end = parse_revision(Some("9998-12-31T23:59:59Z")).unwrap();
+    assert_eq!(max - year_9998_end, 365 * 86_400);
+
+    // The largest numeric offset still subtracts without overflowing at the
+    // upper boundary, and the negative one still adds at the lower boundary.
+    assert_eq!(
+        max - parse_revision(Some("9999-12-31T23:59:59+23:59")).unwrap(),
+        86_340
+    );
+    assert_eq!(
+        parse_revision(Some("0000-01-01T00:00:00-23:59")).unwrap() - min,
+        86_340
+    );
+
+    // A fifth digit or an explicit sign cannot fit the fixed four-digit field
+    // and is rejected rather than silently truncated.
+    for value in [
+        "10000-01-01T00:00:00Z",
+        "09999-12-31T23:59:59Z",
+        "-001-01-01T00:00:00Z",
+        "+9999-12-31T23:59:59Z",
+    ] {
+        assert_eq!(parse_revision(Some(value)), None, "{value}");
+    }
+}

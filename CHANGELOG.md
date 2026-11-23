@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第90弾 / 2026-11-23）
+
+- 検索確定後のクエリへ印刷文字を追加できるようにし、
+  PageUp/PageDown の固定10行をヒントへ明記
+- UnlockError Display/source、same_json_type 全型、pop_shared_char、
+  非数値 type、フィルタ＋クエリ AND、kind_counts をテスト
+- passphrase の恒偽 join チェックを削除
+
 ### 全体改善（第87〜89弾 / 2026-11-23）
 
 - 空一覧/一覧ヘッダのキー案内を用途別に分離
