@@ -3552,3 +3552,33 @@ fn positive_schema_markers_beyond_u32_width_are_future_versions() {
         Some(4_294_967_296)
     );
 }
+
+#[test]
+fn ensure_device_id_with_a_valid_id_and_a_path_does_not_create_a_file() {
+    // `ensure_device_id` (settings.rs:736-749) only generates and persists when
+    // the in-memory value fails `is_valid_device_id`. With an already valid id
+    // and `Some(path)` it takes the early return: the id is reused verbatim and
+    // no settings file is created. This is the "valid id + Some(path) + no
+    // file" branch, distinct from the generation/persist path (which writes)
+    // and from the `None` path (which only touches memory).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    const VALID: &str = "a1b2c3d4-1234-4abc-8def-0123456789ab";
+    assert!(is_valid_device_id(VALID), "fixture premise: {VALID}");
+    assert!(!path.exists(), "fixture premise: no file yet");
+
+    let mut settings = Settings {
+        device_id: VALID.to_string(),
+        ..Default::default()
+    };
+    assert_eq!(settings.ensure_device_id(Some(&path)).unwrap(), VALID);
+    assert!(
+        !path.exists(),
+        "a valid in-memory id must not trigger a write"
+    );
+    assert_eq!(settings.device_id, VALID);
+
+    // Repeating the call keeps the same early-return behaviour.
+    assert_eq!(settings.ensure_device_id(Some(&path)).unwrap(), VALID);
+    assert!(!path.exists());
+}

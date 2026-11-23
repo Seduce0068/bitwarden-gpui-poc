@@ -4253,3 +4253,61 @@ fn raw_control_characters_in_the_server_url_are_masked_and_escaped_on_disk() {
     assert!(!on_disk.contains("RAW\nSECRET"), "{on_disk:?}");
     assert_eq!(load_detailed(&path).unwrap().server_url, url);
 }
+
+#[test]
+fn numeric_password_with_an_unescaped_slash_is_masked_before_the_path_boundary() {
+    // An all-digit colon value used to be dismissed as a `host:port`, so the
+    // first '/' closed the authority and the '@' after the numeric password was
+    // never scanned: `Debug` leaked the credential. `has_userinfo_colon` now
+    // recognizes a non-canonical digit run (5+ digits or a leading zero)
+    // *before* the slash is treated as a path separator (cache.rs:157-167,
+    // 197-204).
+    for (url, expected, secret) in [
+        (
+            "https://user:12345/secret@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+            "12345/secret",
+        ),
+        (
+            "https://alice:9876543210/a/b@vault.example.com:8443/path?state=ok",
+            "https://[redacted]@vault.example.com:8443/path?state=ok",
+            "9876543210/a/b",
+        ),
+        (
+            "https://bob:01234/secret@vault.example.com/path",
+            "https://[redacted]@vault.example.com/path",
+            "01234/secret",
+        ),
+        (
+            "user:12345/secret@vault.example.com",
+            "[redacted]@vault.example.com",
+            "12345/secret",
+        ),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        assert!(
+            rendered.contains("[redacted]@vault.example.com"),
+            "{rendered}"
+        );
+        assert_eq!(cache.server_url, url, "masking is Debug-only");
+    }
+
+    // Boundary of the same heuristic: a canonical 1..=4 digit port before the
+    // '/' stays a port, so its query '@' is still query text and the URL is
+    // copied through verbatim. A five-digit run is deliberately read as a
+    // numeric password (the documented `numeric_password_colon` policy) and is
+    // therefore masked even though 10000 is a representable TCP port. Pin both
+    // sides of the 4/5-digit boundary so the misjudgment cannot drift silently.
+    let port_ok = "https://vault.example.com:8443/path?email=a@b";
+    assert_eq!(super::mask_url_userinfo(port_ok), port_ok, "{port_ok}");
+    assert_eq!(
+        super::mask_url_userinfo("https://vault.example.com:10000/path?email=a@b"),
+        "https://[redacted]@b"
+    );
+    assert!(!super::numeric_password_colon("user:9999"));
+    assert!(super::numeric_password_colon("user:10000"));
+    assert!(super::numeric_password_colon("user:0123"));
+}

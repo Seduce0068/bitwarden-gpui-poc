@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第110弾で 6 件すべてを完了）。
+なし（第111弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第111弾（16 担当・55 回目）の指摘 6 件を完結（2026-11-23）
+  - 数値パスワード＋'/' マスク、model の Cc 判定、
+    確定クエリ案内、ADR redact 行参照を修正。
+  - KDF 成功経路、不可視 server_url、ensure_device_id 早期リターン、
+    4/5桁ポート境界をテスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1076 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第110弾（16 担当・54 回目）の指摘 6 件を完結（2026-11-23）
   - 監査 status の内部 ID／Cf 名、確定クエリ再編集案内、
     arrow キー、master_password の不可視判定を修正。

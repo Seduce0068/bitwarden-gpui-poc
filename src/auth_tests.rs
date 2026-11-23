@@ -4121,3 +4121,105 @@ fn ipv4_compatible_metadata_addresses_are_a_documented_blind_spot_in_every_path(
         );
     }
 }
+
+#[test]
+fn master_key_derive_success_path_is_deterministic() {
+    // The rejection arm is pinned by `weak_kdf_is_rejected_by_the_real_derive`;
+    // this covers the *success* arm of the same production call (auth.rs:1192)
+    // with a policy whose minimum accepts a cheap two-iteration PBKDF2 KDF.
+    // `derive` is pure: equal inputs must yield an equal key (observable via
+    // `password_hash`), and changing any input must change it. No RNG, network
+    // or clock is involved, so the assertions are fully deterministic.
+    let cheap = KdfPolicy {
+        pbkdf2_min_iterations: 2,
+        ..KdfPolicy::default()
+    };
+    let kdf = Kdf::Pbkdf2 { iterations: 2 };
+    let password = SecretString::from("correct horse".to_string());
+    let email = "alice@example.com";
+
+    let first = MasterKey::derive(&password, email, &kdf, &cheap)
+        .expect("a policy-valid KDF must derive a master key");
+    let second = MasterKey::derive(&password, email, &kdf, &cheap)
+        .expect("the same inputs must derive again");
+    let baseline = first.password_hash(&password);
+    assert_eq!(
+        baseline.expose_secret(),
+        second.password_hash(&password).expose_secret(),
+        "derive must be deterministic for identical inputs"
+    );
+
+    // The derived key really depends on every input, so the equality above is
+    // not a constant-valued stub. Each variant uses a policy-valid iteration
+    // count and the same cheap policy.
+    let other_password = SecretString::from("correct horses".to_string());
+    let changed = [
+        (
+            "password",
+            MasterKey::derive(&other_password, email, &kdf, &cheap).unwrap(),
+            &other_password,
+        ),
+        (
+            "email",
+            MasterKey::derive(&password, "bob@example.com", &kdf, &cheap).unwrap(),
+            &password,
+        ),
+        (
+            "kdf",
+            MasterKey::derive(&password, email, &Kdf::Pbkdf2 { iterations: 3 }, &cheap).unwrap(),
+            &password,
+        ),
+    ];
+    for (label, key, pw) in changed {
+        assert_ne!(
+            baseline.expose_secret(),
+            key.password_hash(pw).expose_secret(),
+            "changing {label} must change the derived key"
+        );
+    }
+}
+
+#[test]
+fn invisible_only_server_url_is_an_invalid_url_not_a_missing_field() {
+    // Unlike the credential fields, `server_url` uses `trim().is_empty()` for
+    // its missing-field check (auth.rs:722). Unicode Cf/Cc are not whitespace,
+    // so an invisible-only value reaches the URL parser and is classified as
+    // InvalidServerUrl (with the parser detail), not MissingField. Pin that
+    // classification so a pasted zero-width space cannot be mistaken for an
+    // unset server; the credential fields reject the same text as missing.
+    for invisible in [
+        "\u{200b}",
+        "\u{feff}",
+        "\u{200d}\u{2060}",
+        "\u{0}",
+        "\u{7f}",
+        "\u{9f}",
+    ] {
+        assert!(
+            !invisible.trim().is_empty(),
+            "premise: trim keeps Cf/Cc: {invisible:?}"
+        );
+        assert!(
+            !is_blocked_server_url_without_dns(invisible),
+            "a scheme-less value is not a blocked host: {invisible:?}"
+        );
+        let mut value = config();
+        value.server_url = invisible.to_string();
+        let error = validate_config(&value).unwrap_err();
+        assert_eq!(error, AuthError::InvalidServerUrl, "{invisible:?}");
+        assert!(
+            matches!(&error, AuthError::InvalidServerUrlDetail(_)),
+            "the parser detail must survive: {invisible:?} -> {error:?}"
+        );
+        assert!(error.status_message().contains("サーバー URL が不正です"));
+    }
+
+    // Invisible characters in the path do not move the host out of a blocked
+    // range: the SSRF classifier reads only `url.host_str()` (auth.rs:643-655).
+    for value in [
+        "http://169.254.169.254/\u{200b}latest",
+        "http://metadata.google.internal/\u{200b}latest",
+    ] {
+        assert!(is_blocked_server_url_without_dns(value), "{value:?}");
+    }
+}

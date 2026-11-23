@@ -158,10 +158,15 @@ fn is_scheme(text: &str) -> bool {
 ///
 /// A colon followed by a non-empty, non-all-digits value distinguishes userinfo
 /// from a `host:8443` port. Used to tell an unescaped '/' inside a password
-/// from the path separator that closes the authority.
+/// from the path separator that closes the authority. A non-canonical digit run
+/// (five or more digits, or a leading zero) is a numeric password rather than a
+/// port ([`numeric_password_colon`]) and counts as userinfo too: without this,
+/// `https://user:12345/secret@host` would close the authority at the '/' and
+/// the credential would survive `Debug` masking.
 fn has_userinfo_colon(text: &str) -> bool {
     text.split_once(':').is_some_and(|(_, value)| {
-        !value.is_empty() && !value.bytes().all(|byte| byte.is_ascii_digit())
+        !value.is_empty()
+            && (!value.bytes().all(|byte| byte.is_ascii_digit()) || numeric_password_colon(text))
     })
 }
 

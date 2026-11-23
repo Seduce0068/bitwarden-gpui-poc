@@ -99,15 +99,18 @@ pub(crate) use unicode_normalize::comparison_key;
 
 /// Whether `value` carries no visible content.
 ///
-/// Whitespace and Unicode `Cf` (format) characters render nothing, whether
-/// they sit at the edges or between visible letters. This is the same rule the
-/// UI uses for empty-looking text; search, duplicate detection and the TOTP
-/// badge share it so an invisible-only value is not mistaken for a present
-/// one (for example a Cf-only TOTP field or a zero-width-space name).
+/// Whitespace, Unicode `Cc` (control) characters and `Cf` (format) characters
+/// render nothing, whether they sit at the edges or between visible letters.
+/// `Cc` is not whitespace (`str::trim()` alone keeps NUL and C1 controls), so
+/// it is listed explicitly to match the credential blank rule in
+/// `crate::auth::credential_is_blank`. This is the same rule the UI uses for
+/// empty-looking text; search, duplicate detection and the TOTP badge share it
+/// so an invisible-only value is not mistaken for a present one (for example a
+/// Cf-only TOTP field or a zero-width-space name).
 pub(crate) fn is_visually_empty(value: &str) -> bool {
     value
         .chars()
-        .all(|ch| ch.is_whitespace() || crate::limits::is_format_character(ch))
+        .all(|ch| ch.is_whitespace() || ch.is_control() || crate::limits::is_format_character(ch))
 }
 
 /// Sentinel for a missing or unparsable revision date.

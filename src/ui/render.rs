@@ -753,8 +753,10 @@ mod tests {
         for query in ["", "  ", "\u{200b}", "\u{200b}\u{feff}"] {
             let header = vault_list_header_text(3, 7, "すべて", "名前 ↑", query, false);
             assert!(header.contains("検索: (なし)"), "{query:?}: {header}");
-            // A whitespace-only query is still printed verbatim by the
-            // header (it is visually blank), so only assert the Cf case.
+            // `vault_search_query_text` reuses `is_visually_empty`, so a
+            // whitespace-only query is drawn as "(なし)" here too; the raw
+            // text is never printed. The check below guards the invisible
+            // (`Cf`) case, whose blank appearance is easiest to overlook.
             if query.contains('\u{200b}') {
                 assert!(!header.contains(query), "raw invisible query: {header}");
             }

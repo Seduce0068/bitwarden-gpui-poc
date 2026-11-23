@@ -3757,3 +3757,31 @@ fn item_data_debug_pins_the_empty_totp_branch() {
     assert!(!populated.contains("JBSWY3DPEHPK3PXP"), "{populated}");
     assert!(!populated.contains("totp: \"\""), "{populated}");
 }
+
+#[test]
+fn control_characters_only_values_are_visually_empty_like_auth_credentials() {
+    // `is_visually_empty` (model.rs:100-114) now includes `Cc` through
+    // `char::is_control`, matching `credential_is_blank` in auth. NUL, DEL and
+    // the C1 controls are not whitespace, so the old whitespace + Cf rule
+    // treated a Cc-only name / TOTP value as present.
+    for control in ['\u{0}', '\u{1}', '\u{1f}', '\u{7f}', '\u{80}', '\u{9f}'] {
+        let value = control.to_string();
+        assert!(
+            super::is_visually_empty(&value),
+            "Cc U+{:04X} must be invisible",
+            control as u32
+        );
+        // Cc mixed with whitespace and Cf is still invisible on the shared rule.
+        let mixed = format!(" \u{200b}{control}\t");
+        assert!(
+            super::is_visually_empty(&mixed),
+            "mixed Cc U+{:04X} must be invisible",
+            control as u32
+        );
+        // One visible character makes the value present again.
+        assert!(!super::is_visually_empty(&format!("{control}GitHub")));
+    }
+    // Controls: the pre-existing halves of the rule still hold.
+    assert!(super::is_visually_empty(" \t\n \u{200b}"));
+    assert!(!super::is_visually_empty("GitHub"));
+}

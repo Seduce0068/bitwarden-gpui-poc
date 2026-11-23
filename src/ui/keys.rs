@@ -36,11 +36,14 @@ pub(super) const TEXT_EDIT_ARROW_KEYS_HINT: &str =
 ///
 /// Enter/Escape only *confirms* a search; the query is kept and the
 /// `query_nonempty` branches below still accept `Backspace` and typed text.
-/// The status installed by [`crate::ui::input::search_finished_status`] names
-/// those keys so the re-edit path is discoverable; keeping the wording next to
-/// the bindings makes it harder for the two to drift apart.
+/// Command keys are matched first in the `Panel::Vault` arm, so a character
+/// such as `l` or `/` keeps its vault action instead of reaching the query;
+/// the hint says "コマンド文字を除く" for that reason. The status installed by
+/// [`crate::ui::input::search_finished_status`] names those keys so the
+/// re-edit path is discoverable; keeping the wording next to the bindings
+/// makes it harder for the two to drift apart.
 pub(super) const CONFIRMED_QUERY_REEDIT_HINT: &str =
-    "Backspace: クエリの末尾を削除 / 文字入力: クエリを再編集";
+    "Backspace: クエリの末尾を削除 / 文字入力（コマンド文字を除く）: クエリを再編集";
 
 /// Apply a generator option to its settings.
 ///
@@ -645,7 +648,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             // A confirmed query stays editable with the same insertable-text
             // rule as the search mode. `/` is matched above, so re-pressing it
             // still starts a *fresh* search instead of appending a slash, and
-            // every command key above keeps its existing vault binding.
+            // every command key above keeps its existing vault binding: only
+            // non-command characters reach the query, hence "コマンド文字を除く"
+            // in `CONFIRMED_QUERY_REEDIT_HINT`.
             _ if ctx.query_nonempty => insertable_text(ctx).map_or(UiAction::None, |text| {
                 text_action(text, UiAction::InsertQueryText)
             }),
@@ -1263,12 +1268,19 @@ mod r2_ui_110_tests {
     fn confirmed_query_hint_matches_the_reedit_bindings() {
         let hint = CONFIRMED_QUERY_REEDIT_HINT;
         assert!(hint.contains("Backspace"), "{hint}");
-        assert!(hint.contains("文字入力"), "{hint}");
+        assert!(hint.contains("文字入力（コマンド文字を除く）"), "{hint}");
 
         let mut ctx = nav_ctx("backspace");
         ctx.query_nonempty = true;
         assert_eq!(classify_key(&ctx), UiAction::BackspaceQuery);
         ctx.key = "a";
         assert_eq!(classify_key(&ctx), UiAction::InsertQueryText("a".into()));
+
+        // Command characters keep their vault bindings even with a confirmed
+        // query instead of being inserted, so the hint excludes them.
+        ctx.key = "l";
+        assert_eq!(classify_key(&ctx), UiAction::Lock);
+        ctx.key = "/";
+        assert_eq!(classify_key(&ctx), UiAction::StartSearch);
     }
 }
