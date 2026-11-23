@@ -1160,6 +1160,28 @@ fn uri_marker_rejects_pseudo_markers() {
 }
 
 #[test]
+fn uri_marker_with_an_appended_suffix_is_not_a_marker() {
+    // `is_undecryptable_uri` is exact equality (vault_sync.rs:88-91), like its
+    // password/TOTP siblings. The sibling test pins the suffix form for those
+    // two markers but never calls the URI helper for it; close that gap so a
+    // crafted URI that merely extends the marker is not classified as
+    // undecryptable (which would suppress NoUri and mislead the audit).
+    assert!(is_undecryptable_uri(UNDECRYPTABLE_URI));
+    for suffix in ["-x", " ", "\u{0}", "extra", "\u{3000}"] {
+        let extended = format!("{UNDECRYPTABLE_URI}{suffix}");
+        assert!(
+            !is_undecryptable_uri(&extended),
+            "URI marker accepted with suffix: {extended:?}"
+        );
+        assert!(!is_undecryptable_password(&extended), "{extended:?}");
+        assert!(!is_undecryptable_totp(&extended), "{extended:?}");
+    }
+    // A prefixed lookalike is likewise not the marker.
+    let prefixed = format!("x{UNDECRYPTABLE_URI}");
+    assert!(!is_undecryptable_uri(&prefixed));
+}
+
+#[test]
 fn pascal_case_sync_body_is_normalized_for_openwarden() {
     let body = br#"{
         "Profile": {"Id": "user-1", "Key": "2.encrypted"},
@@ -2015,6 +2037,74 @@ fn uri_wire_matches_zero_two_four_survive_the_sync_to_model_round_trip() {
     }
 
     // The model's serde round trip keeps the wire number as well.
+    let json = serde_json::to_string(uris).unwrap();
+    let restored: Vec<crate::model::LoginUri> = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.as_slice(), uris);
+}
+
+#[test]
+fn pascal_case_uri_match_wire_values_survive_the_sync_to_model_round_trip() {
+    // `parse_sync` folds PascalCase keys through `camel_case_key`, so `Match`
+    // must reach openwarden as `match` (vault_sync.rs:201-212). The wire
+    // number then travels through `login_item` into `LoginUri::match_type`
+    // and back through serde unchanged; a missed key would silently drop the
+    // matching rule and change autofill behaviour.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        serde_json::json!(openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string())
+    };
+    let mut cipher = encrypted_login("pascal-uri-match", REAL_PASSWORD, REAL_TOTP);
+    cipher["login"]["uris"] = serde_json::json!([
+        { "uri": enc(b"https://domain.example.com"), "match": 0 },
+        { "uri": enc(b"https://prefix.example.com"), "match": 2 },
+        { "uri": enc(b"https://regex.example.com"), "match": 4 },
+        { "uri": enc(b"https://unset.example.com"), "match": null }
+    ]);
+    let mut body = serde_json::json!({
+        "profile": { "id": "user-1" },
+        "folders": [],
+        "ciphers": [cipher],
+    });
+    pascalize(&mut body);
+    let vault = vault_from_body(body.to_string().as_bytes());
+    let model = import_logins(&vault).expect("PascalCase URI match keys must normalize");
+    let uris = model
+        .item("pascal-uri-match")
+        .expect("the login must be imported")
+        .uris();
+    assert_eq!(uris.len(), 4, "{uris:?}");
+
+    let cases = [
+        (
+            "https://domain.example.com",
+            0u8,
+            openwarden::UriMatch::Domain,
+        ),
+        (
+            "https://prefix.example.com",
+            2,
+            openwarden::UriMatch::StartsWith,
+        ),
+        (
+            "https://regex.example.com",
+            4,
+            openwarden::UriMatch::RegularExpression,
+        ),
+    ];
+    for (uri, (expected_uri, wire, expected_enum)) in uris[..3].iter().zip(cases.iter()) {
+        assert_eq!(uri.uri, *expected_uri);
+        assert_eq!(uri.match_type, Some(*wire), "wire {wire}");
+        assert_eq!(uri.match_enum(), Some(*expected_enum), "wire {wire}");
+        assert_eq!(expected_enum.to_wire(), *wire);
+    }
+    // An explicit JSON null is not a number: it must not acquire a match type.
+    assert_eq!(uris[3].uri, "https://unset.example.com");
+    assert_eq!(uris[3].match_type, None);
+    assert_eq!(uris[3].match_enum(), None);
+
+    // The model's serde round trip keeps the wire numbers after normalization.
     let json = serde_json::to_string(uris).unwrap();
     let restored: Vec<crate::model::LoginUri> = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.as_slice(), uris);

@@ -152,12 +152,16 @@ pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String
 /// `settings_hint` already carries the settings-specific keys and avoids the
 /// status bar's "入力中:" prefix; appending the scroll note must not reintroduce
 /// that prefix here. While a field is focused, the keys that look like settings
-/// commands but are actually inserted as text (`+`/`-`, `1`-`6`, `i`/`u`) are
-/// spelled out here, because `settings_hint(true)` only lists the letter keys.
+/// commands but are actually inserted as text (`+`/`-`, `1`-`6`, `i`/`u`, and
+/// `n`, which otherwise jumps to the generator panel) are spelled out here,
+/// because `settings_hint(true)` only lists the letter keys. Naming `n` here is
+/// what makes the generator-panel key discoverable during editing: the jump
+/// itself cannot fire until Enter/Escape confirms the field
+/// (`ui::keys::classify_key`), so the wording says so instead of promising it.
 pub(super) fn settings_panel_key_hint(editing: bool) -> String {
     if editing {
         format!(
-            "{} / +/-, 1-6（1〜6）, i/u も文字として入力（設定値は変更しません） / {}",
+            "{} / +/-, 1-6（1〜6）, i/u, n（生成パネルへ）も文字として入力（設定値は変更しません / n: 生成へ は確定後に有効） / {}",
             settings_hint(editing),
             MOUSE_WHEEL_SCROLL_ONLY_HINT
         )
@@ -175,14 +179,18 @@ pub(super) fn settings_panel_key_hint(editing: bool) -> String {
 /// `ui::keys::classify_key` binds `n` directly to `Panel::Generator` in
 /// `Panel::Settings`, so the guidance must not send the user back to the vault
 /// list first (the old wording did). While a settings field is focused, `n` is
-/// inserted as text instead of jumping to the generator, so the hint is
-/// suppressed rather than advertising a command that cannot fire. Pure so the
-/// rendered text can be pinned without a GPUI window.
+/// inserted as text instead of jumping to the generator, so this jump hint is
+/// suppressed rather than advertising a command that cannot fire; the editing
+/// key guide (`settings_panel_key_hint(true)`) names the same `n` key with the
+/// "文字として入力" wording instead. Pure so the rendered text can be pinned
+/// without a GPUI window.
 pub(super) fn settings_generator_summary_line(
     password_length: usize,
     passphrase_words: usize,
     editing: bool,
 ) -> String {
+    // Editing: `settings_panel_key_hint(true)` already carries the n key, so
+    // keep this line free of a jump promise that `classify_key` cannot honour.
     let jump_hint = if editing { "" } else { "（n: 生成へ）" };
     format!(
         "生成設定: パスワード {password_length} 文字 / パスフレーズ {passphrase_words} 語{jump_hint}"
@@ -1402,13 +1410,15 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn settings_editing_hint_names_every_literal_text_key() {
-        // While editing, `+`/`-`, `1`-`6` and `i`/`u` look like settings
-        // commands but are inserted as characters (`ui::keys` editing branch).
+        // While editing, `+`/`-`, `1`-`6`, `i`/`u` and `n` (the generator-panel
+        // jump key) look like settings commands but are inserted as characters
+        // (`ui::keys` editing branch).
         let editing = settings_panel_key_hint(true);
         for token in [
             "+/-",
             "1-6",
             "i/u",
+            "n（生成パネルへ）",
             "文字として入力",
             "設定値は変更しません",
         ] {
@@ -1431,5 +1441,20 @@ mod tests {
                 MOUSE_WHEEL_SCROLL_ONLY_HINT
             )
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_editing_hint_explains_the_generator_key_without_promising_a_jump() {
+        let editing = settings_panel_key_hint(true);
+        assert!(editing.contains("n（生成パネルへ）"), "{editing}");
+        assert!(editing.contains("n: 生成へ は確定後に有効"), "{editing}");
+        // The direct jump works only after Enter/Escape confirms the field, so
+        // the summary line keeps hiding its own jump hint while editing: one
+        // accurate explanation in the key guide, no duplicate promise.
+        let editing_summary = settings_generator_summary_line(24, 6, true);
+        assert!(!editing_summary.contains("n:"), "{editing_summary}");
+        let idle_summary = settings_generator_summary_line(24, 6, false);
+        assert!(idle_summary.contains("n: 生成へ"), "{idle_summary}");
+        assert!(!settings_panel_key_hint(false).contains("n（生成パネルへ）"));
     }
 }

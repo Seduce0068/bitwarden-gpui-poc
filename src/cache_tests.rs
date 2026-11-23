@@ -2691,6 +2691,52 @@ fn genuine_fragment_delimiter_is_not_rewritten_as_a_nested_password_hash() {
 }
 
 #[test]
+fn ambiguous_hash_is_treated_as_a_nested_password_and_fails_closed() {
+    // `hash_continues_nested_password` (cache.rs:707-744) deliberately fails
+    // closed: a `user:secret`-shaped query value plus a tail whose '@' is
+    // followed by a plausible host is treated as a nested authority even when
+    // the text is ambiguous (`?next=a:b#frag@x`). Re-encoding that '#' keeps
+    // the credential inside the value instead of exposing it as fragment text.
+    let head = "https://vault.example.com/login?next=a:b";
+    assert!(super::hash_continues_nested_password(head, "frag@x"));
+    assert!(super::hash_continues_nested_password(
+        head,
+        "frag@docs.example:8443/path"
+    ));
+
+    // Each half of the ambiguity is required: no user:secret marker, an
+    // all-digit "secret" (a port, not a password), no query in the head, and
+    // no plausible host after '@' all stay on the genuine-fragment path.
+    for (plain_head, tail) in [
+        ("https://vault.example.com/login?state=ok", "frag@x"),
+        ("https://vault.example.com/login?next=a:12345", "frag@x"),
+        ("https://vault.example.com/login/path", "frag@x"),
+        (head, "frag"),
+        (head, "frag@"),
+    ] {
+        assert!(
+            !super::hash_continues_nested_password(plain_head, tail),
+            "ambiguous branch must not rewrite {plain_head} #{tail}"
+        );
+    }
+
+    // End to end: the ambiguity is redacted like any other credential, so a
+    // sensitive key's value never reaches Debug even though the '#' was the
+    // only character that looked like a fragment delimiter.
+    let url = "https://vault.example.com/login?token=a:b#frag@x";
+    assert_eq!(
+        super::mask_url_secrets(url),
+        "https://vault.example.com/login?token=[redacted]"
+    );
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("a:b"), "{rendered}");
+    assert!(!rendered.contains("frag@x"), "{rendered}");
+    // Debug-only masking: the stored URL stays byte-for-byte identical.
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
 fn debug_pins_the_stored_body_byte_count() {
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
     let stored = String::from_utf8(cache.body.clone()).expect("the cached JSON body is UTF-8");

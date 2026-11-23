@@ -309,6 +309,34 @@ fn now_unix_is_plausible() {
 }
 
 #[test]
+fn now_unix_tracks_the_system_clock_instead_of_a_fixed_value() {
+    // `now_unix_is_plausible` checks only a lower bound and a ceiling derived
+    // from `now_unix()` itself, so a hardcoded constant passes both. Read the
+    // clock independently immediately before and after the call and require
+    // the wrapper to land inside that bracket: a fixed value can only pass if
+    // it happens to equal the current second during this one test.
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the PoC requires a clock after the Unix epoch")
+        .as_secs();
+    let sampled = now_unix();
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the PoC requires a clock after the Unix epoch")
+        .as_secs();
+    assert!(
+        before <= sampled && sampled <= after,
+        "{before} <= {sampled} <= {after}"
+    );
+    // Keep the bracket tight so the assertion is about the wrapper rather
+    // than about an unbounded window that any stale value could fall into.
+    assert!(
+        after.saturating_sub(before) < 60,
+        "the clock moved too far during the sample: {before}..{after}"
+    );
+}
+
+#[test]
 fn current_code_after_a_period_boundary_matches_the_newly_computed_code() {
     // The UI's `current_code()` reads a `Tick` snapshot and must resample once
     // the TOTP window rolls over. Pin that contract here: at the 30s boundary

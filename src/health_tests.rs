@@ -2,7 +2,7 @@
 
 use crate::generator::{entropy_bits, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE};
 use crate::health::*;
-use crate::model::{CardData, ItemData, LoginUri, SshKeyData, VaultItem};
+use crate::model::{CardData, ItemData, ItemKind, LoginUri, SshKeyData, VaultItem};
 use crate::vault_sync::{is_undecryptable_password, UNDECRYPTABLE_PASSWORD, UNDECRYPTABLE_TOTP};
 use zeroize::Zeroizing;
 
@@ -476,6 +476,50 @@ fn to_text_reports_totp_coverage_and_medium_low_counts() {
     assert!(text.contains(summary.as_str()), "{text}");
     assert!(text.contains("TOTP 設定済み: 2/3 (67%)\n"), "{text}");
     assert!(text.contains("パスワード検査対象外: 0 件\n"), "{text}");
+}
+
+#[test]
+fn to_text_renders_the_item_kind_label_for_every_kind() {
+    // `Report::to_text` (health.rs:271-277) renders each finding-bearing item
+    // as `[severity] name (kind.label())`. All five `ItemKind` labels are
+    // user-visible vocabulary in the exported report, so pin the exact line
+    // for each kind: a label regression must not silently relabel an item.
+    let kinds = [
+        (ItemKind::Login, "ログイン"),
+        (ItemKind::SecureNote, "メモ"),
+        (ItemKind::Card, "カード"),
+        (ItemKind::Identity, "ID"),
+        (ItemKind::SshKey, "SSH鍵"),
+    ];
+    let severity_label = Finding::Unnamed.severity().label();
+    let report = Report {
+        examined: kinds.len(),
+        items: kinds
+            .iter()
+            .map(|(kind, _)| ItemReport {
+                id: format!("id-{}", kind.to_wire()),
+                name: format!("Name-{}", kind.to_wire()),
+                kind: *kind,
+                findings: vec![Finding::Unnamed],
+            })
+            .collect(),
+        ..Report::default()
+    };
+
+    let text = report.to_text();
+    for (kind, label) in kinds {
+        let name = format!("Name-{}", kind.to_wire());
+        assert!(
+            text.contains(&format!("[{severity_label}] {name} ({label})\n")),
+            "missing kind label {label:?} for {name}: {text}"
+        );
+    }
+    // A stub that printed one label for every item could not satisfy the
+    // five distinct per-name assertions above; guard the premise as well.
+    let labels: Vec<_> = kinds.iter().map(|(_, label)| *label).collect();
+    for (index, label) in labels.iter().enumerate() {
+        assert!(!labels[..index].contains(label), "duplicate label: {label}");
+    }
 }
 
 #[test]

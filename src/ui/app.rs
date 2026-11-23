@@ -401,6 +401,25 @@ pub(super) fn totp_detail_text(secret: &str, generated: String, error: Option<St
     }
 }
 
+/// Password cell of a login detail row.
+///
+/// The copy path (`ui::logic::select_copy_value`) refuses a password with no
+/// visible content, but the detail row used to count every `char` and render
+/// e.g. "3文字" for a whitespace/Unicode `Cf`-only value. Both now go through
+/// [`is_visually_empty`], so an absent password reads "なし" on both sides.
+/// The undecryptable sentinel keeps its own label and is checked first because
+/// it carries visible text. Pure so the wording can be pinned without a GPUI
+/// window.
+pub(super) fn password_detail_label(password: &str) -> String {
+    if crate::vault_sync::is_undecryptable_password(password) {
+        "復号不可".to_string()
+    } else if is_visually_empty(password) {
+        "なし".to_string()
+    } else {
+        format!("{}文字", password.chars().count())
+    }
+}
+
 /// TOTP cell of a login detail row.
 ///
 /// A blank or invisible-only (`Cf`) secret is *absent*, not malformed: sending
@@ -1295,11 +1314,7 @@ impl BitwardenApp {
                     let error = self.totp.error_message();
                     (generated, error)
                 });
-                let password_label = if crate::vault_sync::is_undecryptable_password(&password) {
-                    "復号不可".to_string()
-                } else {
-                    format!("{}文字", password.chars().count())
-                };
+                let password_label = password_detail_label(&password);
                 let uri = login_uri_text(&uris);
                 join_detail_fields(
                     &base,
@@ -2818,6 +2833,43 @@ mod tests {
         let label = format!("更新: {}", format_revision_date(1_700_000_000));
         assert!(label.contains("更新: "));
         assert!(!label.contains("更新: 1700000000"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn password_detail_label_agrees_with_the_copy_rule_on_absent_values() {
+        use crate::model::ItemData;
+        use crate::ui::logic::select_copy_value;
+        use crate::vault_sync::UNDECRYPTABLE_PASSWORD;
+        use zeroize::Zeroizing;
+
+        let login = |password: &str| ItemData::Login {
+            username: "alice@example.com".to_string(),
+            password: Zeroizing::new(password.to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+
+        // Whitespace and invisible-only (Cf) values look empty and are refused
+        // by the copy path; the detail row must not advertise a character count.
+        for blank in ["", "   \t ", "\u{200b}", "\u{200b}\u{feff}\u{202e}"] {
+            assert_eq!(password_detail_label(blank), "なし", "{blank:?}");
+            assert_eq!(select_copy_value(&login(blank), true), None, "{blank:?}");
+        }
+
+        // A visible secret keeps its old label and remains copyable.
+        assert_eq!(password_detail_label("s3cret"), "6文字");
+        assert_eq!(password_detail_label(" alice "), "7文字");
+        assert_eq!(
+            select_copy_value(&login("s3cret"), true).as_deref(),
+            Some("s3cret")
+        );
+
+        // The decryption marker keeps its dedicated label and is not copied.
+        assert_eq!(password_detail_label(UNDECRYPTABLE_PASSWORD), "復号不可");
+        assert_eq!(
+            select_copy_value(&login(UNDECRYPTABLE_PASSWORD), true),
+            None
+        );
     }
 
     #[::core::prelude::v1::test]
