@@ -591,3 +591,38 @@ fn expires_within_is_inclusive_at_the_remaining_seconds_boundary() {
     assert!(!code_at(RFC_SECRET, 24).unwrap().expires_within(5));
     assert!(!code_at(RFC_SECRET, 0).unwrap().expires_within(29));
 }
+
+#[test]
+fn expires_within_uses_the_codes_own_custom_period() {
+    // `Code::expires_within` (totp.rs:66-69) compares the code's `remaining`
+    // seconds, which openwarden derives from that code's own period. With a
+    // 60-second window the same wall-clock second is far from expiry, while
+    // the last second of the window still trips a one-second warning.
+    let uri = format!("otpauth://totp/RFC?secret={RFC_SECRET}&period=60");
+    for (time, remaining) in [(0u64, 60u64), (30, 30), (54, 6), (59, 1)] {
+        let code = code_at(&uri, time).unwrap();
+        assert_eq!(code.period(), 60, "t={time}");
+        assert_eq!(code.remaining(), remaining, "t={time}");
+        assert!(
+            code.expires_within(remaining),
+            "t={time}: the boundary itself must be included"
+        );
+        assert!(
+            !code.expires_within(remaining - 1),
+            "t={time}: one second short of the boundary"
+        );
+    }
+    // The full-window warning at t=0 must use 60, not the usual 30.
+    assert!(code_at(&uri, 0).unwrap().expires_within(60));
+    assert!(!code_at(&uri, 0).unwrap().expires_within(59));
+    // Last second of the custom window is inside a 1s warning; two seconds
+    // earlier is not.
+    assert!(code_at(&uri, 59).unwrap().expires_within(1));
+    assert!(!code_at(&uri, 58).unwrap().expires_within(1));
+    // Contrast with the default 30s period at the same instant: it has just
+    // entered a new window, so its remaining time is 1 instead of 2.
+    let standard = code_at(RFC_SECRET, 59).unwrap();
+    assert_eq!(standard.period(), 30);
+    assert_eq!(standard.remaining(), 1);
+    assert!(standard.expires_within(1));
+}

@@ -4301,3 +4301,111 @@ fn ssh_base64_decoder_rejects_an_empty_blob() {
         FingerprintVerify::InvalidPublicKey
     );
 }
+
+#[test]
+fn duplicate_folder_ids_resolve_to_the_first_folder_row() {
+    // `Vault::folder_name` (model.rs:1021-1026) and `Filter::label`
+    // (model.rs:945-956) both resolve an id with `iter().find()`. When two
+    // folder rows carry the same id, the first row therefore wins for both;
+    // reversing the rows must flip both together (the rule is positional,
+    // not based on the names).
+    let mut vault = Vault::new();
+    vault.folders = vec![
+        Folder {
+            id: "dup".into(),
+            name: "First".into(),
+        },
+        Folder {
+            id: "dup".into(),
+            name: "Second".into(),
+        },
+    ];
+    assert_eq!(vault.folder_name("dup"), Some("First"));
+    assert_eq!(Filter::Folder("dup".into()).label(&vault.folders), "First");
+
+    vault.folders.reverse();
+    assert_eq!(vault.folder_name("dup"), Some("Second"));
+    assert_eq!(Filter::Folder("dup".into()).label(&vault.folders), "Second");
+}
+
+#[test]
+fn duplicate_folder_ids_are_counted_once_per_folder_row() {
+    // `folder_counts` (model.rs:1029-1041) maps over every folder row rather
+    // than deduplicating ids: a duplicate id yields two entries, and each row
+    // independently counts all items carrying that id. The filter still
+    // accepts by id, so both rows expose the same items.
+    let mut vault = Vault::new();
+    vault.folders = vec![
+        Folder {
+            id: "dup".into(),
+            name: "First".into(),
+        },
+        Folder {
+            id: "dup".into(),
+            name: "Second".into(),
+        },
+        Folder {
+            id: "other".into(),
+            name: "Other".into(),
+        },
+    ];
+    let mut a = login("1", "A", "u", "p", "https://a.example");
+    a.folder_id = Some("dup".into());
+    let mut b = login("2", "B", "u", "p", "https://b.example");
+    b.folder_id = Some("dup".into());
+    let mut c = login("3", "C", "u", "p", "https://c.example");
+    c.folder_id = Some("other".into());
+    vault.items = vec![a, b, c];
+
+    assert_eq!(
+        vault.folder_counts(),
+        vec![
+            ("dup".to_string(), 2),
+            ("dup".to_string(), 2),
+            ("other".to_string(), 1),
+        ]
+    );
+    let shown: Vec<&str> = vault
+        .view(&Filter::Folder("dup".into()), "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(shown, vec!["1", "2"]);
+}
+
+#[test]
+fn ssh_fingerprint_rejects_a_non_ascii_blob() {
+    // `decode` (model.rs:456-509) matches only ASCII base64 bytes, so a blob
+    // containing non-ASCII characters cannot decode and no fingerprint is
+    // produced. The store audit must report that as `InvalidPublicKey`
+    // instead of hashing a truncated or lossy byte sequence.
+    let canonical = super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ== fp");
+    assert!(
+        canonical.is_some(),
+        "the one-byte ASCII blob is the control"
+    );
+    for line in [
+        "ssh-ed25519 あ fp",
+        "ssh-ed25519 AQIあ fp",
+        "ssh-ed25519 \u{30a2}\u{30a4}\u{30a6}",
+    ] {
+        assert_eq!(
+            super::ssh_fingerprint::sha256_fingerprint(line),
+            None,
+            "{line:?}"
+        );
+        let key = ssh_key(line, REFERENCE_FINGERPRINT);
+        assert_eq!(
+            key.verify_fingerprint(),
+            FingerprintVerify::InvalidPublicKey,
+            "{line:?}"
+        );
+        assert!(!key.fingerprint_matches(), "{line:?}");
+    }
+    // The rejection is specific to the blob field: a non-ASCII trailing
+    // comment is never decoded and must leave the fingerprint unchanged.
+    assert_eq!(
+        super::ssh_fingerprint::sha256_fingerprint("ssh-ed25519 AQ== コメント"),
+        canonical
+    );
+}

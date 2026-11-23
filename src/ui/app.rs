@@ -421,13 +421,35 @@ pub(super) fn totp_copy_absent_status(dirty: bool) -> String {
     )
 }
 
-/// Copy-side counterpart of [`totp_code_text`]'s empty check.
+/// Status when the selected TOTP field carries the undecryptable sentinel.
 ///
-/// `Some` is the status to show when the secret has no visible content;
-/// `None` means it is a real generation target. Pure so the copy rule can be
-/// tested without a GPUI-backed `TotpState`.
+/// The sentinel marks ciphertext that could not be opened, not a malformed
+/// secret. Sending it to generation reports `不正な TOTP secret`, so the copy
+/// path keeps the same "復号不可" wording as [`totp_detail_text`] along with
+/// the persistent unsaved marker.
+pub(super) fn totp_copy_undecryptable_status(dirty: bool) -> String {
+    status_with_unsaved(
+        "TOTP をコピーできません（復号不可: TOTP フィールドを復号できませんでした）",
+        dirty,
+    )
+}
+
+/// Copy-side counterpart of [`totp_code_text`]'s absent/undecryptable checks.
+///
+/// `Some` is the status to show when the secret has no visible content or is
+/// the undecryptable sentinel; `None` means it is a real generation target.
+/// The sentinel check comes first: it contains visible text, so the visual
+/// emptiness rule alone would let it reach generation and be reported as an
+/// invalid secret. Pure so the copy rule can be tested without a GPUI-backed
+/// `TotpState`.
 pub(super) fn totp_copy_absent_status_for(secret: &str, dirty: bool) -> Option<String> {
-    is_visually_empty(secret).then(|| totp_copy_absent_status(dirty))
+    if crate::vault_sync::is_undecryptable_totp(secret) {
+        Some(totp_copy_undecryptable_status(dirty))
+    } else if is_visually_empty(secret) {
+        Some(totp_copy_absent_status(dirty))
+    } else {
+        None
+    }
 }
 
 /// URI cell of a login detail row.
@@ -1634,6 +1656,43 @@ mod tests {
         // A visible secret stays a generation target in both marker states.
         for dirty in [false, true] {
             assert_eq!(totp_copy_absent_status_for("JBSWY3DPEHPK3PXP", dirty), None);
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn totp_copy_reports_the_undecryptable_sentinel_before_a_parse_failure() {
+        // R2-UI-122: the sentinel carries visible text, so the visual emptiness
+        // rule alone let it reach generation and be labelled an invalid secret.
+        // The undecryptable branch must win and keep the unsaved marker.
+        let sentinel = crate::vault_sync::UNDECRYPTABLE_TOTP;
+        assert!(crate::vault_sync::is_undecryptable_totp(sentinel));
+        assert!(
+            !is_visually_empty(sentinel),
+            "precondition: the sentinel has visible content"
+        );
+
+        for dirty in [false, true] {
+            let status = totp_copy_absent_status_for(sentinel, dirty)
+                .expect("an undecryptable field must be skipped on copy");
+            assert!(status.contains("復号不可"), "{status}");
+            assert!(!status.contains("不正"), "{status}");
+            assert!(
+                !status.contains("コピーできる TOTP がありません"),
+                "{status}"
+            );
+            assert_eq!(status, totp_copy_undecryptable_status(dirty), "{status}");
+            assert_ne!(status, totp_copy_absent_status(dirty), "{status}");
+            assert_eq!(
+                status.contains("[未保存の設定変更があります]"),
+                dirty,
+                "{status}"
+            );
+        }
+
+        // A genuine malformed secret is not the sentinel and stays a generation
+        // target; the detail row, not the copy skip, reports its parse failure.
+        for dirty in [false, true] {
+            assert_eq!(totp_copy_absent_status_for("not base32!", dirty), None);
         }
     }
 

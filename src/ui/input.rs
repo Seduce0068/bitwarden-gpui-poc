@@ -218,12 +218,18 @@ pub(super) fn search_finished_status_with_query(
 ///
 /// Every query edit goes through a `VaultViewState`, so deriving both inputs
 /// here prevents one path from forgetting to re-check whether the query is
-/// still non-empty.
+/// still non-empty. Emptiness uses the same `crate::ui::app::is_visually_empty`
+/// rule as the header placeholder in `ui::render`: an invisible-only query is
+/// shown as "(なし)" there and must not advertise the re-edit keys here.
 pub(super) fn search_finished_status_for_view(
     view: &crate::ui::vault_view::VaultViewState,
     dirty: bool,
 ) -> String {
-    search_finished_status_with_query(!view.query.is_empty(), view.visible_items().len(), dirty)
+    search_finished_status_with_query(
+        !crate::ui::app::is_visually_empty(&view.query),
+        view.visible_items().len(),
+        dirty,
+    )
 }
 
 /// Confirm an active search because a row was clicked, and return its status.
@@ -1437,6 +1443,56 @@ mod tests {
                     "{without_query}"
                 );
             }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn confirmed_search_with_an_invisible_query_drops_the_reedit_hint() {
+        // R2-UI-122: `vault_search_query_text` in render.rs shows "(なし)" for a
+        // visually empty query, while this status used a raw `is_empty()` check
+        // and still advertised the re-edit keys. Both now share the same rule.
+        use crate::model::{ItemData, VaultItem};
+        use crate::ui::vault_view::VaultViewState;
+
+        let mut view = VaultViewState::new();
+        view.vault.items.push(VaultItem::new(
+            "a",
+            "Alpha",
+            ItemData::SecureNote {
+                text: String::new().into(),
+            },
+        ));
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+
+        for query in ["", "  \t", "\u{200b}", "\u{202e}"] {
+            assert!(
+                crate::ui::app::is_visually_empty(query),
+                "precondition: {query:?}"
+            );
+            view.query = query.to_string();
+            for dirty in [false, true] {
+                let status = search_finished_status_for_view(&view, dirty);
+                assert!(!status.contains(hint), "{query:?}, dirty {dirty}: {status}");
+                let base =
+                    crate::ui::logic::no_selection_status_for_count(view.visible_items().len());
+                assert_eq!(status, crate::ui::app::status_with_unsaved(&base, dirty));
+                assert_eq!(
+                    status.contains("[未保存の設定変更があります]"),
+                    dirty,
+                    "{status}"
+                );
+            }
+        }
+
+        // A query with visible content keeps the re-edit hint as before.
+        view.query = "Alpha".to_string();
+        for dirty in [false, true] {
+            let status = search_finished_status_for_view(&view, dirty);
+            assert!(status.contains(hint), "dirty {dirty}: {status}");
+            assert_eq!(
+                status,
+                search_finished_status_with_query(true, view.visible_items().len(), dirty)
+            );
         }
     }
 

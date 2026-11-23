@@ -43,12 +43,14 @@ pub const MIN_IDLE_LOCK_SECONDS: u64 = 60;
 pub const MAX_IDLE_LOCK_SECONDS: u64 = 3600;
 /// Minimum idle-lock value expressed in the UI's minute step.
 ///
-/// The UI adjuster works in whole minutes; these two constants and their
-/// seconds counterparts above are the single source of truth so the stored
-/// value, the clamp and the displayed range cannot drift apart.
-pub const MIN_IDLE_LOCK_MINUTES: u64 = 1;
+/// The UI adjuster works in whole minutes; this value is derived from
+/// `MIN_IDLE_LOCK_SECONDS` so the stored value, the clamp and the displayed
+/// range cannot drift apart.
+pub const MIN_IDLE_LOCK_MINUTES: u64 = MIN_IDLE_LOCK_SECONDS / 60;
 /// Maximum idle-lock value expressed in the UI's minute step.
-pub const MAX_IDLE_LOCK_MINUTES: u64 = 60;
+///
+/// Derived from `MAX_IDLE_LOCK_SECONDS` for the same reason as the minimum.
+pub const MAX_IDLE_LOCK_MINUTES: u64 = MAX_IDLE_LOCK_SECONDS / 60;
 /// Minimum login time budget, in seconds.
 pub const MIN_LOGIN_TIMEOUT_SECONDS: u64 = 1;
 /// Maximum login time budget, in seconds.
@@ -160,5 +162,24 @@ mod tests {
         assert_eq!(DEFAULT_LOGIN_TIMEOUT, std::time::Duration::from_secs(30));
         const { assert!(MAX_CLIENT_ID_LEN < MAX_SERVER_URL_LEN) };
         const { assert!(MAX_EMAIL_LEN < MAX_SERVER_URL_LEN) };
+    }
+
+    #[test]
+    fn idle_lock_minutes_are_derived_from_the_seconds_bounds() {
+        // The UI's minute bounds are not independent magic numbers: they are
+        // the seconds bounds converted to whole minutes. A change to the
+        // seconds clamp must move the adjuster with it, and the conversion
+        // must stay exact so no configured value is silently truncated.
+        const { assert!(MIN_IDLE_LOCK_SECONDS.is_multiple_of(60)) };
+        const { assert!(MAX_IDLE_LOCK_SECONDS.is_multiple_of(60)) };
+        assert_eq!(MIN_IDLE_LOCK_MINUTES, MIN_IDLE_LOCK_SECONDS / 60);
+        assert_eq!(MAX_IDLE_LOCK_MINUTES, MAX_IDLE_LOCK_SECONDS / 60);
+        assert_eq!(MIN_IDLE_LOCK_MINUTES * 60, MIN_IDLE_LOCK_SECONDS);
+        assert_eq!(MAX_IDLE_LOCK_MINUTES * 60, MAX_IDLE_LOCK_SECONDS);
+        // Pin the current values too: a deliberate change to either seconds
+        // bound then has to be acknowledged here as an explicit edit.
+        assert_eq!(MIN_IDLE_LOCK_MINUTES, 1);
+        assert_eq!(MAX_IDLE_LOCK_MINUTES, 60);
+        const { assert!(MIN_IDLE_LOCK_MINUTES < MAX_IDLE_LOCK_MINUTES) };
     }
 }

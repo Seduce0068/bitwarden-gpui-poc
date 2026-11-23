@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第121弾で 7 件すべてを完了）。
+なし（第122弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第122弾（16 担当・66 回目）の指摘 6 件を完結（2026-11-24）
+  - TOTP コピー復号不可判定、不可視クエリ案内、
+    分／秒アイドルロック定数導出を修正。
+  - 重複フォルダ id、SSH 非 ASCII blob、非既定 period、
+    調査レポート件数を修正・テスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1146 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第121弾（16 担当・65 回目）の指摘 7 件を完結（2026-11-24）
   - 編集中の生成設定案内、keys_tests 行参照、CHANGELOG 件数を修正。
   - UUID variant/大文字救済、0600 権限、created_at 下限、
