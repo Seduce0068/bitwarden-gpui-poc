@@ -358,16 +358,20 @@ fn dedup_folders_by_id(value: &mut serde_json::Value) {
 /// Name text for one result of `OpenVault::folder_name`.
 ///
 /// Keeping the three-way match in a small private helper makes the defensive
-/// `Ok(None)` arm testable directly. openwarden 0.1.1 returns `Ok(None)` only
-/// for a folder id that is *not* in the vault, while `folders()` yields ids
-/// from that same list, so `folders_from` cannot reach that arm through the
-/// public API today. The reachable branches are `Ok(Some(_))` and `Err(_)`.
+/// `Ok(None)` arm testable directly. In openwarden 0.1.1 `Ok(None)` means the
+/// folder **id is not in the vault**; a folder whose name ciphertext is
+/// malformed returns `Err(MalformedEncString)` instead. Because `folders()`
+/// yields only ids from that same vault, `folders_from` cannot reach the
+/// `Ok(None)` arm through the public API today — the reachable branches there
+/// are `Ok(Some(_))` and `Err(_)`. This helper still pins the unknown-id
+/// placeholder so the seam stays honest about what the dependency returns.
 fn folder_name_text(name: Result<Option<openwarden::SecretString>, openwarden::Error>) -> String {
     match name {
         Ok(Some(value)) => value.expose_secret().to_string(),
-        // A missing name is not an error: keep the folder with a placeholder
-        // rather than dropping it. This arm is exercised through this helper
-        // because the public `Vault` API cannot produce it.
+        // An unknown folder id is not a decryption error: keep a placeholder
+        // rather than dropping the row. `folder_name` reports a malformed name
+        // as `Err`, so this arm is unreachable from `folders_from` and is only
+        // exercised directly through this helper.
         Ok(None) => "(名前なし)".to_string(),
         // Partial decryption failure: keep the folder with a placeholder
         // instead of aborting the whole import. The internal folder id is

@@ -538,6 +538,37 @@ mod tests {
     }
 
     #[test]
+    fn failed_snapshot_is_not_fresh_when_the_clock_moves_backwards() {
+        use crate::totp::Tick;
+
+        let invalid = "not base32!";
+        let failed = Tick::sample(invalid, 100);
+        assert!(failed.code.is_none());
+        assert_eq!(failed.error, Some(crate::totp::TotpError::Invalid));
+        assert_eq!(failed.at, 100);
+        // A failure has no period to advance, so later instants stay fresh.
+        assert!(failed.is_fresh(100));
+        assert!(failed.is_fresh(1_000));
+        // The reverse-time guard runs before the `code: None` branch
+        // (totp.rs:156-168): even a permanent failure sampled at t=100 must be
+        // reported stale at t=99.
+        assert!(!failed.is_fresh(99));
+        assert!(!failed.is_fresh(0));
+
+        let mut state = TotpState::new();
+        assert_eq!(state.display(invalid, 100), "コード生成失敗");
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(100));
+        // Forward time reuses the failed snapshot without re-parsing.
+        assert_eq!(state.display(invalid, 200), "コード生成失敗");
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(100));
+        // Backwards time forces a resample even for the failing secret.
+        assert_eq!(state.display(invalid, 99), "コード生成失敗");
+        assert_eq!(state.tick.as_ref().map(|tick| tick.at), Some(99));
+        assert!(state.matches_secret(invalid));
+        assert!(state.error_message().is_some());
+    }
+
+    #[test]
     fn clear_drops_the_cached_code_and_error_message() {
         let mut state = TotpState::new();
         let displayed = state.display(SECRET, 40);

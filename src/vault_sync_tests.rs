@@ -40,6 +40,8 @@ fn non_object_sync_bodies_are_classified_as_invalid_login() {
         &br#"[]"#[..],
         &br#"[{"profile":{"id":"u"}}]"#[..],
         &b"42"[..],
+        &b"true"[..],
+        &b"false"[..],
         &br#""sync""#[..],
         &b"null"[..],
     ] {
@@ -667,6 +669,14 @@ fn dedup_folders_returns_early_when_folders_are_missing_or_not_an_array() {
     let before = scalar.clone();
     super::dedup_folders_by_id(&mut scalar);
     assert_eq!(scalar, before);
+
+    // Boolean scalars are not arrays either; both spellings must be no-ops.
+    for boolean in [serde_json::json!(true), serde_json::json!(false)] {
+        let mut value = serde_json::json!({"folders": boolean.clone()});
+        let before = value.clone();
+        super::dedup_folders_by_id(&mut value);
+        assert_eq!(value, before, "{boolean}");
+    }
 
     // Control: a real array still dedups by string id (first row wins), while
     // rows without one are left for openwarden to handle as usual. Without
@@ -1503,6 +1513,8 @@ fn dedup_is_a_no_op_when_ciphers_is_missing_or_not_an_array() {
         serde_json::json!("ciphers"),
         serde_json::json!({"0": "row"}),
         serde_json::json!(42),
+        serde_json::json!(true),
+        serde_json::json!(false),
     ] {
         let mut value = serde_json::json!({"ciphers": wrong.clone()});
         super::dedup_ciphers_by_revision(&mut value);
@@ -2974,4 +2986,38 @@ fn updated_branch_replaces_only_the_item_with_the_matching_id() {
     assert!(model.remove(target));
     let remaining: Vec<&str> = model.items.iter().map(|item| item.id.as_str()).collect();
     assert_eq!(remaining, vec!["before-keep", "after-keep"]);
+}
+
+#[test]
+fn updated_audit_advances_from_one_negative_revision_to_another() {
+    // Revisions are signed i64 seconds (vault_sync.rs:709-747). Pre-epoch rows
+    // are negative, so a newer duplicate can advance from one negative value
+    // to another without crossing UNKNOWN_REVISION (0). The audit must report
+    // the actual negative pair, not a clamped zero or a `Clipped` decision.
+    let id = "negative-updated";
+    let older_rev = parse_revision(Some("1969-12-31T00:00:00Z")).unwrap();
+    let newer_rev = parse_revision(Some("1969-12-31T23:59:59Z")).unwrap();
+    assert!(older_rev < 0 && newer_rev < 0 && older_rev < newer_rev);
+
+    let vault = unlocked_vault_raw(&[
+        cipher(id, "1969-12-31T00:00:00Z"),
+        cipher(id, "1969-12-31T23:59:59Z"),
+    ]);
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert_eq!(model.items[0].revision_date, newer_rev);
+    assert_eq!(
+        audit,
+        vec![
+            ImportAudit::Added {
+                id: id.to_string(),
+                revision: older_rev,
+            },
+            ImportAudit::Updated {
+                id: id.to_string(),
+                old_revision: older_rev,
+                new_revision: newer_rev,
+            },
+        ]
+    );
 }

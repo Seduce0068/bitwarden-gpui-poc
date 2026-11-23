@@ -109,7 +109,10 @@ fn vault_list_header_text(
     query: &str,
     searching: bool,
 ) -> String {
-    let row_keys = crate::ui::panels::vault_row_keys_hint(count);
+    // While the search field owns the keyboard, row movement keys are not
+    // routed to the vault selection (`ui::keys::classify_key`), so the header
+    // must not advertise them during editing.
+    let row_keys = crate::ui::panels::vault_row_keys_hint(count, searching);
     let row_suffix = if row_keys.is_empty() {
         String::new()
     } else {
@@ -120,6 +123,17 @@ fn vault_list_header_text(
         if query.is_empty() { "(なし)" } else { query },
         if searching { " _" } else { "" },
     )
+}
+
+/// Name drawn in a vault list row.
+///
+/// The raw `item.name` used to leave a blank column for empty or invisible-only
+/// (`Cf`) names, while the detail row included the same raw value between two
+/// `" | "` separators. Both call sites now use `app::item_name_text`; this thin
+/// adapter keeps the list-row contract separately testable without a GPUI
+/// window.
+fn vault_row_name(name: &str) -> String {
+    crate::ui::app::item_name_text(name).to_string()
 }
 
 /// Username drawn in a vault list row.
@@ -322,7 +336,7 @@ impl BitwardenApp {
                                         .flex_1()
                                         .overflow_hidden()
                                         .font_weight(FontWeight::MEDIUM)
-                                        .child(item.name.clone()),
+                                        .child(vault_row_name(&item.name)),
                                 )
                                 .child(
                                     div()
@@ -699,10 +713,31 @@ mod tests {
 
         let searching = vault_list_header_text(1, 7, "すべてのアイテム", "名前 ↓", "abc", true);
         assert!(searching.contains("検索: abc _"), "{searching}");
+        // The search field owns Up/Down/PageUp/... while editing, so those
+        // keys must not be advertised in the header during that time.
         assert!(
-            searching.contains(crate::ui::panels::LIST_PAGE_AND_EDGE_HINT),
-            "{searching}"
+            !searching.contains(crate::ui::panels::LIST_PAGE_AND_EDGE_HINT),
+            "row keys are inert while searching: {searching}"
         );
+        assert!(!searching.contains("↑↓"), "{searching}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_header_drops_row_keys_while_searching() {
+        for searching in [false, true] {
+            let header = vault_list_header_text(3, 7, "すべて", "名前 ↑", "abc", searching);
+            let advertises_rows = header.contains(crate::ui::panels::LIST_PAGE_AND_EDGE_HINT);
+            assert_eq!(
+                advertises_rows, !searching,
+                "searching={searching}: {header}"
+            );
+            assert_eq!(header.contains("↑↓"), !searching, "{header}");
+        }
+        // The query caret marker stays independent of the row-key hint.
+        let idle = vault_list_header_text(3, 7, "すべて", "名前 ↑", "abc", false);
+        let editing = vault_list_header_text(3, 7, "すべて", "名前 ↑", "abc", true);
+        assert!(!idle.contains("検索: abc _"), "{idle}");
+        assert!(editing.contains("検索: abc _"), "{editing}");
     }
 
     #[::core::prelude::v1::test]
@@ -784,5 +819,24 @@ mod tests {
         // A visible character next to a Cf is a real username and is kept.
         let mixed = "alice\u{200b}";
         assert_eq!(vault_row_username(login(mixed)), mixed);
+    }
+
+    #[::core::prelude::v1::test]
+    fn empty_item_name_shows_the_placeholder_in_the_list_row() {
+        for invisible in ["", "  \t ", "\u{200b}", "\u{feff}\u{202e}", " \u{00ad} "] {
+            assert_eq!(
+                vault_row_name(invisible),
+                crate::ui::app::ITEM_NAME_PLACEHOLDER,
+                "invisible name {invisible:?} must not leave a blank row column"
+            );
+        }
+        assert_eq!(vault_row_name("alice"), "alice");
+        let mixed = "alice\u{200b}";
+        assert_eq!(vault_row_name(mixed), mixed);
+        assert_eq!(
+            vault_row_name(""),
+            crate::ui::app::item_name_text(""),
+            "the list row and the detail row must share the same placeholder"
+        );
     }
 }

@@ -87,6 +87,30 @@ pub enum AuthError {
     Other(&'static str),
 }
 
+/// Family message for a rejected server URL, including its hint.
+///
+/// The hint is already parenthesized. `status_message()` therefore drops it
+/// when it appends a retained cause, otherwise the status bar showed two
+/// adjacent parenthetical groups. The full message is kept as one constant so
+/// the plain and detail variants cannot drift apart.
+const INVALID_SERVER_URL_MESSAGE: &str = "サーバー URL が不正です（HTTPS または loopback の HTTP）";
+/// The parenthesized hint at the end of [`INVALID_SERVER_URL_MESSAGE`].
+const INVALID_SERVER_URL_HINT: &str = "（HTTPS または loopback の HTTP）";
+
+/// Compose a status message from a family message and a retained cause.
+///
+/// Used by the five non-URL detail families. An empty cause is diagnostic
+/// noise, so it contributes no `（…）` suffix: the family message stays
+/// verbatim. The URL family needs a separate arm because its family message
+/// already ends in a parenthetical hint (see [`INVALID_SERVER_URL_MESSAGE`]).
+fn cause_status(family: &'static str, detail: &str) -> String {
+    if detail.is_empty() {
+        family.to_string()
+    } else {
+        format!("{family}（{detail}）")
+    }
+}
+
 impl PartialEq for AuthError {
     /// A `Detail` variant is the same failure as its plain sibling: the cause
     /// is diagnostic context, not identity. This mirrors [`AppError`]'s rule,
@@ -120,9 +144,7 @@ impl AuthError {
     pub const fn message(&self) -> &'static str {
         match self {
             Self::MissingField(_) => "認証情報が未入力です",
-            Self::InvalidServerUrl | Self::InvalidServerUrlDetail(_) => {
-                "サーバー URL が不正です（HTTPS または loopback の HTTP）"
-            }
+            Self::InvalidServerUrl | Self::InvalidServerUrlDetail(_) => INVALID_SERVER_URL_MESSAGE,
             Self::BlockedServerUrl => "サーバー URL が link-local アドレスを指しています",
             Self::InvalidEmail => "メールアドレスの形式が不正です",
             Self::ClientSetup | Self::ClientSetupDetail(_) => {
@@ -143,20 +165,29 @@ impl AuthError {
     /// family; this method appends the field name for [`Self::MissingField`]
     /// and the retained cause text for the `Detail` variants, so a user can see
     /// *which* credential is missing, why the API-key login failed, or which
-    /// URL/client setup error the server reported.
+    /// URL/client setup error the server reported. An empty cause adds no
+    /// decoration, and the URL family drops its own hint when a cause is
+    /// present so only one parenthesized group is shown.
     pub fn status_message(&self) -> String {
         match self {
             Self::MissingField(field) => format!("{}（{field}）", self.message()),
+            // Drop the URL family's own parenthesized hint before appending a
+            // cause. The hint is guidance for a bare InvalidServerUrl status;
+            // repeating it next to the parser's reason produced a doubled
+            // `）（）`. With no detail the full family message stays intact.
+            Self::InvalidServerUrlDetail(detail) if !detail.is_empty() => {
+                let family = INVALID_SERVER_URL_MESSAGE
+                    .strip_suffix(INVALID_SERVER_URL_HINT)
+                    .unwrap_or(INVALID_SERVER_URL_MESSAGE);
+                cause_status(family, detail)
+            }
+            // The other five detail families have no parenthesized hint; the
+            // shared helper also pins their empty-cause behaviour (no suffix).
             Self::PreloginDetail(detail)
             | Self::KdfRejectedDetail(detail)
             | Self::LoginDetail(detail)
             | Self::SyncDetail(detail)
-            | Self::InvalidServerUrlDetail(detail)
-            | Self::ClientSetupDetail(detail)
-                if !detail.is_empty() =>
-            {
-                format!("{}（{detail}）", self.message())
-            }
+            | Self::ClientSetupDetail(detail) => cause_status(self.message(), detail),
             _ => self.message().to_string(),
         }
     }
@@ -359,6 +390,12 @@ fn truncate_secret_to_limit(value: &mut SecretString, limit: usize) {
 /// `AuthState`, which owns only the three credential fields.
 pub fn clamp_auth_config(config: &mut AuthConfig) {
     truncate_to_limit(&mut config.server_url, MAX_SERVER_URL_LEN);
+    // `valid_email` trims before it counts characters. Apply the same
+    // normalization before capping: counting surrounding padding used to cut
+    // the tail off an otherwise valid address, silently turning it into a
+    // different one (for example a long trailing pad left only "alice" of
+    // "alice@example.com"). Trimming first keeps the address intact.
+    config.email = config.email.trim().to_string();
     truncate_to_limit(&mut config.email, MAX_EMAIL_LEN);
     truncate_to_limit(&mut config.client_id, MAX_CLIENT_ID_LEN);
     truncate_secret_to_limit(&mut config.client_secret, MAX_CLIENT_SECRET_LEN);
@@ -416,10 +453,28 @@ pub fn valid_email(value: &str) -> bool {
 //   the resolved address would require replacing openwarden's transport, which
 //   is not possible through its public API in this PoC.
 // * Cloud metadata endpoints reachable only through a non-link-local address
-//   (e.g. Alibaba's 100.100.100.200) are not covered: private/LAN-style ranges
-//   stay allowed so self-hosted Vaultwarden instances keep working.
+//   (for example Alibaba's 100.100.100.200) are blocked explicitly by
+//   [`BLOCKED_METADATA_IPS`] for URL literals, DNS answers and embedded
+//   wildcard-DNS labels. Other private/LAN-style ranges stay allowed so
+//   self-hosted Vaultwarden instances keep working.
 // Do not treat this guard as a complete SSRF boundary.
 // ---------------------------------------------------------------------------
+
+/// Non-link-local addresses used by cloud metadata services.
+///
+/// `100.100.100.200` is Alibaba Cloud's metadata endpoint. It is not in a
+/// link-local range, so the address-only guard below would otherwise let it
+/// through. Keeping the entry here (rather than blocking all private ranges)
+/// preserves self-hosted Vaultwarden instances on ordinary LAN addresses.
+const BLOCKED_METADATA_IPS: &[IpAddr] = &[IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200))];
+
+/// Whether `ip` is a link-local or a known non-link-local metadata address.
+///
+/// Distinct from [`is_link_local_ip`] so the existing classifier tests keep
+/// pinning the link-local rule alone; this wrapper is what the URL guard uses.
+fn is_blocked_metadata_ip(ip: IpAddr) -> bool {
+    is_link_local_ip(ip) || BLOCKED_METADATA_IPS.contains(&ip)
+}
 
 /// Hostnames that resolve to a cloud metadata service. Listed literally so
 /// they are rejected even when DNS is unavailable or returns a different
@@ -473,7 +528,10 @@ fn is_blocked_metadata_host(host: &str) -> bool {
 /// Wildcard DNS services encode an address in the hostname, for example
 /// `169.254.169.254.nip.io`. Recognizing the embedded literal here keeps the
 /// canonical bypass blocked even when resolution is offline; the general case
-/// is handled by the resolver-backed check.
+/// is handled by the resolver-backed check. Despite the historical name the
+/// check uses [`is_blocked_metadata_ip`], so a known non-link-local metadata
+/// address embedded the same way (for example `100.100.100.200.nip.io`) is
+/// blocked too.
 ///
 /// Known constraint: only decimal IPv4 spellings are recognized here. A
 /// non-decimal IPv4 literal embedded in a DNS name — hexadecimal
@@ -504,7 +562,7 @@ fn hostname_embeds_link_local(host: &str) -> bool {
     // Dotted quad as leading labels: 169.254.1.1.nip.io
     for window in labels.windows(4) {
         if let Ok(ip) = window.join(".").parse::<Ipv4Addr>() {
-            if is_link_local_ip(IpAddr::V4(ip)) {
+            if is_blocked_metadata_ip(IpAddr::V4(ip)) {
                 return true;
             }
         }
@@ -514,7 +572,7 @@ fn hostname_embeds_link_local(host: &str) -> bool {
         let parts: Vec<&str> = label.split('-').collect();
         if parts.len() == 4 {
             if let Ok(ip) = parts.join(".").parse::<Ipv4Addr>() {
-                if is_link_local_ip(IpAddr::V4(ip)) {
+                if is_blocked_metadata_ip(IpAddr::V4(ip)) {
                     return true;
                 }
             }
@@ -534,8 +592,8 @@ where
         return false;
     };
     match url.host() {
-        Some(url::Host::Ipv4(ip)) => is_link_local_ip(IpAddr::V4(ip)),
-        Some(url::Host::Ipv6(ip)) => is_link_local_ip(IpAddr::V6(ip)),
+        Some(url::Host::Ipv4(ip)) => is_blocked_metadata_ip(IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => is_blocked_metadata_ip(IpAddr::V6(ip)),
         Some(url::Host::Domain(_)) => {
             let Some(host) = url.host_str() else {
                 return false;
@@ -545,7 +603,7 @@ where
             }
             // Any link-local A/AAAA answer blocks the whole name: a rebinding
             // or split-horizon resolver may mix it with a public address.
-            resolve(host).iter().copied().any(is_link_local_ip)
+            resolve(host).iter().copied().any(is_blocked_metadata_ip)
         }
         None => false,
     }
@@ -567,9 +625,10 @@ fn resolve_host(host: &str) -> Vec<IpAddr> {
     addresses.into_iter().map(|socket| socket.ip()).collect()
 }
 
-/// Reject link-local servers: literal addresses, known cloud metadata
-/// hostnames, wildcard-DNS aliases with an embedded link-local literal, and
-/// any DNS name whose current A/AAAA answers include a link-local address.
+/// Reject metadata servers: link-local literals, known cloud metadata
+/// hostnames and IPs (including the non-link-local Alibaba endpoint),
+/// wildcard-DNS aliases with an embedded metadata literal, and any DNS name
+/// whose current A/AAAA answers include a blocked address.
 ///
 /// This is the network-capable form used on the login path (off the async
 /// executor). Config validation uses the DNS-free variant directly so

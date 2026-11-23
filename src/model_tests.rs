@@ -3194,3 +3194,146 @@ fn ssh_base64_rejects_non_canonical_trailing_bits_without_padding() {
     assert_eq!(decode(b"A"), None);
     assert_eq!(decode(b"A==="), None);
 }
+
+#[test]
+fn mark_only_names_are_blank_for_duplicate_detection() {
+    // Mn (combining acute / Greek ypogegrammeni) and Me (enclosing circle)
+    // have no standalone glyph: with no base character they are decoration,
+    // not a name. They must be skipped like Cf-only and blank names.
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("mark-1", "\u{0301}", "u", "p", "https://a.example"));
+    vault.items.push(login(
+        "mark-2",
+        "\u{0345}\u{0301}",
+        "u",
+        "p",
+        "https://b.example",
+    ));
+    vault
+        .items
+        .push(login("mark-3", "\u{20dd}", "u", "p", "https://c.example"));
+    vault
+        .items
+        .push(login("blank", "  ", "u", "p", "https://d.example"));
+    // A mark after a real base letter stays significant: NFC/NFD spellings of
+    // the same name still form one duplicate group.
+    vault
+        .items
+        .push(login("real-1", "Caf\u{e9}", "u", "p", "https://e.example"));
+    vault.items.push(login(
+        "real-2",
+        "Cafe\u{301}",
+        "u",
+        "p",
+        "https://f.example",
+    ));
+
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "cafe\u{301}");
+    assert_eq!(
+        groups[0].1,
+        vec!["real-1".to_string(), "real-2".to_string()]
+    );
+    for id in ["mark-1", "mark-2", "mark-3", "blank"] {
+        assert!(
+            !groups
+                .iter()
+                .any(|(_, ids)| ids.iter().any(|entry| entry == id)),
+            "{id} must not be a duplicate: {groups:?}"
+        );
+    }
+}
+
+#[test]
+fn ssh_public_key_is_in_the_search_haystack() {
+    // `haystacks` pushes the public key (model.rs:796-799) as a searchable
+    // field while the private key stays out. The public line is not a secret,
+    // so a user can find an SSH item by its key text or comment.
+    const PUBLIC: &str = "ssh-ed25519 HAYSTACK_PUBLIC_TOKEN fp@example";
+    const PRIVATE: &str = "PRIVATE_HAYSTACK_SECRET";
+    let item = VaultItem::new(
+        "ssh-hay",
+        "Key",
+        ItemData::SshKey(SshKeyData {
+            public_key: PUBLIC.into(),
+            private_key: PRIVATE.into(),
+            fingerprint: "SHA256:abc".into(),
+        }),
+    );
+
+    let fields: Vec<String> = item
+        .haystacks()
+        .iter()
+        .map(|field| field.to_string())
+        .collect();
+    assert!(fields.iter().any(|field| field == PUBLIC), "{fields:?}");
+    assert!(item.matches_query("HAYSTACK_PUBLIC_TOKEN"));
+    assert!(item.matches_query("ssh-ed25519"));
+    assert!(!item.matches_query("PRIVATE_HAYSTACK_SECRET"));
+
+    let debug = format!("{item:?}");
+    assert!(debug.contains(PUBLIC));
+    assert!(!debug.contains(PRIVATE));
+}
+
+#[test]
+fn multiple_folder_ids_resolve_to_their_own_names_and_counts() {
+    // `folder_name`, `Filter::label` and `folder_counts` each resolve ids by
+    // walking the folder list (model.rs:931-952, 856-867). With several
+    // folders, each id must map to its own name and count, and an unknown id
+    // must degrade gracefully without materialising a bucket.
+    let mut vault = Vault::new();
+    vault.folders = vec![
+        Folder {
+            id: "f1".into(),
+            name: "仕事".into(),
+        },
+        Folder {
+            id: "f2".into(),
+            name: "私用".into(),
+        },
+        Folder {
+            id: "f3".into(),
+            name: "重要".into(),
+        },
+    ];
+    let mut first = login("1", "One", "u", "p", "https://one.example");
+    first.folder_id = Some("f1".into());
+    let mut second = login("2", "Two", "u", "p", "https://two.example");
+    second.folder_id = Some("f2".into());
+    let mut third = login("3", "Three", "u", "p", "https://three.example");
+    third.folder_id = Some("f2".into());
+    vault.items = vec![first, second, third];
+
+    for (id, name) in [("f1", "仕事"), ("f2", "私用"), ("f3", "重要")] {
+        assert_eq!(vault.folder_name(id), Some(name), "{id}");
+        assert_eq!(
+            Filter::Folder(id.into()).label(&vault.folders),
+            name,
+            "{id}"
+        );
+    }
+    assert_eq!(vault.folder_name("missing"), None);
+    assert_eq!(
+        Filter::Folder("missing".into()).label(&vault.folders),
+        "(不明なフォルダ)"
+    );
+    assert_eq!(
+        vault.folder_counts(),
+        vec![
+            ("f1".to_string(), 1),
+            ("f2".to_string(), 2),
+            ("f3".to_string(), 0),
+        ]
+    );
+    let shown: Vec<&str> = vault
+        .view(&Filter::Folder("f2".into()), "", SortKey::NameAsc)
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    // NameAsc is by folded name, not by id; these fixtures place id 3 first.
+    assert_eq!(shown, vec!["3", "2"]);
+}

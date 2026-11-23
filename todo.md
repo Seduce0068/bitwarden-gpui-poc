@@ -24,10 +24,22 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第102弾で 6 件すべてを完了）。
+なし（第103弾で 7 件すべてを完了）。
 
 ## 完了
 
+- [x] 第103弾（16 担当・47 回目）の指摘 7 件を完結（2026-11-23）
+  - email の trim→クランプ、二重括弧、非 link-local メタデータ IP、
+    Windows 権限制約、created_at 契約を修正・記録。
+  - 空名プレースホルダ、複数 URI 選択、検索中ヒント、
+    TOTP 逆時刻、Mn/Me 空名、SSH public_key を修正・テスト。
+  - boolean スカラ、負→負 Updated、複数フォルダ id をテスト。
+  - CHANGELOG に第101〜102弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（996 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第102弾（16 担当・46 回目）の指摘 6 件を完結（2026-11-23）
   - スキーム無し authority の数字パスワード、Unicode/full-width 空白
     link-local URL、ParseFailed バリアント固定を修正・テスト。

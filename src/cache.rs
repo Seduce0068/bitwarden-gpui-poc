@@ -17,6 +17,12 @@
 //! release wrote one or it was provisioned out of band. A missing cache keeps
 //! the original `AuthError::Sync` status; a present but unusable cache reports
 //! the classified reason (corrupt / unreadable / outdated / mismatched).
+//!
+//! Known constraint (Windows): [`load_detailed`] only checks Unix mode bits,
+//! behind `#[cfg(unix)]`. On Windows a cache file whose ACLs grant other users
+//! access is therefore accepted as-is; `crate::private_file::write_private`
+//! is the only writer and applies a restrictive ACL there. Do not treat the
+//! read-side permission check as a cross-platform guarantee.
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -920,7 +926,9 @@ fn read_bounded<R: Read>(reader: &mut R, limit: u64) -> Result<Vec<u8>, CacheLoa
 /// On Unix a file with group/other read or write bits is refused as unreadable:
 /// the encrypted body must stay owner-only, matching the `private_file` policy
 /// that every write applies. The size cap is checked first so an oversized
-/// file keeps its `CacheTooLarge` classification.
+/// file keeps its `CacheTooLarge` classification. Known constraint: this
+/// permission gate is `#[cfg(unix)]`; Windows has no equivalent check here and
+/// relies on the writer's ACL (see the module docs).
 ///
 /// # Errors
 ///
@@ -999,6 +1007,14 @@ pub fn load(path: impl AsRef<std::path::Path>) -> Option<SyncCache> {
 /// `&SyncCache`: the caller's in-memory value is left untouched and only the
 /// serialized copy is sanitized. A body that cannot be redacted (not valid
 /// JSON) is refused instead of being written with unknown contents.
+///
+/// `created_at` contract: `save` **preserves** the value on `cache`; it does
+/// not refresh the capture time. The sanitized copy is built with
+/// `..cache.clone()`, so re-writing an old body keeps its old timestamp and
+/// [`cached_sync_for_detailed`] still applies the original expiry window. Only
+/// [`SyncCache::from_body`] stamps a fresh capture time; callers that need one
+/// must rebuild the cache from a fresh body first. This avoids silently
+/// extending the offline window on every write.
 ///
 /// # Errors
 ///

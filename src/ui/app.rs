@@ -207,6 +207,25 @@ pub(super) fn is_visually_empty(value: &str) -> bool {
         .all(|ch| ch.is_whitespace() || crate::limits::is_format_character(ch))
 }
 
+/// Placeholder drawn for a vault item whose name has no visible content.
+pub(super) const ITEM_NAME_PLACEHOLDER: &str = "(名称未設定)";
+
+/// Display name shared by the vault list row and the detail row.
+///
+/// `ui::render` used to draw the raw `item.name` in the list column, while
+/// `selected_detail` interpolated it between two `" | "` separators. An empty
+/// or invisible-only (`Cf`) name therefore left a blank column in the list and
+/// a double separator in the detail line. Both call sites now use this helper,
+/// so the same placeholder appears and the separator count stays stable. Kept
+/// pure so the contract can be tested without a GPUI window.
+pub(super) fn item_name_text(name: &str) -> &str {
+    if is_visually_empty(name) {
+        ITEM_NAME_PLACEHOLDER
+    } else {
+        name
+    }
+}
+
 /// Join the vault detail fields with `" | "`, skipping empty ones.
 ///
 /// A plain `format!("{base} | {a} | {b}")` leaves a double separator (`" |  | "`)
@@ -322,18 +341,15 @@ pub(super) fn totp_code_text(
 ///
 /// `mask_uri` reports `(不正な URI)` when its input cannot be parsed, which is
 /// also what an empty string produces. An absent URI is not an invalid one, so
-/// blank and invisible-only values keep the "なし" placeholder instead.
+/// blank and invisible-only entries are skipped: the first entry with visible
+/// content is shown even when earlier entries are empty. Only when every entry
+/// is absent does this keep the "なし" placeholder. Pure, so the selection rule
+/// can be tested without a GPUI window.
 pub(super) fn login_uri_text(uris: &[crate::model::LoginUri]) -> String {
-    uris.first().map_or_else(
-        || "なし".to_string(),
-        |uri| {
-            if is_visually_empty(&uri.uri) {
-                "なし".to_string()
-            } else {
-                crate::model::mask_uri(&uri.uri)
-            }
-        },
-    )
+    let Some(uri) = uris.iter().find(|uri| !is_visually_empty(&uri.uri)) else {
+        return "なし".to_string();
+    };
+    crate::model::mask_uri(&uri.uri)
 }
 
 /// Key guidance shared by every transition into the locked screen.
@@ -1089,7 +1105,7 @@ impl BitwardenApp {
                         format!(
                             "{} | {} | 更新: {}",
                             item.kind().label(),
-                            item.name,
+                            item_name_text(&item.name),
                             crate::ui::logic::format_revision_date(item.revision_date)
                         ),
                         item.data.clone(),
@@ -2384,6 +2400,35 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn item_name_text_uses_a_placeholder_for_invisible_names() {
+        for invisible in [
+            "",
+            "  \t\u{3000}",
+            "\u{200b}",
+            "\u{feff}\u{202e}",
+            " \u{00ad} ",
+        ] {
+            assert_eq!(
+                item_name_text(invisible),
+                ITEM_NAME_PLACEHOLDER,
+                "invisible name {invisible:?} must not leave a blank cell"
+            );
+        }
+        assert_eq!(item_name_text("Bank"), "Bank");
+        assert_eq!(item_name_text(" alice "), " alice ");
+        // A visible character next to a Cf is a real name and is kept as-is.
+        let mixed = "Bank\u{200b}";
+        assert_eq!(item_name_text(mixed), mixed);
+
+        // The detail base interpolates the name between two separators. The
+        // placeholder must keep the line from collapsing into " |  | ".
+        let base = format!("ログイン | {} | 更新: 不明", item_name_text("\u{200b}"));
+        assert!(base.contains(ITEM_NAME_PLACEHOLDER), "{base}");
+        assert!(!base.contains(" |  | "), "{base}");
+        assert!(base.starts_with("ログイン | "), "{base}");
+    }
+
+    #[::core::prelude::v1::test]
     fn totp_code_text_treats_cf_only_secret_as_absent() {
         fn generated(_secret: &str) -> String {
             "123456".to_string()
@@ -2429,6 +2474,46 @@ mod tests {
         assert_eq!(
             login_uri_text(&[LoginUri::new("https://user:token@example.com/secret")]),
             "https://example.com"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn login_uri_text_skips_absent_leading_uris() {
+        use crate::model::LoginUri;
+
+        let uris = [
+            LoginUri::new(""),
+            LoginUri::new("  \t "),
+            LoginUri::new("\u{200b}\u{feff}"),
+            LoginUri::new("https://user:token@example.com/secret"),
+            LoginUri::new("https://other.example.org/path"),
+        ];
+        let shown = login_uri_text(&uris);
+        assert_eq!(
+            shown, "https://example.com",
+            "the first visible URI must win even behind blank entries"
+        );
+        assert!(
+            !shown.contains("user:token"),
+            "the chosen URI must be masked: {shown}"
+        );
+
+        // All entries absent: still the "なし" placeholder, never "(不正な URI)".
+        let absent = [
+            LoginUri::new(""),
+            LoginUri::new(" \u{202e} "),
+            LoginUri::new("   "),
+        ];
+        assert_eq!(login_uri_text(&absent), "なし");
+        assert_eq!(login_uri_text(&[]), "なし");
+
+        // A single blank entry followed by a valid one must not hide it.
+        assert_eq!(
+            login_uri_text(&[
+                LoginUri::new("\u{00ad}"),
+                LoginUri::new("https://a.example.com")
+            ]),
+            "https://a.example.com"
         );
     }
 

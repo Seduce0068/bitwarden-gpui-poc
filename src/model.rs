@@ -21,6 +21,17 @@ mod unicode_normalize {
         input.chars().nfkd().collect()
     }
 
+    /// Whether a code point is a Unicode mark without standalone identity.
+    ///
+    /// The normalization crate exposes the `General_Category=Mark` set (Mn,
+    /// Mc and Me) through its public `char` module, so the blank-name rule can
+    /// reuse the same Unicode table as NFKD instead of a hand-maintained range
+    /// list. A name made only of these code points has no visible identity of
+    /// its own and must not be treated as a duplicate of another such name.
+    pub(crate) fn is_mark(ch: char) -> bool {
+        unicode_normalization::char::is_combining_mark(ch)
+    }
+
     /// One NFKD + lowercase pass with a small set of extra case mappings.
     ///
     /// This is **not** a complete Unicode full case fold. `str::to_lowercase`
@@ -1067,12 +1078,19 @@ impl Vault {
     /// of every other unnamed item. A name made only of invisible Unicode
     /// `Cf` characters (for example a zero-width space) counts as blank too:
     /// it has no visible identity, so two such items must not be reported as
-    /// duplicates of each other.
+    /// duplicates of each other. The same applies to a name made only of
+    /// Unicode marks (`Mn`/`Me`, such as a combining accent or an enclosing
+    /// circle): with no base character they render as decoration, not as a
+    /// name. A mark following an ordinary base letter stays significant.
     pub fn duplicate_names(&self) -> Vec<(String, Vec<String>)> {
         let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for item in &self.items {
             let key = comparison_key(item.name.trim());
-            if key.is_empty() || key.chars().all(crate::limits::is_format_character) {
+            if key.is_empty()
+                || key.chars().all(|ch| {
+                    crate::limits::is_format_character(ch) || unicode_normalize::is_mark(ch)
+                })
+            {
                 continue;
             }
             match groups.iter_mut().find(|(name, _)| *name == key) {

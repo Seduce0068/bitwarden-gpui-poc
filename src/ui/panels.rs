@@ -58,10 +58,17 @@ fn row_navigation_keys_hint(selectable_rows: usize) -> String {
 ///
 /// `Enter` is bound only in the audit panel, so the vault header must not
 /// advertise it. The navigation wording is byte-for-byte the audit variant's
-/// prefix; only the trailing `Enter` segment is omitted. Kept pure so the
-/// wording can be pinned by tests without rendering a GPUI window.
-pub(super) fn vault_row_keys_hint(selectable_rows: usize) -> String {
-    row_navigation_keys_hint(selectable_rows)
+/// prefix; only the trailing `Enter` segment is omitted. `searching` is the
+/// vault's text-edit mode: while it is active `ui::keys::classify_key` routes
+/// Up/Down/PageUp/PageDown/Home/End nowhere (or inserts them as text), so the
+/// header must not promise row movement. Kept pure so the wording can be
+/// pinned by tests without rendering a GPUI window.
+pub(super) fn vault_row_keys_hint(selectable_rows: usize, searching: bool) -> String {
+    if searching {
+        String::new()
+    } else {
+        row_navigation_keys_hint(selectable_rows)
+    }
 }
 
 /// Row-selection keys for the audit panel, including `Enter`.
@@ -1103,11 +1110,11 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn vault_row_keys_hint_omits_the_audit_only_enter_binding() {
-        let empty = vault_row_keys_hint(0);
+        let empty = vault_row_keys_hint(0, false);
         assert!(empty.is_empty(), "{empty}");
         assert!(!empty.contains("Enter"), "{empty}");
 
-        let hint = vault_row_keys_hint(2);
+        let hint = vault_row_keys_hint(2, false);
         assert!(hint.contains("↑↓: 行を選択"), "{hint}");
         assert!(hint.contains(LIST_PAGE_AND_EDGE_HINT), "{hint}");
         assert!(!hint.contains("Enter"), "{hint}");
@@ -1121,6 +1128,26 @@ mod tests {
         let audit = row_selection_keys_hint(2);
         assert!(audit.starts_with(hint.as_str()), "{audit} vs {hint}");
         assert_eq!(audit, format!("{hint} / Enter: 対象を選択"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_row_keys_hint_hides_all_row_keys_while_searching() {
+        for rows in [0, 2] {
+            let searching = vault_row_keys_hint(rows, true);
+            assert!(searching.is_empty(), "rows={rows}: {searching}");
+            assert!(!searching.contains("↑↓"), "{searching}");
+            assert!(!searching.contains(LIST_PAGE_AND_EDGE_HINT), "{searching}");
+            for key in ["PageUp", "PageDown", "Home", "End"] {
+                assert!(!searching.contains(key), "rows={rows}: {searching}");
+            }
+        }
+
+        // Outside the search field the very same rows still advertise the
+        // navigation keys, including the shared page/edge wording.
+        let idle = vault_row_keys_hint(2, false);
+        assert_eq!(idle, row_navigation_keys_hint(2));
+        assert!(idle.contains("↑↓: 行を選択"), "{idle}");
+        assert!(idle.contains(LIST_PAGE_AND_EDGE_HINT), "{idle}");
     }
 
     #[::core::prelude::v1::test]

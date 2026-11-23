@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 全体改善（第101〜102弾 / 2026-11-23）
+
+- all-same の前後装飾、数字 userinfo マスク、Cf-only 重複名を修正
+- 検索中行クリック status、copy 判定の Cf、ページキー、
+  他ソート index をテスト
+- スキーム無し authority の数字パスワード、Unicode 空白
+  link-local URL、ParseFailed バリアントを修正・固定
+- 設定パネル端数秒、TOTP/URI の Cf 空判定、通常行クリック status、
+  Updated の id 差し替え、全ペイロード型検証をテスト
+
 ### 全体改善（第100弾 / 2026-11-23）
 
 - 辞書パスワードの末尾装飾、一覧 Cf 空 username、

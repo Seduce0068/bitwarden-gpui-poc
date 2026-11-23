@@ -456,10 +456,10 @@ fn every_unicode_cf_range_is_rejected_in_an_email() {
 fn uppercase_email_is_not_case_folded_before_kdf_is_a_known_constraint() {
     // Known constraint documented at the `MasterKey::derive` call in
     // `authenticate_inner`: the address is trimmed but its case is preserved.
-    // `valid_email` / `validate_config` accept any casing and clamping does not
-    // rewrite it, so a mixed-case address reaches the KDF verbatim; a user who
-    // typed a different case than the server's stored address derives a
-    // different key. Pin the observable half of that contract here.
+    // `valid_email` / `validate_config` accept any casing and clamping only
+    // removes padding, so a mixed-case address reaches the KDF verbatim; a
+    // user who typed a different case than the server's stored address
+    // derives a different key. Pin the observable half of that contract here.
     const MIXED: &str = "Alice.MIXED@Example.COM";
     assert!(valid_email(MIXED));
     let mut value = config();
@@ -467,18 +467,12 @@ fn uppercase_email_is_not_case_folded_before_kdf_is_a_known_constraint() {
     assert_eq!(validate_config(&value), Ok(()));
     clamp_auth_config(&mut value);
     assert_eq!(
-        value.email,
-        format!("  {MIXED}\t"),
-        "clamp does not fold case"
+        value.email, MIXED,
+        "clamp trims padding but does not fold case"
     );
-
-    let mut bounded = value.clone();
-    clamp_auth_config(&mut bounded);
-    assert_eq!(
-        bounded.email.trim(),
-        MIXED,
-        "the KDF sees the original case"
-    );
+    // Re-applying the cap is a no-op and must not fold case either.
+    clamp_auth_config(&mut value);
+    assert_eq!(value.email, MIXED, "the KDF sees the original case");
 }
 
 #[test]
@@ -1122,9 +1116,15 @@ fn validate_config_keeps_the_url_parser_detail_variant() {
         matches!(&error, AuthError::InvalidServerUrlDetail(_)),
         "the URL parser detail must survive: {error:?}"
     );
-    assert!(error
-        .status_message()
-        .starts_with(AuthError::InvalidServerUrl.message()));
+    // The family message already ends in a parenthetical hint, so the detail
+    // replaces that hint instead of producing two adjacent `（）` groups.
+    let status = error.status_message();
+    assert!(status.starts_with("サーバー URL が不正です（"), "{status}");
+    assert!(
+        !status.contains("HTTPS または loopback の HTTP"),
+        "{status}"
+    );
+    assert!(!status.contains("）（"), "{status}");
 }
 
 #[test]
@@ -2854,9 +2854,9 @@ fn every_unparseable_or_unsupported_url_is_invalid_server_url() {
             matches!(&error, AuthError::InvalidServerUrlDetail(_)),
             "the parser reason must survive for {value}: {error:?}"
         );
-        assert!(error
-            .status_message()
-            .starts_with(AuthError::InvalidServerUrl.message()));
+        // A cause replaces the parenthesised hint, so the family wording is
+        // present but the plain `message()` (with its hint) is not a prefix.
+        assert!(error.status_message().contains("サーバー URL が不正です"));
     }
 
     // The only URL-shaped inputs that are NOT InvalidServerUrl are blank ones:
@@ -3434,4 +3434,149 @@ fn padded_link_local_urls_are_blocked_after_the_caller_trims_them() {
             "{padded:?}"
         );
     }
+}
+
+#[test]
+fn padded_email_is_trimmed_before_the_length_cap() {
+    // `valid_email` trims before counting characters (auth.rs:372-375), and
+    // `clamp_auth_config` now applies the same normalization before truncating
+    // (auth.rs:360-368). Padding must therefore never cut the domain tail and
+    // silently turn a valid address into a different one.
+    let suffix = "@example.com";
+    let local_len = MAX_EMAIL_LEN - suffix.len();
+    let address = format!("{}{suffix}", "a".repeat(local_len));
+    assert_eq!(address.chars().count(), MAX_EMAIL_LEN);
+    assert!(valid_email(&address));
+
+    let padded = format!("  {address}\t");
+    let mut value = config();
+    value.email = padded.clone();
+    clamp_auth_config(&mut value);
+    assert_eq!(value.email, address, "padding must not morph the address");
+    assert_eq!(validate_config(&value), Ok(()));
+
+    // A padded over-long value is capped *after* the trim, so the retained
+    // prefix is still the original address rather than leading whitespace.
+    let mut over = config();
+    over.email = format!(" {address}overlong ");
+    clamp_auth_config(&mut over);
+    assert_eq!(over.email.chars().count(), MAX_EMAIL_LEN);
+    assert_eq!(
+        over.email, address,
+        "the excess tail is dropped, not the domain"
+    );
+    assert_eq!(validate_config(&over), Ok(()));
+    // Clamping is idempotent: it never reintroduces the padding.
+    clamp_auth_config(&mut over);
+    assert_eq!(over.email, address);
+}
+
+#[test]
+fn non_link_local_metadata_ip_is_blocked_in_every_classifier_path() {
+    // Alibaba's metadata endpoint uses an address outside link-local ranges.
+    // The literal, wildcard-DNS and resolver paths must all reject it.
+    let metadata: IpAddr = "100.100.100.200".parse().unwrap();
+    assert!(!is_link_local_ip(metadata), "premise: not link-local");
+    assert!(super::is_blocked_metadata_ip(metadata));
+
+    for value in [
+        "http://100.100.100.200",
+        "https://100.100.100.200/latest/meta-data",
+        "http://100.100.100.200.nip.io",
+        "http://100-100-100-200.nip.io",
+    ] {
+        assert!(is_blocked_server_url_without_dns(value), "{value}");
+        assert!(is_blocked_server_url(value), "{value}");
+        let mut config = config();
+        config.server_url = value.into();
+        assert_eq!(validate_config(&config), Err(AuthError::BlockedServerUrl));
+    }
+    // A DNS name resolving to the metadata IP is refused as a whole.
+    assert!(is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| { vec![metadata] }
+    ));
+
+    // A neighbouring address stays allowed: the guard is not a blanket block
+    // of the surrounding range.
+    let neighbour: IpAddr = "100.100.100.201".parse().unwrap();
+    assert!(!is_blocked_server_url_without_dns("http://100.100.100.201"));
+    assert!(!is_blocked_server_url_with(
+        "https://vault.example.com",
+        |_| { vec![neighbour] }
+    ));
+    let mut allowed = config();
+    allowed.server_url = "https://100.100.100.201".into();
+    assert_eq!(validate_config(&allowed), Ok(()));
+}
+
+#[test]
+fn empty_causes_keep_the_family_message_for_the_five_non_url_details() {
+    use crate::error::{AppError, BoxedCause};
+
+    // The five non-URL detail families share `cause_status`: an empty cause
+    // adds no `（…）` suffix, a non-empty one adds exactly one group.
+    let empty = [
+        (
+            AppError::ClientSetupCause(BoxedCause::text("")),
+            AuthError::ClientSetup,
+        ),
+        (
+            AppError::PreloginCause(BoxedCause::text("")),
+            AuthError::Prelogin,
+        ),
+        (AppError::LoginCause(BoxedCause::text("")), AuthError::Login),
+        (AppError::SyncCause(BoxedCause::text("")), AuthError::Sync),
+        (
+            AppError::KdfRejectedCause(BoxedCause::text("")),
+            AuthError::KdfRejected,
+        ),
+    ];
+    assert_eq!(empty.len(), 5, "all five families are pinned");
+    for (app, plain) in empty {
+        let small = AuthError::from(app);
+        assert_eq!(small.status_message(), plain.message(), "{small:?}");
+        assert_eq!(small.status_message(), small.to_string());
+        assert!(!small.status_message().contains("（）"), "{small:?}");
+        assert_eq!(small, plain, "the cause is diagnostic, not identity");
+    }
+
+    let populated = [
+        AppError::ClientSetupCause(BoxedCause::text("reason")),
+        AppError::PreloginCause(BoxedCause::text("reason")),
+        AppError::LoginCause(BoxedCause::text("reason")),
+        AppError::SyncCause(BoxedCause::text("reason")),
+        AppError::KdfRejectedCause(BoxedCause::text("reason")),
+    ];
+    for app in populated {
+        let status = AuthError::from(app).status_message();
+        assert!(status.contains("reason"), "{status}");
+        assert_eq!(status.matches('（').count(), 1, "{status}");
+        assert!(status.ends_with('）'), "{status}");
+    }
+}
+
+#[test]
+fn invalid_server_url_detail_replaces_the_hint_instead_of_doubling_parentheses() {
+    use crate::error::{AppError, BoxedCause};
+
+    let family = "サーバー URL が不正です（HTTPS または loopback の HTTP）";
+    assert_eq!(AuthError::InvalidServerUrl.message(), family);
+    let detailed = AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::text(
+        "bad scheme",
+    )));
+    assert_eq!(
+        detailed.status_message(),
+        "サーバー URL が不正です（bad scheme）"
+    );
+    assert!(!detailed
+        .status_message()
+        .contains("HTTPS または loopback の HTTP"));
+    assert!(!detailed.status_message().contains("）（"));
+
+    // An empty cause keeps the full family message, hint included.
+    let empty = AuthError::from(AppError::InvalidServerUrlCause(BoxedCause::text("")));
+    assert_eq!(empty.status_message(), family);
+    assert!(!empty.status_message().contains("（）"));
+    assert_eq!(empty, AuthError::InvalidServerUrl);
 }

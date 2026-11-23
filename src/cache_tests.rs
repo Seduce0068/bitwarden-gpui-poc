@@ -3848,3 +3848,63 @@ fn numeric_only_password_in_a_scheme_less_nested_authority_is_masked() {
     );
     assert_eq!(cache.server_url, url);
 }
+
+#[test]
+fn bounded_read_saturates_the_limit_plus_one() {
+    // `read_bounded` caps the reader at `limit.saturating_add(1)` bytes
+    // (cache.rs:905-915). A plain `limit + 1` would overflow at `u64::MAX`;
+    // the saturating form must still read a short reader in full.
+    let mut reader = std::io::Cursor::new(vec![b'x'; 8]);
+    let contents = super::read_bounded(&mut reader, u64::MAX).unwrap();
+    assert_eq!(contents, vec![b'x'; 8]);
+    assert_eq!(reader.position(), 8);
+}
+
+#[test]
+fn save_preserves_the_capture_time_instead_of_refreshing_it() {
+    // Documented `created_at` contract on `save`: the sanitized copy keeps the
+    // caller's timestamp, so writing an old cache cannot extend its offline
+    // window. Only `from_body` stamps a fresh capture time.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sync-cache.json");
+    let mut cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    cache.created_at = Some(1);
+    save(&path, &cache).unwrap();
+    assert_eq!(load_detailed(&path).unwrap().created_at, Some(1));
+    assert_eq!(cache.created_at, Some(1), "the caller's value is untouched");
+
+    // A legacy cache without a timestamp keeps it absent on the round trip.
+    cache.created_at = None;
+    save(&path, &cache).unwrap();
+    assert_eq!(load_detailed(&path).unwrap().created_at, None);
+}
+
+#[test]
+fn pair_start_zero_without_an_equals_sign_masks_the_whole_authority() {
+    // With no `?`/`#`/`/` before the '@' the pre-pass takes `pair_start == 0`.
+    // When there is no '=' either, `prefix_end` falls back to 0 (cache.rs:
+    // 496-503), so the whole `user:secret` text is treated as userinfo.
+    for pairs in [
+        "user:P&SS@cb.example.com/done",
+        "user:P;SS@cb.example.com/done",
+    ] {
+        assert_eq!(
+            super::mask_nested_userinfo_in_pairs(pairs),
+            "[redacted]@cb.example.com/done",
+            "{pairs}"
+        );
+    }
+    // A harmless '@' without a `user:secret` marker is still copied verbatim.
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs("state=a@b&flag=1"),
+        "state=a@b&flag=1"
+    );
+
+    let url = "https://vault.example.com/p?user:P&SS@cb.example.com/done";
+    let masked = super::mask_url_secrets(url);
+    assert!(!masked.contains("P&SS"), "{masked}");
+    assert!(
+        masked.contains("[redacted]@cb.example.com/done"),
+        "{masked}"
+    );
+}
