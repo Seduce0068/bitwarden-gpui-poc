@@ -20,17 +20,17 @@ pub(super) enum GeneratorOption {
     Separator,
 }
 
-/// Help text describing arrow-key handling while editing text.
+/// Help text describing arrow/Home/End handling while editing text.
 ///
-/// Editing modes deliberately do not define a `UiAction` for arrow keys: they
-/// are routed through `UiAction::None` so the GPUI text field can handle them
-/// natively. This only delegates the keys; it does **not** guarantee caret
-/// movement (or Home/End/Shift-selection) because that behaviour belongs to
-/// GPUI's text input, not to this classifier. Adding a `MoveSelection` binding
-/// here would also conflict with the list-navigation meaning of Up/Down
-/// outside editing modes.
+/// Editing modes deliberately do not define a `UiAction` for these keys: they
+/// are classified as `UiAction::None` only so a multi-character key name is not
+/// inserted as literal text. The current UI has **no real GPUI text-input
+/// widget** in those modes, so caret movement is unsupported (R2-UI-128); the
+/// hint must say so rather than claiming GPUI owns the caret. Adding a
+/// `MoveSelection` binding here would also conflict with the list-navigation
+/// meaning of Up/Down outside editing modes.
 pub(super) const TEXT_EDIT_ARROW_KEYS_HINT: &str =
-    "入力中: 矢印キーは GPUI のテキスト入力に任せています（キャレット移動を保証するものではありません）";
+    "入力中: 矢印キー/Home/End は未対応です（GPUI のテキスト入力ウィジェットは未実装で、キャレット移動は保証されません）";
 
 /// Guidance for the confirmed-query re-edit keys in the vault panel.
 ///
@@ -416,11 +416,13 @@ fn text_action(text: &str, action: fn(String) -> UiAction) -> UiAction {
     action(text.to_string())
 }
 
-/// Cursor-movement key names handled natively by the GPUI text field.
+/// Cursor-movement key names that must stay inert while editing text.
 ///
-/// Matching them explicitly in each editing mode documents the intent and
-/// guarantees `UiAction::None` even if a name becomes single-character in a
-/// future GPUI version (which would otherwise make `insertable_text` insert it).
+/// Matching them explicitly in each editing mode guarantees `UiAction::None`
+/// even if a name becomes single-character in a future GPUI version (which
+/// would otherwise make `insertable_text` insert it). This is only a
+/// no-op classification: there is no real text-input widget in edit mode yet,
+/// so arrow/Home/End caret movement is unsupported (R2-UI-128).
 fn is_text_cursor_key(key: &str) -> bool {
     matches!(
         strip_arrow_prefix(key),
@@ -475,8 +477,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             return match key {
                 "escape" | "enter" => UiAction::FinishAuthEdit,
                 "backspace" => UiAction::BackspaceAuth,
-                // Arrow/Home/End stay with the GPUI text field (see
-                // TEXT_EDIT_ARROW_KEYS_HINT): no new list-movement binding here.
+                // Arrow/Home/End are inert while editing: no text-input widget
+                // consumes them yet, so caret movement is unsupported (see
+                // TEXT_EDIT_ARROW_KEYS_HINT). No list binding here either.
                 _ if is_text_cursor_key(key) => UiAction::None,
                 // A control/function key is never text, whatever `key_char`
                 // reports (including a stray single-character glyph).
@@ -504,8 +507,8 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
         return match key {
             "escape" | "enter" => UiAction::FinishSearch,
             "backspace" => UiAction::BackspaceSearch,
-            // Let GPUI move the caret in the search field; Up/Down still mean
-            // MoveSelection only outside this editing mode.
+            // No caret widget in search mode yet, so these keys stay inert;
+            // Up/Down keep their MoveSelection meaning only outside editing.
             _ if is_text_cursor_key(key) => UiAction::None,
             _ if is_non_text_key_name(key) => UiAction::None,
             _ => insertable_text(ctx).map_or(UiAction::None, |text| {
@@ -593,8 +596,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 return match key {
                     "escape" | "enter" => UiAction::FinishSettingsEdit,
                     "backspace" => UiAction::BackspaceSettings,
-                    // Same contract as auth/search editing: native caret
-                    // movement, no vault-list navigation while typing.
+                    // Same contract as auth/search editing: inert because there
+                    // is no caret widget yet, so no vault-list navigation while
+                    // typing.
                     _ if is_text_cursor_key(key) => UiAction::None,
                     _ if is_non_text_key_name(key) => UiAction::None,
                     _ => insertable_text(ctx).map_or(UiAction::None, |text| {
@@ -844,7 +848,10 @@ mod cursor_key_tests {
     #[::core::prelude::v1::test]
     fn is_text_cursor_key_covers_every_native_name() {
         for key in CURSOR_KEYS {
-            assert!(is_text_cursor_key(key), "{key} must be delegated to GPUI");
+            assert!(
+                is_text_cursor_key(key),
+                "{key} must stay inert while editing"
+            );
         }
         for key in ["enter", "escape", "backspace", "a", "", "f1"] {
             assert!(
@@ -855,9 +862,29 @@ mod cursor_key_tests {
     }
 
     #[::core::prelude::v1::test]
+    fn arrow_key_hint_states_caret_movement_is_unsupported() {
+        // R2-UI-128: the old copy claimed GPUI text input owned the caret, but
+        // edit mode has no real text-input widget. The hint must say "未対応"
+        // instead, while keeping the shared "入力中:" prefix and the key names
+        // that other modules' tests and inline hints rely on.
+        let hint = TEXT_EDIT_ARROW_KEYS_HINT;
+        assert!(hint.starts_with("入力中:"), "{hint}");
+        assert!(hint.contains("矢印キー"), "{hint}");
+        assert!(hint.contains("Home/End"), "{hint}");
+        assert!(hint.contains("未対応"), "{hint}");
+        assert!(
+            !hint.contains("に任せています"),
+            "the hint must not claim GPUI text input handles the keys: {hint}"
+        );
+        assert!(hint.contains("保証"), "{hint}");
+    }
+
+    #[::core::prelude::v1::test]
     fn every_cursor_key_stays_unbound_in_all_editing_modes() {
-        // A multi-character key must never fall through to `insertable_text`,
-        // which would insert e.g. "arrowup" as literal text in a field.
+        // Inert classification, not caret handling: there is no text-input
+        // widget in edit mode yet. A multi-character key must also never fall
+        // through to `insertable_text`, which would insert e.g. "arrowup" as
+        // literal text in a field.
         for key in CURSOR_KEYS {
             let mut ctx = KeyContext {
                 screen: Screen::Locked,
@@ -1257,9 +1284,9 @@ mod r2_ui_110_tests {
     }
 
     #[::core::prelude::v1::test]
-    fn editing_modes_still_delegate_arrow_prefixed_keys() {
-        // Normalizing the command name must not give the text field a new
-        // list-movement binding: editing modes keep delegating to GPUI.
+    fn editing_modes_keep_arrow_prefixed_keys_inert() {
+        // Normalizing the command name must not add a list-movement binding:
+        // editing modes keep these keys inert (no caret widget yet, R2-UI-128).
         for key in ["arrowup", "ArrowDown", "arrowleft"] {
             let mut ctx = nav_ctx(key);
             ctx.searching = true;

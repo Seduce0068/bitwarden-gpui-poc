@@ -3580,3 +3580,157 @@ fn report_text_renders_finding_numbers() {
     assert!(text.contains("推定 13 bit"), "{text}");
     assert!(text.contains("400 日以上更新されていない"), "{text}");
 }
+
+#[test]
+fn invisible_characters_do_not_add_the_wide_pool() {
+    // Unicode `Cf` (zero-width space, ZWJ, word joiner) and non-ASCII `Cc`
+    // (C1 controls) render no glyph. They must not select the 100-character
+    // WIDE_POOL allowance (health.rs:333-341); a value made only of them scores
+    // zero instead of `entropy_bits(100, 4)`.
+    let invisible = "\u{200b}\u{200d}\u{2060}\u{9f}";
+    assert_eq!(invisible.chars().count(), 4);
+    assert_eq!(
+        estimate_entropy(invisible),
+        entropy_bits(0, invisible.chars().count()).round() as u32
+    );
+    assert_eq!(estimate_entropy(invisible), 0);
+
+    // A visible multi-byte character still selects WIDE_POOL even when the
+    // value also carries invisible characters: the filter in
+    // `visible_lowercase` keeps kana but drops the Cf/Cc decoration.
+    let mixed = "\u{200b}あい\u{9f}";
+    assert_eq!(mixed.chars().count(), 4);
+    assert_eq!(
+        estimate_entropy(mixed),
+        entropy_bits(100, mixed.chars().count()).round() as u32,
+        "{mixed:?}"
+    );
+    // Control: the same visible characters keep their pre-existing wide-pool
+    // score, which is higher than an ASCII value of the same length.
+    let visible = "あい";
+    assert!(estimate_entropy(visible) > estimate_entropy("ab"));
+
+    // The audit surfaces the invisible-only estimate as a WeakPassword finding.
+    let bits = estimate_entropy(invisible);
+    let report = report_of(vec![login(
+        "invisible-pool",
+        "Invisible",
+        invisible,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn embedded_invisible_characters_do_not_break_dictionary_classification() {
+    // A Cf/Cc character inserted *inside* a common password used to defeat the
+    // `starts_with("password")` prefix rule (and, for non-ASCII Cf/C1, add the
+    // wide pool), pushing an ~11-bit guess above the 40-bit weak threshold.
+    let weak_bits = Thresholds::default().weak_bits;
+    for (padded, plain) in [
+        ("pass\u{200b}word123", "password123"),
+        ("password\u{200b}123", "password123"),
+        ("\u{200b}password123", "password123"),
+        ("pass\u{0}word123", "password123"),
+        ("pass\u{9f}word123", "password123"),
+        ("qwerty\u{200b}123", "qwerty123"),
+        ("\u{feff}letmein\u{200d}", "letmein"),
+    ] {
+        let bits = estimate_entropy(padded);
+        assert!(bits < weak_bits, "{padded:?}: {bits} >= {weak_bits}");
+        assert_eq!(bits, estimate_entropy(plain), "{padded:?} vs {plain}");
+    }
+
+    // The same normalization must not extend the prefix cap to a long value
+    // that merely starts with a dictionary word: the core is still measured in
+    // characters after the invisible characters are removed.
+    let long = format!("password{}", "Vt7#kQm2!zR9wP4$xL8@");
+    let decorated = format!("pass\u{200b}word{}", "Vt7#kQm2!zR9wP4$xL8@");
+    let normalized = super::visible_lowercase(&decorated);
+    assert_eq!(normalized, long.to_lowercase(), "{decorated}");
+    assert!(!super::is_common_password(&normalized));
+    assert!(estimate_entropy(&decorated) >= weak_bits, "{decorated}");
+
+    // End-to-end: with a valid TOTP and HTTPS URI only the weak password can
+    // produce a finding, so the low estimate reaches the report verbatim.
+    let padded = "pass\u{200b}word123";
+    let bits = estimate_entropy(padded);
+    let report = report_of(vec![login(
+        "cf-dictionary",
+        "CfDictionary",
+        padded,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn passphrase_estimate_accepts_a_non_ascii_single_separator() {
+    use crate::generator::{passphrase_entropy, PassphraseSettings};
+    use crate::words::WORDS;
+
+    let first = WORDS[0];
+    let second = WORDS[1];
+    let base = PassphraseSettings {
+        words: 2,
+        separator: "。".into(),
+        capitalize: false,
+        include_number: false,
+    };
+
+    // `。` (U+3002 IDEOGRAPHIC FULL STOP) is non-alphanumeric, so it is found
+    // by the generator-recognizer's separator scan and the word parts are
+    // still ordinary shared-list words (health.rs:425-466).
+    let plain = format!("{first}。{second}");
+    let expected = passphrase_entropy(&base).round() as u32;
+    assert_eq!(
+        super::passphrase_estimate(&plain),
+        Some(expected),
+        "{plain}"
+    );
+    assert_eq!(estimate_entropy(&plain), expected, "{plain}");
+
+    // A trailing digit and ASCII capitalization work with a multi-byte
+    // separator too: the byte-level digit check sees only the final ASCII byte.
+    let numbered = format!("{first}。{second}7");
+    let numbered_expected = passphrase_entropy(&PassphraseSettings {
+        include_number: true,
+        ..base.clone()
+    })
+    .round() as u32;
+    assert_eq!(
+        super::passphrase_estimate(&numbered),
+        Some(numbered_expected),
+        "{numbered}"
+    );
+    let capitalized = format!("{}。{second}", upper_first(first));
+    let capitalized_expected = passphrase_entropy(&PassphraseSettings {
+        capitalize: true,
+        ..base
+    })
+    .round() as u32;
+    assert_eq!(
+        super::passphrase_estimate(&capitalized),
+        Some(capitalized_expected),
+        "{capitalized}"
+    );
+    assert!(capitalized_expected > expected);
+    assert!(numbered_expected > expected);
+
+    // Control: a non-ASCII *alphanumeric* character is not a separator, so the
+    // value is not a generated passphrase and falls back to the character pool.
+    let alphanumeric_join = format!("{first}あ{second}");
+    assert_eq!(super::passphrase_estimate(&alphanumeric_join), None);
+}

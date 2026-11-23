@@ -3391,3 +3391,92 @@ fn missing_password_field_imports_an_empty_password_audited_as_weak() {
         .contains(&crate::health::Finding::PasswordUninspectable));
     assert_eq!(report.password_uninspectable(), 0);
 }
+
+#[test]
+fn revision_dates_combine_lowercase_t_z_with_fractions_and_numeric_offsets() {
+    // `parse_revision` accepts lowercase `t` as the date/time separator and
+    // lowercase `z` as UTC (vault_sync.rs:531,564-565). Those spellings must
+    // compose with the fractional-second and numeric-offset branches rather
+    // than stopping the parser early.
+    let utc = Some(1_700_000_000);
+
+    // Lowercase `t` + fraction + numeric offset.
+    for value in [
+        "2023-11-15t07:13:20.000+09:00",
+        "2023-11-15t07:13:20,123456+09:00",
+        "2023-11-14t17:13:20.999-05:00",
+        "2023-11-14t17:13:20,1-05:00",
+    ] {
+        assert_eq!(parse_revision(Some(value)), utc, "{value}");
+    }
+
+    // Lowercase `z` is a UTC terminator, so it combines with the fraction but
+    // not with a numeric offset. Mixed-case t/Z and T/z pairs agree.
+    for value in [
+        "2023-11-14t22:13:20.000z",
+        "2023-11-14T22:13:20,123456z",
+        "2023-11-14t22:13:20.999Z",
+        "2023-11-14T22:13:20.5z",
+    ] {
+        assert_eq!(parse_revision(Some(value)), utc, "{value}");
+    }
+
+    // Invalid combinations stay invalid with lowercase separators: an empty
+    // fraction, an out-of-range offset, trailing bytes and a `z` stacked after
+    // a numeric offset must all be rejected as a whole (vault_sync.rs:589-592).
+    for value in [
+        "2023-11-15t07:13:20.+09:00",
+        "2023-11-15t07:13:20.5+24:00",
+        "2023-11-15t07:13:20.1+09:00x",
+        "2023-11-15t07:13:20.1+09:00z",
+        "2023-11-15t07:13:20.1z+09:00",
+    ] {
+        assert_eq!(parse_revision(Some(value)), None, "{value}");
+    }
+}
+
+#[test]
+fn non_object_profile_is_classified_as_invalid_login() {
+    use std::error::Error as _;
+
+    // The outer JSON value is a valid object, but `profile` is not. openwarden's
+    // `SyncWire` requires `profile` to be an object with an `id`, so every
+    // non-object shape is rejected at `SyncData::from_json` and `parse_sync`
+    // classifies it as `InvalidLoginCause` with the family message and a typed
+    // cause -- never a different variant or a panic (vault_sync.rs:195-198).
+    for profile in [
+        "null",
+        "42",
+        "true",
+        "\"profile\"",
+        "[]",
+        "[{\"id\":\"u\"}]",
+    ] {
+        let body = format!("{{\"profile\":{profile},\"folders\":[],\"ciphers\":[]}}");
+        let error = parse_sync(body.as_bytes()).unwrap_err();
+        assert!(
+            matches!(error, SyncError::InvalidLoginCause(_, _)),
+            "profile {profile}: {error:?}"
+        );
+        assert_eq!(
+            error.message(),
+            "ログイン項目を読み取れませんでした",
+            "profile {profile}"
+        );
+        let source = error
+            .source()
+            .expect("a non-object profile must keep a typed cause")
+            .to_string();
+        assert!(!source.is_empty(), "profile {profile}");
+        assert!(
+            !source.contains("ログイン項目を読み取れませんでした"),
+            "profile {profile}: the family message must stay in message()"
+        );
+    }
+
+    // Control: an object profile with an id still parses, so the assertions
+    // above are about the field's shape rather than a blanket rejection.
+    let ok = parse_sync(br#"{"profile":{"id":"u"},"folders":[],"ciphers":[]}"#)
+        .expect("an object profile should parse");
+    assert_eq!(ok.user_id(), "u");
+}

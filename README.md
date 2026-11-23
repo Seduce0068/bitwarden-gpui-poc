@@ -321,8 +321,10 @@ gpui-kit の API を固定する明示的な判断であり、ピンを外して
    cargo check --all-targets --locked
    cargo test --all-targets --locked
    cargo clippy --all-targets --locked -- -D warnings
+   RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
    cargo audit
    cargo deny check
+   markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
    ```
 
 5. API 変更があればコードを追従させ、CHANGELOG の `[Unreleased]` と

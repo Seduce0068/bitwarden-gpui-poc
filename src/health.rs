@@ -330,7 +330,15 @@ pub fn estimate_entropy(password: &str) -> u32 {
     let has_symbol = chars
         .iter()
         .any(|c| !c.is_ascii_alphanumeric() && c.is_ascii());
-    let has_wide = chars.iter().any(|c| !c.is_ascii());
+    // Unicode `Cf` (format) and `Cc` (control) characters render no glyph, so
+    // they are not draws from the wide glyph repertoire. Counting a zero-width
+    // space or a C1 control here added 100 to the pool and inflated the score
+    // of an otherwise weak guess. Only visible multi-byte characters keep the
+    // wide-pool allowance; `visible_lowercase` applies the same rule to the
+    // pattern checks below.
+    let has_wide = chars
+        .iter()
+        .any(|c| !c.is_ascii() && !c.is_control() && !crate::limits::is_format_character(*c));
     // Use the generator's class sizes so the audit and the strength meter
     // agree with what the generator can actually draw. The wide pool is an
     // audit-only allowance: the generator emits ASCII only, but vault passwords
@@ -357,8 +365,13 @@ pub fn estimate_entropy(password: &str) -> u32 {
     // check and the dictionary checks below see the same characters. Folding
     // case first is what makes a mixed-case run such as `aAaAaA` count as one
     // repeated character; checking the original code points let it dodge the
-    // zero score.
-    let lower = password.to_lowercase();
+    // zero score. Invisible `Cf`/`Cc` characters are dropped by
+    // `visible_lowercase`: an embedded zero-width space (or NUL / C1 control)
+    // used to break the `starts_with("password")` prefix match in
+    // `is_common_password`, so a dictionary guess padded with one escaped the
+    // ~11-bit shortcut. Visible multi-byte characters survive the filter, so
+    // the wide pool and the non-ASCII suffix rules below are unchanged.
+    let lower = visible_lowercase(password);
     // A bare run of one character scores zero. Decoration at *either* end must
     // not hide such a run: `aaaaaaaaaa1`, `aaaaaaaaaa!` and `!aaaaaaaa` are no
     // harder to guess than `aaaaaaaaaa`, because an attacker tries each
@@ -512,6 +525,23 @@ fn word_capitalization(word: &str, lower: &str) -> Option<bool> {
         return Some(true);
     }
     None
+}
+
+/// Lowercased value with invisible Unicode `Cf`/`Cc` characters removed.
+///
+/// Used only by the pattern checks in [`estimate_entropy`]. Format characters
+/// (zero-width space, bidi controls, BOM, …) and control characters render
+/// nothing, yet they can be inserted in the middle of a dictionary word
+/// (`pass\u{200b}word`) where `strip_decoration` cannot reach them. Removing
+/// them restores the exact and prefix dictionary matches. Visible multi-byte
+/// characters are deliberately kept so the wide-pool allowance and the
+/// non-ASCII suffix rules still see them.
+fn visible_lowercase(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_control() && !crate::limits::is_format_character(*ch))
+        .collect::<String>()
+        .to_lowercase()
 }
 
 fn strip_trailing_digits(value: &str) -> Option<&str> {
@@ -679,10 +709,18 @@ fn strip_decoration(value: &str) -> &str {
 /// The prefix branch ignores decoration at **both** ends (whitespace, symbols
 /// and ASCII digit runs) so `!password`, `password!`, `  qwerty1` and
 /// `1password!` cannot escape the cap; the exact branch is never stripped (see
-/// the function body).
+/// the function body). Invisible `Cf`/`Cc` characters are the one exception:
+/// they render nothing and can sit *inside* a word, so they are removed before
+/// either branch (see [`visible_lowercase`]).
 fn is_common_password(lower: &str) -> bool {
-    // Exact membership stays verbatim: a leading or trailing character must
-    // not turn an unlisted value into a COMMON entry.
+    // Drop embedded invisible characters first: `pass\u{200b}word123` must
+    // classify exactly like `password123`. `estimate_entropy` already passes a
+    // normalized value; doing it here keeps direct callers consistent too.
+    let normalized = visible_lowercase(lower);
+    let lower = normalized.as_str();
+    // Exact membership stays verbatim apart from that invisible-character
+    // removal: a visible leading or trailing character must not turn an
+    // unlisted value into a COMMON entry.
     if is_exact_common_password(lower) {
         return true;
     }

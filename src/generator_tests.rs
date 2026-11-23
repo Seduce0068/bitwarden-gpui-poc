@@ -785,3 +785,36 @@ fn mixed_class_weak_boundary_is_rounded_to_match_the_audit() {
     assert!((password_entropy(&eight) - entropy_bits(52, 8)).abs() < 1e-9);
     assert_eq!(Strength::from_bits(password_entropy(&six)), Strength::Weak);
 }
+
+#[test]
+fn non_ascii_separator_passphrases_are_scored_by_the_audit() {
+    // The generator accepts any separator string. The audit's recognizer
+    // treats the first non-alphanumeric character as the separator, so a
+    // multi-byte one such as '。' must still be scored with the word-list model
+    // instead of falling back to the (much higher) character-pool estimate.
+    for settings in [
+        PassphraseSettings {
+            words: 4,
+            separator: "。".into(),
+            capitalize: false,
+            include_number: false,
+        },
+        PassphraseSettings {
+            words: 4,
+            separator: "。".into(),
+            capitalize: true,
+            include_number: true,
+        },
+    ] {
+        let expected = passphrase_entropy(&settings);
+        for _ in 0..8 {
+            let phrase = settings.generate().expect("passphrase should generate");
+            assert_eq!(phrase.split('。').count(), 4, "{phrase}");
+            let actual = crate::health::estimate_entropy(&phrase);
+            assert!(
+                (f64::from(actual) - expected).abs() <= 1.0,
+                "{phrase}: {actual} vs {expected}"
+            );
+        }
+    }
+}
