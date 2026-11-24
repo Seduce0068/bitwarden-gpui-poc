@@ -597,9 +597,12 @@ fn current_schema_drops_non_string_device_ids_per_field() {
     const A1B2C3D4: &str = "A1B2C3D4-1234-4ABC-8DEF-0123456789AB";
     // A current-schema file uses per-field tolerance instead of the future
     // rescue path: a non-string `device_id` is dropped while siblings survive.
+    // Every non-string JSON tag is covered, including null: `tolerant_struct`
+    // compares the input tag with the default (a String) and skips the field.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     for device_id in [
+        serde_json::json!(null),
         serde_json::json!(42),
         serde_json::json!([A1B2C3D4]),
         serde_json::json!({ "uuid": A1B2C3D4 }),
@@ -1363,12 +1366,15 @@ fn numeric_string_schema_markers_are_trimmed_before_classification() {
 fn future_schema_drops_non_string_device_ids() {
     // A future file can carry a valid `device_id` through the wholesale
     // fallback (settings.rs:860-871), but the rescue accepts only a JSON
-    // string. Numbers, arrays and objects are not opaque UUIDs: stringifying
-    // them would send a malformed identifier to the server, so each must yield
-    // the empty id that triggers `ensure_device_id`'s regeneration.
+    // string. Numbers, arrays, objects and null are not opaque UUIDs:
+    // stringifying them would send a malformed identifier to the server, so
+    // each must yield the empty id that triggers `ensure_device_id`'s
+    // regeneration. `Value::as_str` returns None for null just as it does for
+    // the other non-string tags.
     const VALID: &str = "A1B2C3D4-1234-4ABC-8DEF-0123456789AB";
     let future = CURRENT_SCHEMA_VERSION + 1;
     for device_id in [
+        serde_json::json!(null),
         serde_json::json!(42),
         serde_json::json!([VALID]),
         serde_json::json!({ "uuid": VALID }),

@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第147弾で 2 件すべてを完了）。
+なし（第148弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第148弾（16 担当・92 回目）の指摘 6 件を完結（2026-11-24）
+  - mark-only 名前の UI 空判定、アイドルロック doc、
+    device_id null、権限/パース優先順位を修正・テスト。
+  - フォールバック破損伝播、Strength::score 小数丸めをテスト。
+  - CHANGELOG に第147弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1280 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第147弾（16 担当・91 回目）の指摘 2 件を完結（2026-11-24）
   - Unicode 結合文字混入パスワードの characterization をテスト。
   - CHANGELOG に第145〜146弾を反映。

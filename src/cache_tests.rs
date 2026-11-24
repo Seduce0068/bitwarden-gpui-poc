@@ -1187,6 +1187,39 @@ fn corrupt_primary_does_not_silently_fall_back_to_legacy() {
 }
 
 #[test]
+fn missing_primary_propagates_the_corrupt_fallback_error() {
+    let root = tempfile::tempdir().unwrap();
+    let new = root.path().join("cache").join("sync-cache.json");
+    let old = root.path().join("config").join("sync-cache.json");
+    assert!(!new.exists(), "premise: the primary must really be absent");
+
+    // `load_with_fallback` consults the legacy file only on NotFound
+    // (cache.rs:1126-1135), but it does not swallow the fallback's own error:
+    // a corrupt legacy envelope must surface as ParseFailedCause instead of
+    // being downgraded to NotFound or silently ignored.
+    write_fixture(&old, b"not json");
+    let error = load_with_fallback(&new, &old).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ParseFailedCause(_)),
+        "the fallback's parse error must propagate unchanged: {error:?}"
+    );
+    assert!(
+        std::error::Error::source(&error).is_some(),
+        "the original serde error must stay reachable"
+    );
+    assert_eq!(cache_error_message(error), REASON_CORRUPT);
+    // The read path has no repair side effects: nothing is created or rewritten.
+    assert_eq!(std::fs::read(&old).unwrap(), b"not json".to_vec());
+    assert!(!new.exists());
+
+    // Control: with a readable fallback the same call succeeds, proving the
+    // error above came from the fallback rather than from the missing primary.
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&old, &cache).unwrap();
+    assert_eq!(load_with_fallback(&new, &old), Ok(cache));
+}
+
+#[test]
 fn fallback_returns_not_found_when_both_locations_are_missing() {
     let root = tempfile::tempdir().unwrap();
     assert_eq!(
@@ -4766,6 +4799,46 @@ fn permission_gate_wins_over_the_post_parse_body_size_gate() {
     assert!(
         matches!(&error, CacheLoadError::ReadFailedCause(_)),
         "permission gate must win over the post-parse body cap: {error:?}"
+    );
+    assert_eq!(cache_error_message(error), REASON_UNREADABLE);
+    assert!(load(&path).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_gate_wins_over_json_parse_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // The private-file mode gate runs after `metadata` but before the bounded
+    // read and `serde_json::from_slice` (cache.rs:1232-1252). A file that is
+    // both world-readable and syntactically broken must therefore be reported
+    // as unreadable with the permission cause, never as a JSON parse failure.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wide-and-broken.json");
+    write_fixture(&path, b"not json");
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o066,
+        0,
+        "premise: write_fixture created an owner-only file"
+    );
+
+    // Control at the safe mode: the same bytes really do reach the parser, so
+    // the assertion below is about priority rather than a disabled gate.
+    let error = load_detailed(&path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ParseFailedCause(_)),
+        "control: broken JSON at mode 0600 must be a parse failure: {error:?}"
+    );
+    assert!(
+        std::error::Error::source(&error).is_some(),
+        "the serde error must stay reachable through the cause chain"
+    );
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let error = load_detailed(&path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        "permission gate must win over the JSON parse failure: {error:?}"
     );
     assert_eq!(cache_error_message(error), REASON_UNREADABLE);
     assert!(load(&path).is_none());

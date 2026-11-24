@@ -275,6 +275,41 @@ fn entropy_and_strength_buckets() {
 }
 
 #[test]
+fn strength_score_rounds_fractional_bits_to_the_nearest_integer() {
+    // `score` (generator.rs:296-303) maps bits to 0..=100 with
+    // `(bits.clamp(0.0, 128.0) / 128.0 * 100.0).round()`. The inputs are dyadic
+    // (apart from 127.9, which stays far from a rounding boundary), so the
+    // expected integers pin the rounding without a float tolerance.
+    assert_eq!(Strength::Weak.score(0.0), 0);
+    assert_eq!(Strength::Weak.score(1.0), 1, "0.78125 rounds up, not down");
+    assert_eq!(Strength::Weak.score(2.0), 2, "1.5625 rounds up");
+    // Exact halves round away from zero (Rust's `f64::round`), so a truncating
+    // or banker's-rounding implementation would fail these two cases.
+    assert_eq!(Strength::Fair.score(16.0), 13, "12.5 -> 13");
+    assert_eq!(Strength::Good.score(48.0), 38, "37.5 -> 38");
+    assert_eq!(Strength::Good.score(49.0), 38, "38.28125 -> 38");
+    assert_eq!(Strength::Strong.score(127.0), 99, "99.21875 -> 99");
+    assert_eq!(Strength::Strong.score(127.9), 100, "99.921875 -> 100");
+
+    // Clamping happens before the percentage conversion and applies in both
+    // directions; the 128-bit ceiling is a full bar.
+    assert_eq!(Strength::Weak.score(-10.0), 0);
+    assert_eq!(Strength::Strong.score(128.0), 100);
+    assert_eq!(Strength::Strong.score(1000.0), 100);
+
+    // `self` only selects the label; every bucket shares the same numeric
+    // scale, so the same entropy must produce the same bar in all four.
+    for strength in [
+        Strength::Weak,
+        Strength::Fair,
+        Strength::Good,
+        Strength::Strong,
+    ] {
+        assert_eq!(strength.score(48.0), 38, "{strength:?}");
+    }
+}
+
+#[test]
 fn every_strength_bucket_has_its_own_label() {
     // The four label branches are part of the detail pane's contract
     // (generator.rs:278-286); a missing branch must not fall back to another

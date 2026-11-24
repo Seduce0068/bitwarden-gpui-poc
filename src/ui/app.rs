@@ -229,32 +229,42 @@ pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
     format!("{base}{}", unsaved_status_suffix(dirty))
 }
 
-/// Whether `value` carries no visible content.
+/// Whether `value` carries no visible content or identity.
 ///
 /// Whitespace, Unicode `Cc` (control) characters and Unicode `Cf` (format)
 /// characters such as zero-width spaces or bidi overrides all render nothing,
 /// whether at the edges or between visible letters. `Cc` is not whitespace
 /// (`str::trim()` alone keeps NUL and C1 controls), so it is listed explicitly
-/// to match `crate::model::is_visually_empty` and
-/// `crate::auth::credential_is_blank`. Otherwise a value that looks empty still
-/// passes a plain `trim().is_empty()` guard. Shared with the list row renderer
-/// so the two places agree on what "empty" means.
+/// to match `crate::auth::credential_is_blank`. Otherwise a value that looks
+/// empty still passes a plain `trim().is_empty()` guard.
+///
+/// A value made only of Unicode marks (`Mn`/`Mc`/`Me`, optionally separated by
+/// whitespace or `Cc`/`Cf` characters) has no visible identity either: bare
+/// marks have no base character to decorate. The strict rule is delegated to
+/// `crate::model::has_no_visible_identity`, the same one search and duplicate
+/// detection use, so a mark-only item name / username cannot leave a blank
+/// cell in the list while the rest of the app sees it as an identity. Shared
+/// with the list row renderer so the two places agree on what "empty" means.
 pub(super) fn is_visually_empty(value: &str) -> bool {
-    value
-        .chars()
-        .all(|ch| ch.is_whitespace() || ch.is_control() || crate::limits::is_format_character(ch))
+    crate::model::has_no_visible_identity(value)
 }
 
 /// Count only characters that actually render, using the same invisibility rule
 /// as [`is_visually_empty`]. Whitespace and Unicode `Cc`/`Cf` characters (zero
 /// width spaces, bidi overrides, controls, ...) draw nothing, so including them
 /// in a user-facing "n文字" length made a value such as `a\u{200b}b` read as
-/// "3文字". Pure so the wording can be pinned without a GPUI window.
+/// "3文字". Combining marks draw only together with a base character, so they
+/// are not counted either; a mark-only value then reports zero just like
+/// [`is_visually_empty`]. Pure so the wording can be pinned without a GPUI
+/// window.
 pub(super) fn visible_char_count(value: &str) -> usize {
     value
         .chars()
         .filter(|ch| {
-            !ch.is_whitespace() && !ch.is_control() && !crate::limits::is_format_character(*ch)
+            !ch.is_whitespace()
+                && !ch.is_control()
+                && !crate::limits::is_format_character(*ch)
+                && !unicode_normalization::char::is_combining_mark(*ch)
         })
         .count()
 }
@@ -265,11 +275,12 @@ pub(super) const ITEM_NAME_PLACEHOLDER: &str = "(名称未設定)";
 /// Display name shared by the vault list row and the detail row.
 ///
 /// `ui::render` used to draw the raw `item.name` in the list column, while
-/// `selected_detail` interpolated it between two `" | "` separators. An empty
-/// or invisible-only (`Cf`) name therefore left a blank column in the list and
-/// a double separator in the detail line. Both call sites now use this helper,
-/// so the same placeholder appears and the separator count stays stable. Kept
-/// pure so the contract can be tested without a GPUI window.
+/// `selected_detail` interpolated it between two `" | "` separators. An empty,
+/// invisible-only (`Cf`) or mark-only (`Mn`/`Mc`/`Me`) name therefore left a
+/// blank column in the list and a double separator in the detail line. Both
+/// call sites now use this helper, so the same placeholder appears and the
+/// separator count stays stable. Kept pure so the contract can be tested
+/// without a GPUI window.
 pub(super) fn item_name_text(name: &str) -> &str {
     if is_visually_empty(name) {
         ITEM_NAME_PLACEHOLDER
@@ -3101,9 +3112,10 @@ mod tests {
     #[::core::prelude::v1::test]
     fn is_visually_empty_treats_cc_controls_as_empty_like_the_model() {
         // NUL, DEL and the C1 controls are Unicode Cc, not whitespace. The UI
-        // rule must include `char::is_control`, exactly like
-        // `model::is_visually_empty` and `auth::credential_is_blank`; otherwise
-        // a Cc-only name / TOTP value counts as present in the UI alone.
+        // rule must keep `char::is_control`, like
+        // `auth::credential_is_blank` and the model's blank rule that
+        // `has_no_visible_identity` starts from; otherwise a Cc-only name /
+        // TOTP value counts as present in the UI alone.
         for control in ['\u{0}', '\u{1}', '\u{1f}', '\u{7f}', '\u{80}', '\u{9f}'] {
             let value = control.to_string();
             assert!(
@@ -3124,6 +3136,70 @@ mod tests {
         // The pre-existing halves of the rule still hold.
         assert!(is_visually_empty(" \t\n \u{200b}"));
         assert!(!is_visually_empty("GitHub"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn is_visually_empty_treats_mark_only_text_as_empty_like_the_model() {
+        // R2-UI-148: a value made only of Unicode marks has no standalone
+        // glyph. Search and duplicate detection already use the model's strict
+        // rule; the list-rendering rule must agree, or the cell looks blank
+        // while the rest of the app sees an identity.
+        for marks in [
+            "\u{0301}",                 // Mn: COMBINING ACUTE ACCENT
+            "\u{093e}",                 // Mc: DEVANAGARI VOWEL SIGN AA
+            "\u{20dd}",                 // Me: COMBINING ENCLOSING CIRCLE
+            "\u{0301}\u{200b}\u{093e}", // marks separated by Cf
+            " \u{0301}\t\u{20dd} ",     // marks separated by whitespace
+        ] {
+            assert!(
+                is_visually_empty(marks),
+                "mark-only {marks:?} must be empty"
+            );
+            assert_eq!(
+                crate::model::has_no_visible_identity(marks),
+                is_visually_empty(marks),
+                "must delegate to the model rule: {marks:?}"
+            );
+            assert_eq!(visible_char_count(marks), 0, "{marks:?}");
+        }
+
+        // A mark attached to a base character is a real identity: it is not
+        // empty, and only the base counts toward the visible length.
+        let decorated = "Caf\u{0301}";
+        assert!(!is_visually_empty(decorated));
+        assert_eq!(visible_char_count(decorated), 3, "{decorated:?}");
+        // The narrower blank rules keep their previous behaviour.
+        assert!(is_visually_empty("\u{200b}"));
+        assert!(!is_visually_empty("GitHub"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn mark_only_name_and_username_no_longer_leave_a_blank_cell() {
+        // R2-UI-148: list item names use `item_name_text`; list usernames use
+        // `is_visually_empty` directly (ui::render::vault_row_username). Both
+        // now resolve a mark-only value to a placeholder.
+        let marks = "\u{0301}\u{093e}\u{20dd}";
+        assert_eq!(item_name_text(marks), ITEM_NAME_PLACEHOLDER);
+        assert_eq!(item_name_text(marks), item_name_text(""));
+        assert!(!item_name_text(marks).contains(marks));
+        assert!(is_visually_empty(marks));
+        assert!(
+            audit_row_status(0, 1, marks, false).contains(ITEM_NAME_PLACEHOLDER),
+            "audit rows share the same display-name helper"
+        );
+
+        // The detail row drops visually empty fields, so a mark-only username
+        // cannot leave a dangling `" | "` separator behind either.
+        let base = "ログイン | Bank | 更新: 不明";
+        let detail = join_detail_fields(base, &[marks.into(), "パスワード: 6文字".into()]);
+        assert_eq!(detail, format!("{base} | パスワード: 6文字"));
+        assert!(!detail.contains(marks));
+
+        // A base character plus a mark stays visible and unchanged.
+        let decorated = "Caf\u{0301}";
+        assert_eq!(item_name_text(decorated), decorated);
+        let detail = join_detail_fields(base, &[decorated.into()]);
+        assert_eq!(detail, format!("{base} | {decorated}"));
     }
 
     #[::core::prelude::v1::test]

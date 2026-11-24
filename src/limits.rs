@@ -54,16 +54,20 @@ pub const DEFAULT_CLIPBOARD_RESTORE_SECONDS: u64 = 30;
 pub const MIN_IDLE_LOCK_SECONDS: u64 = 60;
 /// Maximum inactivity before auto-lock, in seconds.
 pub const MAX_IDLE_LOCK_SECONDS: u64 = 3600;
-/// Minimum idle-lock value expressed in the UI's minute step.
+/// Minimum idle-lock bound expressed in the UI's minute step.
 ///
-/// The UI adjuster works in whole minutes; this value is derived from
-/// `MIN_IDLE_LOCK_SECONDS` so the stored value, the clamp and the displayed
-/// range cannot drift apart.
+/// This is a derived convenience value for tests and diagnostics, not the
+/// constant the production UI clamps against. The adjuster in
+/// `crate::ui::logic::adjust_idle_lock` reads `MIN_IDLE_LOCK_SECONDS` and
+/// `MAX_IDLE_LOCK_SECONDS` directly and multiplies the one-minute step by 60,
+/// so changing this value alone does not move the UI range. The derivation
+/// only pins the unit relationship between the two spellings.
 #[allow(dead_code)]
 pub const MIN_IDLE_LOCK_MINUTES: u64 = MIN_IDLE_LOCK_SECONDS / 60;
-/// Maximum idle-lock value expressed in the UI's minute step.
+/// Maximum idle-lock bound expressed in the UI's minute step.
 ///
-/// Derived from `MAX_IDLE_LOCK_SECONDS` for the same reason as the minimum.
+/// Derived from `MAX_IDLE_LOCK_SECONDS` for the same reason as the minimum:
+/// the production UI clamp reads the seconds constant directly.
 #[allow(dead_code)]
 pub const MAX_IDLE_LOCK_MINUTES: u64 = MAX_IDLE_LOCK_SECONDS / 60;
 /// Minimum login time budget, in seconds.
