@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第139弾で 7 件すべてを完了）。
+なし（第140弾で 3 件すべてを完了）。
 
 ## 完了
 
+- [x] 第140弾（16 担当・84 回目）の指摘 3 件を完結（2026-11-24）
+  - 検索編集中 Backspace 案内を追加。
+  - Argon2id 全パラメータ、Session kdf 伝播、
+    bare authority 深さ上限、cache 行参照を修正・テスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1243 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第139弾（16 担当・83 回目）の指摘 7 件を完結（2026-11-24）
   - bare authority の第2 '?' マスク、BlockedServerUrl status、
     数字コア 0bit、PageUp 案内、ADR verified を修正。

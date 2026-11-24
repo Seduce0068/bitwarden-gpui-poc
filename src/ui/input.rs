@@ -110,17 +110,32 @@ pub(super) fn cycle_sort(view: &mut crate::ui::vault_view::VaultViewState) {
     view.deselect_and_rewind();
 }
 
+/// Backspace guidance shared by every text-editing mode.
+///
+/// The lock-screen and settings inline hints already spell this phrase as
+/// "Backspace: 削除" (`ui::logic::auth_hint(true)` / `settings_hint(true)`).
+/// Search has no inline editing hint, so the status bar is the only place that
+/// can advertise `UiAction::BackspaceSearch` (keys.rs) while searching. One
+/// literal here, pinned against those hints by a test, keeps all three modes
+/// in sync. (R2-UI-140)
+pub(super) const TEXT_EDIT_BACKSPACE_HINT: &str = "Backspace: 削除";
+
 /// Status shown when a text-editing mode begins.
 ///
 /// This status owns the shared "入力中:" arrow-key guidance for all three
 /// editing modes (auth, search, settings); the settings panel deliberately
 /// draws only its settings-specific inline hint so the prefix appears once.
-/// Entering a mode is a transient edit, not a save, so `dirty` must keep the
-/// persistent unsaved marker visible. Keeping it in one pure helper makes both
-/// the wording and the marker contract testable without a GPUI window.
+/// It also carries [`TEXT_EDIT_BACKSPACE_HINT`]: without it, search editing had
+/// no Backspace guidance anywhere, because the vault panel draws no inline
+/// editing hint (unlike the lock screen and settings panel). Entering a mode
+/// is a transient edit, not a save, so `dirty` must keep the persistent unsaved
+/// marker visible. Keeping it in one pure helper makes both the wording and
+/// the marker contract testable without a GPUI window.
 pub(super) fn text_edit_start_status(dirty: bool) -> String {
     crate::ui::app::status_with_unsaved(
-        &format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定"),
+        &format!(
+            "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter または Esc で確定"
+        ),
         dirty,
     )
 }
@@ -1159,7 +1174,38 @@ mod tests {
         assert!(status.contains("GPUI"), "{status}");
         assert_eq!(
             status,
-            format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
+            format!(
+                "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter または Esc で確定"
+            )
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn text_edit_start_status_guides_backspace_in_every_editing_mode() {
+        // R2-UI-140: search has no inline editing hint, so the status bar is
+        // the only place that can advertise `UiAction::BackspaceSearch`
+        // (keys.rs). The same status is installed by EditAuthField,
+        // EditSettingsField and StartSearch; pin the phrase and verify it is
+        // identical to the auth/settings inline wording rather than a new copy.
+        let status = text_edit_start_status(false);
+        assert_eq!(TEXT_EDIT_BACKSPACE_HINT, "Backspace: 削除");
+        assert!(
+            status.contains(TEXT_EDIT_BACKSPACE_HINT),
+            "search editing must advertise Backspace: {status}"
+        );
+        assert!(
+            crate::ui::logic::auth_hint(true).contains(TEXT_EDIT_BACKSPACE_HINT),
+            "auth and search editing must use the same Backspace wording"
+        );
+        assert!(
+            crate::ui::logic::settings_hint(true).contains(TEXT_EDIT_BACKSPACE_HINT),
+            "settings and search editing must use the same Backspace wording"
+        );
+
+        // The extra guidance is still a transient edit, not a save.
+        assert_eq!(
+            text_edit_start_status(true),
+            crate::ui::app::status_with_unsaved(&status, true)
         );
     }
 
@@ -1168,7 +1214,9 @@ mod tests {
         let clean = text_edit_start_status(false);
         assert_eq!(
             clean,
-            format!("{TEXT_EDIT_ARROW_KEYS_HINT} / Enter または Esc で確定")
+            format!(
+                "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter または Esc で確定"
+            )
         );
         assert!(!clean.contains("[未保存"), "{clean}");
 

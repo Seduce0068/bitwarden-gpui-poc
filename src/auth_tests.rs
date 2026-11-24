@@ -2085,6 +2085,69 @@ fn public_unlock_and_import_extracts_session_derived_inputs() {
     assert_eq!(error.message(), "復号キーが応答にありません");
 }
 
+thread_local! {
+    /// The exact KDF openwarden stored on the vault in [`recording_import`].
+    /// `Kdf` is `Copy`, and `Option<Kdf>` keeps the `None` arm observable.
+    static SEEN_KDF: std::cell::RefCell<Vec<Option<Kdf>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn recording_import(
+    vault: &openwarden::Vault,
+) -> Result<crate::model::Vault, crate::vault_sync::SyncError> {
+    SEEN_KDF.with(|seen| seen.borrow_mut().push(vault.key_state().kdf));
+    crate::vault_sync::import_logins(vault)
+}
+
+#[test]
+fn public_unlock_and_import_propagates_the_session_derived_kdf() {
+    // The public entry point (auth.rs:895-917) extracts both `protected_key()`
+    // and `kdf()` from the authenticated `Session` and forwards them unchanged
+    // to the shared helper. Its own signature has no import seam and always
+    // calls the real importer, so the value that reaches openwarden is observed
+    // through that helper with a recording importer. `Session::from_token` is
+    // the only public constructor that needs no login response and leaves kdf
+    // unset, so a token-only session contributes `None`; the live-login
+    // `Some(Kdf)` arm is pinned by
+    // `unlock_and_import_forwards_the_session_kdf_to_openwarden` below.
+    let session = Session::from_token(
+        SecretString::from("test-access-token".to_string()),
+        std::time::Duration::from_secs(3600),
+    )
+    .expect("a one-hour token must be accepted");
+    let session_kdf = session.kdf();
+    assert_eq!(session_kdf, None, "fixture precondition: token session kdf");
+
+    // Drive the public function with the same session so the extraction path
+    // itself is exercised, not only the helper it delegates to.
+    let (public_key, _public_protected, public_sync) = unlock_fixture();
+    let authenticated = AuthenticatedVault {
+        session,
+        sync: public_sync,
+        master_key: public_key,
+        from_cache: false,
+    };
+    assert_eq!(
+        unlock_and_import(authenticated).unwrap_err(),
+        UnlockError::MissingProtectedKey,
+        "the public path must read the protected key from the Session"
+    );
+
+    // The kdf value extracted above is the one the public path passes on: pin
+    // that it reaches openwarden's unlocked vault unchanged.
+    SEEN_KDF.with(|seen| seen.borrow_mut().clear());
+    let (master_key, protected, sync) = unlock_fixture();
+    let vault =
+        super::unlock_and_import_with(&protected, session_kdf, &master_key, sync, recording_import)
+            .expect("the session-derived kdf must unlock like production");
+    assert!(vault.items.is_empty());
+    assert_eq!(
+        SEEN_KDF.with(|seen| seen.borrow().clone()),
+        vec![session_kdf],
+        "the exact kdf extracted from the Session must reach openwarden"
+    );
+}
+
 #[test]
 fn authenticate_wrapper_matches_the_explicit_default_timeout_on_the_validation_path() {
     // Honest scope: `authenticate()` (auth.rs:1023-1029) is a thin wrapper around
@@ -4571,7 +4634,11 @@ fn argon2id_kdf_derive_success_path_is_deterministic() {
     );
 
     // Every input matters, so the equality above is not a constant-valued
-    // stub. Each variant stays policy-valid under the same cheap policy.
+    // stub. Vary all five Argon2id inputs (password, email and each of the
+    // three KDF fields) one at a time; every variant stays policy-valid under
+    // the same cheap policy and within the dependency's Argon2 constraints
+    // (`memory_mib * 1024 >= 8 * parallelism`, see openwarden 0.1.1's use of
+    // `argon2::Params::new`).
     let other_password = SecretString::from("correct horses".to_string());
     let changed = [
         (
@@ -4593,6 +4660,36 @@ fn argon2id_kdf_derive_success_path_is_deterministic() {
                     iterations: 3,
                     memory_mib: 8,
                     parallelism: 1,
+                },
+                &cheap,
+            )
+            .unwrap(),
+            &password,
+        ),
+        (
+            "memory_mib",
+            MasterKey::derive(
+                &password,
+                email,
+                &Kdf::Argon2id {
+                    iterations: 2,
+                    memory_mib: 16,
+                    parallelism: 1,
+                },
+                &cheap,
+            )
+            .unwrap(),
+            &password,
+        ),
+        (
+            "parallelism",
+            MasterKey::derive(
+                &password,
+                email,
+                &Kdf::Argon2id {
+                    iterations: 2,
+                    memory_mib: 8,
+                    parallelism: 2,
                 },
                 &cheap,
             )

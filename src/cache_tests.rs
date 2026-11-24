@@ -3494,7 +3494,7 @@ fn empty_profile_id_fails_closed_on_both_validation_paths() {
 fn nested_userinfo_password_with_equals_uses_the_pair_start_zero_branch() {
     // With no `?`/`#`/`/` before the '@', `pair_start == 0` and the *first*
     // '=' is the `key=` separator; later '=' characters are part of the
-    // password (cache.rs:383-395). A `rfind('=')` shortcut would cut at
+    // password (cache.rs:598-625). A `rfind('=')` shortcut would cut at
     // `x=1` and leave the real credential in the diagnostic URL.
     for pairs in [
         "next=user:P=SS&x=1@cb.example.com/done",
@@ -3523,7 +3523,7 @@ fn bare_authority_password_with_equals_is_masked_before_pair_splitting() {
     // A scheme-less authority used directly as a query value has no `key=`
     // prefix, so the '=' in its password is *not* a pair separator. The old
     // `split_once('=')` read `user:pa` as a key and copied the whole pair
-    // verbatim, leaking `pa=ss` through `Debug` (cache.rs:715). The same
+    // verbatim, leaking `pa=ss` through `Debug` (cache.rs:725). The same
     // assumption in `mask_nested_userinfo_in_pairs` cut the candidate at '='
     // and skipped the pre-pass rewrite (cache.rs:610-625).
     let pairs = "user:pa=ss@cb.example.com/done";
@@ -3600,6 +3600,44 @@ fn bare_authority_with_equals_also_masks_a_second_query_after_the_host() {
     assert!(!rendered.contains("SECOND_QUERY_SECRET"), "{rendered}");
     assert!(rendered.contains("token=[redacted]"), "{rendered}");
     assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn bare_authority_equals_redescent_stops_at_the_mask_depth_limit() {
+    // The bare-authority-with-'=' branch of `mask_param_pairs` masks the
+    // userinfo and then descends once more (cache.rs:708-723) so a second
+    // query behind the host is redacted too. That descent shares the
+    // MAX_MASK_DEPTH cap with the ordinary nested-URL branch: at the cap the
+    // whole tail becomes `[redacted]` instead of being rendered, so nothing
+    // behind the limit can reach a diagnostic line.
+    assert_eq!(super::MAX_MASK_DEPTH, 8);
+    let leaf = "https://leaf.example.com/p?user:pa=ss@cb.example.com/done";
+
+    // Seven `next=` wrappers place the leaf at depth 7, just below the cap:
+    // the branch still descends and keeps the redacted authority's host.
+    let mut below = leaf.to_string();
+    for layer in 0..7 {
+        below = format!("https://layer{layer}.example.com/next?next={below}");
+    }
+    let below_masked = super::mask_url_secrets(&below);
+    assert!(
+        below_masked.contains("leaf.example.com/p?[redacted]@cb.example.com/done"),
+        "{below_masked}"
+    );
+    assert!(!below_masked.contains("pa=ss"), "{below_masked}");
+
+    // At the cap, the bare-authority branch must redact the whole pair
+    // instead of descending again: neither the password nor the authority
+    // host may be rendered. Drive the branch directly with depth=8 so the
+    // guard is exercised independently of the `next=` recursion depth.
+    let at_cap = super::mask_param_pairs(leaf, super::MAX_MASK_DEPTH);
+    assert_eq!(at_cap, "[redacted]");
+    for hidden in ["pa=ss", "cb.example.com", "leaf.example.com"] {
+        assert!(!at_cap.contains(hidden), "leaked {hidden}: {at_cap}");
+    }
+    // One level below the cap the branch still descends and keeps the host.
+    let below_cap = super::mask_param_pairs(leaf, super::MAX_MASK_DEPTH - 1);
+    assert_eq!(below_cap, "https://leaf.example.com/p?[redacted]");
 }
 
 #[test]
