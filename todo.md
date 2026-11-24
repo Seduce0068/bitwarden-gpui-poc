@@ -24,10 +24,18 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第149弾で 5 件すべてを完了）。
+なし（第150弾で 3 件すべてを完了）。
 
 ## 完了
 
+- [x] 第150弾（16 担当・94 回目）の指摘 3 件を完結（2026-11-24）
+  - esc/return エイリアス正規化、separator 案内の不可視判定、
+    matches_page 折り目タイブレーク、README 上限を修正。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1294 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第149弾（16 担当・93 回目）の指摘 5 件を完結（2026-11-24）
   - 秒単位 status の対象ラベル、separator 上限、
     XDG ENV_LOCK 共有、mark-only Unnamed、再利用 visible_key を修正。

@@ -388,6 +388,23 @@ fn strip_arrow_prefix(name: &str) -> &str {
     name.strip_prefix("arrow").unwrap_or(name)
 }
 
+/// Canonical command spelling for key-name aliases.
+///
+/// [`is_non_text_key_name`] already accepts both spellings of Escape (`escape`
+/// and `esc`) and Return (`enter` and `return`) as text-free. Command matching
+/// used to accept only the long spellings, so an alias was classified as a
+/// non-text key yet matched no binding and silently became `UiAction::None`
+/// (R2-UI-150). Folding them here, at the single choke point shared by every
+/// panel arm, keeps each alias and its canonical name indistinguishable.
+/// Input must already be lowercased and arrow-prefix-free.
+fn canonical_command_key(name: &str) -> &str {
+    match name {
+        "esc" => "escape",
+        "return" => "enter",
+        other => other,
+    }
+}
+
 /// The key name to use for command matching.
 ///
 /// On Linux GPUI lowercases `key` and keeps Shift characters in `key_char`,
@@ -398,17 +415,24 @@ fn strip_arrow_prefix(name: &str) -> &str {
 /// resolved from [`raw_command_key`] before this fold, so
 /// `CopyPassword`/`CopyPassphrase` stay distinct. Arrow-prefixed navigation
 /// names are normalized here, so the audit and vault row matches only need the
-/// plain `up`/`down`/`pageup`/`pagedown`/`home`/`end` spellings.
+/// plain `up`/`down`/`pageup`/`pagedown`/`home`/`end` spellings. Escape/Return
+/// aliases are folded to their canonical spellings here too (R2-UI-150), so
+/// every `escape`/`enter` arm answers `esc`/`return` identically.
 fn command_key<'a>(ctx: &KeyContext<'a>) -> Cow<'a, str> {
-    let raw = if is_arrow_prefixed(ctx.key) {
+    // Alias names live in `key`. Prefer it over a one-character `key_char`
+    // echo (e.g. `\r` for Return), which would otherwise hide the alias and
+    // drop the keystroke through to `UiAction::None` again.
+    let physical = strip_arrow_prefix(ctx.key);
+    let is_alias = physical.eq_ignore_ascii_case("esc") || physical.eq_ignore_ascii_case("return");
+    let raw = if is_arrow_prefixed(ctx.key) || is_alias {
         ctx.key
     } else {
         raw_command_key(ctx)
     };
     if raw.bytes().all(|byte| !byte.is_ascii_uppercase()) {
-        Cow::Borrowed(strip_arrow_prefix(raw))
+        Cow::Borrowed(canonical_command_key(strip_arrow_prefix(raw)))
     } else {
-        Cow::Owned(strip_arrow_prefix(&raw.to_ascii_lowercase()).to_string())
+        Cow::Owned(canonical_command_key(strip_arrow_prefix(&raw.to_ascii_lowercase())).to_string())
     }
 }
 
@@ -1455,6 +1479,142 @@ mod r2_ui_119_tests {
             let mut ctx = panel_ctx(panel, key);
             ctx.modifiers.control = true;
             assert_eq!(classify_key(&ctx), UiAction::None, "{panel:?}/ctrl+{key}");
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod r2_ui_150_tests {
+    use super::*;
+
+    fn ctx(key: &str) -> KeyContext<'_> {
+        KeyContext {
+            screen: Screen::Unlocked,
+            panel: Panel::Vault,
+            key,
+            key_char: None,
+            modifiers: KeyModifiers::default(),
+            editing_auth: false,
+            searching: false,
+            editing_settings: false,
+            login_failed: false,
+            has_audit_report: true,
+            query_nonempty: false,
+        }
+    }
+
+    /// Pin the canonical action, then require the alias to produce exactly the
+    /// same action from the same state (so a shared wrong action cannot pass).
+    fn assert_alias_matches<'a>(mut canonical: KeyContext<'a>, alias: &'a str, expected: UiAction) {
+        let canonical_action = classify_key(&canonical);
+        assert_eq!(canonical_action, expected, "canonical/{0}", canonical.key);
+        canonical.key = alias;
+        assert_eq!(classify_key(&canonical), canonical_action, "alias/{alias}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn alias_names_normalize_at_the_command_choke_point() {
+        assert_eq!(&*command_key(&ctx("esc")), "escape");
+        assert_eq!(&*command_key(&ctx("ESC")), "escape");
+        assert_eq!(&*command_key(&ctx("return")), "enter");
+        assert_eq!(&*command_key(&ctx("RETURN")), "enter");
+        // A single-character key_char echo must not hide the alias.
+        let mut echoed = ctx("return");
+        echoed.key_char = Some("\r");
+        assert_eq!(&*command_key(&echoed), "enter");
+        // Existing normalization and canonical names are unchanged.
+        assert_eq!(&*command_key(&ctx("ArrowUp")), "up");
+        assert_eq!(&*command_key(&ctx("escape")), "escape");
+        assert_eq!(&*command_key(&ctx("enter")), "enter");
+    }
+
+    #[::core::prelude::v1::test]
+    fn esc_answers_every_escape_binding() {
+        let mut auth = ctx("escape");
+        auth.screen = Screen::Locked;
+        auth.editing_auth = true;
+        assert_alias_matches(auth, "esc", UiAction::FinishAuthEdit);
+
+        let mut locked = ctx("escape");
+        locked.screen = Screen::Locked;
+        assert_alias_matches(locked, "esc", UiAction::quit_or_warn());
+
+        let mut search = ctx("escape");
+        search.searching = true;
+        assert_alias_matches(search, "esc", UiAction::FinishSearch);
+
+        let mut settings_editing = ctx("escape");
+        settings_editing.panel = Panel::Settings;
+        settings_editing.editing_settings = true;
+        assert_alias_matches(settings_editing, "esc", UiAction::FinishSettingsEdit);
+
+        for panel in [
+            Panel::Audit,
+            Panel::Generator,
+            Panel::Settings,
+            Panel::Vault,
+        ] {
+            let mut panel_ctx = ctx("escape");
+            panel_ctx.panel = panel;
+            assert_alias_matches(panel_ctx, "esc", UiAction::quit_or_warn());
+        }
+
+        // A confirmed query still resolves Escape before the insert fallback.
+        let mut confirmed = ctx("escape");
+        confirmed.query_nonempty = true;
+        assert_alias_matches(confirmed, "esc", UiAction::quit_or_warn());
+    }
+
+    #[::core::prelude::v1::test]
+    fn return_answers_every_enter_binding() {
+        let mut auth = ctx("enter");
+        auth.screen = Screen::Locked;
+        auth.editing_auth = true;
+        assert_alias_matches(auth, "return", UiAction::FinishAuthEdit);
+
+        let mut locked = ctx("enter");
+        locked.screen = Screen::Locked;
+        assert_alias_matches(locked, "return", UiAction::Authenticate);
+
+        let mut search = ctx("enter");
+        search.searching = true;
+        assert_alias_matches(search, "return", UiAction::FinishSearch);
+
+        let mut audit = ctx("enter");
+        audit.panel = Panel::Audit;
+        assert_alias_matches(audit, "return", UiAction::focus_selected_audit_row());
+
+        let mut settings_editing = ctx("enter");
+        settings_editing.panel = Panel::Settings;
+        settings_editing.editing_settings = true;
+        assert_alias_matches(settings_editing, "return", UiAction::FinishSettingsEdit);
+
+        // These panels have no Enter binding, so both spellings stay inert.
+        for panel in [Panel::Generator, Panel::Settings] {
+            let mut panel_ctx = ctx("enter");
+            panel_ctx.panel = panel;
+            assert_alias_matches(panel_ctx, "return", UiAction::None);
+        }
+        assert_alias_matches(ctx("enter"), "return", UiAction::None);
+        let mut confirmed = ctx("enter");
+        confirmed.query_nonempty = true;
+        assert_alias_matches(confirmed, "return", UiAction::None);
+    }
+
+    #[::core::prelude::v1::test]
+    fn aliases_with_an_echoed_key_char_keep_their_command_action() {
+        // Backends may echo a name or a control glyph in `key_char`; the
+        // physical alias in `key` still decides the command (R2-UI-150).
+        for (key, echo, expected) in [
+            ("esc", "Esc", UiAction::quit_or_warn()),
+            ("esc", "\r", UiAction::quit_or_warn()),
+            ("return", "Return", UiAction::None),
+            ("return", "\r", UiAction::None),
+        ] {
+            let mut value = ctx(key);
+            value.key_char = Some(echo);
+            assert_eq!(classify_key(&value), expected, "{key}/{echo:?}");
         }
     }
 }

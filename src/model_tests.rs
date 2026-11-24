@@ -1751,18 +1751,26 @@ fn page_matching_ties_use_the_folded_name_key_then_the_id() {
     // `matches_page` shares the `compare` tiebreak (model.rs:1109-1129,1221-1231):
     // folded names order first, and identical folded names fall back to the id
     // so the result never depends on insertion order.
+    //
+    // "B" and "b\u{200b}" fold to the same key (lowercasing + dropping Cf), so
+    // only their ids can break the tie. Raw UTF-8 bytes order them the other
+    // way ('B' = 0x42 < 'b' = 0x62), so replacing the folded comparison with
+    // `a.name.cmp(&b.name)` flips `a-cf` and `b-upper` and fails this test.
     let page = "https://example.com/shared";
     let mut vault = Vault::new();
-    let mut nfd = login("b-nfd", "cafe\u{301}", "u", "p", page);
-    nfd.favorite = true;
-    nfd.revision_date = 10;
-    let mut nfc = login("a-nfc", "Café", "u", "p", page);
-    nfc.favorite = true;
-    nfc.revision_date = 10;
+    let mut upper = login("b-upper", "B", "u", "p", page);
+    upper.favorite = true;
+    upper.revision_date = 10;
+    let mut cf = login("a-cf", "b\u{200b}", "u", "p", page);
+    cf.favorite = true;
+    cf.revision_date = 10;
     let mut alpha = login("z-alpha", "Apple", "u", "p", page);
     alpha.favorite = true;
     alpha.revision_date = 10;
-    vault.items = vec![nfd, nfc, alpha];
+    // Guard the premise: the raw UTF-8 order of the two tied names disagrees
+    // with the folded order asserted below, so the test really is a guard.
+    assert!(upper.name < cf.name, "raw names must order differently");
+    vault.items = vec![upper, cf, alpha];
 
     let opts = openwarden::MatchOptions::default();
     let ids: Vec<&str> = vault
@@ -1770,8 +1778,8 @@ fn page_matching_ties_use_the_folded_name_key_then_the_id() {
         .iter()
         .map(|item| item.id.as_str())
         .collect();
-    assert_eq!(ids, vec!["z-alpha", "a-nfc", "b-nfd"]);
-    assert_eq!(comparison_key("cafe\u{301}"), comparison_key("Café"));
+    assert_eq!(ids, vec!["z-alpha", "a-cf", "b-upper"]);
+    assert_eq!(comparison_key("B"), comparison_key("b\u{200b}"));
 }
 
 #[test]

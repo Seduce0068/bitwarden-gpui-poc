@@ -223,7 +223,7 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 | `password_generator.symbols` | bool | `true` | `!@#$%^&*` を含める |
 | `password_generator.avoid_ambiguous` | bool | `false` | 紛らわしい文字を除外 |
 | `passphrase_generator.words` | number | `4` | 2〜20 |
-| `passphrase_generator.separator` | string | `"-"` | 単語区切り |
+| `passphrase_generator.separator` | string | `"-"` | 単語区切り（最大 16 文字） |
 | `passphrase_generator.capitalize` | bool | `true` | 単語を大文字開始に |
 | `passphrase_generator.include_number` | bool | `false` | 数字を 1 桁追加 |
 | `thresholds.weak_bits` | number | `40` | 1〜200（推定エントロピー） |

@@ -7,6 +7,7 @@ use gpui_kit::*;
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
 use crate::health::{has_totp_field, has_usable_totp, ItemReport, Report, Severity};
 use crate::settings::Settings;
+use crate::ui::app::is_visually_empty;
 use crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
 use crate::ui::logic::{settings_hint, unsaved_marker, FOCUS_RECOVERY_HINT};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
@@ -584,11 +585,14 @@ pub(super) fn result_row<'a>(label: &'a str, value: Option<&'a str>) -> impl Int
 /// Human-readable label for the passphrase separator.
 ///
 /// `{:?}` on the `String` adds quotes (`"-"`), which reads like a literal
-/// token instead of the character actually placed between words. The empty
-/// separator is named explicitly so a concatenated passphrase is not mistaken
-/// for a missing value.
+/// token instead of the character actually placed between words. A visually
+/// empty separator is named explicitly so a concatenated passphrase is not
+/// mistaken for a missing value. The blank check goes through the shared
+/// `ui::app::is_visually_empty` rule (whitespace and Unicode `Cc`/`Cf`/
+/// marks), so a zero-width space or bidi override cannot leave a blank after
+/// the "区切り:" label (R2-UI-150).
 pub(super) fn separator_label(separator: &str) -> &str {
-    if separator.is_empty() {
+    if is_visually_empty(separator) {
         "(なし)"
     } else {
         separator
@@ -1252,6 +1256,30 @@ mod tests {
         assert_eq!(separator_label("_"), "_");
         assert_eq!(separator_label(""), "(なし)");
         assert_ne!(separator_label("-"), "\"-\"");
+    }
+
+    #[::core::prelude::v1::test]
+    fn separator_label_hides_cf_and_whitespace_only_separators() {
+        // An invisible separator renders as a blank after "区切り:"; use the
+        // same `is_visually_empty` rule as every other empty-value label.
+        // The literals cover whitespace, ZERO WIDTH SPACE, ZERO WIDTH
+        // NO-BREAK SPACE, RIGHT-TO-LEFT OVERRIDE, and a mix of them (all Cf).
+        for separator in [
+            "",
+            " ",
+            " \t\n ",
+            "\u{200b}",
+            "\u{feff}",
+            "\u{202e}",
+            "\u{200b}\u{feff}\u{202e}",
+        ] {
+            assert_eq!(separator_label(separator), "(なし)", "{separator:?}");
+        }
+        // Visible separators keep their exact glyph, including surrounding
+        // whitespace and a leading invisible character.
+        for separator in ["-", ".", "_", " - ", "\u{200b}-"] {
+            assert_eq!(separator_label(separator), separator, "{separator:?}");
+        }
     }
 
     #[::core::prelude::v1::test]
