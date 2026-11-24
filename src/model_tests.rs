@@ -4716,3 +4716,33 @@ fn invisible_characters_in_non_name_haystack_fields_do_not_hide_search_hits() {
         1
     );
 }
+
+#[test]
+fn mark_only_totp_value_is_present_for_the_badge_but_has_no_visible_identity() {
+    // A bare combining mark is not whitespace, Cc or Cf, so the narrow
+    // `is_visually_empty` rule used by the TOTP badge keeps the field present.
+    // The stricter `has_no_visible_identity` rule used by search and duplicate
+    // detection adds the mark-only case and treats the same value as blank
+    // (model.rs:114-149). The two rules must not be conflated for a TOTP field.
+    const MARKS: &str = "\u{0301}\u{0300}\u{0301}";
+    assert!(!super::is_visually_empty(MARKS));
+    assert!(super::has_no_visible_identity(MARKS));
+    assert!(super::is_visually_empty("\u{200b}"));
+    assert!(super::has_no_visible_identity("\u{200b}"));
+
+    let mut item = login("1", "Login", "u", "p", "https://example.com");
+    if let ItemData::Login { totp, .. } = &mut item.data {
+        *totp = Zeroizing::new(MARKS.to_string());
+    }
+    let value = item.totp_secret().expect("a login has a TOTP field");
+    assert_eq!(value, MARKS);
+    assert!(!super::is_visually_empty(value), "field counts as present");
+    assert!(
+        super::has_no_visible_identity(value),
+        "but it is not a usable identifier"
+    );
+    assert!(
+        !item.matches_query(MARKS),
+        "a mark-only needle must not widen the result"
+    );
+}

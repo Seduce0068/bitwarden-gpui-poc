@@ -24,10 +24,21 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第144弾で 5 件すべてを完了）。
+なし（第145弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第145弾（16 担当・89 回目）の指摘 5 件を完結（2026-11-24）
+  - host 確定後の `?@` 誤マスク、空認証フィールドの
+    編集中マーカーを修正。
+  - 数値オーバーフロー、連番 PIN、to_text 分岐、
+    mark-only TOTP、Steam 表記を修正・テスト。
+  - CHANGELOG に第144弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1267 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第144弾（16 担当・88 回目）の指摘 5 件を完結（2026-11-24）
   - unlock_detail 3系統、ゼロ幅のみメール、空フォルダ id、
     wire 非整数、Steam 期限警告を修正・テスト。

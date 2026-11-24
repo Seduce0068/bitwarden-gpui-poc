@@ -27,6 +27,8 @@ filter.matchesAny(finding["secret"], [
   `https://user:12345?=@host`, `https://alice:12345?text@host`,
   `https://bob:0000?text@host/path`, `https://host:8443#frag@x`,
   `https://alice:12345?=@host`, `https://alice:12345?==@host/path`,
+  `https://user:p?x@host?@evil`, `https://user:p@ss?@host`,
+  `https://user:p?@host`,
   `https://user:12345?key=value@host`, `https://bob:01234?state=ok@host/path`,
   `https://vault.example.com:8443#frag@x`,
   `https://user:SECRET@[::1]`, `https://user:IPv6SECRET@[::1]:8443`,

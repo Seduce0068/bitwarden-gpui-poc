@@ -669,6 +669,52 @@ fn userinfo_separator_is_found_even_with_query_at_signs_and_unescaped_delimiters
 }
 
 #[test]
+fn empty_valued_query_or_fragment_at_sign_after_a_confirmed_host_is_not_userinfo() {
+    // Regression: `at_is_in_query` dismissed every '@' directly after a
+    // '?'/'#' as password decoration (cache.rs:333-343). Once an earlier '@'
+    // plus a plausible host has closed the authority, that delimiter is a
+    // genuine query/fragment start even with an empty value, so the reverse
+    // separator search (cache.rs:268-278) must keep the first '@' as the
+    // userinfo separator instead of cutting at the query '@'.
+    for (url, expected) in [
+        ("https://user:p@host?@evil", "https://[redacted]@host?@evil"),
+        ("https://user:p@host#@evil", "https://[redacted]@host#@evil"),
+        (
+            "https://user:p@host?@evil/x",
+            "https://[redacted]@host?@evil/x",
+        ),
+        (
+            "https://user:p?x@host?@evil",
+            "https://[redacted]@host?@evil",
+        ),
+        // An '@' inside the password followed by `?@host`: the real separator
+        // is still the first one, so the password tail stays redacted too.
+        ("https://user:p@ss?@host", "https://[redacted]@ss?@host"),
+    ] {
+        assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
+        assert_eq!(super::mask_url_secrets(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(rendered.contains(expected), "{url}: {rendered}");
+        assert!(!rendered.contains("user:p"), "{url}: {rendered}");
+        // Debug masking never rewrites the stored value used by the mismatch
+        // check.
+        assert_eq!(cache.server_url, url);
+    }
+
+    // Control: with no completed host the adjacent delimiter is still password
+    // decoration, so short/non-canonical numeric secrets remain masked.
+    assert_eq!(
+        super::mask_url_userinfo("https://user:12345?@host"),
+        "https://[redacted]@host"
+    );
+    assert_eq!(
+        super::mask_url_userinfo("https://user:p?@host"),
+        "https://[redacted]@host"
+    );
+}
+
+#[test]
 fn debug_masks_userinfo_when_a_query_at_sign_is_present() {
     // The search starts at the first separator in the authority, so a query
     // '@' cannot hide a credential from the top-level `Debug` masker either.

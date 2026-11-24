@@ -3360,6 +3360,68 @@ fn same_json_type_covers_all_six_tags_and_rejects_cross_tag_pairs() {
 }
 
 #[test]
+fn tolerant_struct_rejects_same_type_numeric_overflow_per_field() {
+    use serde_json::json;
+
+    let defaults = Settings::default();
+
+    // An out-of-range number still shares its default's JSON *number* tag, so
+    // `same_json_type` admits it; only the trial parse inside
+    // `tolerant_struct` (settings.rs:595-602) rejects it. The bad field keeps
+    // its default while a correctly typed sibling survives.
+    let repaired: crate::health::Thresholds = super::tolerant_struct(json!({
+        "weak_bits": 4_294_967_296u64, // u32::MAX + 1
+        "stale_days": 30,
+    }));
+    assert_eq!(repaired.weak_bits, defaults.thresholds.weak_bits);
+    assert_eq!(repaired.stale_days, 30);
+
+    let overflowing: serde_json::Value =
+        serde_json::from_str(r#"{"weak_bits":60,"stale_days":9223372036854775808}"#).unwrap();
+    let repaired: crate::health::Thresholds = super::tolerant_struct(overflowing);
+    assert_eq!(repaired.weak_bits, 60);
+    assert_eq!(repaired.stale_days, defaults.thresholds.stale_days);
+
+    // The same rule on the real parse path: nested u32/i64 fields and two
+    // top-level u64 fields overflow, but none of them discards a good sibling.
+    // The `.0` spelling is deliberately a JSON number (same tag as the
+    // default) whose value is past usize/u64, not a wrong-type string.
+    let parsed = Settings::parse_settings(
+        r#"{
+            "schema_version": 1,
+            "email": "overflow@example.com",
+            "server_url": "https://overflow.example",
+            "password_generator": {
+                "length": 18446744073709551616.0,
+                "lowercase": false
+            },
+            "passphrase_generator": {"words": 6},
+            "thresholds": {"weak_bits": 4294967296, "stale_days": 90},
+            "idle_lock_seconds": 18446744073709551616.0,
+            "login_timeout_seconds": 45
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(parsed.email, "overflow@example.com");
+    assert_eq!(parsed.server_url, "https://overflow.example");
+    assert_eq!(parsed.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        parsed.password_generator.length,
+        defaults.password_generator.length
+    );
+    assert!(
+        !parsed.password_generator.lowercase,
+        "valid sibling survives"
+    );
+    assert_eq!(parsed.passphrase_generator.words, 6);
+    assert_eq!(parsed.thresholds.weak_bits, defaults.thresholds.weak_bits);
+    assert_eq!(parsed.thresholds.stale_days, 90);
+    assert_eq!(parsed.idle_lock_seconds, defaults.idle_lock_seconds);
+    assert_eq!(parsed.login_timeout_seconds, 45);
+}
+
+#[test]
 fn pop_shared_char_is_a_no_op_on_empty_and_pops_consecutive_characters() {
     use crate::settings::SharedSettingsField;
 

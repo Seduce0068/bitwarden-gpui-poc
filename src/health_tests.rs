@@ -4234,3 +4234,132 @@ fn repeated_body_with_a_fullwidth_digit_suffix_escapes_the_all_same_penalty() {
         "the overestimated value is not Weak today: {wide_report:?}"
     );
 }
+
+#[test]
+fn sequential_pin_is_charged_the_digit_pool_by_length_only() {
+    let weak_bits = Thresholds::default().weak_bits;
+
+    // Ascending, descending and a leading-zero counter are all plain decimal
+    // digits: the estimator has no sequential-digit rule, so only the length
+    // and the 10-symbol pool decide (health.rs:408-412).
+    for pin in ["1234", "0123456789", "9876543210"] {
+        let bits = entropy_bits(10, pin.chars().count()).round() as u32;
+        assert_eq!(estimate_entropy(pin), bits, "{pin}");
+        assert_eq!(password_strength(pin).1, Strength::Weak, "{pin}");
+        assert!(bits < weak_bits, "{pin}: {bits}");
+        let report = report_of(vec![login(
+            "pin",
+            "Pin",
+            pin,
+            "https://a.example",
+            "GEZDGNBVGY3TQOJQ",
+        )]);
+        assert!(
+            report.items[0]
+                .findings
+                .contains(&Finding::WeakPassword { bits }),
+            "{pin}: {report:?}"
+        );
+    }
+
+    // The boundary stays exactly where the sibling test pins it: twelve
+    // sequential digits reach 40 bits (Fair), eleven remain Weak.
+    assert_eq!(estimate_entropy("123456789012"), weak_bits);
+    assert_eq!(estimate_entropy("12345678901"), 37);
+}
+
+#[test]
+fn to_text_uses_a_question_mark_for_an_item_without_findings() {
+    // `ItemReport::worst` (health.rs:171-173) returns None for an empty
+    // finding list and `Report::to_text` renders that as "?" instead of a
+    // severity label. `audit` skips clean items, so only a hand-built Report
+    // (as the UI/tests also construct) reaches this arm.
+    let clean = ItemReport {
+        id: "clean".into(),
+        name: "Clean".into(),
+        kind: ItemKind::Login,
+        findings: Vec::new(),
+    };
+    assert_eq!(clean.worst(), None);
+    let report = Report {
+        examined: 1,
+        items: vec![clean],
+        ..Report::default()
+    };
+    let text = report.to_text();
+    assert!(text.contains("[?] Clean (ログイン)\n"), "{text}");
+    assert!(!text.contains("  - "), "{text}");
+}
+
+#[test]
+fn to_text_renders_uninspectable_finding_lines() {
+    use crate::vault_sync::UNDECRYPTABLE_URI;
+
+    // The three "検査対象外" findings are informational, not weak/security
+    // failures. Every one must still get its own `to_text` line so a reader
+    // knows which check could not run (health.rs:278-280).
+    let report = report_of(vec![login(
+        "uninspectable",
+        "Uninspectable",
+        UNDECRYPTABLE_PASSWORD,
+        UNDECRYPTABLE_URI,
+        UNDECRYPTABLE_TOTP,
+    )]);
+    let item = &report.items[0];
+    assert_eq!(
+        item.findings,
+        vec![
+            Finding::PasswordUninspectable,
+            Finding::TotpUninspectable,
+            Finding::UriUninspectable,
+        ],
+        "{item:?}"
+    );
+    assert_eq!(item.worst(), Some(Severity::Low));
+
+    let text = report.to_text();
+    assert!(text.contains("[低] Uninspectable (ログイン)\n"), "{text}");
+    for line in [
+        "  - パスワード検査対象外（復号できませんでした）\n",
+        "  - TOTP 検査対象外（復号できませんでした）\n",
+        "  - URI 検査対象外（復号できませんでした）\n",
+    ] {
+        assert!(text.contains(line), "missing {line:?}: {text}");
+    }
+    // The password exclusion is also part of the summary and its own line.
+    assert!(text.contains("パスワード検査対象外: 1 件\n"), "{text}");
+}
+
+#[test]
+fn mark_only_totp_field_is_present_but_not_usable_and_reports_no_totp() {
+    // The TOTP badge uses the narrow `is_visually_empty` rule, which excludes
+    // whitespace/Cc/Cf but not Unicode marks; duplicate detection and search
+    // use the stricter `has_no_visible_identity` rule (model.rs:114-149).
+    // A mark-only secret is therefore a *present* field with no usable value:
+    // `is_valid_secret` rejects it and the audit emits NoTotp, not
+    // TotpUninspectable.
+    const MARK_ONLY: &str = "\u{0301}\u{0300}";
+    assert!(!crate::model::is_visually_empty(MARK_ONLY));
+    assert!(crate::model::has_no_visible_identity(MARK_ONLY));
+    assert!(!crate::totp::is_valid_secret(MARK_ONLY));
+
+    let item = login(
+        "mark-totp",
+        "MarkTOTP",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        MARK_ONLY,
+    );
+    assert!(has_totp_field(&item));
+    assert!(!has_usable_totp(&item));
+
+    let report = report_of(vec![item]);
+    assert_eq!(
+        report.items[0].findings,
+        vec![Finding::NoTotp],
+        "{report:?}"
+    );
+    assert_eq!(report.logins, 1);
+    assert_eq!(report.with_totp, 0);
+    assert_eq!(report.totp_coverage(), 0.0);
+}

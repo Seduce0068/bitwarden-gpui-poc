@@ -871,21 +871,30 @@ pub(super) fn panel_button<V: 'static>(
         .into_any_element()
 }
 
-pub(super) fn auth_row<'a>(
-    label: &'a str,
-    value: &'a str,
-    editing: bool,
-    secret: bool,
-) -> impl IntoElement + 'a {
-    let shown = if value.is_empty() {
-        "(未入力)".to_string()
+/// Text drawn in the value column of [`auth_row`].
+///
+/// The trailing `_` is the non-colour marker that a field is being edited. It
+/// must survive an empty value too: otherwise focusing an unset credential
+/// gives no visual feedback that the field is editable.
+fn auth_row_shown_text(value: &str, editing: bool, secret: bool) -> String {
+    if value.is_empty() {
+        format!("(未入力){}", if editing { " _" } else { "" })
     } else if secret {
         // Never render secret values in plain text, not even while editing.
         let masked = "•".repeat(value.chars().count());
         format!("{masked}{}", if editing { " _" } else { "" })
     } else {
         format!("{value}{}", if editing { " _" } else { "" })
-    };
+    }
+}
+
+pub(super) fn auth_row<'a>(
+    label: &'a str,
+    value: &'a str,
+    editing: bool,
+    secret: bool,
+) -> impl IntoElement + 'a {
+    let shown = auth_row_shown_text(value, editing, secret);
     div()
         .flex()
         .gap_3()
@@ -1255,6 +1264,22 @@ mod tests {
         );
         // Every tab label gets the same cue, including the audit placeholder.
         assert!(panel_button_label("[監査 (未生成)]", true).starts_with("▶ "));
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_row_shown_text_keeps_the_editing_marker_on_an_empty_value() {
+        // The regression: an empty credential field lost the `_` marker while
+        // focused, so editing had no non-colour indication at all.
+        assert_eq!(auth_row_shown_text("", true, false), "(未入力) _");
+        assert_eq!(auth_row_shown_text("", true, true), "(未入力) _");
+        // Idle empty fields keep the original wording.
+        assert_eq!(auth_row_shown_text("", false, false), "(未入力)");
+        assert_eq!(auth_row_shown_text("", false, true), "(未入力)");
+        // Non-empty branches are unchanged by the fix.
+        assert_eq!(auth_row_shown_text("user", true, false), "user _");
+        assert_eq!(auth_row_shown_text("user", false, false), "user");
+        assert_eq!(auth_row_shown_text("pw", true, true), "•• _");
+        assert_eq!(auth_row_shown_text("pw", false, true), "••");
     }
 
     #[::core::prelude::v1::test]

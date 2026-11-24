@@ -287,9 +287,13 @@ fn mask_url_userinfo(url: &str) -> String {
 /// no userinfo-style `user:password` marker (`host:8443` is a port, not a
 /// password); an '@' already followed by a clean host also closes the authority,
 /// so a later `?`/`#` starts the query. A delimiter with nothing between it
-/// and the '@' is never a query start: it is password decoration, which also
-/// keeps an all-digit password (`https://user:12345?@host`) from looking like
-/// a `host:port` with a query. The same applies when non-empty password text
+/// and the '@' is normally password decoration, which also keeps an all-digit
+/// password (`https://user:12345?@host`) from looking like a `host:port` with
+/// a query. The exception is an authority already closed by an earlier '@'
+/// followed by a plausible host: in `https://user:p@host?@evil` the empty-valued
+/// `?` is a genuine query start and the second '@' is query text, so only the
+/// first '@' may be chosen as the userinfo separator. The same applies when
+/// non-empty password text
 /// follows the delimiter: `https://user:12345?text@host` is userinfo and must
 /// be masked even though `user:12345` looks like `host:port`. The username is
 /// arbitrary — the classifier no longer looks for a hardcoded `user` name —
@@ -308,14 +312,6 @@ fn mask_url_userinfo(url: &str) -> String {
 fn at_is_in_query(scan: &str, at: usize) -> bool {
     let before = &scan[..at];
     before.match_indices(&['?', '#'][..]).any(|(delimiter, _)| {
-        // A delimiter immediately before the '@' has no query/fragment text
-        // after it, so it cannot be a genuine query start: it is an unescaped
-        // character in the password. In particular an all-digit password such
-        // as `12345?` in `https://user:12345?@host` used to be mistaken for a
-        // `host:port` authority with a query, leaving the credential visible.
-        if delimiter + 1 == at {
-            return false;
-        }
         let head = &before[..delimiter];
         let has_userinfo_colon = head.split(&['?', '#'][..]).any(|part| {
             let part = without_ipv6_literals(part);
@@ -334,6 +330,17 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
             let host = candidate.split(&['/', '?', '#'][..]).next().unwrap_or("");
             host_with_optional_port_ok(host)
         });
+        // A delimiter immediately before the '@' has no query/fragment text
+        // after it, so it is normally an unescaped character in the password
+        // (e.g. `12345?` in `https://user:12345?@host`). Once an earlier '@'
+        // followed by a plausible host has already closed the authority,
+        // though, the delimiter is a genuine query/fragment start even with
+        // an empty value: in `https://user:p@host?@evil` the second '@' is
+        // query text and only the first one separates userinfo from the host.
+        // The empty-value exemption must yield to that confirmed host.
+        if delimiter + 1 == at && !host_complete {
+            return false;
+        }
         // Keep the existing decision whenever a userinfo marker or an earlier
         // completed host already classifies the delimiter.
         if has_userinfo_colon || host_complete {
