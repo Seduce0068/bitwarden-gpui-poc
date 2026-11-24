@@ -791,9 +791,10 @@ fn avoid_ambiguous_mixed_case_still_lands_on_the_40_bit_boundary() {
     // Filtering `l`, `o`, `I`, `O` leaves 24 + 24 = 48 symbols. Seven draws
     // give 7 * log2(48) = 39.09… bits: below 40 but inside the [39, 40)
     // rounding window (generator.rs:335-337), but 39.09 rounds to 39, so the
-    // meter reports Weak here while the audit of an unambiguous 7-letter
-    // sample also scores 39 bits. The boundary itself is covered by the
-    // 39..40 rounding tests; this pins the unambiguous alphabet instead.
+    // meter reports Weak here. The audit scores an unambiguous 7-letter sample
+    // on its unfiltered 52-symbol pool as 40 bits (see `SAMPLE` below), not 39;
+    // the boundary itself is covered by the 39..40 rounding tests, so this pins
+    // the unambiguous alphabet instead.
     let settings = PasswordSettings {
         length: 7,
         lowercase: true,

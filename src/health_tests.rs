@@ -2842,6 +2842,53 @@ fn digit_then_symbol_then_word_leading_decoration_takes_the_prefix_cap() {
 }
 
 #[test]
+fn digit_run_with_trailing_decoration_keeps_its_numeric_core() {
+    // Regression: `strip_leading_decoration` alternates its symbol and digit
+    // steps. For a numeric core followed by decoration (`12345678!`) it used to
+    // strip the whole digit run, hand the loop a decoration-only tail and
+    // return `"!"`. The all-same check then scored the varied PIN 0 bits,
+    // far below the pure-digit estimate. The digit run is the core here, not
+    // decoration before a word, so it must survive to the trailing stripper.
+    for password in ["12345678!", "12345678!!!", "!12345678!", "12345678!1"] {
+        let body = super::strip_decoration(password);
+        assert!(
+            body.starts_with("12345678"),
+            "{password:?} -> {body:?}: the digit core was discarded"
+        );
+        let bits = estimate_entropy(password);
+        assert!(
+            bits >= estimate_entropy("12345678"),
+            "{password:?}: {bits} bits lost the numeric core"
+        );
+    }
+    // The all-same penalty still applies to a uniform digit core.
+    assert_eq!(estimate_entropy("11111111!"), 0);
+    assert_eq!(estimate_entropy("1111111111!"), 0);
+    // Leading digits before a real word remain decoration and are stripped.
+    assert_eq!(super::strip_leading_decoration("1!password"), "password");
+    assert_eq!(super::strip_decoration("12!@password!"), "password");
+    assert!(super::is_common_password(&"1!password".to_lowercase()));
+
+    // The audit surfaces the corrected estimate, not a fake zero-bit result.
+    let password = "12345678!";
+    let bits = estimate_entropy(password);
+    let report = report_of(vec![login(
+        "pin-decoration",
+        "PinDecoration",
+        password,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+    assert!(bits > 0, "the numeric core must not be scored as 0 bits");
+}
+
+#[test]
 fn trailing_dictionary_decoration_does_not_escape_the_prefix_cap() {
     // Regression: `is_common_password` stripped only leading decoration, so a
     // short guess padded at the *end* pushed its character count past the cap
@@ -4024,6 +4071,76 @@ fn unicode_space_separators_do_not_add_the_wide_pool() {
         report.items[0]
             .findings
             .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn unicode_space_separator_passwords_are_excluded_from_reuse() {
+    // `Zs` is whitespace, so `model::is_visually_empty` must keep a Zs-only
+    // password out of the reuse map even when two items carry the identical
+    // value. A visible pair beside it must still form its own reuse group so
+    // the "no reuse" assertion below is not vacuous.
+    const ZS_PASSWORD: &str = "\u{00a0}\u{2007}\u{202f}\u{3000}";
+    assert!(ZS_PASSWORD.chars().all(char::is_whitespace));
+
+    let report = report_of(vec![
+        login(
+            "zs-one",
+            "ZsOne",
+            ZS_PASSWORD,
+            "https://a.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+        login(
+            "zs-two",
+            "ZsTwo",
+            ZS_PASSWORD,
+            "https://b.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+        login(
+            "visible-one",
+            "VisibleOne",
+            "VisibleSecret42!",
+            "https://c.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+        login(
+            "visible-two",
+            "VisibleTwo",
+            "VisibleSecret42!",
+            "https://d.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+    ]);
+
+    let reused: Vec<&str> = report
+        .items
+        .iter()
+        .filter(|item| {
+            item.findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::ReusedPassword { .. }))
+        })
+        .map(|item| item.id.as_str())
+        .collect();
+    assert!(
+        !reused.contains(&"zs-one") && !reused.contains(&"zs-two"),
+        "a Zs-only password must not register as reused: {reused:?}"
+    );
+    assert!(
+        reused.contains(&"visible-one") && reused.contains(&"visible-two"),
+        "the visible pair must still be reused: {reused:?}"
+    );
+    assert_eq!(reused.len(), 2, "{reused:?}");
+    assert!(
+        report.items.iter().any(|item| {
+            item.id == "visible-one"
+                && item
+                    .findings
+                    .contains(&Finding::ReusedPassword { count: 2 })
+        }),
         "{report:?}"
     );
 }

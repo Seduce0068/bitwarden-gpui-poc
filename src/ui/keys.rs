@@ -20,7 +20,7 @@ pub(super) enum GeneratorOption {
     Separator,
 }
 
-/// Help text describing arrow/Home/End handling while editing text.
+/// Help text describing arrow/Home/End/PageUp/PageDown handling while editing text.
 ///
 /// Editing modes deliberately do not define a `UiAction` for these keys: they
 /// are classified as `UiAction::None` only so a multi-character key name is not
@@ -30,7 +30,7 @@ pub(super) enum GeneratorOption {
 /// `MoveSelection` binding here would also conflict with the list-navigation
 /// meaning of Up/Down outside editing modes.
 pub(super) const TEXT_EDIT_ARROW_KEYS_HINT: &str =
-    "入力中: 矢印キー/Home/End は未対応です（GPUI のテキスト入力ウィジェットは未実装で、キャレット移動は保証されません）";
+    "入力中: 矢印キー/Home/End/PageUp/PageDown は未対応です（GPUI のテキスト入力ウィジェットは未実装で、キャレット移動は保証されません）";
 
 /// Guidance for the confirmed-query re-edit keys in the vault panel.
 ///
@@ -877,6 +877,19 @@ mod cursor_key_tests {
             "the hint must not claim GPUI text input handles the keys: {hint}"
         );
         assert!(hint.contains("保証"), "{hint}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn arrow_key_hint_announces_pageup_pagedown_as_unsupported() {
+        // R2-UI-139: `PageUp`/`PageDown` are already classified as inert while
+        // editing (see `is_text_cursor_key` and `paging_keys_stay_unbound_in_every_editing_mode`),
+        // so the user-facing hint must announce that disabling instead of
+        // listing only arrows/Home/End (R2-UI-128).
+        let hint = TEXT_EDIT_ARROW_KEYS_HINT;
+        assert!(
+            hint.contains("PageUp/PageDown"),
+            "the hint must announce PageUp/PageDown as unsupported while editing: {hint}"
+        );
     }
 
     #[::core::prelude::v1::test]

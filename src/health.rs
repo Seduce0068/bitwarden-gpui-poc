@@ -692,9 +692,9 @@ fn is_exact_common_password(lower: &str) -> bool {
 /// `"!1password"` collapse as well. Symbols are "any non-alphanumeric
 /// character", which covers whitespace and invisible format characters; only
 /// ASCII digits are handled by the digit step, matching
-/// [`strip_trailing_digits`]. When stripping would remove the whole value, the
-/// undecorated-so-far remainder is kept, so a symbol-only or digit-only string
-/// is never turned into an empty prefix candidate.
+/// [`strip_trailing_digits`]. A leading digit run is only decoration when a
+/// word-like core follows it; with only trailing decoration left the run is the
+/// core and is kept. No value is ever reduced to an empty prefix candidate.
 fn strip_leading_decoration(value: &str) -> &str {
     let mut current = value;
     loop {
@@ -712,10 +712,17 @@ fn strip_leading_decoration(value: &str) -> &str {
             no_symbols
         };
         let no_digits = after_symbols.trim_start_matches(|c: char| c.is_ascii_digit());
-        let after_digits = if no_digits.is_empty() {
-            after_symbols
-        } else {
+        // A leading digit run is decoration only when a word-like core follows
+        // it (`1!password` -> `password`). When nothing alphabetic remains —
+        // for example `12345678!` or `12345678!1` — the run *is* the core:
+        // stripping it used to hand the loop a decoration-only tail, discard
+        // the numeric core and let the all-same check score a varied PIN as
+        // zero bits. Keep the run in that case so `strip_trailing_decoration`
+        // can remove only the trailing decoration.
+        let after_digits = if no_digits.chars().any(char::is_alphabetic) {
             no_digits
+        } else {
+            after_symbols
         };
         if after_digits.len() == current.len() {
             return after_digits;

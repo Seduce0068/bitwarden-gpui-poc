@@ -2160,10 +2160,17 @@ fn whitespace_only_server_url_and_email_are_missing_fields() {
     assert_eq!(validate_config(&padded), Ok(()));
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
 
-/// Set by [`observing_import`] when the production KDF reaches openwarden.
-static SAW_KDF: AtomicBool = AtomicBool::new(false);
+// Each Rust test runs on its own thread, so a thread-local flag gives the two
+// KDF tests independent state. A process-global `AtomicBool` let one test's
+// `store(false)` land between the other test's import and its assertion,
+// making the "KDF reached openwarden" check intermittently fail.
+thread_local! {
+    /// Set by [`observing_import`] when the production KDF reaches openwarden.
+    static SAW_KDF: Cell<bool> = const { Cell::new(false) };
+}
+
 /// A policy-valid PBKDF2 KDF, used to exercise the `Some(Kdf)` path.
 const TEST_KDF: Kdf = Kdf::Pbkdf2 {
     iterations: 100_000,
@@ -2172,7 +2179,7 @@ const TEST_KDF: Kdf = Kdf::Pbkdf2 {
 fn observing_import(
     vault: &openwarden::Vault,
 ) -> Result<crate::model::Vault, crate::vault_sync::SyncError> {
-    SAW_KDF.store(vault.key_state().kdf == Some(TEST_KDF), Ordering::SeqCst);
+    SAW_KDF.with(|flag| flag.set(vault.key_state().kdf == Some(TEST_KDF)));
     crate::vault_sync::import_logins(vault)
 }
 
@@ -2184,7 +2191,7 @@ fn unlock_and_import_forwards_the_session_kdf_to_openwarden() {
     // unset, so the existing branch tests all use `None`. This test supplies a
     // real `Some(Kdf)` and uses an import stub to observe the KDF that reached
     // the unlocked vault, covering the same path a real login takes.
-    SAW_KDF.store(false, Ordering::SeqCst);
+    SAW_KDF.with(|flag| flag.set(false));
 
     let (master_key, protected, sync) = unlock_fixture();
     let vault = super::unlock_and_import_with(
@@ -2197,7 +2204,7 @@ fn unlock_and_import_forwards_the_session_kdf_to_openwarden() {
     .expect("a session-derived Some(Kdf) must unlock like production");
     assert!(vault.items.is_empty());
     assert!(
-        SAW_KDF.load(Ordering::SeqCst),
+        SAW_KDF.with(Cell::get),
         "the supplied KDF must reach openwarden's unlocked vault"
     );
 }
@@ -2246,7 +2253,7 @@ fn unlock_and_import_success_uses_the_full_production_shape() {
         "the sync must carry the session's protected key"
     );
 
-    SAW_KDF.store(false, Ordering::SeqCst);
+    SAW_KDF.with(|flag| flag.set(false));
     let vault = super::unlock_and_import_with(
         &protected,
         Some(TEST_KDF),
@@ -2257,7 +2264,7 @@ fn unlock_and_import_success_uses_the_full_production_shape() {
     .expect("matching key, Some(Kdf) and encrypted ciphers must unlock");
 
     assert!(
-        SAW_KDF.load(Ordering::SeqCst),
+        SAW_KDF.with(Cell::get),
         "the session KDF must reach the unlocked vault"
     );
     assert_eq!(
@@ -3337,13 +3344,13 @@ fn plain_failed_unlock_variants_have_no_source() {
 
 #[test]
 fn plain_auth_error_variants_render_the_same_status_and_family_message() {
-    // `status_message()` (auth.rs:164-195) appends text only for `MissingField`
-    // and for non-empty `Detail` variants. Every plain variant must fall
-    // through to `message()` unchanged, including `Other`'s owned-by-reference
-    // family text. `to_string()` uses the same `message()` (auth.rs:198-202).
+    // `status_message()` (auth.rs:186-212) appends text only for `MissingField`
+    // and for non-empty `Detail` variants, plus the metadata-aware
+    // `BlockedServerUrl` exception pinned below. Every other plain variant must
+    // fall through to `message()` unchanged, including `Other`'s
+    // owned-by-reference family text. `to_string()` uses the same `message()`.
     let plain = [
         AuthError::InvalidServerUrl,
-        AuthError::BlockedServerUrl,
         AuthError::InvalidEmail,
         AuthError::ClientSetup,
         AuthError::Prelogin,
@@ -3357,6 +3364,17 @@ fn plain_auth_error_variants_render_the_same_status_and_family_message() {
         assert_eq!(error.status_message(), error.message(), "{error:?}");
         assert_eq!(error.status_message(), error.to_string(), "{error:?}");
     }
+    // `BlockedServerUrl` is the deliberate exception: its status text also
+    // names metadata addresses, while `message()` keeps the family wording
+    // shared with `AppError` (error.rs) and `Display`.
+    assert_eq!(
+        AuthError::BlockedServerUrl.status_message(),
+        "サーバー URL が link-local またはメタデータアドレスを指しています"
+    );
+    assert_ne!(
+        AuthError::BlockedServerUrl.status_message(),
+        AuthError::BlockedServerUrl.message()
+    );
     // The decorated families really do differ, so the assertions above are not
     // vacuous: a stub that always returned `message()` would fail these two.
     assert_ne!(
@@ -3367,6 +3385,30 @@ fn plain_auth_error_variants_render_the_same_status_and_family_message() {
         AuthError::LoginDetail("invalid_client".into()).status_message(),
         AuthError::Login.message()
     );
+}
+
+#[test]
+fn blocked_server_url_status_message_covers_metadata_ips_and_hosts() {
+    // The guard rejects link-local literals, known metadata hosts, wildcard-DNS
+    // names with an embedded metadata literal and the non-link-local Alibaba
+    // endpoint. The status bar must not claim that only link-local addresses
+    // were rejected.
+    let status = "サーバー URL が link-local またはメタデータアドレスを指しています";
+    for url in [
+        "https://169.254.169.254",
+        "https://[fe80::1]",
+        "https://100.100.100.200",
+        "https://metadata.google.internal",
+        "https://169.254.169.254.nip.io",
+    ] {
+        let mut value = config();
+        value.server_url = url.into();
+        let error = validate_config(&value).expect_err("the URL must be blocked");
+        assert_eq!(error, AuthError::BlockedServerUrl, "{url}");
+        assert_eq!(error.status_message(), status, "{url}");
+    }
+    // An ordinary server URL still validates without any blocked status.
+    assert_eq!(validate_config(&config()), Ok(()));
 }
 
 #[test]

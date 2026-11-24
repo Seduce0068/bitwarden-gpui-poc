@@ -102,6 +102,16 @@ const INVALID_SERVER_URL_MESSAGE: &str = "サーバー URL が不正です（HTT
 /// The parenthesized hint at the end of [`INVALID_SERVER_URL_MESSAGE`].
 const INVALID_SERVER_URL_HINT: &str = "（HTTPS または loopback の HTTP）";
 
+/// Metadata-aware status text for [`AuthError::BlockedServerUrl`].
+///
+/// The guard rejects more than link-local addresses: known metadata hosts,
+/// wildcard-DNS names with an embedded metadata literal and non-link-local
+/// metadata IPs such as `100.100.100.200` (see [`is_blocked_server_url_with`]).
+/// `message()` deliberately keeps the shorter family wording shared with
+/// `AppError::BlockedServerUrl`; only the status bar uses this broader text.
+const BLOCKED_SERVER_URL_STATUS: &str =
+    "サーバー URL が link-local またはメタデータアドレスを指しています";
+
 /// Compose a status message from a family message and a retained cause.
 ///
 /// Used by the five non-URL detail families. An empty cause is diagnostic
@@ -193,6 +203,10 @@ impl AuthError {
             | Self::LoginDetail(detail)
             | Self::SyncDetail(detail)
             | Self::ClientSetupDetail(detail) => cause_status(self.message(), detail),
+            // The blocked-URL guard also rejects non-link-local metadata IPs
+            // and known metadata hosts, so the status bar says so even though
+            // the shared family message keeps its older, narrower wording.
+            Self::BlockedServerUrl => BLOCKED_SERVER_URL_STATUS.to_string(),
             _ => self.message().to_string(),
         }
     }

@@ -3570,6 +3570,39 @@ fn bare_authority_password_with_equals_is_masked_before_pair_splitting() {
 }
 
 #[test]
+fn bare_authority_with_equals_also_masks_a_second_query_after_the_host() {
+    // The bare-authority branch used to `continue` right after
+    // `mask_url_userinfo`, which only rewrites the userinfo and copies the rest
+    // verbatim. A scheme-less authority followed by a second '?'
+    // (`?user:pa=ss@host?token=SECRET`) therefore left its own secret-bearing
+    // query unmasked. Both the authority password and the second query key must
+    // be redacted, while harmless parameters survive.
+    let pairs = "user:pa=ss@cb.example.com/done?token=SECOND_QUERY_SECRET&state=ok";
+    assert_eq!(
+        super::mask_param_pairs(pairs, 0),
+        "[redacted]@cb.example.com/done?token=[redacted]&state=ok"
+    );
+
+    let url = "https://vault.example.com/login?user:pa=ss@cb.example.com/done?token=SECOND_QUERY_SECRET&state=ok";
+    let masked = super::mask_url_secrets(url);
+    assert!(!masked.contains("pa=ss"), "{masked}");
+    assert!(!masked.contains("SECOND_QUERY_SECRET"), "{masked}");
+    assert_eq!(
+        masked,
+        "https://vault.example.com/login?[redacted]@cb.example.com/done?token=[redacted]&state=ok"
+    );
+
+    // `Debug` uses the same masker; the stored URL stays byte-for-byte intact
+    // for the server-mismatch check.
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("pa=ss"), "{rendered}");
+    assert!(!rendered.contains("SECOND_QUERY_SECRET"), "{rendered}");
+    assert!(rendered.contains("token=[redacted]"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
 fn nested_hash_password_coexists_with_a_real_fragment() {
     // The nested authority's password carries a literal '#', while the URL
     // also has a genuine fragment with a sensitive key. Only the first '#'

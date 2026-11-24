@@ -50,6 +50,96 @@ fn round_trip_through_temp_file() {
 }
 
 #[test]
+fn generator_boolean_fields_survive_load_sanitize_and_round_trip() {
+    // `digits`, `symbols` and `avoid_ambiguous` (password) plus `include_number`
+    // (passphrase) are persisted booleans. `sanitized()` only clamps numeric
+    // bounds, so a hand-edited file must keep every valid boolean spelling,
+    // including `false` for flags whose default is `true`.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        br#"{
+            "password_generator": {
+                "length": 16,
+                "lowercase": true,
+                "uppercase": true,
+                "digits": false,
+                "symbols": false,
+                "avoid_ambiguous": true
+            },
+            "passphrase_generator": {
+                "words": 5,
+                "separator": "_",
+                "capitalize": false,
+                "include_number": true
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert!(!loaded.password_generator.digits);
+    assert!(!loaded.password_generator.symbols);
+    assert!(loaded.password_generator.avoid_ambiguous);
+    assert!(loaded.passphrase_generator.include_number);
+    // Siblings omitted from the file keep their defaults.
+    assert!(loaded.password_generator.lowercase);
+    assert!(loaded.password_generator.uppercase);
+    // The defaults differ from the hand-edited values, so the assertions above
+    // are not vacuous.
+    let defaults = Settings::default();
+    assert!(defaults.password_generator.digits);
+    assert!(defaults.password_generator.symbols);
+    assert!(!defaults.password_generator.avoid_ambiguous);
+    assert!(!defaults.passphrase_generator.include_number);
+
+    // `sanitized()` preserves booleans; it only clamps numeric fields.
+    let safe = loaded.sanitized();
+    assert!(!safe.password_generator.digits);
+    assert!(!safe.password_generator.symbols);
+    assert!(safe.password_generator.avoid_ambiguous);
+    assert!(safe.passphrase_generator.include_number);
+
+    // `save` writes the same booleans back; the round trip is lossless.
+    safe.save(&path).unwrap();
+    let reloaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(reloaded.password_generator, safe.password_generator);
+    assert_eq!(reloaded.passphrase_generator, safe.passphrase_generator);
+
+    // A wrong JSON type falls back per field without discarding valid flags.
+    std::fs::write(
+        &path,
+        br#"{
+            "password_generator": {"digits": "no", "symbols": true, "avoid_ambiguous": 1},
+            "passphrase_generator": {"include_number": "yes", "capitalize": false}
+        }"#,
+    )
+    .unwrap();
+    let tolerant = Settings::load_detailed(&path).unwrap();
+    assert!(
+        tolerant.password_generator.digits,
+        "a wrong-typed boolean uses the default"
+    );
+    assert!(
+        tolerant.password_generator.symbols,
+        "a valid sibling survives"
+    );
+    assert!(
+        !tolerant.password_generator.avoid_ambiguous,
+        "a wrong-typed boolean uses the default"
+    );
+    assert!(
+        !tolerant.passphrase_generator.include_number,
+        "a wrong-typed boolean uses the default"
+    );
+    assert!(
+        !tolerant.passphrase_generator.capitalize,
+        "a valid sibling survives"
+    );
+}
+
+#[test]
 fn debug_masks_email_and_server_url() {
     let settings = Settings {
         email: "alice@example.com".into(),

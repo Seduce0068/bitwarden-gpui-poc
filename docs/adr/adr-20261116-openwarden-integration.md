@@ -13,8 +13,8 @@ generated:
 status: "approved"
 verified:
   by: "dsh-agent (lead)"
-  at: "2026-11-23T06:00:00+09:00"
-stale_after: "2027-05-23T06:00:00+09:00"
+  at: "2026-11-24T11:11:16+09:00"
+stale_after: "2027-05-24T11:11:16+09:00"
 ---
 
 ## Context

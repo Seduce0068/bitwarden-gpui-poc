@@ -706,7 +706,20 @@ fn mask_param_pairs(pairs: &str, depth: usize) -> String {
             })
         }) && nested_authority_with_userinfo(pair);
         if bare_authority_with_equals {
-            out.push_str(&mask_url_userinfo(pair));
+            let masked = mask_url_userinfo(pair);
+            // `mask_url_userinfo` only rewrites the authority. A scheme-less
+            // authority may carry a *second* '?' after its host
+            // (`?user:pa=ss@host?token=SECRET`): pushing the masked text
+            // straight through used to leave that second query unprocessed, so
+            // its secret key reached a diagnostic log verbatim. Descend once
+            // more with the same depth-limited masker so every query/fragment
+            // behind the authority is redacted too. The depth guard mirrors the
+            // nested-URL branch below so the cap stays authoritative.
+            if depth >= MAX_MASK_DEPTH {
+                out.push_str("[redacted]");
+            } else {
+                out.push_str(&mask_url_secrets_inner(&masked, depth + 1));
+            }
             continue;
         }
         if let Some((key, value)) = pair.split_once('=') {
