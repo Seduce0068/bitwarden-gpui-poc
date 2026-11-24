@@ -54,8 +54,7 @@ fn row_navigation_keys_hint(selectable_rows: usize) -> String {
     }
 }
 
-/// Main vault commands shown in the list header: after the row keys when rows
-/// exist, on their own when the vault is empty.
+/// Main vault commands shown in the list header after the row keys.
 ///
 /// `ui::keys::classify_key` binds all of these in `Panel::Vault`: `/` starts a
 /// search, `t`/`s` cycle filter and sort, `f` toggles a favorite, `y`/`p`/`u`
@@ -64,7 +63,19 @@ fn row_navigation_keys_hint(selectable_rows: usize) -> String {
 /// to advertise row movement only, leaving none of these discoverable on the
 /// vault screen. Kept as a constant so the wording can be pinned by tests
 /// without rendering a GPUI window.
+///
+/// `f`/`y`/`p`/`u` act on the highlighted row, so an empty list uses
+/// [`VAULT_SELECTION_FREE_KEYS_HINT`] instead of this constant. Both strings
+/// are pinned by tests so the selection-dependent subset cannot drift.
 pub(super) const VAULT_MAIN_KEYS_HINT: &str = "/: 検索 / t: フィルタ / s: 並び替え / f: お気に入り / y: TOTP をコピー / p: パスワードをコピー / u: ユーザー名をコピー / g: 監査 / n: 生成 / c: 設定 / l: ロック / Esc: 終了";
+
+/// Vault commands that need no selected row.
+///
+/// `/` opens search, `t`/`s` change the list view and `g`/`n`/`c`/`l`/`Esc`
+/// switch panels, lock or quit. None of them reads a highlighted item, so they
+/// stay discoverable when the vault has zero rows; `f`/`y`/`p`/`u` do not.
+pub(super) const VAULT_SELECTION_FREE_KEYS_HINT: &str =
+    "/: 検索 / t: フィルタ / s: 並び替え / g: 監査 / n: 生成 / c: 設定 / l: ロック / Esc: 終了";
 
 /// Row and command keys for the vault list, with no `Enter` promise.
 ///
@@ -77,18 +88,19 @@ pub(super) const VAULT_MAIN_KEYS_HINT: &str = "/: 検索 / t: フィルタ / s: 
 /// either path.
 ///
 /// With zero selectable rows the navigation helper returns `""` because there
-/// is nothing to move to, but the main commands still work: `/` opens search,
-/// `g`/`n`/`c` switch panels and `l`/`Esc` lock or quit. Returning the bare
-/// [`VAULT_MAIN_KEYS_HINT`] keeps those commands discoverable on an empty
-/// vault without advertising row movement or the audit-only `Enter`.
-/// Kept pure so the wording can be pinned by tests without a GPUI window.
+/// is nothing to move to. Selection-dependent commands (`f` favorite, `y`/`p`/`u`
+/// copy) are dropped too, since there is no highlighted row for them to act on;
+/// returning [`VAULT_SELECTION_FREE_KEYS_HINT`] keeps the row-independent
+/// commands discoverable on an empty vault without advertising row movement or
+/// the audit-only `Enter`. Kept pure so the wording can be pinned by tests
+/// without a GPUI window.
 pub(super) fn vault_row_keys_hint(selectable_rows: usize, searching: bool) -> String {
     if searching {
         String::new()
     } else {
         let navigation = row_navigation_keys_hint(selectable_rows);
         if navigation.is_empty() {
-            VAULT_MAIN_KEYS_HINT.to_string()
+            VAULT_SELECTION_FREE_KEYS_HINT.to_string()
         } else {
             format!("{navigation} / {VAULT_MAIN_KEYS_HINT}")
         }
@@ -1446,13 +1458,21 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn vault_row_keys_hint_omits_the_audit_only_enter_binding() {
-        // An empty vault still shows the main commands, but no row keys and
-        // no audit-only `Enter` binding.
+        // An empty vault still shows the row-independent commands, but no row
+        // keys, no selection-dependent commands and no audit-only `Enter`.
         let empty = vault_row_keys_hint(0, false);
-        assert_eq!(empty, VAULT_MAIN_KEYS_HINT, "{empty}");
+        assert_eq!(empty, VAULT_SELECTION_FREE_KEYS_HINT, "{empty}");
         assert!(!empty.contains("Enter"), "{empty}");
         assert!(!empty.contains("↑↓"), "{empty}");
         assert!(!empty.contains(LIST_PAGE_AND_EDGE_HINT), "{empty}");
+        for token in [
+            "f: お気に入り",
+            "y: TOTP をコピー",
+            "p: パスワードをコピー",
+            "u: ユーザー名をコピー",
+        ] {
+            assert!(!empty.contains(token), "unexpected {token} in {empty}");
+        }
         for key in ["PageUp", "PageDown", "Home", "End"] {
             assert!(!empty.contains(key), "unexpected {key} in {empty}");
         }
@@ -1519,26 +1539,25 @@ mod tests {
         assert!(!hint.contains("Enter"), "{hint}");
 
         // Search mode still hides every key hint because command letters
-        // become search text. With an empty list only the row keys are
-        // dropped; the same main commands stay visible.
+        // become search text. With an empty list the row keys and the
+        // selection-dependent commands are dropped; the rest stay visible.
         assert_eq!(vault_row_keys_hint(2, true), "");
-        assert_eq!(vault_row_keys_hint(0, false), VAULT_MAIN_KEYS_HINT);
+        assert_eq!(
+            vault_row_keys_hint(0, false),
+            VAULT_SELECTION_FREE_KEYS_HINT
+        );
     }
 
     #[::core::prelude::v1::test]
-    fn vault_row_keys_hint_keeps_main_commands_when_the_vault_is_empty() {
+    fn vault_row_keys_hint_keeps_selection_free_commands_when_the_vault_is_empty() {
         let empty = vault_row_keys_hint(0, false);
-        assert_eq!(empty, VAULT_MAIN_KEYS_HINT, "{empty}");
+        assert_eq!(empty, VAULT_SELECTION_FREE_KEYS_HINT, "{empty}");
 
-        // Every primary command stays discoverable with no row to select.
+        // Row-independent commands stay discoverable with no row to select.
         for token in [
             "/: 検索",
             "t: フィルタ",
             "s: 並び替え",
-            "f: お気に入り",
-            "y: TOTP をコピー",
-            "p: パスワードをコピー",
-            "u: ユーザー名をコピー",
             "g: 監査",
             "n: 生成",
             "c: 設定",
@@ -1546,6 +1565,16 @@ mod tests {
             "Esc: 終了",
         ] {
             assert!(empty.contains(token), "missing {token} in {empty}");
+        }
+
+        // Selection-dependent commands need a highlighted row and must go.
+        for token in [
+            "f: お気に入り",
+            "y: TOTP をコピー",
+            "p: パスワードをコピー",
+            "u: ユーザー名をコピー",
+        ] {
+            assert!(!empty.contains(token), "unexpected {token} in {empty}");
         }
 
         // Nothing may promise a selectable row or the audit-only `Enter`.
@@ -1565,6 +1594,38 @@ mod tests {
         assert_eq!(
             with_rows,
             format!("{} / {VAULT_MAIN_KEYS_HINT}", row_navigation_keys_hint(2))
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_row_keys_hint_drops_selection_dependent_keys_only_when_empty() {
+        let selection_keys = [
+            "f: お気に入り",
+            "y: TOTP をコピー",
+            "p: パスワードをコピー",
+            "u: ユーザー名をコピー",
+        ];
+
+        let empty = vault_row_keys_hint(0, false);
+        assert_eq!(empty, VAULT_SELECTION_FREE_KEYS_HINT, "{empty}");
+        for token in selection_keys {
+            assert!(!empty.contains(token), "unexpected {token} in {empty}");
+        }
+
+        let with_rows = vault_row_keys_hint(1, false);
+        assert_eq!(
+            with_rows,
+            format!("{} / {VAULT_MAIN_KEYS_HINT}", row_navigation_keys_hint(1)),
+            "{with_rows}"
+        );
+        for token in selection_keys {
+            assert!(with_rows.contains(token), "missing {token} in {with_rows}");
+        }
+
+        // Both constants keep the same command order around the dropped keys.
+        assert!(VAULT_MAIN_KEYS_HINT.starts_with("/: 検索 / t: フィルタ / s: 並び替え"));
+        assert!(
+            VAULT_MAIN_KEYS_HINT.ends_with("g: 監査 / n: 生成 / c: 設定 / l: ロック / Esc: 終了")
         );
     }
 

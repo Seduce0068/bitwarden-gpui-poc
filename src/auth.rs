@@ -58,7 +58,10 @@ pub enum AuthError {
     InvalidServerUrl,
     /// The URL was rejected with a cause; keeps its detail for the status bar.
     InvalidServerUrlDetail(String),
-    /// The server URL points at a link-local address (e.g. cloud metadata).
+    /// The server URL points at a blocked metadata service: a link-local
+    /// address, a known metadata host, or a metadata address embedded in a
+    /// wildcard-DNS name (including non-link-local endpoints such as
+    /// `100.100.100.200`). See `is_blocked_server_url_with`.
     BlockedServerUrl,
     /// The email address is malformed.
     InvalidEmail,
@@ -392,7 +395,7 @@ fn truncate_secret_to_limit(value: &mut SecretString, limit: usize) {
 /// `AuthState`, which owns only the three credential fields.
 pub fn clamp_auth_config(config: &mut AuthConfig) {
     // `validate_config` and `authenticate_inner` both trim the server URL
-    // before parsing it (auth.rs:682, 700-705, 1071-1081). Apply the same
+    // before parsing it (auth.rs:740, 758-761, 1135-1143, 1185). Apply the same
     // normalization before capping: counting surrounding padding used to cut
     // the tail off an otherwise valid at-limit URL, silently turning it into
     // a different endpoint. Trimming first keeps the URL intact.
@@ -730,7 +733,7 @@ fn api_key_from(config: &AuthConfig) -> ApiKey {
 ///
 /// [`AuthError::MissingField`] for an empty field,
 /// [`AuthError::InvalidEmail`] for a malformed or over-long address,
-/// [`AuthError::BlockedServerUrl`] for link-local hosts, or
+/// [`AuthError::BlockedServerUrl`] for blocked metadata addresses/hosts, or
 /// [`AuthError::InvalidServerUrl`] for a URL `openwarden` rejects (carrying the
 /// parser's message in [`AuthError::InvalidServerUrlDetail`]).
 pub fn validate_config(config: &AuthConfig) -> Result<(), AuthError> {
@@ -974,7 +977,7 @@ fn login_deadline(now: std::time::Instant, timeout: std::time::Duration) -> Logi
 ///
 /// Both arms report the same [`AuthError::Timeout`]; the relative form is the
 /// fallback chosen by `login_deadline` for an unrepresentable absolute deadline
-/// (auth.rs:960-965).
+/// (auth.rs:969-974).
 async fn login_watchdog(deadline: LoginDeadline) -> Result<AuthenticatedVault, AuthError> {
     match deadline {
         LoginDeadline::At(at) => {
@@ -1020,7 +1023,7 @@ pub async fn authenticate_with_timeout(
     // fires on the first poll, which the zero-duration test seam relies on.
     // An unrepresentable deadline is not a reason to skip the watchdog:
     // `login_deadline` selects smol's relative timer with the original
-    // duration in that case (auth.rs:960-965).
+    // duration in that case (auth.rs:969-974).
     let deadline = login_deadline(std::time::Instant::now(), timeout);
     let timer = login_watchdog(deadline);
     smol::future::race(login, timer).await

@@ -3519,6 +3519,83 @@ fn nested_userinfo_password_with_equals_uses_the_pair_start_zero_branch() {
 }
 
 #[test]
+fn bare_authority_password_with_equals_is_masked_before_pair_splitting() {
+    // A scheme-less authority used directly as a query value has no `key=`
+    // prefix, so the '=' in its password is *not* a pair separator. The old
+    // `split_once('=')` read `user:pa` as a key and copied the whole pair
+    // verbatim, leaking `pa=ss` through `Debug` (cache.rs:715). The same
+    // assumption in `mask_nested_userinfo_in_pairs` cut the candidate at '='
+    // and skipped the pre-pass rewrite (cache.rs:610-625).
+    let pairs = "user:pa=ss@cb.example.com/done";
+    assert_eq!(
+        super::mask_param_pairs(pairs, 0),
+        "[redacted]@cb.example.com/done"
+    );
+
+    // An '&' inside the password used to be split into separate pairs before
+    // the authority masker could see the whole `user:secret` marker.
+    let with_separator = "user:p&a=b@cb.example.com/done";
+    assert!(
+        super::nested_authority_with_userinfo(with_separator),
+        "premise: this is an authority with userinfo"
+    );
+    assert_eq!(
+        super::mask_nested_userinfo_in_pairs(with_separator),
+        "[redacted]@cb.example.com/done"
+    );
+
+    for (url, expected) in [
+        (
+            "https://vault.example.com/login?user:pa=ss@cb.example.com/done",
+            "https://vault.example.com/login?[redacted]@cb.example.com/done",
+        ),
+        (
+            "https://vault.example.com/login?user:p&a=b@cb.example.com/done",
+            "https://vault.example.com/login?[redacted]@cb.example.com/done",
+        ),
+    ] {
+        let masked = super::mask_url_secrets(url);
+        assert_eq!(masked, expected, "{url}");
+        assert!(!masked.contains("pa=ss"), "{masked}");
+        assert!(!masked.contains("a=b"), "{masked}");
+    }
+
+    // `Debug` uses the same masker; the stored URL stays byte-for-byte intact
+    // for the server-mismatch check.
+    let url = "https://vault.example.com/login?user:pa=ss@cb.example.com/done";
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("pa=ss"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn nested_hash_password_coexists_with_a_real_fragment() {
+    // The nested authority's password carries a literal '#', while the URL
+    // also has a genuine fragment with a sensitive key. Only the first '#'
+    // may be re-encoded as `%23`; the second must stay a fragment delimiter so
+    // both secrets are redacted independently (cache.rs:834-845).
+    let url = "https://vault.example.com/login?next=user:p#NESTED_HASH_SECRET@cb.example.com#code=FRAGMENT_SECRET";
+    let head = "https://vault.example.com/login?next=user:p";
+    let tail = "NESTED_HASH_SECRET@cb.example.com#code=FRAGMENT_SECRET";
+    assert!(
+        super::hash_continues_nested_password(head, tail),
+        "premise: the first '#' belongs to the nested password"
+    );
+    assert_eq!(
+        super::mask_url_secrets(url),
+        "https://vault.example.com/login?next=[redacted]@cb.example.com#code=[redacted]"
+    );
+
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("NESTED_HASH_SECRET"), "{rendered}");
+    assert!(!rendered.contains("FRAGMENT_SECRET"), "{rendered}");
+    assert!(rendered.contains("#code=[redacted]"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
 fn leading_slash_scheme_less_authority_userinfo_is_masked() {
     // A scheme-less nested authority can reach the recursive masker with a
     // leading '/': `?next=%2Fuser%3ASECRET%40host%2Fp` decodes to

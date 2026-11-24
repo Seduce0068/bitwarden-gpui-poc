@@ -787,6 +787,68 @@ fn mixed_class_weak_boundary_is_rounded_to_match_the_audit() {
 }
 
 #[test]
+fn avoid_ambiguous_mixed_case_still_lands_on_the_40_bit_boundary() {
+    // Filtering `l`, `o`, `I`, `O` leaves 24 + 24 = 48 symbols. Seven draws
+    // give 7 * log2(48) = 39.09… bits: below 40 but inside the [39, 40)
+    // rounding window (generator.rs:335-337), but 39.09 rounds to 39, so the
+    // meter reports Weak here while the audit of an unambiguous 7-letter
+    // sample also scores 39 bits. The boundary itself is covered by the
+    // 39..40 rounding tests; this pins the unambiguous alphabet instead.
+    let settings = PasswordSettings {
+        length: 7,
+        lowercase: true,
+        uppercase: true,
+        digits: false,
+        symbols: false,
+        avoid_ambiguous: true,
+    };
+    assert_eq!(settings.alphabet().chars().count(), 48);
+    let raw = entropy_bits(48, 7);
+    assert!(
+        raw < f64::from(WEAK_BITS) && raw >= f64::from(WEAK_BITS) - 1.0,
+        "{raw}"
+    );
+    assert_eq!(password_entropy(&settings), 39.0);
+    assert_eq!(
+        Strength::from_bits(password_entropy(&settings)),
+        Strength::Weak
+    );
+
+    // The drawn password really avoids the six ambiguous characters and keeps
+    // one character from each enabled class.
+    for _ in 0..64 {
+        let password = settings.generate().unwrap();
+        assert_eq!(password.chars().count(), 7);
+        assert!(
+            password.chars().all(|c| !AMBIGUOUS.contains(&c)),
+            "{password}"
+        );
+        assert!(
+            password.chars().any(|c| c.is_ascii_lowercase()),
+            "{password}"
+        );
+        assert!(
+            password.chars().any(|c| c.is_ascii_uppercase()),
+            "{password}"
+        );
+    }
+
+    // The audit scores the same unambiguous string on its own scale (40).
+    const SAMPLE: &str = "AbCdEfG";
+    assert!(SAMPLE.chars().all(|c| !AMBIGUOUS.contains(&c)));
+    assert_eq!(crate::health::estimate_entropy(SAMPLE), 40);
+
+    // One character shorter stays Weak even though the pool is unchanged.
+    let short = PasswordSettings {
+        length: 6,
+        ..settings
+    };
+    let short_bits = password_entropy(&short);
+    assert!(short_bits < f64::from(WEAK_BITS), "{short_bits}");
+    assert_eq!(Strength::from_bits(short_bits), Strength::Weak);
+}
+
+#[test]
 fn non_ascii_separator_passphrases_are_scored_by_the_audit() {
     // The generator accepts any separator string. The audit's recognizer
     // treats the first non-alphanumeric character as the separator, so a

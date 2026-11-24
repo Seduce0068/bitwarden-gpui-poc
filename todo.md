@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第137弾で 5 件すべてを完了）。
+なし（第138弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第138弾（16 担当・82 回目）の指摘 6 件を完結（2026-11-24）
+  - bare authority の '=' マスク漏れ、F1 視覚フィードバック、
+    空一覧キー案内、auth 行参照／doc を修正。
+  - ネスト '#' 共存、avoid_ambiguous 境界をテスト。
+  - CHANGELOG に第134〜137弾を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1234 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第137弾（16 担当・81 回目）の指摘 5 件を完結（2026-11-24）
   - Zs の WIDE_POOL 計上、ADR の本番アンロック手順を修正。
   - メールオクテット境界、server_url 型不一致、権限/サイズ

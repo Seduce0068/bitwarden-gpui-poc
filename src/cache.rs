@@ -608,10 +608,18 @@ fn mask_nested_userinfo_in_pairs(pairs: &str) -> String {
         // treating that as the key/value boundary hid the real userinfo from
         // this helper.
         let prefix_end = if pair_start == 0 {
-            // Scheme-less authority: keep the `key=` prefix in the diagnostic
-            // output. The first '=' is the pair separator here; later '=' are
-            // part of the password and must not be treated as boundaries.
-            before.find('=').map(|index| index + 1).unwrap_or(0)
+            // A leading `key=` is a pair separator only when the text before it
+            // is not itself a `user:secret` marker. A scheme-less *bare*
+            // authority such as `user:p&a=b@host` has no key prefix at all: its
+            // first '=' sits inside the password, and treating it as `key=`
+            // reduced the candidate to `b`, failed the userinfo check and left
+            // the credential unmasked. Keep the whole authority in that case;
+            // later '=' characters are password text, never boundaries.
+            before
+                .find('=')
+                .filter(|at| !before[..*at].contains(':'))
+                .map(|index| index + 1)
+                .unwrap_or(0)
         } else {
             pair_start
         };
@@ -683,6 +691,23 @@ fn mask_param_pairs(pairs: &str, depth: usize) -> String {
     for (index, &pair) in segments.iter().enumerate() {
         if index > 0 {
             out.push(separators[index - 1]);
+        }
+        // A bare authority used directly as a value (`?user:pa=ss@host`) has no
+        // `key=` prefix. Its '=' is password text, but `split_once('=')` used
+        // to read `user:pa` as a key, find no sensitive name or nested URL in
+        // the remainder and copy the whole pair verbatim, leaking the secret.
+        // Mask it as userinfo first when the would-be key is itself a
+        // `user:secret` marker and the pair closes a plausible authority.
+        let bare_authority_with_equals = pair.split_once('=').is_some_and(|(key, _)| {
+            key.split_once(':').is_some_and(|(user, secret)| {
+                !user.is_empty()
+                    && !secret.is_empty()
+                    && !secret.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        }) && nested_authority_with_userinfo(pair);
+        if bare_authority_with_equals {
+            out.push_str(&mask_url_userinfo(pair));
+            continue;
         }
         if let Some((key, value)) = pair.split_once('=') {
             // A key can hide a credential name behind percent escapes

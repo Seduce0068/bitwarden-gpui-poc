@@ -927,6 +927,22 @@ impl BitwardenApp {
         this
     }
 
+    /// Status written when the global F1 observer re-acquires focus.
+    ///
+    /// Recovery used to be silent: the root handle was re-focused and the
+    /// activity clock reset, but the status bar kept showing the previous
+    /// message. Writing a transient status and notifying the view makes the
+    /// recovery visible. The shared F1 hint is part of the text so the vault
+    /// status bar does not append it a second time, while panels with their own
+    /// inline hint strip it. The unsaved marker survives the transient message.
+    /// Kept pure so the wording can be pinned without a GPUI window.
+    pub(super) fn focus_recovery_status(dirty: bool) -> String {
+        status_with_unsaved(
+            &format!("フォーカスを復帰しました / {FOCUS_RECOVERY_HINT}"),
+            dirty,
+        )
+    }
+
     /// Install a global keystroke observer that re-acquires this view's focus
     /// handle after focus has left it (for example via Tab).
     ///
@@ -949,6 +965,10 @@ impl BitwardenApp {
             view.focus_handle.focus(window, cx);
             // Regaining focus is user activity, just like `key_down`.
             view.last_activity = std::time::Instant::now();
+            // Confirm the otherwise silent recovery on screen and redraw.
+            let status = Self::focus_recovery_status(view.settings_dirty);
+            view.status = status;
+            cx.notify();
         })
         .detach();
     }
@@ -3323,5 +3343,21 @@ mod tests {
             "監査行 1/2: example（Enter: 対象を選択 / g: 一覧 / Esc: 終了 / {FOCUS_RECOVERY_HINT}）"
         );
         assert!(audit_status.contains(FOCUS_RECOVERY_HINT));
+    }
+
+    #[::core::prelude::v1::test]
+    fn focus_recovery_status_announces_recovery_and_preserves_unsaved_marker() {
+        let clean = BitwardenApp::focus_recovery_status(false);
+        assert_eq!(
+            clean,
+            format!("フォーカスを復帰しました / {FOCUS_RECOVERY_HINT}")
+        );
+        assert!(clean.contains(FOCUS_RECOVERY_HINT), "{clean}");
+        assert!(!clean.contains("[未保存の設定変更があります]"), "{clean}");
+
+        let dirty = BitwardenApp::focus_recovery_status(true);
+        assert_eq!(dirty, status_with_unsaved(&clean, true));
+        assert!(dirty.ends_with(unsaved_status_suffix(true)), "{dirty}");
+        assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
     }
 }
