@@ -24,10 +24,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第135弾で 4 件すべてを完了）。
+なし（第136弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第136弾（16 担当・80 回目）の指摘 6 件を完結（2026-11-24）
+  - 監査タブ idle 更新、health の Unicode 空白/Cc 扱い、
+    README の同期 body 表現を修正。
+  - unlock_and_import 本番形状、URL マルチバイト、
+    非文字列 profile.id 全型、設定 1/2 キーをテスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1224 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第135弾（16 担当・79 回目）の指摘 4 件を完結（2026-11-24）
   - ADR の暗号化済み body 誤記述を修正。
   - settings.json 0600、未知キー破棄、非文字列 profile.id、

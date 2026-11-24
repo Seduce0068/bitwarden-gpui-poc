@@ -3866,3 +3866,104 @@ fn digits_only_common_entries_never_reach_the_common_cap() {
         );
     }
 }
+
+#[test]
+fn unicode_space_separators_do_not_hide_a_dictionary_password() {
+    // `visible_chars` used to fold only `Cc`/`Cf`. Unicode space separators
+    // (`Zs`: NBSP U+00A0, figure space U+2007, narrow NBSP U+202F,
+    // ideographic space U+3000, …) are neither controls nor format characters,
+    // so an inserted Zs survived the fold, defeated `starts_with("password")`
+    // and let an ~11-bit dictionary guess escape the weak-password threshold.
+    let weak_bits = Thresholds::default().weak_bits;
+    let baseline = estimate_entropy("password123");
+    assert!(baseline < weak_bits, "{baseline}");
+
+    for (padded, plain) in [
+        ("pass\u{00a0}word123", "password123"),
+        ("password\u{2007}123", "password123"),
+        ("pass\u{202f}word123", "password123"),
+        ("pass\u{3000}word123", "password123"),
+        ("\u{00a0}password123", "password123"),
+        ("qwerty\u{00a0}123", "qwerty123"),
+    ] {
+        assert!(
+            padded
+                .chars()
+                .any(|ch| ch.is_whitespace() && !ch.is_control()),
+            "fixture must contain a Zs: {padded:?}"
+        );
+        assert_eq!(super::visible_chars(padded), plain, "{padded:?}");
+        assert!(
+            super::is_common_password(&padded.to_lowercase()),
+            "{padded:?}"
+        );
+        assert_eq!(
+            estimate_entropy(padded),
+            estimate_entropy(plain),
+            "{padded:?} vs {plain}"
+        );
+    }
+
+    // Folding Zs must not widen the prefix cap indiscriminately: a long value
+    // that merely starts with a dictionary word keeps its real estimate.
+    let long = format!("password{}", "Vt7#kQm2!zR9wP4$xL8@");
+    let decorated = format!("pass\u{00a0}word{}", "Vt7#kQm2!zR9wP4$xL8@");
+    assert_eq!(super::visible_chars(&decorated), long);
+    assert!(!super::is_common_password(&decorated.to_lowercase()));
+    assert!(estimate_entropy(&decorated) >= weak_bits, "{decorated:?}");
+
+    // End to end: the padded guess reaches the report as WeakPassword with the
+    // same bit count as its plain spelling.
+    let padded = "pass\u{00a0}word123";
+    let bits = estimate_entropy(padded);
+    let report = report_of(vec![login(
+        "zs-dictionary",
+        "ZsDictionary",
+        padded,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn controls_and_spaces_are_not_charged_as_symbols() {
+    // The SYMBOLS pool is for *visible* ASCII punctuation. An ASCII control
+    // (Cc) or the space separator used to satisfy `!is_ascii_alphanumeric()`
+    // and add SYMBOLS.len() to the pool, while the wide-pool path already
+    // dropped non-ASCII Cc/Cf. Both sides must now use the same rule.
+    let lower_pool = LOWERCASE.len();
+    let symbol_pool = lower_pool + SYMBOLS.len();
+
+    // Five letters with one invisible ASCII character between them: only the
+    // lowercase class contributes to the pool.
+    for invisible in [' ', '\u{0000}', '\u{0009}', '\u{007f}'] {
+        let password = format!("ab{invisible}cd");
+        assert_eq!(password.chars().count(), 5);
+        assert_eq!(
+            estimate_entropy(&password),
+            entropy_bits(lower_pool, 5).round() as u32,
+            "{password:?}"
+        );
+    }
+
+    // A real ASCII symbol still selects the SYMBOLS pool, so this is not a
+    // blanket removal of the symbol class.
+    assert_eq!(
+        estimate_entropy("ab!cd"),
+        entropy_bits(symbol_pool, 5).round() as u32
+    );
+    assert_eq!(
+        estimate_entropy("!@#$%^&*!@#$%^&*"),
+        entropy_bits(SYMBOLS.len(), 16).round() as u32
+    );
+
+    // Whitespace-padded dictionary guesses keep the plain dictionary estimate
+    // instead of gaining a symbol class from the padding.
+    assert_eq!(estimate_entropy("password "), estimate_entropy("password"));
+}

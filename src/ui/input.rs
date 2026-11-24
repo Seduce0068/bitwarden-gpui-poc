@@ -151,6 +151,19 @@ pub(super) fn audit_unavailable_status(dirty: bool) -> String {
     crate::ui::app::status_with_unsaved(AUDIT_UNAVAILABLE_MESSAGE, dirty)
 }
 
+/// Refresh the idle-activity timestamp to `now`.
+///
+/// Every user-input path must stamp this value. Keyboard input and scrolling
+/// do it directly in `key_down`/`scrolled`, `apply_action` does it before
+/// dispatching any action, and a mouse click with no matching `UiAction`
+/// (currently the report-absent audit tab, R2-UI-136) reaches it through
+/// [`BitwardenApp::stamp_activity`]. Keeping the mutation in one free function
+/// over the plain timestamp lets the contract be tested without a GPUI window
+/// (this crate does not enable gpui's `test-support` feature).
+pub(super) fn stamp_last_activity(last_activity: &mut std::time::Instant, now: std::time::Instant) {
+    *last_activity = now;
+}
+
 /// Shared composer for the status restored when a text-editing mode ends.
 ///
 /// `EditAuthField`, `EditSettingsField` and `StartSearch` all replace the
@@ -698,7 +711,7 @@ impl BitwardenApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.last_activity = std::time::Instant::now();
+        stamp_last_activity(&mut self.last_activity, std::time::Instant::now());
         let ctx = KeyContext {
             screen: self.screen,
             panel: crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some()),
@@ -736,13 +749,23 @@ impl BitwardenApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
-        self.last_activity = std::time::Instant::now();
+        stamp_last_activity(&mut self.last_activity, std::time::Instant::now());
+    }
+
+    /// Stamp activity for a mouse click with no matching `UiAction`.
+    ///
+    /// The report-absent audit-tab click in `render.rs` cannot call
+    /// `apply_action(SetPanel(Audit))`, but it is still user input: writing only
+    /// the status let the idle lock fire under an active user (R2-UI-136). This
+    /// applies the same timestamp update as every other input path.
+    pub(super) fn stamp_activity(&mut self) {
+        stamp_last_activity(&mut self.last_activity, std::time::Instant::now());
     }
 
     /// Apply a UI action to the app state. Both keyboard and mouse input go
     /// through this single path so state transitions stay consistent.
     pub(super) fn apply_action(&mut self, action: UiAction, cx: &mut Context<Self>) {
-        self.last_activity = std::time::Instant::now();
+        stamp_last_activity(&mut self.last_activity, std::time::Instant::now());
         match action {
             UiAction::Quit => cx.quit(),
             UiAction::Authenticate | UiAction::RetryLogin => self.unlock_with_auth(cx),
@@ -1190,6 +1213,85 @@ mod tests {
         let dirty = audit_unavailable_status(true);
         assert_eq!(dirty, crate::ui::app::status_with_unsaved(base, true));
         assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn mouse_only_click_stamps_idle_activity_like_apply_action() {
+        // Regression for R2-UI-136: the report-absent audit-tab branch in
+        // `ui::render` bypasses `apply_action`, so it must call
+        // `stamp_activity` explicitly. Every input path now shares this single
+        // timestamp mutation.
+        let old = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(600))
+            .unwrap_or_else(std::time::Instant::now);
+        let mut last_activity = old;
+        let now = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(300);
+
+        // The precondition is not vacuous: a stale timestamp is idle-locked.
+        assert!(crate::ui::timing::idle_lock_due(old, now, timeout));
+
+        stamp_last_activity(&mut last_activity, now);
+
+        assert_eq!(
+            last_activity, now,
+            "the click must stamp the idle timestamp"
+        );
+        assert_ne!(last_activity, old, "the stale timestamp must be replaced");
+        assert!(
+            !crate::ui::timing::idle_lock_due(last_activity, now, timeout),
+            "a just-clicked user must not be idle-locked"
+        );
+
+        // The audit-tab click still keeps the unsaved marker in its status.
+        let status = audit_unavailable_status(true);
+        assert!(status.contains("[未保存の設定変更があります]"), "{status}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn settings_digit_keys_insert_text_while_editing() {
+        // While a settings field is being edited, `1`/`2` must stay literal
+        // text: the non-editing bindings open ServerUrl/Email fields
+        // (`ui::keys::classify_key`), which would clobber the field being typed
+        // into. This pins the contract at the classifier boundary.
+        let mut value = context(Screen::Unlocked, Panel::Settings, "1");
+        value.editing_settings = true;
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSettingsText("1".into()),
+            "settings/1 while editing"
+        );
+
+        value.key = "2";
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSettingsText("2".into()),
+            "settings/2 while editing"
+        );
+
+        // The echoed-glyph path (layout/IME) keeps the same contract.
+        value.key = "1";
+        value.key_char = Some("1");
+        assert_eq!(
+            classify_key(&value),
+            UiAction::InsertSettingsText("1".into()),
+            "settings/1 with an explicit key_char"
+        );
+
+        // Outside editing mode the same keys retain their field-opening
+        // bindings, so the mode boundary is the only difference.
+        value.key_char = None;
+        value.editing_settings = false;
+        value.key = "1";
+        assert_eq!(
+            classify_key(&value),
+            UiAction::EditSettingsField(crate::ui::state::SettingsField::ServerUrl)
+        );
+        value.key = "2";
+        assert_eq!(
+            classify_key(&value),
+            UiAction::EditSettingsField(crate::ui::state::SettingsField::Email)
+        );
     }
 
     #[::core::prelude::v1::test]

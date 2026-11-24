@@ -5218,3 +5218,44 @@ fn non_string_profile_id_fails_closed_on_both_validation_paths() {
     save_default(&ok).unwrap();
     assert!(cached_sync_for_detailed(url, "user-1").is_ok());
 }
+
+#[test]
+fn raw_non_ascii_multibyte_characters_pass_through_the_url_redactor() {
+    // The redactor slices URLs at byte offsets found for ASCII delimiters and
+    // advances over non-'%' characters with `len_utf8()` (cache.rs:525-545,
+    // 662-740). Raw multibyte scalars must therefore survive unchanged and
+    // must never trigger a mid-scalar slice panic, while ASCII secret keys are
+    // still redacted in both the query and the fragment.
+    let url = "https://vault.example.com/パス?token=SECRET🔑&state=あい#code=FRAGMENT秘密";
+    let masked = super::mask_url_secrets(url);
+    assert_eq!(
+        masked, "https://vault.example.com/パス?token=[redacted]&state=あい#code=[redacted]",
+        "{masked}"
+    );
+    assert!(!masked.contains("SECRET"), "{masked}");
+    assert!(!masked.contains("FRAGMENT"), "{masked}");
+    assert!(masked.contains("パス"), "{masked}");
+    assert!(masked.contains("あい"), "{masked}");
+
+    // A raw multibyte password in userinfo is masked as a whole; the host and
+    // the non-ASCII path stay traceable for diagnostics.
+    let with_userinfo = "https://user:秘密🔑@vault.example.com/パス?state=あい";
+    assert_eq!(
+        super::mask_url_userinfo(with_userinfo),
+        "https://[redacted]@vault.example.com/パス?state=あい",
+    );
+    assert_eq!(
+        super::mask_url_secrets(with_userinfo),
+        "https://[redacted]@vault.example.com/パス?state=あい",
+    );
+
+    // The same URL reaches Debug through `SyncCache`: no secret leaks, the
+    // non-ASCII text is preserved, and the stored URL stays byte-for-byte
+    // identical for the server-mismatch check.
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("SECRET"), "{rendered}");
+    assert!(!rendered.contains("FRAGMENT"), "{rendered}");
+    assert!(rendered.contains("vault.example.com/パス"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}

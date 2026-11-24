@@ -3611,19 +3611,37 @@ fn lowercase_profile_key_folders_only_vault_imports_through_both_entry_points() 
 fn non_string_profile_id_is_classified_as_invalid_login() {
     use std::error::Error as _;
 
-    // `profile.id` is a string on the openwarden sync wire. A number or null is
-    // still valid JSON and normalization only rewrites keys, so these bodies
-    // reach `SyncData::from_json` and are rejected there. `parse_sync` must put
-    // every such type mismatch into the same `InvalidLoginCause` family as a
-    // missing or non-object profile, with a typed cause -- not a success with
-    // a fabricated id, a panic, or a different variant
-    // (vault_sync.rs:182-198). PascalCase `Id` is covered too: normalization
-    // must not change the value's type before the upstream check.
+    // `profile.id` is a string on the openwarden sync wire (`ProfileWire.id:
+    // String` in openwarden 0.1.1's sync.rs). Every other JSON type -- number,
+    // null, bool, array and object -- is still valid JSON and normalization
+    // only rewrites keys, so these bodies reach `SyncData::from_json` and are
+    // rejected there. `parse_sync` must put every such type mismatch into the
+    // same `InvalidLoginCause` family as a missing or non-object profile, with
+    // a typed cause -- not a success with a fabricated id, a panic, or a
+    // different variant (vault_sync.rs:182-198). PascalCase `Id` is covered in
+    // each family too: normalization must not change the value's type before
+    // the upstream check.
     for profile in [
+        // number and null (the original coverage)
         r#"{"id":42}"#,
         r#"{"id":null}"#,
         r#"{"Id":42}"#,
         r#"{"Id":null}"#,
+        // bool
+        r#"{"id":true}"#,
+        r#"{"id":false}"#,
+        r#"{"Id":true}"#,
+        r#"{"Id":false}"#,
+        // array
+        r#"{"id":[]}"#,
+        r#"{"id":["user-1"]}"#,
+        r#"{"Id":[]}"#,
+        r#"{"Id":["user-1",42]}"#,
+        // object
+        r#"{"id":{}}"#,
+        r#"{"id":{"value":"user-1"}}"#,
+        r#"{"Id":{}}"#,
+        r#"{"Id":{"id":"user-1"}}"#,
     ] {
         let body = format!("{{\"profile\":{profile},\"folders\":[],\"ciphers\":[]}}");
         let error = parse_sync(body.as_bytes()).unwrap_err();

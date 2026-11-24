@@ -327,9 +327,14 @@ pub fn estimate_entropy(password: &str) -> u32 {
     let has_lower = chars.iter().any(|c| c.is_ascii_lowercase());
     let has_upper = chars.iter().any(|c| c.is_ascii_uppercase());
     let has_digit = chars.iter().any(|c| c.is_ascii_digit());
-    let has_symbol = chars
-        .iter()
-        .any(|c| !c.is_ascii_alphanumeric() && c.is_ascii());
+    // Only *visible* ASCII symbols draw from the generator's SYMBOLS pool. An
+    // ASCII control (NUL, tab, DEL, …) or the ASCII space separator renders no
+    // symbol glyph, so charging SYMBOLS.len() for it inflated the estimate.
+    // This is the ASCII-side counterpart of the `has_wide` filter below, which
+    // already drops non-ASCII `Cc`/`Cf`: the two paths must use the same rule.
+    let has_symbol = chars.iter().any(|c| {
+        c.is_ascii() && !c.is_ascii_alphanumeric() && !c.is_control() && !c.is_whitespace()
+    });
     // Unicode `Cf` (format) and `Cc` (control) characters render no glyph, so
     // they are not draws from the wide glyph repertoire. Counting a zero-width
     // space or a C1 control here added 100 to the pool and inflated the score
@@ -540,15 +545,17 @@ fn word_capitalization(word: &str, lower: &str) -> Option<bool> {
     None
 }
 
-/// Lowercased value with invisible Unicode `Cf`/`Cc` characters removed.
+/// Lowercased value with invisible Unicode `Cf`/`Cc`/`Zs` characters removed.
 ///
 /// Used only by the pattern checks in [`estimate_entropy`]. Format characters
-/// (zero-width space, bidi controls, BOM, …) and control characters render
-/// nothing, yet they can be inserted in the middle of a dictionary word
-/// (`pass\u{200b}word`) where `strip_decoration` cannot reach them. Removing
-/// them restores the exact and prefix dictionary matches. Visible multi-byte
-/// characters are deliberately kept so the wide-pool allowance and the
-/// non-ASCII suffix rules still see them.
+/// (zero-width space, bidi controls, BOM, …), control characters and Unicode
+/// space separators (`Zs`: NBSP U+00A0, U+2007, U+202F, ideographic space
+/// U+3000, …) render no glyph, yet they can be inserted in the middle of a
+/// dictionary word (`pass\u{200b}word`, `pass\u{00a0}word`) where
+/// `strip_decoration` cannot reach them. Removing them restores the exact and
+/// prefix dictionary matches. Visible multi-byte characters are deliberately
+/// kept so the wide-pool allowance and the non-ASCII suffix rules still see
+/// them.
 fn visible_lowercase(value: &str) -> String {
     visible_chars(value).to_lowercase()
 }
@@ -557,10 +564,17 @@ fn visible_lowercase(value: &str) -> String {
 /// original casing preserved. [`passphrase_estimate`] needs the unlowered
 /// spelling to award the generator's capitalization bonus, so it shares only
 /// this step and performs its own case-insensitive word matching.
+///
+/// `is_whitespace()` also covers `Zs`; `is_control()` and
+/// `crate::limits::is_format_character` cover `Cc` and `Cf` respectively. A
+/// missing `Zs` branch let `pass\u{00a0}word123` escape the dictionary shortcut
+/// while still looking harmless to a reader, so all three are folded here.
 fn visible_chars(value: &str) -> String {
     value
         .chars()
-        .filter(|ch| !ch.is_control() && !crate::limits::is_format_character(*ch))
+        .filter(|ch| {
+            !ch.is_control() && !ch.is_whitespace() && !crate::limits::is_format_character(*ch)
+        })
         .collect::<String>()
 }
 

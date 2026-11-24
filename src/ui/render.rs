@@ -483,6 +483,10 @@ impl Render for BitwardenApp {
                                 // the unsaved-settings marker (Z13).
                                 let dirty = this.settings_dirty;
                                 this.status = audit_unavailable_status(dirty);
+                                // No panel to open, so this branch bypasses
+                                // apply_action; stamp activity explicitly or an
+                                // active user can hit the idle lock (R2-UI-136).
+                                this.stamp_activity();
                                 cx.notify();
                             }
                         },

@@ -2149,6 +2149,78 @@ fn unlock_and_import_forwards_the_session_kdf_to_openwarden() {
 }
 
 #[test]
+fn unlock_and_import_success_uses_the_full_production_shape() {
+    // Combines the three parts the other success tests keep separate: a
+    // `profile.key` that matches the session's protected key (so apply_sync
+    // does not lock), a real `Some(Kdf)` from the session, and cipher fields
+    // encrypted under the user key the protected key decrypts to. No network,
+    // no clock and no randomness: every ciphertext is built locally.
+    let master_key = MasterKey::from_bytes([0x11; 32]);
+    let stretched = master_key.stretch();
+    let protected = EncString::encrypt(&stretched, &[0x22; 64])
+        .expect("a 64-byte user key must encrypt")
+        .to_string();
+    let user_symmetric = openwarden::SymmetricKey::from_bytes(&[0x22; 64])
+        .expect("a 64-byte user key must be valid");
+    let enc = |plain: &[u8]| {
+        EncString::encrypt(&user_symmetric, plain)
+            .expect("a field must encrypt under the user key")
+            .to_string()
+    };
+
+    let body = serde_json::json!({
+        "profile": { "id": "user-1", "key": protected.clone() },
+        "folders": [],
+        "ciphers": [{
+            "id": "login-1",
+            "type": 1,
+            "name": enc(b"Production Login"),
+            "login": {
+                "username": enc(b"alice@example.com"),
+                "password": enc(b"correct horse battery staple"),
+                "uris": [{ "uri": enc(b"https://example.com") }],
+            },
+            "revisionDate": "2024-01-01T00:00:00Z",
+        }],
+    })
+    .to_string();
+    let sync = crate::vault_sync::parse_sync(body.as_bytes())
+        .expect("a production-shaped sync body must parse");
+    assert_eq!(
+        sync.protected_key(),
+        Some(protected.as_str()),
+        "the sync must carry the session's protected key"
+    );
+
+    SAW_KDF.store(false, Ordering::SeqCst);
+    let vault = super::unlock_and_import_with(
+        &protected,
+        Some(TEST_KDF),
+        &master_key,
+        sync,
+        observing_import,
+    )
+    .expect("matching key, Some(Kdf) and encrypted ciphers must unlock");
+
+    assert!(
+        SAW_KDF.load(Ordering::SeqCst),
+        "the session KDF must reach the unlocked vault"
+    );
+    assert_eq!(
+        vault.items.len(),
+        1,
+        "the encrypted cipher must be imported"
+    );
+    let item = &vault.items[0];
+    assert_eq!(item.name, "Production Login");
+    let (username, password, _totp, uris) = item.login().expect("the item is a login");
+    assert_eq!(username, "alice@example.com");
+    assert_eq!(password, "correct horse battery staple");
+    assert_eq!(uris.len(), 1);
+    assert_eq!(uris[0].uri, "https://example.com");
+}
+
+#[test]
 fn apply_sync_failed_cause_round_trips_through_app_error() {
     use crate::error::BoxedCause;
 

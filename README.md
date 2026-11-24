@@ -152,7 +152,7 @@ cargo test --test real_server_e2e -- --ignored --nocapture
   許可され、古くても復元対象になり得る。`version` は 1 が必須で、
   欠落・不一致のファイルは期限判定の前に拒否される
 - フィールド: `version`（スキーマ版数）、`user_id`、`server_url`、
-  `body`（暗号化済み同期 JSON の生バイト）、`created_at`（Unix 秒）
+  `body`（暗号文フィールドを含む生の同期 JSON バイト）、`created_at`（Unix 秒）
 - `profile.key` / `privateKey` は保存前に除去し、復号鍵・マスターパスワード・
   API 秘密は書き出さない
 - 読み出しのみ本番経路へ接続済み。書き出しは ADR の裁定により未接続
