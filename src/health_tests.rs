@@ -4180,3 +4180,57 @@ fn ascii_symbols_outside_the_generator_pool_are_charged_the_fixed_symbol_pool() 
         "{mixed}"
     );
 }
+
+#[test]
+fn repeated_body_with_a_fullwidth_digit_suffix_escapes_the_all_same_penalty() {
+    // Characterization of a known overestimate, not a desired invariant.
+    // `strip_decoration` / `strip_trailing_digits` strip only ASCII digit runs
+    // (health.rs:585-616,745-747), so a repeated body followed by a full-width
+    // digit keeps two distinct code points and misses the 0-bit all-same arm
+    // (health.rs:397-407). The full-width digit still switches on WIDE_POOL
+    // (health.rs:345-370), so the estimate stays high even though the value is
+    // no harder to guess than its ASCII-suffixed twin.
+    assert_eq!(super::strip_decoration("aaaaaaaaaa1"), "aaaaaaaaaa");
+    assert_eq!(super::strip_decoration("aaaaaaaaaa１"), "aaaaaaaaaa１");
+
+    for (ascii, wide, pool) in [
+        ("aaaaaaaaaa1", "aaaaaaaaaa１", LOWERCASE.len() + 100), // 126-char pool
+        ("zzzz9", "zzzz９", LOWERCASE.len() + 100),
+        ("あああああ1", "あああああ１", 100), // wide pool only
+    ] {
+        assert_eq!(estimate_entropy(ascii), 0, "{ascii}");
+        let expected = entropy_bits(pool, wide.chars().count()).round() as u32;
+        assert_eq!(estimate_entropy(wide), expected, "{wide}");
+        assert!(expected > 0, "{wide}");
+    }
+
+    // End-to-end: the ASCII twin is flagged WeakPassword{bits: 0} while the
+    // high full-width estimate clears the default 40-bit threshold and leaves
+    // the login clean (valid TOTP and HTTPS URI avoid any other finding).
+    let ascii_bits = estimate_entropy("aaaaaaaaaa1");
+    let ascii_report = report_of(vec![login(
+        "ascii-suffix",
+        "AsciiSuffix",
+        "aaaaaaaaaa1",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert_eq!(ascii_bits, 0);
+    assert!(ascii_report.items[0]
+        .findings
+        .contains(&Finding::WeakPassword { bits: 0 }));
+
+    let wide_bits = estimate_entropy("aaaaaaaaaa１");
+    let wide_report = report_of(vec![login(
+        "wide-suffix",
+        "WideSuffix",
+        "aaaaaaaaaa１",
+        "https://b.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(wide_bits >= Thresholds::default().weak_bits, "{wide_bits}");
+    assert!(
+        wide_report.items.is_empty(),
+        "the overestimated value is not Weak today: {wide_report:?}"
+    );
+}

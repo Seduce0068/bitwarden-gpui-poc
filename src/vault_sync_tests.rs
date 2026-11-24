@@ -3800,3 +3800,143 @@ fn sync_body_size_gate_counts_multibyte_utf8_bytes_not_chars() {
     assert!(source.contains(over_len.as_str()), "{source}");
     assert!(!source.contains("expected value"), "{source}");
 }
+
+#[test]
+fn out_of_range_uri_match_wire_values_fall_back_to_no_explicit_match() {
+    // openwarden's UriWire stores `match` as Option<u8> and maps it through
+    // `UriMatch::from_wire` (openwarden vault.rs:269-276,359-362). Wire 6 and
+    // 255 are valid u8 but unknown to the enum, so StoredUri.match_type becomes
+    // None; the importer then emits LoginUri.match_type = None
+    // (vault_sync.rs:463-469) and matching falls back to the default domain
+    // rule. The valid wire 1 sibling proves the URI list itself was parsed and
+    // only the two unknown numbers were discarded.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        serde_json::json!(openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string())
+    };
+    let mut cipher = encrypted_login("uri-out-of-range", REAL_PASSWORD, REAL_TOTP);
+    cipher["login"]["uris"] = serde_json::json!([
+        { "uri": enc(b"https://six.example.com/login"), "match": 6 },
+        { "uri": enc(b"https://max.example.com/login"), "match": 255 },
+        { "uri": enc(b"https://host.example.com/login"), "match": 1 },
+    ]);
+    let vault = unlocked_vault(&[cipher]);
+    let model = import_logins(&vault).expect("unknown match numbers must not abort the import");
+    let uris = model
+        .item("uri-out-of-range")
+        .expect("the login must survive")
+        .uris();
+    assert_eq!(uris.len(), 3, "{uris:?}");
+    assert_eq!(uris[0].uri, "https://six.example.com/login");
+    assert_eq!(uris[0].match_type, None, "wire 6 is not a UriMatch");
+    assert_eq!(uris[0].match_enum(), None);
+    assert_eq!(uris[1].uri, "https://max.example.com/login");
+    assert_eq!(uris[1].match_type, None, "wire 255 is not a UriMatch");
+    assert_eq!(uris[1].match_enum(), None);
+    // Control: the in-range sibling is preserved verbatim.
+    assert_eq!(uris[2].uri, "https://host.example.com/login");
+    assert_eq!(uris[2].match_type, Some(1));
+    assert_eq!(uris[2].match_enum(), Some(openwarden::UriMatch::Host));
+
+    // An unknown match number behaves like "no explicit rule": default domain
+    // matching still applies to a subdomain, but not to a lookalike host.
+    let opts = openwarden::MatchOptions::default();
+    assert!(uris[0].matches("https://www.six.example.com/other", &opts));
+    assert!(!uris[0].matches("https://six.example.com.evil.net/", &opts));
+}
+
+#[test]
+fn a_negative_uri_match_wire_value_drops_the_whole_cipher() {
+    // -1 cannot fit UriWire's Option<u8> (openwarden vault.rs:274-275), so
+    // `StoredCipher::parse` rejects the row and `apply_sync` silently drops it
+    // (openwarden vault.rs:344-347,600-604). `parse_sync` itself still succeeds:
+    // this is a per-cipher skip, not a whole-body error. A clean sibling
+    // survives and is the only imported login.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let enc = |plain: &[u8]| {
+        serde_json::json!(openwarden::EncString::encrypt(&key, plain)
+            .expect("field should encrypt")
+            .to_string())
+    };
+    let mut bad = encrypted_login("negative-match", REAL_PASSWORD, REAL_TOTP);
+    bad["login"]["uris"] = serde_json::json!([
+        { "uri": enc(b"https://negative.example.com/login"), "match": -1 },
+    ]);
+    let good = encrypted_login("valid-match", REAL_PASSWORD, REAL_TOTP);
+    let vault = unlocked_vault(&[bad, good]);
+    let logins = vault.logins();
+    let ids: Vec<&str> = logins.iter().map(|info| info.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["valid-match"],
+        "the negative wire value must drop only its own cipher"
+    );
+    let (model, audit) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 1);
+    assert!(model.item("negative-match").is_none());
+    assert_eq!(
+        model.item("valid-match").unwrap().password(),
+        Some(REAL_PASSWORD)
+    );
+    let revision = parse_revision(Some("2024-01-01T00:00:00Z")).unwrap();
+    assert_eq!(
+        audit,
+        vec![ImportAudit::Added {
+            id: "valid-match".to_string(),
+            revision,
+        }]
+    );
+}
+
+#[test]
+fn empty_string_cipher_ids_are_deduped_by_revision_like_any_other_id() {
+    // "" is a real String id: `dedup_ciphers_by_revision` keys on it like on
+    // any other id (vault_sync.rs:273-305), and openwarden keeps CipherId("")
+    // instead of filtering it out (openwarden vault.rs:340-343,366). Pin the
+    // helper first (including excluded-row preference), then the end-to-end
+    // import where a stale empty-id row would otherwise supply the fields.
+    let mut value = serde_json::json!({
+        "ciphers": [
+            {"id": "", "name": "old", "type": 1, "revisionDate": "2024-01-01T00:00:00Z"},
+            {"id": "", "name": "new", "type": 1, "revisionDate": "2024-03-01T00:00:00Z"},
+            {"id": "", "name": "excluded", "type": 1, "revisionDate": "2024-06-01T00:00:00Z",
+             "organizationId": "org-1"},
+            {"id": "real", "name": "keep", "type": 1, "revisionDate": "2024-01-01T00:00:00Z"},
+            {"name": "no-id", "type": 1},
+        ]
+    });
+    super::dedup_ciphers_by_revision(&mut value);
+    let kept = value["ciphers"].as_array().unwrap();
+    assert_eq!(kept.len(), 3, "the three empty-id rows collapse to one");
+    assert_eq!(
+        kept[0]["name"], "new",
+        "the eligible newest empty-id row wins over an excluded newer row"
+    );
+    assert_eq!(kept[1]["id"], "real");
+    assert_eq!(kept[2]["name"], "no-id");
+
+    let mut old = encrypted_login("", "OLD_EMPTY_ID_PASSWORD", REAL_TOTP);
+    old["revisionDate"] = serde_json::json!("2024-01-01T00:00:00Z");
+    let mut newest = encrypted_login("", "NEW_EMPTY_ID_PASSWORD", REAL_TOTP);
+    newest["revisionDate"] = serde_json::json!("2024-03-01T00:00:00Z");
+    let sibling = encrypted_login("non-empty", "SIBLING_PASSWORD", REAL_TOTP);
+    let vault = unlocked_vault(&[old, newest, sibling]);
+    let logins = vault.logins();
+    let ids: Vec<&str> = logins.iter().map(|info| info.id.as_str()).collect();
+    assert_eq!(ids, vec!["", "non-empty"], "the empty id survives once");
+
+    let model = import_logins(&vault).expect("an empty id must import");
+    assert_eq!(model.items.len(), 2);
+    let empty = model.item("").expect("the empty id is a real model id");
+    assert_eq!(empty.password(), Some("NEW_EMPTY_ID_PASSWORD"));
+    assert_eq!(
+        empty.revision_date,
+        parse_revision(Some("2024-03-01T00:00:00Z")).unwrap()
+    );
+    assert_eq!(
+        model.item("non-empty").unwrap().password(),
+        Some("SIBLING_PASSWORD")
+    );
+}

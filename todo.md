@@ -24,10 +24,18 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第142弾で 3 件すべてを完了）。
+なし（第143弾で 3 件すべてを完了）。
 
 ## 完了
 
+- [x] 第143弾（16 担当・87 回目）の指摘 3 件を完結（2026-11-24）
+  - 範囲外 URI match wire、空文字 id dedup、LoginUri Debug、
+    非 name haystack、全角数字サフィックスの非対称をテスト。
+  - 起動エージェント: 17 体（補充探索 16 + 実装 1）。
+  - 検証: fmt / check / test（1255 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第142弾（16 担当・86 回目）の指摘 3 件を完結（2026-11-24）
   - 数字パスワード＋'=' の bare authority マスク、
     numeric_password_colon ガード、余白付き数値 advisory を修正・テスト。

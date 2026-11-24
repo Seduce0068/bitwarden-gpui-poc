@@ -4582,3 +4582,137 @@ fn ssh_fingerprint_rejects_five_character_base64_blob_with_nonempty_body() {
     // `leftover_bits >= 6` clause but is rejected for the empty blob as well.
     assert_eq!(super::ssh_fingerprint::decode(b"A"), None);
 }
+
+#[test]
+fn login_uri_debug_shows_the_numeric_match_type_and_masks_the_uri() {
+    // The manual Debug (model.rs:562-569) masks the URI but keeps `match_type`
+    // verbatim: diagnostics must be able to distinguish a Host rule from a
+    // Never rule without ever showing credentials embedded in the URI.
+    let uri = LoginUri {
+        uri: "https://user:token@example.com/secret?key=VALUE".into(),
+        match_type: Some(4),
+    };
+    let debug = format!("{uri:?}");
+    assert!(debug.contains("LoginUri"), "{debug}");
+    assert!(debug.contains("uri: \"https://example.com\""), "{debug}");
+    assert!(debug.contains("match_type: Some(4)"), "{debug}");
+    for leaked in ["user:token", "token", "/secret", "key=VALUE", "VALUE"] {
+        assert!(!debug.contains(leaked), "leaked {leaked:?}: {debug}");
+    }
+
+    // None and every other number stay distinguishable in the same field.
+    let none = format!("{:?}", LoginUri::new("https://example.com"));
+    let never = format!(
+        "{:?}",
+        LoginUri {
+            uri: "https://example.com".into(),
+            match_type: Some(5),
+        }
+    );
+    assert!(none.contains("match_type: None"), "{none}");
+    assert!(never.contains("match_type: Some(5)"), "{never}");
+    assert_ne!(none, never, "Debug must not collapse distinct match types");
+}
+
+#[test]
+fn invisible_characters_in_non_name_haystack_fields_do_not_hide_search_hits() {
+    // `comparison_key` drops Cc/Cf code points from every haystack
+    // (model.rs:46-63), not just the name. A Cf/Cc inserted into a username,
+    // URI, note or kind-specific field must therefore not hide its text from
+    // search, and a needle carrying an invisible character folds the same way
+    // (model.rs:837-909).
+    let mut hidden = login(
+        "l",
+        "Unrelated Title",
+        "ali\u{200b}ce@example.com",
+        "pw",
+        "https://ex\u{0007}ample.com/path",
+    );
+    hidden.notes = Zeroizing::new("rec\u{0000}overy-\u{2060}code".to_string());
+    assert!(
+        !hidden.name.contains("alice"),
+        "precondition: name is unrelated"
+    );
+    assert!(hidden.matches_query("alice"), "username with ZWSP");
+    assert!(hidden.matches_query("ali\u{200b}ce"), "needle with ZWSP");
+    assert!(hidden.matches_query("example.com"), "URI with BEL control");
+    assert!(
+        hidden.matches_query("ex\u{0007}ample.com/path"),
+        "URI-only needle folds like the plain spelling"
+    );
+    assert!(
+        hidden.matches_query("recovery-code"),
+        "notes with NUL + word joiner"
+    );
+    assert!(
+        hidden.matches_query("rec\u{200b}overy-code"),
+        "padded needle"
+    );
+
+    let note = VaultItem::new(
+        "n",
+        "Unrelated Title",
+        ItemData::SecureNote {
+            text: "to\u{200b}do-\u{202e}list".into(),
+        },
+    );
+    assert!(note.matches_query("todo-list"), "secure-note text");
+
+    let card = VaultItem::new(
+        "c",
+        "Unrelated Title",
+        ItemData::Card(CardData {
+            cardholder_name: "Vi\u{200b}sa".into(),
+            brand: "Ma\u{0000}ster".into(),
+            number: "4111111111111234".into(),
+            ..CardData::default()
+        }),
+    );
+    assert!(card.matches_query("visa"), "cardholder name");
+    assert!(card.matches_query("master"), "card brand");
+
+    let identity = VaultItem::new(
+        "i",
+        "Unrelated Title",
+        ItemData::Identity(IdentityData {
+            company: "A\u{2060}cme".into(),
+            address: "42 Ma\u{200b}ple Ave".into(),
+            ..IdentityData::default()
+        }),
+    );
+    assert!(identity.matches_query("acme"), "identity company");
+    assert!(identity.matches_query("maple ave"), "identity address");
+
+    let ssh = VaultItem::new(
+        "s",
+        "Unrelated Title",
+        ItemData::SshKey(SshKeyData {
+            public_key: "ssh-ed25519 AAAA".into(),
+            private_key: String::new().into(),
+            fingerprint: "SHA256:\u{0000}abc".into(),
+        }),
+    );
+    assert!(ssh.matches_query("sha256:abc"), "SSH fingerprint");
+
+    // A needle made only of invisible characters is still blank, so it must
+    // not widen the result through any of those fields.
+    for blank in ["\u{200b}", "\u{0000}", "\u{202e}\u{200b}", " \u{200b} "] {
+        assert!(!hidden.matches_query(blank), "blank needle {blank:?}");
+    }
+
+    // The same folded key is used when the needle goes through Vault::view.
+    let mut vault = Vault::new();
+    vault.items = vec![hidden];
+    assert_eq!(
+        vault
+            .view(&Filter::All, "ali\u{200b}ce", SortKey::NameAsc)
+            .len(),
+        1
+    );
+    assert_eq!(
+        vault
+            .view(&Filter::All, "recovery-code", SortKey::NameAsc)
+            .len(),
+        1
+    );
+}
