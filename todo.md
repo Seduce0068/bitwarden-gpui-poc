@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第148弾で 6 件すべてを完了）。
+なし（第149弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第149弾（16 担当・93 回目）の指摘 5 件を完結（2026-11-24）
+  - 秒単位 status の対象ラベル、separator 上限、
+    XDG ENV_LOCK 共有、mark-only Unnamed、再利用 visible_key を修正。
+  - validate 優先順位、live Session 抽出をテスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1289 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第148弾（16 担当・92 回目）の指摘 6 件を完結（2026-11-24）
   - mark-only 名前の UI 空判定、アイドルロック doc、
     device_id null、権限/パース優先順位を修正・テスト。

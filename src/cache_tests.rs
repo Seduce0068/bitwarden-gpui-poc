@@ -988,9 +988,10 @@ fn cache_errors_are_not_all_reported_as_corruption() {
 
 // --- Cache-directory migration (default path -> XDG cache, legacy read-only) ---
 
-/// Environment variables are process-global; serialize tests that change them.
+// Environment variables are process-global. Use the same mutex as
+// `settings_tests` so an `XDG_CONFIG_HOME` swap there cannot overlap one here.
 #[cfg(target_os = "linux")]
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use crate::limits::ENV_LOCK;
 
 #[cfg(target_os = "linux")]
 struct EnvGuard {
@@ -5671,4 +5672,70 @@ fn numeric_password_colon_guards_reject_invalid_users_and_values() {
             "must be a numeric password: {authority}"
         );
     }
+}
+
+// --- R2-CORE-149: validate's check priority ---
+
+#[test]
+fn validate_prioritizes_server_then_account_then_body_parse() {
+    // `validate` checks the cheap metadata first and only then parses the held
+    // body (cache.rs:1455-1467). Pin the ordering with caches where several
+    // checks fail at once: the first failing gate must decide the error.
+    const SERVER: &str = "https://vault.example.com";
+    let original = SyncCache::from_body(body(), SERVER).unwrap();
+    let corrupt = |cache: &SyncCache| SyncCache {
+        body: b"not json".to_vec(),
+        ..cache.clone()
+    };
+
+    // Server mismatch wins over a wrong account and an unparsable body.
+    let both = corrupt(&SyncCache {
+        user_id: "other".to_string(),
+        ..original.clone()
+    });
+    assert_eq!(
+        validate(&both, "user-1", "https://other.example.com"),
+        Err(SyncCacheError::ServerMismatch)
+    );
+
+    // With the server matching, the envelope account check wins over parsing.
+    let wrong_account = corrupt(&SyncCache {
+        user_id: "other".to_string(),
+        ..original.clone()
+    });
+    assert_eq!(
+        validate(&wrong_account, "user-1", SERVER),
+        Err(SyncCacheError::UserMismatch)
+    );
+
+    // Only once both metadata checks pass does the body parse failure surface.
+    assert!(matches!(
+        validate(&corrupt(&original), "user-1", SERVER),
+        Err(SyncCacheError::CacheParse(_))
+    ));
+
+    // A parseable body whose Profile.Id differs from the envelope is a
+    // UserMismatch, not a CacheParse.
+    let foreign = br#"{"profile":{"id":"someone-else"},"folders":[],"ciphers":[]}"#;
+    let mismatch = SyncCache {
+        body: foreign.to_vec(),
+        ..original.clone()
+    };
+    assert_eq!(
+        validate(&mismatch, "user-1", SERVER),
+        Err(SyncCacheError::UserMismatch)
+    );
+
+    // Two blank ids never match, even though a blank equals a blank.
+    let blank = SyncCache {
+        user_id: String::new(),
+        ..original.clone()
+    };
+    assert_eq!(
+        validate(&blank, "", SERVER),
+        Err(SyncCacheError::UserMismatch)
+    );
+
+    // Control: the unmodified cache still validates.
+    assert_eq!(validate(&original, "user-1", SERVER), Ok(()));
 }

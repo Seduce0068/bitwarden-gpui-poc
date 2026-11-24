@@ -4630,3 +4630,82 @@ fn combining_mark_passwords_are_judged_by_the_audit_from_the_wide_pool_estimate(
         );
     }
 }
+
+// --- R2-CORE-149: model-aligned name and reuse rules ---
+
+#[test]
+fn mark_only_names_are_reported_as_unnamed() {
+    // The audit now uses the model's `has_no_visible_identity` (model.rs:139-149)
+    // instead of the narrower `is_visually_empty`: a name made only of combining
+    // marks has no base glyph and must be just as unnamed as an empty one. A
+    // visible base letter followed by a mark stays a real name.
+    const MARKS: &str = "\u{0300}\u{0301}\u{0302}";
+    const BASE_AND_MARK: &str = "Cafe\u{0301}";
+    assert!(!crate::model::is_visually_empty(MARKS));
+    assert!(crate::model::has_no_visible_identity(MARKS));
+    assert!(!crate::model::has_no_visible_identity(BASE_AND_MARK));
+
+    let report = report_of(vec![login(
+        "mark-name",
+        MARKS,
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0].findings.contains(&Finding::Unnamed),
+        "{report:?}"
+    );
+    assert_eq!(report.items[0].name, "(名称未設定)");
+
+    let clean = report_of(vec![login(
+        "base-and-mark",
+        BASE_AND_MARK,
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://b.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(clean.items.is_empty(), "{clean:?}");
+}
+
+#[test]
+fn passwords_differing_only_by_invisible_characters_share_a_reuse_group() {
+    // The reuse map keys on `limits::visible_key`: the model's rule that Cc,
+    // Cf and whitespace render nothing, without its case fold. Two spellings
+    // that render the same password must form one reuse group, while `Same`
+    // and `same` stay distinct (pinned by `reused_passwords_compare_exactly`).
+    const CORE: &str = "vT7#kQm2!zR9wP4$xL8@";
+    const VALID_TOTP: &str = "GEZDGNBVGY3TQOJQ";
+    let variants = [
+        "vT7#kQm2!\u{200b}zR9wP4$xL8@", // ZERO WIDTH SPACE (Cf)
+        "vT7#kQm2!\u{202e}zR9wP4$xL8@", // RIGHT-TO-LEFT OVERRIDE (Cf)
+        "vT7#kQm2!\u{00a0}zR9wP4$xL8@", // NO-BREAK SPACE (Zs)
+        "vT7#kQm2!\u{0}zR9wP4$xL8@",    // NUL (Cc)
+    ];
+    for (index, variant) in variants.iter().enumerate() {
+        assert_eq!(crate::limits::visible_key(variant), CORE, "{variant:?}");
+        let report = report_of(vec![
+            login("1", "A", CORE, "https://a.example", VALID_TOTP),
+            login("2", "B", variant, "https://b.example", VALID_TOTP),
+        ]);
+        let counts: Vec<usize> = report
+            .items
+            .iter()
+            .flat_map(|item| item.findings.iter())
+            .filter_map(|finding| match finding {
+                Finding::ReusedPassword { count } => Some(*count),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(counts, vec![2, 2], "variant {index}: {report:?}");
+        for item in &report.items {
+            assert!(
+                !item
+                    .findings
+                    .iter()
+                    .any(|finding| matches!(finding, Finding::WeakPassword { .. })),
+                "the decorated spelling must not become weak: variant {index}: {item:?}"
+            );
+        }
+    }
+}

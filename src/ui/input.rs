@@ -420,8 +420,12 @@ pub(super) fn idle_lock_adjust_status(idle_lock_seconds: u64, dirty: bool) -> St
 }
 
 /// Status after `3`-`6` adjusts a seconds-based settings field.
-pub(super) fn seconds_adjust_status(seconds: u64, dirty: bool) -> String {
-    time_adjust_status("秒数", &format!("{seconds}秒"), dirty)
+///
+/// `label` names the field being adjusted ("ログインタイムアウト" for `3`/`4`,
+/// "クリップボード保持" for `5`/`6`). Without it both branches reported the
+/// generic "秒数" wording and produced indistinguishable statuses.
+pub(super) fn seconds_adjust_status(label: &str, seconds: u64, dirty: bool) -> String {
+    time_adjust_status(label, &format!("{seconds}秒"), dirty)
 }
 
 /// Status after trying to copy a value the generator has not produced yet.
@@ -981,6 +985,7 @@ impl BitwardenApp {
                 if adjustment.changed {
                     self.mark_settings_dirty();
                     self.status = seconds_adjust_status(
+                        "ログインタイムアウト",
                         self.settings.login_timeout_seconds,
                         self.settings_dirty,
                     );
@@ -999,6 +1004,7 @@ impl BitwardenApp {
                 if adjustment.changed {
                     self.mark_settings_dirty();
                     self.status = seconds_adjust_status(
+                        "クリップボード保持",
                         self.settings.clipboard_restore_seconds,
                         self.settings_dirty,
                     );
@@ -1355,19 +1361,49 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn seconds_adjust_status_keeps_save_hint_and_unsaved_marker() {
-        let clean = seconds_adjust_status(31, false);
-        assert_eq!(clean, "秒数を変更しました: 31秒（w: 保存 / d: 破棄）");
+        let clean = seconds_adjust_status("ログインタイムアウト", 31, false);
+        assert_eq!(
+            clean,
+            "ログインタイムアウトを変更しました: 31秒（w: 保存 / d: 破棄）"
+        );
         assert!(!clean.contains("[未保存"), "{clean}");
 
         // The seconds-based 3/4 and 5/6 branches mark the settings dirty
         // before writing the status, so the unsaved marker must survive.
-        let dirty = seconds_adjust_status(31, true);
+        let dirty = seconds_adjust_status("ログインタイムアウト", 31, true);
         assert_eq!(
             dirty,
             crate::ui::app::status_with_unsaved(clean.as_str(), true)
         );
         assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
         assert!(dirty.contains("w: 保存 / d: 破棄"), "{dirty}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn seconds_adjust_status_names_the_adjusted_target() {
+        let login = seconds_adjust_status("ログインタイムアウト", 30, false);
+        let clipboard = seconds_adjust_status("クリップボード保持", 30, false);
+
+        assert!(login.contains("ログインタイムアウト"), "{login}");
+        assert!(!login.contains("クリップボード保持"), "{login}");
+        assert!(clipboard.contains("クリップボード保持"), "{clipboard}");
+        assert!(!clipboard.contains("ログインタイムアウト"), "{clipboard}");
+        // The same value must no longer collapse into one generic status.
+        assert_ne!(login, clipboard, "3/4 and 5/6 must be distinguishable");
+        assert!(login.contains("30秒"), "{login}");
+        assert!(clipboard.contains("30秒"), "{clipboard}");
+
+        let login_dirty = seconds_adjust_status("ログインタイムアウト", 30, true);
+        let clipboard_dirty = seconds_adjust_status("クリップボード保持", 30, true);
+        assert_ne!(login_dirty, clipboard_dirty);
+        assert!(
+            login_dirty.contains("[未保存の設定変更があります]"),
+            "{login_dirty}"
+        );
+        assert!(
+            clipboard_dirty.contains("[未保存の設定変更があります]"),
+            "{clipboard_dirty}"
+        );
     }
 
     #[::core::prelude::v1::test]
@@ -1384,12 +1420,12 @@ mod tests {
         assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
         assert!(dirty.contains("w: 保存 / d: 破棄"), "{dirty}");
 
-        // The 3-6 fields really are seconds-based and keep their wording.
+        // The 3-6 fields really are seconds-based and keep their unit.
         assert_eq!(
-            seconds_adjust_status(31, false),
-            "秒数を変更しました: 31秒（w: 保存 / d: 破棄）"
+            seconds_adjust_status("ログインタイムアウト", 31, false),
+            "ログインタイムアウトを変更しました: 31秒（w: 保存 / d: 破棄）"
         );
-        assert!(!seconds_adjust_status(31, false).contains("分を変更"));
+        assert!(!seconds_adjust_status("ログインタイムアウト", 31, false).contains("分を変更"));
     }
 
     #[::core::prelude::v1::test]
@@ -2598,10 +2634,10 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn adjusted_values_are_included_in_time_and_threshold_statuses() {
-        assert!(seconds_adjust_status(1, false).contains("1秒"));
+        assert!(seconds_adjust_status("ログインタイムアウト", 1, false).contains("1秒"));
         assert_ne!(
-            seconds_adjust_status(1, false),
-            seconds_adjust_status(2, false)
+            seconds_adjust_status("ログインタイムアウト", 1, false),
+            seconds_adjust_status("ログインタイムアウト", 2, false)
         );
         assert!(idle_lock_adjust_status(90, false).contains("1分30秒"));
 

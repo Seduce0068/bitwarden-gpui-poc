@@ -1,14 +1,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use crate::limits::ENV_LOCK;
 use crate::settings::*;
 
-/// Serializes tests that mutate process-global environment variables.
-///
-/// The `EnvGuard` in `default_path_is_unchanged_after_the_config_environment_changes`
-/// restores the previous value on drop, but that alone does not stop two tests
-/// from changing `XDG_CONFIG_HOME` at the same time. Every env-touching test
-/// must hold this lock for its whole body.
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// `ENV_LOCK` lives in `crate::limits` so the settings and cache test modules
+// share one process-global mutex. The `EnvGuard` in
+// `default_path_is_unchanged_after_the_config_environment_changes` restores the
+// previous value on drop, but that alone does not stop two tests from changing
+// `XDG_CONFIG_HOME` at the same time. Every env-touching test must hold the
+// shared lock for its whole body.
 
 #[test]
 fn defaults_are_sensible() {
@@ -4435,4 +4435,86 @@ fn load_advisories_warns_about_padded_numeric_string_future_versions() {
     });
     std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
     assert!(load_advisories(&path).is_empty(), "{current:?}");
+}
+
+#[test]
+fn sanitized_truncates_an_overlong_passphrase_separator() {
+    use crate::limits::MAX_PASSPHRASE_SEPARATOR_LEN;
+
+    let separator = "x".repeat(MAX_PASSPHRASE_SEPARATOR_LEN + 10);
+    let settings = Settings {
+        passphrase_generator: crate::generator::PassphraseSettings {
+            separator: separator.clone(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let safe = settings.sanitized();
+    assert_eq!(
+        safe.passphrase_generator.separator.chars().count(),
+        MAX_PASSPHRASE_SEPARATOR_LEN
+    );
+    assert_eq!(
+        safe.passphrase_generator.separator,
+        "x".repeat(MAX_PASSPHRASE_SEPARATOR_LEN)
+    );
+    // `sanitized()` is a pure clone-based operation.
+    assert_eq!(settings.passphrase_generator.separator, separator);
+
+    // Separators within the cap, including the empty one, are untouched.
+    for short in ["", "-", "::", "あ"] {
+        let settings = Settings {
+            passphrase_generator: crate::generator::PassphraseSettings {
+                separator: short.to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(settings.sanitized().passphrase_generator.separator, short);
+    }
+}
+
+#[test]
+fn passphrase_separator_cap_is_applied_on_a_utf8_boundary_and_persisted() {
+    use crate::limits::MAX_PASSPHRASE_SEPARATOR_LEN;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // Multi-byte characters make a byte-based cut invalid; the shared
+    // `truncate_to_limit` must stop on a character boundary.
+    let separator = "あ".repeat(MAX_PASSPHRASE_SEPARATOR_LEN + 3);
+    let settings = Settings {
+        passphrase_generator: crate::generator::PassphraseSettings {
+            separator: separator.clone(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    settings.save(&path).unwrap();
+
+    let expected = "あ".repeat(MAX_PASSPHRASE_SEPARATOR_LEN);
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        raw["passphrase_generator"]["separator"],
+        serde_json::json!(expected)
+    );
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.passphrase_generator.separator, expected);
+    // `save()` writes the sanitized value without mutating the caller.
+    assert_eq!(settings.passphrase_generator.separator, separator);
+
+    // The load path clamps a hand-edited file the same way.
+    std::fs::write(
+        &path,
+        serde_json::json!({ "passphrase_generator": { "separator": separator } }).to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path)
+            .unwrap()
+            .passphrase_generator
+            .separator,
+        expected
+    );
 }

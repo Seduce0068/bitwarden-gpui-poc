@@ -110,10 +110,10 @@ use crate::health::Thresholds;
 use crate::limits::{
     has_format_character, truncate_to_limit, DEFAULT_CLIPBOARD_RESTORE_SECONDS,
     DEFAULT_IDLE_LOCK_SECONDS, MAX_CLIPBOARD_RESTORE_SECONDS, MAX_EMAIL_LEN, MAX_IDLE_LOCK_SECONDS,
-    MAX_LOGIN_TIMEOUT_SECONDS, MAX_PASSPHRASE_WORDS, MAX_PASSWORD_LENGTH, MAX_SERVER_URL_LEN,
-    MAX_STALE_DAYS, MAX_WEAK_BITS, MIN_CLIPBOARD_RESTORE_SECONDS, MIN_IDLE_LOCK_SECONDS,
-    MIN_LOGIN_TIMEOUT_SECONDS, MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH, MIN_STALE_DAYS,
-    MIN_WEAK_BITS,
+    MAX_LOGIN_TIMEOUT_SECONDS, MAX_PASSPHRASE_SEPARATOR_LEN, MAX_PASSPHRASE_WORDS,
+    MAX_PASSWORD_LENGTH, MAX_SERVER_URL_LEN, MAX_STALE_DAYS, MAX_WEAK_BITS,
+    MIN_CLIPBOARD_RESTORE_SECONDS, MIN_IDLE_LOCK_SECONDS, MIN_LOGIN_TIMEOUT_SECONDS,
+    MIN_PASSPHRASE_WORDS, MIN_PASSWORD_LENGTH, MIN_STALE_DAYS, MIN_WEAK_BITS,
 };
 
 /// Leading zero-width code points that may be stripped from a pasted email.
@@ -680,8 +680,13 @@ impl Settings {
     /// reusing the constants from `crate::limits` so the stored value and the
     /// effective (clamped) login config cannot diverge.
     ///
-    /// Known constraint: `passphrase_generator.separator` is a free-form
-    /// string, so a single alphanumeric character (e.g. `x`) is accepted here
+    /// `passphrase_generator.separator` is a free-form string but is capped at
+    /// `MAX_PASSPHRASE_SEPARATOR_LEN` characters. The cap is applied here, so
+    /// both `load_detailed` and `save` persist the clamped value; the original
+    /// struct is never mutated.
+    ///
+    /// Known constraint: within that cap the separator is still free-form, so
+    /// a single alphanumeric character (e.g. `x`) is accepted here
     /// and by the generator (`generator.rs:129,169`). The health audit's
     /// passphrase recognizer only handles a repeated *non*-alphanumeric
     /// separator or no separator at all, so such a passphrase falls back to
@@ -727,6 +732,13 @@ impl Settings {
             .passphrase_generator
             .words
             .clamp(MIN_PASSPHRASE_WORDS, MAX_PASSPHRASE_WORDS);
+        // A hand-edited file may carry an arbitrarily long separator. Truncate
+        // on a character boundary so every persisted passphrase stays bounded
+        // and the audit's separator scan cannot be inflated by junk.
+        truncate_to_limit(
+            &mut result.passphrase_generator.separator,
+            MAX_PASSPHRASE_SEPARATOR_LEN,
+        );
         result.thresholds.weak_bits = result
             .thresholds
             .weak_bits

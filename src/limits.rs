@@ -3,6 +3,15 @@
 //! Keeping these here prevents the pure settings module from depending on the
 //! network-oriented auth module just to validate two text fields.
 
+/// Process-global lock shared by every test that mutates `XDG_*` environment
+/// variables.
+///
+/// `settings_tests` swaps `XDG_CONFIG_HOME` while `cache_tests` swaps both
+/// `XDG_CONFIG_HOME` and `XDG_CACHE_HOME`. Module-local locks would not exclude
+/// each other, so both modules take this one. Production code never reads it.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Maximum length of an email address, in Unicode characters (not octets).
 ///
 /// The *number* comes from RFC 5321's octet limits: §4.5.3.1.1 caps the local
@@ -86,6 +95,16 @@ pub const MAX_PASSWORD_LENGTH: usize = 128;
 pub const MIN_PASSPHRASE_WORDS: usize = 2;
 /// Maximum passphrase word count.
 pub const MAX_PASSPHRASE_WORDS: usize = 20;
+/// Maximum length of a passphrase separator, in Unicode characters.
+///
+/// The generator joins word-list entries with this string, so a hand-edited
+/// settings file carrying an arbitrarily long separator would inflate every
+/// generated passphrase and the audit's separator scan. The cap is small on
+/// purpose: every separator the UI can select (`-`, `.`, `_`, empty) is at most
+/// one character. It is applied by `Settings::sanitized` and therefore by both
+/// the load and save paths, using the same character-counting `truncate_to_limit`
+/// as the other text caps.
+pub const MAX_PASSPHRASE_SEPARATOR_LEN: usize = 16;
 /// Minimum weak-password entropy threshold, in bits.
 pub const MIN_WEAK_BITS: u32 = 1;
 /// Maximum weak-password entropy threshold, in bits.
@@ -131,6 +150,21 @@ pub(crate) fn is_format_character(ch: char) -> bool {
 /// Whether `value` contains a Unicode `Cf` (format) character.
 pub(crate) fn has_format_character(value: &str) -> bool {
     value.chars().any(is_format_character)
+}
+
+/// Case-preserving comparison key that drops characters rendering no glyph.
+///
+/// The model's name rule ([`crate::model::comparison_key`]) removes `Cc`, `Cf`
+/// and whitespace before folding case, so `Git\u{200b}Hub` compares equal to
+/// `GitHub`. Passwords must keep their case, so this applies the same
+/// invisible-character policy *without* lowercasing: two stored passwords that
+/// differ only by a zero-width space, a bidi control or a Unicode space
+/// separator share a reuse key, while `Same` and `same` stay distinct.
+pub(crate) fn visible_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_control() && !ch.is_whitespace() && !is_format_character(*ch))
+        .collect()
 }
 
 /// Byte offset just past `limit` characters, or `None` when `value` fits.
@@ -200,6 +234,31 @@ mod tests {
         assert_eq!(DEFAULT_LOGIN_TIMEOUT, std::time::Duration::from_secs(30));
         const { assert!(MAX_CLIENT_ID_LEN < MAX_SERVER_URL_LEN) };
         const { assert!(MAX_EMAIL_LEN < MAX_SERVER_URL_LEN) };
+    }
+
+    #[test]
+    fn visible_key_folds_invisible_characters_but_keeps_case() {
+        // Same policy as the model's name comparison (drop Cc/Cf/Zs), minus the
+        // case fold: reuse must not merge `Same` into `same`.
+        assert_eq!(visible_key("pass\u{200b}word"), "password");
+        assert_eq!(visible_key("pa\u{202e}ss\u{00a0}word"), "password");
+        assert_eq!(visible_key("pass\u{0}word"), "password");
+        assert_eq!(visible_key("Same"), "Same");
+        assert_ne!(visible_key("Same"), visible_key("same"));
+        assert_eq!(visible_key("\u{200b}\u{00a0}\u{0}"), "");
+    }
+
+    #[test]
+    fn passphrase_separator_cap_is_small_and_positive() {
+        // Every separator the UI can select is at most one character; pin the
+        // cap so a future widening is an explicit, reviewed change.
+        const { assert!(MAX_PASSPHRASE_SEPARATOR_LEN > 0) };
+        const {
+            assert!(MAX_PASSPHRASE_SEPARATOR_LEN >= 4);
+        }
+        const {
+            assert!(MAX_PASSPHRASE_SEPARATOR_LEN <= 64);
+        }
     }
 
     #[test]

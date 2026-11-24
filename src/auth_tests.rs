@@ -4985,3 +4985,102 @@ fn blocked_server_url_is_returned_by_authenticate_with_timeout() {
         "サーバー URL が link-local アドレスを指しています"
     );
 }
+
+// --- R2-CORE-149: the public entry point's live-Session extraction ---
+
+#[tokio::test]
+async fn public_unlock_and_import_extracts_a_live_login_session() {
+    use openwarden::{ApiKey, Client, Device, ServerUrls};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // `Session` has no public setter for `protected_key`/`kdf`; only the token
+    // exchange fills them. A one-shot loopback token endpoint therefore gives
+    // the test a genuine logged-in Session without a real account.
+    let (master_key, protected, sync) = unlock_fixture();
+    let token = serde_json::json!({
+        "access_token": "test-access-token",
+        "expires_in": 3600,
+        "Key": protected.clone(),
+        "Kdf": 0,
+        "KdfIterations": 100_000,
+    })
+    .to_string();
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let base = format!("http://{}", listener.local_addr().expect("local addr"));
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("one token request");
+        let mut request = [0u8; 4096];
+        let _ = stream.read(&mut request).expect("read the token request");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            token.len(), token
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write the token response");
+    });
+
+    let urls = ServerUrls::new(&base, &base).expect("loopback URLs are accepted");
+    let client = Client::new(
+        urls,
+        Device {
+            identifier: "r2-core-149-test-device".to_string(),
+            name: "R2-CORE-149 test".to_string(),
+            device_type: Device::LINUX_CLI,
+        },
+    )
+    .expect("an HTTP client can be built");
+    let session = client
+        .login_api_key(&ApiKey {
+            client_id: "user.1234".to_string(),
+            client_secret: SecretString::from("client-secret".to_string()),
+        })
+        .await
+        .expect("the loopback token response must produce a session");
+    server.join().expect("the one-shot server must finish");
+
+    // Preconditions: this live session really carries both values the public
+    // function is supposed to read off it.
+    assert_eq!(session.protected_key(), Some(protected.as_str()));
+    let live_kdf = session.kdf();
+    assert_eq!(
+        live_kdf,
+        Some(Kdf::Pbkdf2 {
+            iterations: 100_000
+        })
+    );
+
+    let authenticated = AuthenticatedVault {
+        session,
+        sync,
+        master_key,
+        from_cache: false,
+    };
+    // The public entry point extracts `protected_key()` and `kdf()` from this
+    // Session and runs the real unlock/apply_sync/import sequence. A wrong
+    // extraction would fail as MissingProtectedKey or an unlock error.
+    let vault = unlock_and_import(authenticated).expect("the live session must unlock");
+    assert!(vault.items.is_empty());
+
+    // Complement for the KDF half: feed the exact value extracted from the live
+    // session through the seam with a recording importer, proving that this
+    // `Some(Kdf)` reaches openwarden's unlocked vault unchanged.
+    SEEN_KDF.with(|seen| seen.borrow_mut().clear());
+    let (second_key, second_protected, second_sync) = unlock_fixture();
+    let observed = super::unlock_and_import_with(
+        &second_protected,
+        live_kdf,
+        &second_key,
+        second_sync,
+        recording_import,
+    )
+    .expect("the session-derived KDF must unlock like production");
+    assert!(observed.items.is_empty());
+    assert_eq!(
+        SEEN_KDF.with(|seen| seen.borrow().clone()),
+        vec![live_kdf],
+        "the live session's KDF must reach openwarden unchanged"
+    );
+}

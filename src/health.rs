@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::generator::{entropy_bits, Strength, DIGITS, LOWERCASE, SYMBOLS, UPPERCASE, WEAK_BITS};
-use crate::model::{is_visually_empty, FingerprintVerify, ItemKind, Vault, VaultItem};
+use crate::model::{
+    has_no_visible_identity, is_visually_empty, FingerprintVerify, ItemKind, Vault, VaultItem,
+};
 use crate::totp::is_valid_secret;
 // Layering note: `health` depends on `vault_sync` (the openwarden bridge)
 // although the bridge is conceptually a lower, import-side layer. This
@@ -602,12 +604,9 @@ fn visible_lowercase(value: &str) -> String {
 /// missing `Zs` branch let `pass\u{00a0}word123` escape the dictionary shortcut
 /// while still looking harmless to a reader, so all three are folded here.
 fn visible_chars(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| {
-            !ch.is_control() && !ch.is_whitespace() && !crate::limits::is_format_character(*ch)
-        })
-        .collect::<String>()
+    // Single source of truth with the password-reuse key: the invisible-code-
+    // point filter lives in `limits`, next to the other shared text rules.
+    crate::limits::visible_key(value)
 }
 
 fn strip_trailing_digits(value: &str) -> Option<&str> {
@@ -849,7 +848,12 @@ pub fn has_totp_field(item: &VaultItem) -> bool {
 /// Reuse is computed across all logins in the vault, including ones that are
 /// filtered out of the current view, so the report is stable.
 pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
-    let mut passwords: HashMap<&str, Vec<&str>> = HashMap::new();
+    // The key is the case-preserving `visible_key`, not the raw password: the
+    // model treats `Cc`/`Cf`/whitespace as rendering nothing, so `pass\u{200b}word`
+    // and `password` are the same credential for reuse purposes. Case is kept
+    // (unlike the model's name `comparison_key`), because `Same` and `same` are
+    // different passwords.
+    let mut passwords: HashMap<String, Vec<&str>> = HashMap::new();
     for item in &vault.items {
         if let Some(password) = item.password() {
             // Blank-looking passwords have no guessable value, and undecryptable
@@ -858,7 +862,10 @@ pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
             // TOTP checks so whitespace, Cc controls and Unicode `Cf` cannot
             // register a phantom reuse match or hide a real one behind a count.
             if !is_visually_empty(password) && !is_undecryptable_password(password) {
-                passwords.entry(password).or_default().push(&item.id);
+                passwords
+                    .entry(crate::limits::visible_key(password))
+                    .or_default()
+                    .push(&item.id);
             }
         }
     }
@@ -884,7 +891,7 @@ pub fn audit(vault: &Vault, thresholds: Thresholds, now: i64) -> Report {
                 // `audit_item` flags a name with no visible content, so the
                 // report must show the same placeholder for a whitespace/Cf-
                 // only name instead of rendering the invisible raw value.
-                name: if is_visually_empty(&item.name) {
+                name: if has_no_visible_identity(&item.name) {
                     "(名称未設定)".to_string()
                 } else {
                     item.name.clone()
@@ -908,13 +915,14 @@ fn audit_item(
     item: &VaultItem,
     thresholds: Thresholds,
     now: i64,
-    passwords: &HashMap<&str, Vec<&str>>,
+    passwords: &HashMap<String, Vec<&str>>,
     findings: &mut Vec<Finding>,
 ) {
-    // Share the model's `is_visually_empty` rule with the placeholder in
-    // `audit`: whitespace and Unicode `Cf` render nothing, so a zero-width-
-    // space-only name is just as unnamed as an empty one.
-    if is_visually_empty(&item.name) {
+    // Share the model's `has_no_visible_identity` rule with the placeholder in
+    // `audit`: besides whitespace, `Cc` and `Cf`, a name made only of Unicode
+    // marks has no base character to decorate and is just as unnamed as an
+    // empty one. A mark following a visible base letter stays a real name.
+    if has_no_visible_identity(&item.name) {
         findings.push(Finding::Unnamed);
     }
 
@@ -938,7 +946,10 @@ fn audit_item(
                 if bits < thresholds.weak_bits {
                     findings.push(Finding::WeakPassword { bits });
                 }
-                if let Some(ids) = passwords.get(password.as_str()) {
+                // Same case-preserving invisible-character fold as the map
+                // insertion above, so an embedded zero-width space cannot hide
+                // a reuse group while a case difference still splits one.
+                if let Some(ids) = passwords.get(&crate::limits::visible_key(password)) {
                     if ids.len() > 1 {
                         findings.push(Finding::ReusedPassword { count: ids.len() });
                     }
