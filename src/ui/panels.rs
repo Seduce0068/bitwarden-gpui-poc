@@ -7,6 +7,7 @@ use gpui_kit::*;
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
 use crate::health::{has_totp_field, has_usable_totp, ItemReport, Report, Severity};
 use crate::settings::Settings;
+use crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
 use crate::ui::logic::{settings_hint, unsaved_marker, FOCUS_RECOVERY_HINT};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
 use crate::vault_sync::is_undecryptable_totp;
@@ -94,15 +95,32 @@ pub(super) const VAULT_SELECTION_FREE_KEYS_HINT: &str =
 /// commands discoverable on an empty vault without advertising row movement or
 /// the audit-only `Enter`. Kept pure so the wording can be pinned by tests
 /// without a GPUI window.
-pub(super) fn vault_row_keys_hint(selectable_rows: usize, searching: bool) -> String {
+///
+/// `query_nonempty` is the confirmed-query flag used by
+/// [`crate::ui::input::confirmed_query_nonempty`] and the `KeyContext` in
+/// `ui::keys`. When it is set, Backspace and non-command characters still edit
+/// the query after Enter/Escape confirmed it, so the header must advertise
+/// [`CONFIRMED_QUERY_REEDIT_HINT`] rather than leaving those keys discoverable
+/// only through the temporary status. Search mode stays silent: there the
+/// characters are a fresh query, not a confirmed one being re-edited.
+pub(super) fn vault_row_keys_hint(
+    selectable_rows: usize,
+    searching: bool,
+    query_nonempty: bool,
+) -> String {
     if searching {
         String::new()
     } else {
         let navigation = row_navigation_keys_hint(selectable_rows);
-        if navigation.is_empty() {
+        let keys = if navigation.is_empty() {
             VAULT_SELECTION_FREE_KEYS_HINT.to_string()
         } else {
             format!("{navigation} / {VAULT_MAIN_KEYS_HINT}")
+        };
+        if query_nonempty {
+            format!("{keys} / {CONFIRMED_QUERY_REEDIT_HINT}")
+        } else {
+            keys
         }
     }
 }
@@ -1460,7 +1478,7 @@ mod tests {
     fn vault_row_keys_hint_omits_the_audit_only_enter_binding() {
         // An empty vault still shows the row-independent commands, but no row
         // keys, no selection-dependent commands and no audit-only `Enter`.
-        let empty = vault_row_keys_hint(0, false);
+        let empty = vault_row_keys_hint(0, false, false);
         assert_eq!(empty, VAULT_SELECTION_FREE_KEYS_HINT, "{empty}");
         assert!(!empty.contains("Enter"), "{empty}");
         assert!(!empty.contains("↑↓"), "{empty}");
@@ -1477,7 +1495,7 @@ mod tests {
             assert!(!empty.contains(key), "unexpected {key} in {empty}");
         }
 
-        let hint = vault_row_keys_hint(2, false);
+        let hint = vault_row_keys_hint(2, false, false);
         assert!(hint.contains("↑↓: 行を選択"), "{hint}");
         assert!(hint.contains(LIST_PAGE_AND_EDGE_HINT), "{hint}");
         assert!(!hint.contains("Enter"), "{hint}");
@@ -1497,7 +1515,7 @@ mod tests {
     #[::core::prelude::v1::test]
     fn vault_row_keys_hint_hides_all_row_keys_while_searching() {
         for rows in [0, 2] {
-            let searching = vault_row_keys_hint(rows, true);
+            let searching = vault_row_keys_hint(rows, true, false);
             assert!(searching.is_empty(), "rows={rows}: {searching}");
             assert!(!searching.contains("↑↓"), "{searching}");
             assert!(!searching.contains(LIST_PAGE_AND_EDGE_HINT), "{searching}");
@@ -1508,7 +1526,7 @@ mod tests {
 
         // Outside the search field the very same rows still advertise the
         // navigation keys, including the shared page/edge wording.
-        let idle = vault_row_keys_hint(2, false);
+        let idle = vault_row_keys_hint(2, false, false);
         assert_eq!(
             idle,
             format!("{} / {VAULT_MAIN_KEYS_HINT}", row_navigation_keys_hint(2))
@@ -1519,7 +1537,7 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn vault_row_keys_hint_advertises_the_main_command_keys() {
-        let hint = vault_row_keys_hint(2, false);
+        let hint = vault_row_keys_hint(2, false, false);
         for token in [
             "/: 検索",
             "t: フィルタ",
@@ -1541,16 +1559,16 @@ mod tests {
         // Search mode still hides every key hint because command letters
         // become search text. With an empty list the row keys and the
         // selection-dependent commands are dropped; the rest stay visible.
-        assert_eq!(vault_row_keys_hint(2, true), "");
+        assert_eq!(vault_row_keys_hint(2, true, false), "");
         assert_eq!(
-            vault_row_keys_hint(0, false),
+            vault_row_keys_hint(0, false, false),
             VAULT_SELECTION_FREE_KEYS_HINT
         );
     }
 
     #[::core::prelude::v1::test]
     fn vault_row_keys_hint_keeps_selection_free_commands_when_the_vault_is_empty() {
-        let empty = vault_row_keys_hint(0, false);
+        let empty = vault_row_keys_hint(0, false, false);
         assert_eq!(empty, VAULT_SELECTION_FREE_KEYS_HINT, "{empty}");
 
         // Row-independent commands stay discoverable with no row to select.
@@ -1587,10 +1605,10 @@ mod tests {
         assert!(!empty.contains(" / / "), "{empty}");
 
         // Search mode remains fully silent: the letters become search text.
-        assert_eq!(vault_row_keys_hint(0, true), "");
+        assert_eq!(vault_row_keys_hint(0, true, false), "");
 
         // The non-empty branch keeps its established navigation prefix.
-        let with_rows = vault_row_keys_hint(2, false);
+        let with_rows = vault_row_keys_hint(2, false, false);
         assert_eq!(
             with_rows,
             format!("{} / {VAULT_MAIN_KEYS_HINT}", row_navigation_keys_hint(2))
@@ -1606,13 +1624,13 @@ mod tests {
             "u: ユーザー名をコピー",
         ];
 
-        let empty = vault_row_keys_hint(0, false);
+        let empty = vault_row_keys_hint(0, false, false);
         assert_eq!(empty, VAULT_SELECTION_FREE_KEYS_HINT, "{empty}");
         for token in selection_keys {
             assert!(!empty.contains(token), "unexpected {token} in {empty}");
         }
 
-        let with_rows = vault_row_keys_hint(1, false);
+        let with_rows = vault_row_keys_hint(1, false, false);
         assert_eq!(
             with_rows,
             format!("{} / {VAULT_MAIN_KEYS_HINT}", row_navigation_keys_hint(1)),
@@ -1627,6 +1645,55 @@ mod tests {
         assert!(
             VAULT_MAIN_KEYS_HINT.ends_with("g: 監査 / n: 生成 / c: 設定 / l: ロック / Esc: 終了")
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_row_keys_hint_appends_reedit_hint_for_a_confirmed_query() {
+        // R2-UI-141: the re-edit keys used to appear only in the temporary
+        // status installed after confirming a search. The persistent vault
+        // header must name them too, without changing the established keys.
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+        for rows in [0, 2] {
+            let base = vault_row_keys_hint(rows, false, false);
+            let confirmed = vault_row_keys_hint(rows, false, true);
+            assert_eq!(confirmed, format!("{base} / {hint}"), "rows={rows}");
+            assert!(confirmed.ends_with(hint), "rows={rows}: {confirmed}");
+            assert_eq!(confirmed.matches(hint).count(), 1, "{confirmed}");
+            assert!(confirmed.contains("Esc: 終了"), "{confirmed}");
+        }
+        // A confirmed query needs no selected row: even an empty vault tells
+        // the user how to refine the query that produced zero matches.
+        let empty = vault_row_keys_hint(0, false, true);
+        assert!(empty.contains(VAULT_SELECTION_FREE_KEYS_HINT), "{empty}");
+        assert!(empty.contains(hint), "{empty}");
+        assert!(!empty.contains("↑↓"), "{empty}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_row_keys_hint_hides_reedit_hint_until_a_query_is_confirmed() {
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+        for rows in [0, 2] {
+            // Without a confirmed query the established key lists are intact.
+            let idle = vault_row_keys_hint(rows, false, false);
+            assert!(!idle.contains(hint), "rows={rows}: {idle}");
+            let expected = if rows == 0 {
+                VAULT_SELECTION_FREE_KEYS_HINT.to_string()
+            } else {
+                format!(
+                    "{} / {VAULT_MAIN_KEYS_HINT}",
+                    row_navigation_keys_hint(rows)
+                )
+            };
+            assert_eq!(idle, expected, "rows={rows}");
+
+            // While the search field owns the keyboard every hint is hidden:
+            // typed characters start a fresh query, not a confirmed one.
+            for query_nonempty in [false, true] {
+                let searching = vault_row_keys_hint(rows, true, query_nonempty);
+                assert_eq!(searching, "", "rows={rows}, query={query_nonempty}");
+                assert!(!searching.contains(hint), "{searching}");
+            }
+        }
     }
 
     #[::core::prelude::v1::test]

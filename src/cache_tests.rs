@@ -2231,11 +2231,15 @@ fn mask_url_userinfo_handles_ipv6_hosts_and_query_at_signs() {
         assert_eq!(super::mask_url_userinfo(url), expected, "{url}");
     }
     // A host without userinfo is unchanged even when its query holds an '@':
-    // the address's colons must not invent a separator.
+    // the address's colons must not invent a separator. The combined
+    // host + port + path forms exercise both delimiters at once: the ':8443'
+    // port and the '/path' segment must not turn the query '@' into userinfo.
     for url in [
         "https://[::1]?email=a@b",
         "https://[::1]:8443?email=a@b",
         "https://[2001:db8::1]/path?email=a@b",
+        "https://[::1]:8443/path?email=a@b",
+        "https://[2001:db8::1]:8443/path?email=a@b",
     ] {
         assert_eq!(super::mask_url_userinfo(url), url, "{url}");
     }

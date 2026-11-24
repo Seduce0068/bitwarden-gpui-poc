@@ -113,8 +113,11 @@ fn vault_search_query_text(query: &str) -> &str {
 /// `PageUp`/`PageDown` and `Home`/`End` move the vault selection just like
 /// Up/Down (see `ui::keys::classify_key`), so the header advertises them next
 /// to the row-move key. `Enter` is bound only in the audit panel and is inert
-/// in the vault panel, so it is deliberately left out of this header. Kept
-/// pure so the wording can be tested without a GPUI window.
+/// in the vault panel, so it is deliberately left out of this header. A
+/// confirmed (non-empty, non-searching) query keeps Backspace and typed text
+/// bound to re-editing, so those keys belong in the header too instead of only
+/// in the temporary status. Kept pure so the wording can be tested without a
+/// GPUI window.
 fn vault_list_header_text(
     count: usize,
     total: usize,
@@ -125,8 +128,14 @@ fn vault_list_header_text(
 ) -> String {
     // While the search field owns the keyboard, row movement keys are not
     // routed to the vault selection (`ui::keys::classify_key`), so the header
-    // must not advertise them during editing.
-    let row_keys = crate::ui::panels::vault_row_keys_hint(count, searching);
+    // must not advertise them during editing. The query flag uses the same
+    // shared visual-emptiness rule as the status and key classification, so an
+    // invisible-only query cannot make the header promise re-edit keys.
+    let row_keys = crate::ui::panels::vault_row_keys_hint(
+        count,
+        searching,
+        crate::ui::input::confirmed_query_nonempty(query),
+    );
     let row_suffix = if row_keys.is_empty() {
         String::new()
     } else {
@@ -797,6 +806,40 @@ mod tests {
         let editing = vault_list_header_text(3, 7, "すべて", "名前 ↑", "abc", true);
         assert!(!idle.contains("検索: abc _"), "{idle}");
         assert!(editing.contains("検索: abc _"), "{editing}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_header_shows_reedit_keys_for_a_confirmed_query() {
+        // R2-UI-141: the re-edit keys used to live only in the temporary
+        // post-confirm status. The persistent header must name them whenever
+        // the query is still bound to Backspace and typed text.
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+        for count in [0, 3] {
+            let confirmed = vault_list_header_text(count, 7, "すべて", "名前 ↑", "alice", false);
+            assert!(confirmed.contains(hint), "count={count}: {confirmed}");
+            assert_eq!(confirmed.matches(hint).count(), 1, "{confirmed}");
+            assert!(confirmed.contains("検索: alice"), "{confirmed}");
+        }
+        // The established keys survive the addition.
+        let confirmed = vault_list_header_text(3, 7, "すべて", "名前 ↑", "alice", false);
+        assert!(confirmed.contains("↑↓: 行を選択"), "{confirmed}");
+        assert!(
+            confirmed.contains(crate::ui::panels::LIST_PAGE_AND_EDGE_HINT),
+            "{confirmed}"
+        );
+        assert!(confirmed.contains("Esc: 終了"), "{confirmed}");
+
+        // Still typing a new query: the re-edit hint does not apply because
+        // those characters are the fresh query, not a confirmed one.
+        let searching = vault_list_header_text(3, 7, "すべて", "名前 ↑", "alice", true);
+        assert!(!searching.contains(hint), "{searching}");
+
+        // No query or an invisible-only one leaves nothing to re-edit. The
+        // same shared emptiness rule drives key classification and status.
+        for query in ["", "  \t", "\u{200b}", "\u{feff}\u{202e}"] {
+            let idle = vault_list_header_text(3, 7, "すべて", "名前 ↑", query, false);
+            assert!(!idle.contains(hint), "{query:?}: {idle}");
+        }
     }
 
     #[::core::prelude::v1::test]

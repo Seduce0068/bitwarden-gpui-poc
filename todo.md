@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第140弾で 3 件すべてを完了）。
+なし（第141弾で 3 件すべてを完了）。
 
 ## 完了
 
+- [x] 第141弾（16 担当・85 回目）の指摘 3 件を完結（2026-11-24）
+  - IPv6＋ポート＋パスのクエリ '@' 誤判定、確定クエリ再編集案内、
+    ADR redact 行参照を修正。
+  - 数字コロン判定を authority 部分へ限定。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1246 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第140弾（16 担当・84 回目）の指摘 3 件を完結（2026-11-24）
   - 検索編集中 Backspace 案内を追加。
   - Argon2id 全パラメータ、Session kdf 伝播、

@@ -319,7 +319,13 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
         let head = &before[..delimiter];
         let has_userinfo_colon = head.split(&['?', '#'][..]).any(|part| {
             let part = without_ipv6_literals(part);
-            part.split_once(':').is_some_and(|(_, value)| {
+            // Only the authority before any path separator can hold a
+            // `user:password` marker. Including a path in the value made
+            // `[::1]:8443/path` look like a non-numeric colon (value
+            // `8443/path`) and turned the query '@' into a false userinfo
+            // separator on IPv6 hosts with both a port and a path.
+            let authority = part.split('/').next().unwrap_or(part.as_str());
+            authority.split_once(':').is_some_and(|(_, value)| {
                 !value.is_empty() && !value.bytes().all(|byte| byte.is_ascii_digit())
             })
         });
@@ -374,6 +380,9 @@ fn at_is_in_query(scan: &str, at: usize) -> bool {
 /// a `?`/`#` delimiter would otherwise dismiss as query text, and only makes
 /// masking more conservative.
 fn numeric_password_colon(authority: &str) -> bool {
+    // A path segment must not be folded into the colon value: `host:10000/path`
+    // is a port followed by a path, not a five-digit password.
+    let authority = authority.split('/').next().unwrap_or(authority);
     let Some((user, value)) = authority.split_once(':') else {
         return false;
     };
