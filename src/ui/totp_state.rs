@@ -719,6 +719,65 @@ mod tests {
     }
 
     #[test]
+    fn steam_code_adds_expiry_warning_within_five_seconds() {
+        let mut state = TotpState::new();
+        let steam = "steam://GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+        // A 30 秒周期の t=25 は残り 5 秒。Steam コードでも totp_state.rs:83-84 の
+        // `expires_within` 分岐が走り、警告サフィックスが付く (692-719 の表示経路)。
+        let at_boundary = state.display(steam, 25);
+        let grouped = state
+            .tick
+            .as_ref()
+            .and_then(|tick| tick.code.as_ref())
+            .expect("a Steam URI must produce a code")
+            .grouped();
+        assert_eq!(
+            at_boundary,
+            format!("{grouped} (あと5秒) / まもなく期限切れ"),
+            "exactly five seconds left must warn on the Steam code: {at_boundary}"
+        );
+        assert_eq!(
+            state.current_code().map(|code| code.len()),
+            Some(5),
+            "Steam codes stay five characters"
+        );
+        assert_eq!(
+            state
+                .tick
+                .as_ref()
+                .and_then(|tick| tick.code.as_ref())
+                .map(|code| code.remaining()),
+            Some(5)
+        );
+
+        // 4 秒ならばキャッシュ再利用ではなく新しい状態でサンプリングし、
+        // より短いカウントダウンにも警告が付くことを確認する。
+        let mut state = TotpState::new();
+        let expiring = state.display(steam, 26);
+        assert!(
+            expiring.contains("(あと4秒)"),
+            "expected 4 seconds left, got: {expiring}"
+        );
+        assert!(
+            expiring.contains(" / まもなく期限切れ"),
+            "4 seconds left must warn, got: {expiring}"
+        );
+
+        // 境界の 1 秒前 (残り 6 秒) ではまだ警告が出ない。
+        let mut state = TotpState::new();
+        let fresh = state.display(steam, 24);
+        assert!(
+            fresh.contains("(あと6秒)"),
+            "expected 6 seconds left, got: {fresh}"
+        );
+        assert!(
+            !fresh.contains("まもなく期限切れ"),
+            "6 seconds left must not warn, got: {fresh}"
+        );
+    }
+
+    #[test]
     fn invalid_otpauth_uri_shows_failure_and_caches_its_error() {
         // totp_state.rs:73-79: a rejected URI still produces a `Tick`, but with
         // `code: None` and the failure cached for the copy path. These spellings

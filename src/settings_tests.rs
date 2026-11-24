@@ -2183,6 +2183,61 @@ fn sanitized_email_cc_is_kept_but_valid_email_rejects_it() {
 }
 
 #[test]
+fn normalize_email_text_treats_a_zero_width_only_input_as_empty() {
+    // `normalize_email_text` (settings.rs:225-240) distinguishes a leading
+    // zero-width run from other `Cf` characters: when the whole input is
+    // U+200B..=U+200F, `only_leading_zero_width` is true even though the skip
+    // leaves nothing, so the value is accepted and every `Cf` is filtered out
+    // into `Some("")` instead of being rejected wholesale with `None`.
+    for zero_width in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{200e}', '\u{200f}'] {
+        let single = zero_width.to_string();
+        assert_eq!(
+            super::normalize_email_text(&single),
+            Some(String::new()),
+            "U+{:04X} alone must normalize to empty: {single:?}",
+            zero_width as u32
+        );
+        let repeated = format!("{zero_width}{zero_width}{zero_width}");
+        assert_eq!(
+            super::normalize_email_text(&repeated),
+            Some(String::new()),
+            "a run of U+{:04X} must normalize to empty",
+            zero_width as u32
+        );
+    }
+    let mixed = "\u{200b}\u{200d}\u{200f}\u{200c}\u{200e}\u{200b}";
+    assert_eq!(
+        super::normalize_email_text(mixed),
+        Some(String::new()),
+        "a mixed zero-width-only run is still one removable prefix"
+    );
+
+    // Neighbouring branches stay distinct: plain text is untouched, and a
+    // bidi override or a zero-width character after visible text is rejected.
+    assert_eq!(
+        super::normalize_email_text("alice@example.com"),
+        Some("alice@example.com".to_string())
+    );
+    assert_eq!(super::normalize_email_text(""), Some(String::new()));
+    assert_eq!(super::normalize_email_text("\u{202e}"), None);
+    assert_eq!(
+        super::normalize_email_text("al\u{200b}ice@example.com"),
+        None
+    );
+
+    // Both public entry points inherit the same branch.
+    let stored = Settings {
+        email: mixed.to_string(),
+        ..Default::default()
+    };
+    assert_eq!(stored.sanitized().email, "");
+    assert_eq!(stored.email, mixed, "sanitized() must stay a pure clone");
+    let mut pushed = Settings::default();
+    pushed.push_shared_text(SharedSettingsField::Email, mixed);
+    assert_eq!(pushed.email, "", "a zero-width-only paste appends nothing");
+}
+
+#[test]
 fn sanitized_clips_clipboard_delay_to_the_lower_bound() {
     use crate::limits::{MAX_CLIPBOARD_RESTORE_SECONDS, MIN_CLIPBOARD_RESTORE_SECONDS};
 

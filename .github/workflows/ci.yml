@@ -41,7 +41,7 @@ jobs:
         # シークレットスキャンは pre-commit を主軸とし、CI を最終ゲートとする。
         BETTERLEAKS_VERSION=1.10.1
         # pre-commit と CI の版がずれないようにする（片方だけの更新を検出）。
-        grep -q "rev: v${BETTERLEAKS_VERSION}" .pre-commit-config.yaml
+        grep -Fqx "    rev: v${BETTERLEAKS_VERSION}" .pre-commit-config.yaml
         BETTERLEAKS_ARCHIVE="betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz"
         curl -sSfL \
           "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${BETTERLEAKS_ARCHIVE}" \

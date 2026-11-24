@@ -2362,6 +2362,35 @@ fn duplicate_folder_ids_are_collapsed_before_apply_sync() {
 }
 
 #[test]
+fn empty_string_folder_ids_are_deduped_like_any_other_id() {
+    // `dedup_folders_by_id` (vault_sync.rs:353-367) keys on `id.as_str()`;
+    // `""` is a real `String` id, not a missing one. Two empty-id rows must
+    // collapse to the first, while a numeric id and a row without an id are
+    // left untouched (same split of responsibility as the cipher dedup).
+    let mut value = serde_json::json!({
+        "folders": [
+            {"id": "", "name": "first-empty"},
+            {"id": "", "name": "second-empty"},
+            {"id": 42, "name": "numeric-id"},
+            {"name": "no-id"},
+            {"id": "f1", "name": "normal"},
+            {"id": "f1", "name": "normal-duplicate"},
+        ]
+    });
+    super::dedup_folders_by_id(&mut value);
+    let kept = value["folders"].as_array().unwrap();
+    let names: Vec<&str> = kept
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["first-empty", "numeric-id", "no-id", "normal"],
+        "the empty id must collapse just like a non-empty duplicate"
+    );
+}
+
+#[test]
 fn parse_sync_removes_duplicate_folder_ids_end_to_end() {
     // `Vault::folder_name(id)` reads the first matching folder, so a duplicate
     // id would otherwise shadow the later row and yield duplicate model ids.
@@ -3888,6 +3917,63 @@ fn a_negative_uri_match_wire_value_drops_the_whole_cipher() {
             revision,
         }]
     );
+}
+
+#[test]
+fn non_integer_uri_match_wire_values_drop_the_whole_cipher() {
+    // `UriWire.match` is `Option<u8>` (openwarden vault.rs:269-276). A JSON
+    // string, boolean, fractional number, object or array cannot deserialize
+    // into `u8`, so `StoredCipher::parse` rejects the row and `apply_sync`
+    // drops only that cipher (openwarden vault.rs:344-347,600-604) while
+    // `parse_sync` still succeeds. A clean sibling survives; `null` maps to
+    // `None` and is the control for the "no explicit rule" path.
+    let key = openwarden::SymmetricKey::from_bytes(&[0u8; 64]).expect("a 64-byte test key");
+    let uri = openwarden::EncString::encrypt(&key, b"https://noninteger.example.com/login")
+        .expect("field should encrypt")
+        .to_string();
+    let non_integers = [
+        serde_json::json!("1"),
+        serde_json::json!(true),
+        serde_json::json!(1.5),
+        serde_json::json!({ "wire": 1 }),
+        serde_json::json!(["Host"]),
+    ];
+    let mut ciphers: Vec<serde_json::Value> = non_integers
+        .into_iter()
+        .enumerate()
+        .map(|(index, bad)| {
+            let mut cipher = encrypted_login(
+                &format!("non-integer-match-{index}"),
+                REAL_PASSWORD,
+                REAL_TOTP,
+            );
+            cipher["login"]["uris"] = serde_json::json!([{ "uri": uri, "match": bad }]);
+            cipher
+        })
+        .collect();
+    let mut null_match = encrypted_login("null-match", REAL_PASSWORD, REAL_TOTP);
+    null_match["login"]["uris"] = serde_json::json!([{ "uri": uri, "match": null }]);
+    ciphers.push(null_match);
+    let mut good = encrypted_login("integer-match", REAL_PASSWORD, REAL_TOTP);
+    good["login"]["uris"] = serde_json::json!([{ "uri": uri, "match": 1 }]);
+    ciphers.push(good);
+
+    let vault = unlocked_vault(&ciphers);
+    let logins = vault.logins();
+    let ids: Vec<&str> = logins.iter().map(|info| info.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["null-match", "integer-match"],
+        "only rows whose match wire value deserializes as u8 or null survive"
+    );
+
+    let (model, _) = import_logins_with_audit(&vault).expect("import should succeed");
+    assert_eq!(model.items.len(), 2);
+    let null_uris = model.item("null-match").unwrap().uris();
+    assert_eq!(null_uris[0].match_type, None);
+    let good_uris = model.item("integer-match").unwrap().uris();
+    assert_eq!(good_uris[0].match_type, Some(1));
+    assert_eq!(good_uris[0].match_enum(), Some(openwarden::UriMatch::Host));
 }
 
 #[test]

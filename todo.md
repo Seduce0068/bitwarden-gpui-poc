@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第143弾で 3 件すべてを完了）。
+なし（第144弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第144弾（16 担当・88 回目）の指摘 5 件を完結（2026-11-24）
+  - unlock_detail 3系統、ゼロ幅のみメール、空フォルダ id、
+    wire 非整数、Steam 期限警告を修正・テスト。
+  - CHANGELOG 第142〜143弾、Betterleaks 版検査の厳密化を反映。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1259 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第143弾（16 担当・87 回目）の指摘 3 件を完結（2026-11-24）
   - 範囲外 URI match wire、空文字 id dedup、LoginUri Debug、
     非 name haystack、全角数字サフィックスの非対称をテスト。

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 全体改善（第142〜143弾 / 2026-11-24）
+
+- 数字パスワード＋'=' の bare authority マスク、
+  numeric_password_colon ガードを修正
+- 範囲外 URI match wire、空文字 id、LoginUri Debug、
+  非 name haystack、全角数字サフィックスをテスト
+
 ### 全体改善（第138〜141弾 / 2026-11-24）
 
 - bare authority の '=' 第2クエリマスク、BlockedServerUrl status、

@@ -1152,26 +1152,56 @@ fn auth_error_other_keeps_its_text_until_the_ui_boundary() {
 
 #[test]
 fn unlock_detail_does_not_add_a_second_prefix_when_text_has_no_suffix() {
-    // `unlock_detail` strips prefix+suffix as a pair (auth.rs:288-292). A
-    // legacy message that carries the prefix but was truncated before the
-    // closing `）` must be kept verbatim: splitting the two operations would
-    // strip the prefix alone and then re-add it, producing a doubled prefix.
-    for text in [
-        "復号キーを取得できません（truncated detail",
-        "同期データを取り込めません（truncated detail",
-        "vault 変換に失敗しました（truncated detail",
-    ] {
+    // `unlock_detail` strips prefix+suffix as a pair (auth.rs:305-310). A
+    // legacy message carrying its prefix but truncated before the closing
+    // `）` must stay verbatim. Routing all three prefix texts through
+    // `AppError::ImportFailed` (as this test did) only exercised the import
+    // call site (auth.rs:360); the unlock and apply-sync call sites
+    // (auth.rs:346, 353) were never reached. Pin each family with its own
+    // prefix now so all three strip fallbacks are covered.
+    {
+        let text = "復号キーを取得できません（truncated detail";
+        let small = UnlockError::from(AppError::UnlockFailed(text.to_string()));
+        assert_eq!(
+            small,
+            UnlockError::UnlockFailed(text.to_string()),
+            "unlock prefix-only text must be kept verbatim: {small:?}"
+        );
+        let restored = AppError::from(small);
+        assert_eq!(
+            restored.message(),
+            AppError::unlock_failed(text).message(),
+            "the unlock status message must round-trip unchanged: {restored:?}"
+        );
+    }
+    {
+        let text = "同期データを取り込めません（truncated detail";
+        let small = UnlockError::from(AppError::ApplySyncFailed(text.to_string()));
+        assert_eq!(
+            small,
+            UnlockError::ApplySyncFailed(text.to_string()),
+            "apply-sync prefix-only text must be kept verbatim: {small:?}"
+        );
+        let restored = AppError::from(small);
+        assert_eq!(
+            restored.message(),
+            AppError::apply_sync_failed(text).message(),
+            "the apply-sync status message must round-trip unchanged: {restored:?}"
+        );
+    }
+    {
+        let text = "vault 変換に失敗しました（truncated detail";
         let small = UnlockError::from(AppError::ImportFailed(text.to_string()));
         assert_eq!(
             small,
             UnlockError::ImportFailed(text.to_string()),
-            "prefix-only text must not be rewritten: {small:?}"
+            "import prefix-only text must be kept verbatim: {small:?}"
         );
         let restored = AppError::from(small);
         assert_eq!(
             restored.message(),
             AppError::import_failed(text).message(),
-            "the status bar must not show a doubled prefix: {restored:?}"
+            "the import status message must round-trip unchanged: {restored:?}"
         );
     }
     // A fully decorated legacy message is still reduced to its raw detail.
