@@ -362,6 +362,8 @@ Betterleaks は CI 起動時に pre-commit の `rev` と一致するか検査し
 ## ライセンス
 
 [AGPL-3.0-or-later](LICENSE)（[GNU 公式文書](https://www.gnu.org/licenses/agpl-3.0.txt)）。
+サードパーティ依存のライセンスは
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照。
 
 ## 既知の制約
 
