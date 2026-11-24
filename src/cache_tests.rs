@@ -5152,3 +5152,69 @@ fn hand_built_cache_server_url_credentials_are_plaintext_on_disk() {
     // The plaintext value is what the server-mismatch check later compares.
     assert_eq!(load_detailed(&path).unwrap().server_url, url);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn non_string_profile_id_fails_closed_on_both_validation_paths() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+    let url = "https://vault.example.com";
+
+    // `profile.id` is a string on the sync wire. A hand-built envelope may carry
+    // a number / bool / null there: unlike a missing or empty id, the body is
+    // valid JSON but not a sync response. Both the held-object `validate` path
+    // and the on-disk restore path must fail at `cache.sync()` with CacheParse,
+    // even though server, account and freshness all check out.
+    for raw in [
+        br#"{"profile":{"id":42},"folders":[],"ciphers":[]}"#.as_slice(),
+        br#"{"profile":{"id":null},"folders":[],"ciphers":[]}"#.as_slice(),
+        br#"{"profile":{"id":true},"folders":[],"ciphers":[]}"#.as_slice(),
+        br#"{"Profile":{"Id":42},"Ciphers":[]}"#.as_slice(),
+    ] {
+        let cache = SyncCache {
+            version: SyncCache::VERSION,
+            user_id: "user-1".to_string(),
+            server_url: url.to_string(),
+            body: raw.to_vec(),
+            created_at: None,
+        };
+
+        assert!(
+            matches!(cache.sync(), Err(SyncCacheError::CacheParse(_))),
+            "{raw:?}"
+        );
+        assert!(
+            matches!(
+                validate(&cache, "user-1", url),
+                Err(SyncCacheError::CacheParse(_))
+            ),
+            "{raw:?}"
+        );
+
+        save_default(&cache).unwrap();
+        assert!(
+            matches!(
+                cached_sync_for_detailed(url, "user-1"),
+                Err(SyncCacheError::CacheParse(_))
+            ),
+            "{raw:?}"
+        );
+        assert!(cached_sync_for(url, "user-1").is_none(), "{raw:?}");
+    }
+
+    // Control: the same hand-built envelope with a string id parses, validates
+    // and restores, so the failures above are about the id's JSON type.
+    let ok = SyncCache {
+        version: SyncCache::VERSION,
+        user_id: "user-1".to_string(),
+        server_url: url.to_string(),
+        body: br#"{"profile":{"id":"user-1"},"folders":[],"ciphers":[]}"#.to_vec(),
+        created_at: None,
+    };
+    assert_eq!(ok.sync().unwrap().user_id(), "user-1");
+    assert!(validate(&ok, "user-1", url).is_ok());
+    save_default(&ok).unwrap();
+    assert!(cached_sync_for_detailed(url, "user-1").is_ok());
+}

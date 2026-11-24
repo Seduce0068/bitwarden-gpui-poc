@@ -3709,3 +3709,76 @@ fn root_level_key_collision_is_rejected_without_echoing_the_raw_keys() {
     assert!(clean.get("ciphers").is_some());
     assert!(clean.get("Ciphers").is_none());
 }
+
+#[test]
+fn revision_dates_reject_a_valid_fraction_without_a_terminator() {
+    // `parse_revision` consumes a valid fractional second (vault_sync.rs:553-562)
+    // but then requires `Z`/`z` or a `±HH:MM` offset at the cursor
+    // (vault_sync.rs:564-588). A well-formed fraction that runs into
+    // end-of-input, whitespace or an unrelated byte must not be accepted as a
+    // timestamp on its own.
+    let utc = parse_revision(Some("2023-11-14T22:13:20Z")).unwrap();
+    for value in [
+        "2023-11-14T22:13:20.999",
+        "2023-11-14t22:13:20,1",
+        "2023-11-14T22:13:20.999 ",
+        "2023-11-14T22:13:20.999x",
+        "2023-11-14T22:13:20.999+",
+    ] {
+        assert_eq!(parse_revision(Some(value)), None, "{value}");
+    }
+
+    // Control: the same fractions followed by a terminator parse to the exact
+    // same instant, so the rejections above are about the missing terminator,
+    // not about the fraction's digits.
+    for value in ["2023-11-14T22:13:20.999Z", "2023-11-14t22:13:20,1z"] {
+        assert_eq!(parse_revision(Some(value)), Some(utc), "{value}");
+    }
+}
+
+#[test]
+fn sync_body_size_gate_counts_multibyte_utf8_bytes_not_chars() {
+    use std::error::Error as _;
+
+    // The gate in `parse_sync` compares `body.len()` -- UTF-8 octets -- against
+    // MAX_SYNC_BODY_BYTES (vault_sync.rs:171-181). A body made mostly of 3-byte
+    // `あ` characters has far fewer chars than bytes, so a character-based gate
+    // would wrongly accept a body one byte past the cap.
+    let empty = r#"{"profile":{"id":"user-1","name":""},"folders":[],"ciphers":[]}"#;
+    let repeat = (MAX_SYNC_BODY_BYTES - empty.len()) / 3;
+    let name = "あ".repeat(repeat);
+    let mut at_limit =
+        format!(r#"{{"profile":{{"id":"user-1","name":"{name}"}},"folders":[],"ciphers":[]}}"#);
+    for _ in at_limit.len()..MAX_SYNC_BODY_BYTES {
+        at_limit.push(' ');
+    }
+    assert_eq!(at_limit.len(), MAX_SYNC_BODY_BYTES);
+    assert!(
+        at_limit.chars().count() < MAX_SYNC_BODY_BYTES,
+        "the fixture must really contain multibyte characters"
+    );
+    // The padded body is still valid JSON (trailing spaces are whitespace), and
+    // the exact byte boundary is accepted.
+    let sync = parse_sync(at_limit.as_bytes()).expect("the exact byte boundary must be accepted");
+    assert_eq!(sync.user_id(), "user-1");
+
+    // One more byte crosses the gate even though the character count stays
+    // below the cap; the typed cause reports the octet count.
+    let mut over = at_limit.clone();
+    over.push(' ');
+    assert_eq!(over.len(), MAX_SYNC_BODY_BYTES + 1);
+    let error = parse_sync(over.as_bytes()).unwrap_err();
+    assert!(
+        matches!(error, SyncError::InvalidLoginCause(_, _)),
+        "{error:?}"
+    );
+    assert_eq!(error.message(), "ログイン項目を読み取れませんでした");
+    let source = error
+        .source()
+        .expect("the size gate must keep a typed cause")
+        .to_string();
+    let over_len = (MAX_SYNC_BODY_BYTES + 1).to_string();
+    assert!(source.contains("MAX_SYNC_BODY_BYTES"), "{source}");
+    assert!(source.contains(over_len.as_str()), "{source}");
+    assert!(!source.contains("expected value"), "{source}");
+}

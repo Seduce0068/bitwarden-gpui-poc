@@ -55,7 +55,7 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
    と `Vault::unlock` は現在 `auth` モジュールが担当する
 3. `src/main.rs`: ロック画面から API key とマスターパスワードを入力させ、
    統合層を非同期で呼ぶ。認証情報は `Settings` に保存しない
-4. `cache` モジュール（新設）: 暗号化済み同期 body を保持し、同期 body の
+4. `cache` モジュール（新設）: 暗号文フィールドを含む生の同期 JSON body を保持し、同期 body の
    取得・解析失敗時に auth 層がオフライン復元する。書き出しは未接続で読み取り専用の
    復元に限る（後述「Decision Update (2026-11-18)」を参照）
 
@@ -130,8 +130,8 @@ API key はテスト専用アカウントで使用すること（権限範囲の
 オフラインキャッシュについて: `src/cache.rs` の読み込み・検証を認証フローへ
 接続した。`authenticate_inner` は `sync_body()` の失敗、または取得した body の
 パース失敗時に `cache::cached_sync_for_detailed` でプラットフォームのキャッシュ
-ディレクトリ（旧設定ディレクトリは読み取り専用フォールバック）から暗号化済み
-body を読み出し、サーバー URL と client_id 由来のアカウント id を照合して
+ディレクトリ（旧設定ディレクトリは読み取り専用フォールバック）から暗号文フィールドを含む
+生 JSON body を読み出し、サーバー URL と client_id 由来のアカウント id を照合して
 `SyncData` に戻す。復号には
 生セッションの protected key を使うため、キャッシュは鍵素材を一切提供しない
 （保存前に `profile.key` / `privateKey` を除去済み）。復元したかどうかは

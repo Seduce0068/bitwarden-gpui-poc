@@ -4040,3 +4040,93 @@ fn future_schema_rescues_uppercase_uuid_device_ids() {
     assert!(Settings::load_detailed(&path).unwrap().device_id.is_empty());
     assert!(Settings::load(&path).device_id.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn save_writes_settings_json_itself_with_owner_only_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // A brand-new file created by `save` must be 0600, not merely its parent:
+    // `write_private` persists a 0600 temporary file (private_file.rs:47-56).
+    let fresh = dir.path().join("fresh-settings.json");
+    Settings::default().save(&fresh).unwrap();
+    let fresh_mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+    assert_eq!(fresh_mode, 0o600, "a new settings.json must be owner-only");
+
+    // An existing world-readable file is replaced, and the replacement must
+    // correct the mode instead of inheriting the old one.
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, br#"{"email":"old@example.com"}"#).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o644,
+        "the fixture must really be world-readable before save"
+    );
+
+    Settings {
+        email: "new@example.com".to_string(),
+        ..Default::default()
+    }
+    .save(&path)
+    .unwrap();
+
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "settings.json itself must be 0600 after save");
+    assert_eq!(Settings::load(&path).email, "new@example.com");
+}
+
+#[test]
+fn save_discards_unknown_top_level_and_nested_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // The loader only warns about unknown keys (`load_advisories`); `save`
+    // serializes the typed `Settings` struct, so none of them may be written
+    // back -- at the top level or inside a known nested object.
+    std::fs::write(
+        &path,
+        br#"{
+            "schema_version": 1,
+            "email": "keep@example.com",
+            "unknown_top": "DROP_TOP_VALUE",
+            "password_generator": {"length": 24, "unknown_nested": "DROP_NESTED_VALUE"},
+            "thresholds": {"weak_bits": 70, "mystery_nested": "DROP_MYSTERY_VALUE"}
+        }"#,
+    )
+    .unwrap();
+
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "keep@example.com");
+    assert!(load_advisories(&path)
+        .iter()
+        .any(|notice| notice.contains("unknown_top")));
+    loaded.save(&path).unwrap();
+
+    let raw = std::fs::read_to_string(&path).unwrap();
+    for dropped in [
+        "unknown_top",
+        "DROP_TOP_VALUE",
+        "unknown_nested",
+        "DROP_NESTED_VALUE",
+        "mystery_nested",
+        "DROP_MYSTERY_VALUE",
+    ] {
+        assert!(
+            !raw.contains(dropped),
+            "unknown key survived save: {dropped}: {raw}"
+        );
+    }
+    // The advisory pass is silent after the rewrite, and known values survive.
+    assert!(
+        load_advisories(&path).is_empty(),
+        "{:?}",
+        load_advisories(&path)
+    );
+    let reloaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(reloaded.email, "keep@example.com");
+    assert_eq!(reloaded.password_generator.length, 24);
+    assert_eq!(reloaded.thresholds.weak_bits, 70);
+    assert_eq!(reloaded.schema_version, CURRENT_SCHEMA_VERSION);
+}

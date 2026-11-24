@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第134弾で 6 件すべてを完了）。
+なし（第135弾で 4 件すべてを完了）。
 
 ## 完了
 
+- [x] 第135弾（16 担当・79 回目）の指摘 4 件を完結（2026-11-24）
+  - ADR の暗号化済み body 誤記述を修正。
+  - settings.json 0600、未知キー破棄、非文字列 profile.id、
+    分数秒終端子、マルチバイトサイズ境界をテスト。
+  - 起動エージェント: 17 体（補充探索 16 + 実装 1）。
+  - 検証: fmt / check / test（1218 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第134弾（16 担当・78 回目）の指摘 6 件を完結（2026-11-24）
   - ADR ログ 11-24 節の重複、キャッシュ特殊ファイル／資格情報
     永続化の既知制約を修正・記録。
