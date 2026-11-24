@@ -4709,3 +4709,65 @@ fn passwords_differing_only_by_invisible_characters_share_a_reuse_group() {
         }
     }
 }
+
+#[test]
+fn invisible_characters_do_not_lift_a_numeric_pin_past_the_weak_threshold() {
+    // `estimate_entropy` used to gate the numeric-PIN branch on the raw `chars`
+    // slice (health.rs:435 before the fix). A ZWSP/ZWJ renders nothing, but
+    // counting it as a draw inflated `entropy_bits(10, len)` by ~3.3 bits per
+    // code point. Eleven visible digits plus two invisible characters therefore
+    // scored 43 bits -- above the 40-bit default threshold -- instead of the
+    // 37 bits the same PIN
+    // scores on its own, so the audit stopped reporting `WeakPassword`. The
+    // branch now judges the `visible_lowercase` value already computed above.
+    const PIN: &str = "12345678901";
+    const HIDDEN: &str = "\u{200b}\u{200d}";
+    let laced = format!("{PIN}{HIDDEN}");
+
+    let plain_bits = estimate_entropy(PIN);
+    assert_eq!(plain_bits, entropy_bits(10, PIN.len()).round() as u32);
+    assert_eq!(
+        plain_bits, 37,
+        "eleven digits sit below the 40-bit boundary"
+    );
+    assert!(plain_bits < Thresholds::default().weak_bits, "{plain_bits}");
+
+    // The invisible suffix must not change the score at all, and the laced PIN
+    // must take the same numeric-PIN path as the bare one.
+    let laced_bits = estimate_entropy(&laced);
+    assert_eq!(
+        laced_bits, plain_bits,
+        "invisible padding must not inflate the PIN score"
+    );
+    assert_ne!(laced_bits, 43, "43 bits is the pre-fix, escaped value");
+
+    // The fold is position-independent: Cf at the front, in the middle, and a
+    // Zs (NBSP) plus a BOM at either end all reduce to the same visible PIN.
+    for variant in [
+        format!("{HIDDEN}{PIN}"),
+        "123\u{200b}45678901".to_string(),
+        format!("\u{00a0}{PIN}\u{feff}"),
+    ] {
+        assert_eq!(estimate_entropy(&variant), plain_bits, "{variant:?}");
+    }
+
+    // The audit path turns the corrected estimate back into a WeakPassword
+    // finding. A valid TOTP and https URI keep it the only finding.
+    let report = report_of(vec![login(
+        "1",
+        "HiddenPin",
+        &laced,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits: plain_bits }),
+        "{report:?}"
+    );
+
+    // Control: a genuinely longer visible PIN still scores higher, so the
+    // invariant above is about invisible characters, not a disabled branch.
+    assert!(estimate_entropy("123456789012") > plain_bits);
+}

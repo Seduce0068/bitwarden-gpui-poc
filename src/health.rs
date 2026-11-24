@@ -432,11 +432,21 @@ pub fn estimate_entropy(password: &str) -> u32 {
     if chars.iter().all(|c| *c == chars[0]) || all_same_body {
         return 0;
     }
-    if chars.iter().all(char::is_ascii_digit) {
+    // The numeric-PIN check must judge the *visible* spelling. `chars` is the
+    // raw slice and still holds the Unicode Cf/Cc/Zs characters that
+    // `visible_lowercase` folds away, so a PIN padded with a zero-width space
+    // missed this branch and took the character-pool estimate instead. Each
+    // invisible code point then counted toward `entropy_bits(10, len)`,
+    // inflating the score by ~3.3 bits: eleven digits plus two invisible
+    // characters scored 43 bits and escaped the 40-bit weak threshold, while
+    // the same eleven-digit PIN scores 37. `lower` is already the folded,
+    // lowercased value (health.rs:410), so gate and size this branch on it.
+    if !lower.is_empty() && lower.chars().all(|ch| ch.is_ascii_digit()) {
         // A numeric PIN: length dominates, pool is 10. Apply the same 1000-bit
         // ceiling as the character-pool and passphrase paths below, so an
-        // arbitrarily long digit run cannot report an uncapped score.
-        return entropy_bits(10, chars.len()).round().clamp(0.0, 1000.0) as u32;
+        // arbitrarily long digit run cannot report an uncapped score. The
+        // folded value is ASCII-only here, so byte and character lengths agree.
+        return entropy_bits(10, lower.len()).round().clamp(0.0, 1000.0) as u32;
     }
     // `lower` has already had invisible characters folded away. Widen the
     // dictionary check with decoration removal at this call site only;

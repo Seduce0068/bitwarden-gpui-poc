@@ -204,16 +204,17 @@ pub(super) fn auth_edit_finished_status(dirty: bool) -> String {
 /// With zero matches that generic prompt would point at a row that does not
 /// exist, so the confirmed result count selects a dedicated message instead.
 ///
-/// This form is for callers that only know the result count (for example
-/// `ui::app::panel_transition_status_after_edit`). The count alone cannot tell
-/// whether a confirmed query still exists: once Backspace removes its last
-/// character the re-edit keys are no longer bound, so a count-only caller must
-/// not advertise [`crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT`]. Callers that
-/// own a `VaultViewState` use [`search_finished_status_for_view`], the single
-/// view-derived composer that adds the hint only while the query is non-empty.
+/// This form is for callers that only know the result count. The count alone
+/// cannot tell whether a confirmed query still exists: once Backspace removes
+/// its last character the re-edit keys are no longer bound, so a count-only
+/// caller must not advertise [`crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT`].
+/// Callers that own a `VaultViewState` use [`search_finished_status_for_view`],
+/// the single view-derived composer that adds the hint only while the query is
+/// non-empty. `ui::app::panel_transition_status_after_edit` now takes that
+/// view-derived path, so this wrapper is only a pinned count-only entry point.
 ///
-/// Kept as the count-only entry point for cross-module callers; the allowance
-/// covers a future caller switching to the view-derived form entirely.
+/// Kept as the count-only entry point so its contract stays pinned by tests;
+/// the allowance covers that no production caller now needs it.
 #[allow(dead_code)]
 pub(super) fn search_finished_status(result_count: usize, dirty: bool) -> String {
     search_finished_status_with_query(false, result_count, dirty)
@@ -1758,10 +1759,11 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn count_only_search_status_never_claims_a_reedit_query() {
-        // `panel_transition_status_after_edit` only knows the visible count,
-        // so it calls this count-only wrapper. It must not hard-code "a query
-        // exists": an emptied query no longer binds Backspace/typed text to
-        // re-editing, and the old wrapper kept advertising those keys.
+        // A count-only caller cannot tell whether a confirmed query still
+        // exists, so this wrapper must not hard-code "a query exists": an
+        // emptied query no longer binds Backspace/typed text to re-editing.
+        // `panel_transition_status_after_edit` now uses the view-derived
+        // composer; this pins the remaining count-only contract.
         let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
         for count in [0, 2] {
             for dirty in [false, true] {

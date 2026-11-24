@@ -135,6 +135,15 @@ pub(super) enum ExitedEditMode {
 /// audit panel, settings feedback on a settings-owning panel). For that audit
 /// case the report and the still-highlighted row are passed in so the status
 /// describes the actual selection instead of always claiming none.
+///
+/// A search exiting onto the vault panel is derived from the live
+/// [`VaultViewState`] via [`crate::ui::input::search_finished_status_for_view`]
+/// instead of a bare result count. `finish_search` keeps the confirmed query,
+/// so the re-edit hint must follow that query: it is advertised while the query
+/// still has visible content and dropped once Backspace empties it. The old
+/// count-only call could not tell the two apart and silently dropped the
+/// guidance on every panel transition.
+///
 /// [`ExitedEditMode::None`] means the caller must keep its current status (a
 /// login notice, an audit-focus message, ...). Kept pure so the contract can
 /// be tested without a GPUI window (this crate does not enable gpui's
@@ -142,7 +151,7 @@ pub(super) enum ExitedEditMode {
 pub(super) fn panel_transition_status_after_edit(
     panel: Panel,
     exited: ExitedEditMode,
-    visible_count: usize,
+    view: &VaultViewState,
     dirty: bool,
     audit_report: Option<&crate::health::Report>,
     audit_selection: Option<usize>,
@@ -158,7 +167,7 @@ pub(super) fn panel_transition_status_after_edit(
             Panel::Settings | Panel::Generator => {
                 crate::ui::input::settings_edit_finished_status(dirty)
             }
-            Panel::Vault => crate::ui::input::search_finished_status(visible_count, dirty),
+            Panel::Vault => crate::ui::input::search_finished_status_for_view(view, dirty),
         }),
     }
 }
@@ -1140,7 +1149,7 @@ impl BitwardenApp {
         } else if let Some(status) = panel_transition_status_after_edit(
             self.panel,
             exited_edit_mode,
-            self.view.visible_items().len(),
+            &self.view,
             self.settings_dirty,
             self.view.audit_report.as_ref(),
             self.audit_row_selection,
@@ -1486,7 +1495,25 @@ mod tests {
     // these tests name the built-in attribute by its absolute path.
     use super::*;
     use crate::health::Report;
+    use crate::model::VaultItem;
     use crate::ui::clipboard::ClipboardState;
+
+    /// Build a vault view with `count` visible items and a caller-supplied
+    /// query, so the transition helper can be exercised with a real view.
+    fn view_with_query(count: usize, query: &str) -> VaultViewState {
+        let mut view = VaultViewState::new();
+        for index in 0..count {
+            view.vault.items.push(VaultItem::new(
+                index.to_string(),
+                format!("item-{index}"),
+                ItemData::SecureNote {
+                    text: String::new().into(),
+                },
+            ));
+        }
+        view.query = query.to_string();
+        view
+    }
 
     #[::core::prelude::v1::test]
     fn quit_gate_warns_only_when_settings_are_dirty() {
@@ -2623,7 +2650,7 @@ mod tests {
                 panel_transition_status_after_edit(
                     panel,
                     ExitedEditMode::None,
-                    3,
+                    &view_with_query(3, ""),
                     false,
                     None,
                     None,
@@ -2639,7 +2666,7 @@ mod tests {
             let vault = panel_transition_status_after_edit(
                 Panel::Vault,
                 ExitedEditMode::Search,
-                3,
+                &view_with_query(3, ""),
                 dirty,
                 None,
                 None,
@@ -2651,7 +2678,7 @@ mod tests {
             let audit = panel_transition_status_after_edit(
                 Panel::Audit,
                 ExitedEditMode::Search,
-                3,
+                &view_with_query(3, ""),
                 dirty,
                 None,
                 None,
@@ -2665,7 +2692,7 @@ mod tests {
             let empty = panel_transition_status_after_edit(
                 Panel::Vault,
                 ExitedEditMode::Search,
-                0,
+                &view_with_query(0, ""),
                 dirty,
                 None,
                 None,
@@ -2680,7 +2707,7 @@ mod tests {
                 let status = panel_transition_status_after_edit(
                     panel,
                     ExitedEditMode::Search,
-                    3,
+                    &view_with_query(3, ""),
                     dirty,
                     None,
                     None,
@@ -2704,7 +2731,7 @@ mod tests {
                 let status = panel_transition_status_after_edit(
                     panel,
                     ExitedEditMode::SettingsField,
-                    3,
+                    &view_with_query(3, ""),
                     dirty,
                     None,
                     None,
@@ -2722,7 +2749,7 @@ mod tests {
             let auth = panel_transition_status_after_edit(
                 Panel::Vault,
                 ExitedEditMode::AuthField,
-                3,
+                &view_with_query(3, ""),
                 dirty,
                 None,
                 None,
@@ -2741,7 +2768,7 @@ mod tests {
         let search = panel_transition_status_after_edit(
             Panel::Vault,
             ExitedEditMode::Search,
-            3,
+            &view_with_query(3, ""),
             false,
             None,
             None,
@@ -2750,7 +2777,7 @@ mod tests {
         let settings = panel_transition_status_after_edit(
             Panel::Vault,
             ExitedEditMode::SettingsField,
-            3,
+            &view_with_query(3, ""),
             false,
             None,
             None,
@@ -2759,7 +2786,7 @@ mod tests {
         let auth = panel_transition_status_after_edit(
             Panel::Vault,
             ExitedEditMode::AuthField,
-            3,
+            &view_with_query(3, ""),
             false,
             None,
             None,
@@ -2784,13 +2811,110 @@ mod tests {
             ExitedEditMode::SettingsField,
             ExitedEditMode::AuthField,
         ] {
-            let clean =
-                panel_transition_status_after_edit(Panel::Vault, mode, 3, false, None, None)
-                    .unwrap();
-            let dirty = panel_transition_status_after_edit(Panel::Vault, mode, 3, true, None, None)
-                .unwrap();
+            let clean = panel_transition_status_after_edit(
+                Panel::Vault,
+                mode,
+                &view_with_query(3, ""),
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+            let dirty = panel_transition_status_after_edit(
+                Panel::Vault,
+                mode,
+                &view_with_query(3, ""),
+                true,
+                None,
+                None,
+            )
+            .unwrap();
             assert_eq!(dirty, status_with_unsaved(&clean, true), "{mode:?}");
             assert!(dirty.contains("[未保存の設定変更があります]"), "{mode:?}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_transition_keeps_the_search_reedit_guidance_for_a_live_query() {
+        // R2-UI-152: leaving a confirmed search by switching panels used the
+        // count-only composer, which never advertises the re-edit keys even
+        // though `finish_search` keeps the query and the vault panel rebinds
+        // Backspace/typed text to it. The view-derived composer must restore
+        // that guidance for every panel transition that lands on the vault
+        // panel, and drop it once the query is gone.
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+        assert!(hint.contains("Backspace"), "precondition: {hint}");
+
+        for dirty in [false, true] {
+            let mut view = view_with_query(3, "item-1");
+            assert_eq!(view.visible_items().len(), 1, "precondition");
+
+            let status = panel_transition_status_after_edit(
+                Panel::Vault,
+                ExitedEditMode::Search,
+                &view,
+                dirty,
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                status,
+                crate::ui::input::search_finished_status_for_view(&view, dirty)
+            );
+            assert!(status.contains(hint), "dirty {dirty}: {status}");
+            assert!(
+                status.contains(crate::ui::logic::no_selection_status()),
+                "{status}"
+            );
+            assert!(!status.contains("入力中"), "{status}");
+            assert_eq!(
+                status.contains("[未保存の設定変更があります]"),
+                dirty,
+                "{status}"
+            );
+
+            // The old count-only path proves the bug: same count, no guidance.
+            let count_only = crate::ui::input::search_finished_status(1, dirty);
+            assert!(!count_only.contains(hint), "{count_only}");
+            assert_ne!(status, count_only);
+
+            // Emptying the query (Backspace to the last character) unbinds the
+            // re-edit keys, so the status must stop advertising them.
+            view.query.clear();
+            let emptied = panel_transition_status_after_edit(
+                Panel::Vault,
+                ExitedEditMode::Search,
+                &view,
+                dirty,
+                None,
+                None,
+            )
+            .unwrap();
+            assert!(!emptied.contains(hint), "dirty {dirty}: {emptied}");
+            assert_eq!(
+                emptied,
+                crate::ui::input::search_finished_status_for_view(&view, dirty)
+            );
+            assert_eq!(
+                emptied.contains("[未保存の設定変更があります]"),
+                dirty,
+                "{emptied}"
+            );
+
+            // An invisible-only query renders as "(なし)" and must not claim
+            // the re-edit keys either (shared `is_visually_empty` rule).
+            view.query = "\u{200b}".to_string();
+            let invisible = panel_transition_status_after_edit(
+                Panel::Vault,
+                ExitedEditMode::Search,
+                &view,
+                dirty,
+                None,
+                None,
+            )
+            .unwrap();
+            assert!(!invisible.contains(hint), "dirty {dirty}: {invisible}");
         }
     }
 
@@ -2907,7 +3031,7 @@ mod tests {
         let selected = panel_transition_status_after_edit(
             Panel::Audit,
             ExitedEditMode::Search,
-            3,
+            &view_with_query(3, ""),
             false,
             Some(&report),
             Some(0),
@@ -2924,7 +3048,7 @@ mod tests {
         let none = panel_transition_status_after_edit(
             Panel::Audit,
             ExitedEditMode::Search,
-            3,
+            &view_with_query(3, ""),
             false,
             Some(&report),
             None,

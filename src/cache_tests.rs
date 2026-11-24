@@ -5739,3 +5739,86 @@ fn validate_prioritizes_server_then_account_then_body_parse() {
     // Control: the unmodified cache still validates.
     assert_eq!(validate(&original, "user-1", SERVER), Ok(()));
 }
+
+#[test]
+fn every_nested_authority_is_masked_by_the_pair_prepass() {
+    // `mask_nested_userinfo_in_pairs` (cache.rs:594-672) loops over every '@'
+    // in the pair string; it must not stop after rewriting the first nested
+    // authority. Each password below contains a pair separator, so both are
+    // rewrites this pre-pass owns rather than ordinary `key=value` pairs.
+    let pairs =
+        "next=user:P&SS@cb1.example.com/done&also=user:Q;TT@cb2.example.com/finish&state=ok";
+    // The second rewrite starts at the '/' after the first host, so the text
+    // `done&also=` is part of the second authority candidate and is replaced
+    // together with its password.
+    let expected = "next=[redacted]@cb1.example.com/[redacted]@cb2.example.com/finish&state=ok";
+    assert_eq!(super::mask_nested_userinfo_in_pairs(pairs), expected);
+
+    // The same loop runs inside `mask_url_secrets`: neither secret reaches the
+    // rendered diagnostic URL, and the harmless `state` pair survives.
+    let url = format!("https://vault.example.com/login?{pairs}");
+    let masked = super::mask_url_secrets(&url);
+    assert!(!masked.contains("P&SS"), "{masked}");
+    assert!(!masked.contains("Q;TT"), "{masked}");
+    assert_eq!(
+        masked,
+        format!("https://vault.example.com/login?{expected}")
+    );
+    assert!(masked.contains("state=ok"), "{masked}");
+
+    // Debug uses the same masker; the stored URL stays byte-for-byte intact.
+    let cache = SyncCache::from_body(body(), &url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("P&SS"), "{rendered}");
+    assert!(!rendered.contains("Q;TT"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}
+
+#[test]
+fn hash_continues_nested_password_scans_every_query_pair() {
+    let tail = "frag@cb.example.com/done";
+    // The `user:secret` marker sits in a later pair. The `any()` scan over
+    // `&`/`;`-separated pairs (cache.rs:822-830) must not stop at the first
+    // pair, or the literal '#' would be mistaken for a real fragment delimiter.
+    for head in [
+        "https://vault.example.com/login?state=ok&nonce=abc&next=user:NESTED_SECRET&flag=1",
+        "https://vault.example.com/login?state=ok;nonce=abc;next=user:NESTED_SECRET",
+        "https://vault.example.com/login?state=ok;nonce=abc&next=user:NESTED_SECRET&flag=1",
+    ] {
+        assert!(
+            super::hash_continues_nested_password(head, tail),
+            "later query pair was not scanned: {head}"
+        );
+    }
+
+    // A decoy pair with an empty secret is not a marker, but must not hide a
+    // valid marker that follows it.
+    let decoy = "https://vault.example.com/login?note=user:&next=user:NESTED_SECRET";
+    assert!(super::hash_continues_nested_password(decoy, tail));
+
+    // Control: when no pair carries a usable marker, an '@' in the tail stays
+    // a genuine fragment and the delimiter is left alone.
+    for clean in [
+        "https://vault.example.com/login?state=ok&nonce=abc&next=done",
+        "https://vault.example.com/login?note=user:&state=ok",
+    ] {
+        assert!(
+            !super::hash_continues_nested_password(clean, tail),
+            "no marker in {clean}"
+        );
+    }
+
+    // End to end: the marker is the *second* query pair, so the re-encode and
+    // the recursive masker must see it through the pair scan. The whole tail
+    // behind the first pair's '=' is redacted, but no secret text survives.
+    let url = "https://vault.example.com/login?state=ok&next=user:p#NESTED_HASH_SECRET@cb.example.com/done";
+    assert_eq!(
+        super::mask_url_secrets(url),
+        "https://vault.example.com/login?state=[redacted]@cb.example.com/done"
+    );
+    let cache = SyncCache::from_body(body(), url).unwrap();
+    let rendered = format!("{cache:?}");
+    assert!(!rendered.contains("NESTED_HASH_SECRET"), "{rendered}");
+    assert!(!rendered.contains("user:p"), "{rendered}");
+    assert_eq!(cache.server_url, url);
+}

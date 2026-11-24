@@ -5187,3 +5187,152 @@ async fn public_unlock_and_import_extracts_a_live_login_session() {
         "the live session's KDF must reach openwarden unchanged"
     );
 }
+
+// --- R2-CORE-152: loopback coverage for the two pre-sync failure branches ---
+
+#[tokio::test]
+async fn prelogin_failure_reaches_the_auth_error_with_the_server_detail() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // A loopback server rejects /identity/accounts/prelogin with an OAuth
+    // error body. `authenticate` -> `authenticate_inner` (auth.rs:1162-1165)
+    // must map it to PreloginDetail and stop before the token exchange: a
+    // third request would find no listener, so the single-request server also
+    // pins that the failure really short-circuits the login sequence.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let base = format!("http://{}", listener.local_addr().expect("a local address"));
+    let error_body = r#"{"error":"server_error"}"#;
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("one prelogin request");
+        let mut request = [0u8; 4096];
+        let n = stream
+            .read(&mut request)
+            .expect("read the prelogin request");
+        assert!(n > 0, "the client closed before sending a request");
+        let head = String::from_utf8_lossy(&request[..n]);
+        let first = head.lines().next().unwrap_or_default().to_owned();
+        let payload = format!(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            error_body.len(), error_body
+        );
+        stream
+            .write_all(payload.as_bytes())
+            .expect("write the error response");
+        first
+    });
+
+    let mut auth_config = config();
+    auth_config.server_url = base;
+    let error = authenticate(&auth_config, "r2-core-152-prelogin")
+        .await
+        .err()
+        .expect("prelogin must fail");
+
+    let first = server.join().expect("the loopback server must finish");
+    assert!(
+        first.starts_with("POST /identity/accounts/prelogin"),
+        "{first}"
+    );
+    assert!(
+        matches!(
+            &error,
+            AuthError::PreloginDetail(detail)
+                if detail.contains("prelogin returned HTTP 500")
+                    && detail.contains("server_error")
+        ),
+        "the real openwarden reason must survive: {error:?}"
+    );
+    assert_eq!(
+        error,
+        AuthError::Prelogin,
+        "cause is diagnostic, not identity"
+    );
+    assert_eq!(error.message(), "サーバー情報の取得に失敗しました");
+    assert_eq!(
+        error.status_message(),
+        "サーバー情報の取得に失敗しました（prelogin returned HTTP 500 (server_error)）"
+    );
+}
+
+#[tokio::test]
+async fn token_exchange_failure_reaches_the_auth_error_with_the_server_detail() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // Prelogin succeeds, then /identity/connect/token returns invalid_client.
+    // `authenticate_inner` (auth.rs:1167-1170) must map that to LoginDetail
+    // without attempting /api/sync, so exactly two requests reach the server.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let base = format!("http://{}", listener.local_addr().expect("a local address"));
+    let prelogin_body = r#"{"kdf":0,"kdfIterations":100000}"#;
+    let token_body = r#"{"error":"invalid_client"}"#;
+    let server = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        // `Connection: close` gives each request its own connection, so the
+        // two accepts arrive in prelogin/then-token order.
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().expect("a loopback request");
+            let mut request = [0u8; 4096];
+            let n = stream.read(&mut request).expect("read the request");
+            assert!(n > 0, "the client closed before sending a request");
+            let head = String::from_utf8_lossy(&request[..n]);
+            let first = head.lines().next().unwrap_or_default().to_owned();
+            let payload = if first.starts_with("POST /identity/accounts/prelogin") {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    prelogin_body.len(), prelogin_body
+                )
+            } else if first.starts_with("POST /identity/connect/token") {
+                format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    token_body.len(), token_body
+                )
+            } else {
+                panic!("unexpected loopback request: {first}");
+            };
+            stream
+                .write_all(payload.as_bytes())
+                .expect("write the loopback response");
+            seen.push(first);
+        }
+        seen
+    });
+
+    let mut auth_config = config();
+    auth_config.server_url = base;
+    let error = authenticate(&auth_config, "r2-core-152-token")
+        .await
+        .err()
+        .expect("the token exchange must fail");
+
+    let seen = server.join().expect("the loopback server must finish");
+    assert_eq!(
+        seen.len(),
+        2,
+        "no /api/sync may follow a failed token exchange"
+    );
+    assert!(
+        seen[0].starts_with("POST /identity/accounts/prelogin"),
+        "{seen:?}"
+    );
+    assert!(
+        seen[1].starts_with("POST /identity/connect/token"),
+        "{seen:?}"
+    );
+    assert!(
+        matches!(
+            &error,
+            AuthError::LoginDetail(detail)
+                if detail.contains("token returned HTTP 400")
+                    && detail.contains("invalid_client")
+        ),
+        "the real openwarden reason must survive: {error:?}"
+    );
+    assert_eq!(error, AuthError::Login, "cause is diagnostic, not identity");
+    assert_eq!(error.message(), "ログインに失敗しました");
+    assert_eq!(
+        error.status_message(),
+        "ログインに失敗しました（token returned HTTP 400 (invalid_client)）"
+    );
+}

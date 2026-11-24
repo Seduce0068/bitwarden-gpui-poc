@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第151弾で 2 件すべてを完了）。
+なし（第152弾で 4 件すべてを完了）。
 
 ## 完了
 
+- [x] 第152弾（16 担当・96 回目）の指摘 4 件を完結（2026-11-24）
+  - パネル遷移時の再編集案内、不可視文字混入 PIN 判定を修正。
+  - prelogin/token 失敗、nested authority 反復、
+    複数クエリペア走査をテスト。
+  - 起動エージェント: 18 体（補充探索 16 + 実装 2）。
+  - 検証: fmt / check / test（1300 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第151弾（16 担当・95 回目）の指摘 2 件を完結（2026-11-24）
   - from_cache 形骸化テストを実 production 経路（sync 503 →
     キャッシュ復元）へ置換。
