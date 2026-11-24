@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第148〜150弾 / 2026-11-24）
+
+- mark-only UI 空判定、separator 上限、共有 ENV_LOCK、
+  mark-only Unnamed、再利用 visible_key を修正
+- フォールバック破損伝播、Strength 小数丸め、
+  live Session 抽出をテスト
+- esc/return エイリアス正規化、separator 案内、
+  matches_page 折り目ソートを修正
+
 ### 全体改善（第147弾 / 2026-11-24）
 
 - Unicode 結合文字混入パスワードの characterization を記録

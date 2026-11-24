@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第150弾で 3 件すべてを完了）。
+なし（第151弾で 2 件すべてを完了）。
 
 ## 完了
 
+- [x] 第151弾（16 担当・95 回目）の指摘 2 件を完結（2026-11-24）
+  - from_cache 形骸化テストを実 production 経路（sync 503 →
+    キャッシュ復元）へ置換。
+  - CHANGELOG に第148〜150弾を反映。
+  - 起動エージェント: 17 体（補充探索 16 + 実装 1）。
+  - 検証: fmt / check / test（1294 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第150弾（16 担当・94 回目）の指摘 3 件を完結（2026-11-24）
   - esc/return エイリアス正規化、separator 案内の不可視判定、
     matches_page 折り目タイブレーク、README 上限を修正。

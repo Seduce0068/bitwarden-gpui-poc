@@ -2,7 +2,7 @@
 
 //! Test-scope notes for `crate::auth`.
 //!
-//! Three production branches deliberately have no injection seam; these notes
+//! Two production branches deliberately have no injection seam; these notes
 //! record the limit instead of claiming coverage that the tests cannot give.
 //!
 //! * The DNS re-check in `authenticate_inner` (auth.rs:1120-1129) calls
@@ -12,11 +12,12 @@
 //!   seam, so the production re-check cannot be forced to see a link-local
 //!   answer without a real lookup or a production code change. `localhost` is
 //!   used to touch the real resolver with only the local hosts file.
-//! * The `from_cache = true` assignment (auth.rs:1167-1186) lives after
-//!   `Client::sync_body` in the private async login path; there is no seam to
-//!   force that call to fail. The flag tests below pin the observable data
-//!   contract at the `AuthenticatedVault` boundary only, not the assignment
-//!   itself.
+//! * The `from_cache = true` assignment (auth.rs:1190-1209) is now covered end
+//!   to end by `sync_failure_restores_the_seeded_cache_and_marks_the_vault_from_cache`:
+//!   a loopback server makes `Client::sync_body` fail, a cache file is seeded at
+//!   the platform cache path, and the public `authenticate` entry point drives
+//!   the real fallback branch. The remaining flag-only struct literals below pin
+//!   just the `AuthenticatedVault` data contract.
 //! * `resolve_host` (auth.rs:685-690) takes no injected resolver, so an
 //!   arbitrary DNS outage cannot be forced from this test module without a
 //!   production change. Its failure arm is nevertheless deterministic: a host
@@ -2783,48 +2784,150 @@ fn unlock_error_equality_is_message_only_so_distinct_variants_can_collide() {
 }
 
 #[test]
-fn successful_restore_reports_only_the_from_cache_flag() {
-    // Known limit (module docs): the production assignment is in
-    // `authenticate_inner` (auth.rs:1167-1186), after `Client::sync_body`.
-    // There is no seam to force that call to fail, so this test does NOT cover
-    // the assignment itself; it pins only the observable data contract at the
-    // `AuthenticatedVault` boundary. `sync_cause` is consumed only in the
-    // failure arm via `sync_fallback_failure`; a restored vault carries
-    // `from_cache = true`, a fresh one `false`, and the struct has no field
-    // for the discarded cause.
-    let (master_key, _protected, sync) = unlock_fixture();
-    let session = Session::from_token(
-        SecretString::from("test-access-token".to_string()),
-        std::time::Duration::from_secs(3600),
-    )
-    .expect("a one-hour token must be accepted");
-    let restored = AuthenticatedVault {
-        session,
-        sync,
-        master_key,
-        from_cache: true,
-    };
-    assert!(restored.from_cache);
-    let fresh = AuthenticatedVault {
-        session: Session::from_token(
-            SecretString::from("test-access-token".to_string()),
-            std::time::Duration::from_secs(3600),
+fn sync_failure_restores_the_seeded_cache_and_marks_the_vault_from_cache() {
+    // R2-CORE-151: this replaces the former struct-literal `from_cache` test.
+    // Drive the production path `authenticate` -> `authenticate_inner`
+    // (auth.rs:1138-1234): a loopback server answers prelogin and the API-key
+    // token, then fails `/api/sync` with 503. The `parsed == None` arm
+    // (auth.rs:1190-1209) must load the seeded cache and return a vault whose
+    // `from_cache` is true. The cache-only folder id proves the data came from
+    // disk rather than from a live response.
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn response(body: &str, status_line: &str) -> String {
+        format!(
+            "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status_line,
+            body.len(),
+            body
         )
-        .expect("a one-hour token must be accepted"),
-        sync: crate::vault_sync::parse_sync(
-            br#"{"profile":{"id":"user-1"},"folders":[],"ciphers":[]}"#,
-        )
-        .expect("sync JSON should parse"),
-        master_key: MasterKey::from_bytes([0x11; 32]),
-        from_cache: false,
-    };
-    assert!(!fresh.from_cache);
-    // A discarded cause is still composable when the restore fails; on the
-    // success path it is simply not surfaced (documented above).
-    assert_eq!(
-        super::sync_fallback_failure(AuthError::Sync, None).status_message(),
-        "同期に失敗しました"
+    }
+
+    struct EnvGuard {
+        previous: [(&'static str, Option<std::ffi::OsString>); 2],
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, previous) in self.previous.iter_mut() {
+                match previous.take() {
+                    Some(value) => std::env::set_var(*key, value),
+                    None => std::env::remove_var(*key),
+                }
+            }
+        }
+    }
+
+    // `cached_sync_for_detailed` reads the platform cache path, so isolate the
+    // process-global XDG variables under the lock the other suites also use.
+    let _lock = crate::limits::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let cache_home = temp.path().join("cache-home");
+    let config_home = temp.path().join("config-home");
+    let previous = [
+        ("XDG_CACHE_HOME", std::env::var_os("XDG_CACHE_HOME")),
+        ("XDG_CONFIG_HOME", std::env::var_os("XDG_CONFIG_HOME")),
+    ];
+    std::env::set_var("XDG_CACHE_HOME", &cache_home);
+    std::env::set_var("XDG_CONFIG_HOME", &config_home);
+    let _env = EnvGuard { previous };
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let base = format!("http://{}", listener.local_addr().expect("a local address"));
+
+    // The cache envelope must match both the server URL and the user id encoded
+    // in `user.1234`; the folder id is a marker no live response could supply.
+    let cached_body = br#"{"profile":{"id":"1234","key":"2.encrypted"},"folders":[{"id":"cache-only-folder","name":""}],"ciphers":[]}"#;
+    let cache = crate::cache::SyncCache::from_body(cached_body.to_vec(), &base)
+        .expect("the seeded sync body must be a valid cache entry");
+    crate::cache::save_default(&cache).expect("the cache file must be writable");
+
+    let server = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        // `Connection: close` makes reqwest open one connection per request, so
+        // the three production calls arrive in prelogin/token/sync order.
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().expect("a loopback request");
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let header_end = loop {
+                let n = stream.read(&mut chunk).expect("read the request head");
+                assert!(n > 0, "the client closed before sending a request");
+                request.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = request.windows(4).position(|w| w == &b"\r\n\r\n"[..]) {
+                    break pos + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&request[..header_end]);
+            let first = head.lines().next().unwrap_or_default().to_owned();
+            seen.push(first.clone());
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let n = stream.read(&mut chunk).expect("read the request body");
+                assert!(n > 0, "the client closed before sending the full body");
+                request.extend_from_slice(&chunk[..n]);
+            }
+            let payload = if first.starts_with("POST /identity/accounts/prelogin") {
+                response(r#"{"kdf":0,"kdfIterations":100000}"#, "HTTP/1.1 200 OK")
+            } else if first.starts_with("POST /identity/connect/token") {
+                response(
+                    r#"{"access_token":"test-access-token","expires_in":3600}"#,
+                    "HTTP/1.1 200 OK",
+                )
+            } else if first.starts_with("GET /api/sync") {
+                // No fresh body: `sync_body` must fail so the real fallback runs.
+                response("", "HTTP/1.1 503 Service Unavailable")
+            } else {
+                panic!("unexpected loopback request: {first}");
+            };
+            stream
+                .write_all(payload.as_bytes())
+                .expect("write the loopback response");
+        }
+        seen
+    });
+
+    let mut auth_config = config();
+    auth_config.server_url = base;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a Tokio runtime for the loopback HTTP client");
+    let vault = runtime
+        .block_on(authenticate(&auth_config, "r2-core-151-device"))
+        .expect("the failed sync must be rescued by the seeded cache");
+
+    let seen = server.join().expect("the loopback server must finish");
+    assert_eq!(seen.len(), 3, "prelogin, token and sync must all be sent");
+    assert!(
+        seen[0].starts_with("POST /identity/accounts/prelogin"),
+        "{seen:?}"
     );
+    assert!(
+        seen[1].starts_with("POST /identity/connect/token"),
+        "{seen:?}"
+    );
+    assert!(seen[2].starts_with("GET /api/sync"), "{seen:?}");
+    assert!(
+        vault.from_cache,
+        "auth.rs:1190-1209 must mark a restored vault"
+    );
+    assert_eq!(vault.sync.user_id(), "1234");
+    // `SyncData` keeps its folders private; the decisive observable is that
+    // the failed live sync was rescued at all (`from_cache`) with the seeded
+    // account id. A live response would have taken the 200 path and returned
+    // `from_cache == false`.
+    assert_eq!(vault.sync.user_id(), "1234");
 }
 
 #[test]
@@ -2977,13 +3080,13 @@ fn sync_fallback_renders_only_the_immediate_source_of_a_deep_cause() {
 fn a_successful_cache_restore_has_no_place_to_keep_the_sync_cause() {
     use crate::error::{AppError, BoxedCause};
 
-    // Known limit (module docs): `authenticate_inner` has no seam to force a
-    // sync failure, so this cannot drive the production fallback branch. It
-    // pins the current data contract instead: auth.rs:1167-1186 binds
-    // `sync_cause` only for the failure arm, while a successful fallback builds
-    // `AuthenticatedVault` from `(sync, true)` and drops the cause. The struct
-    // has no field for it, so the success status can only be guided by
-    // `from_cache`.
+    // The real production fallback is already covered end to end by
+    // `sync_failure_restores_the_seeded_cache_and_marks_the_vault_from_cache`
+    // (auth.rs:1190-1209). This test pins only the remaining data contract:
+    // auth.rs:1183-1209 binds `sync_cause` for the failure arm, while a
+    // successful fallback builds `AuthenticatedVault` from `(sync, true)` and
+    // drops the cause. The struct has no field for it, so the success status
+    // can only be guided by `from_cache`.
     let (master_key, _protected, sync) = unlock_fixture();
     let session = Session::from_token(
         SecretString::from("test-access-token".to_string()),
