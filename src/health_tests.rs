@@ -4479,3 +4479,154 @@ fn stripping_exact_common_decoration_does_not_widen_the_prefix_cap() {
         assert!(estimate_entropy(long) >= weak_bits, "{long}");
     }
 }
+
+// --- R2-CORE-147: Unicode combining marks (Mn/Mc/Me) in passwords ---
+//
+// Test basis: `has_wide` (health.rs:370-375) excludes only non-ASCII Cc, Cf and
+// Zs, and `visible_chars` (health.rs:604-610) folds the same three classes. A
+// combining mark is in none of them, so it is counted into WIDE_POOL and kept
+// by the normalization used by the pattern checks. These tests characterize
+// that behavior (including its overestimate) rather than asserting it is
+// desirable; a future change to score marks as decoration must update them.
+
+/// Seven distinct marks spanning Mn, Mc and Me. Distinct code points matter:
+/// one repeated mark takes the 0-bit all-same branch and hides the pool.
+const COMBINING_MARKS: &str = "\u{0300}\u{0301}\u{0302}\u{093e}\u{093f}\u{20dd}\u{20de}";
+
+#[test]
+fn combining_marks_survive_visible_chars_but_invisible_characters_do_not() {
+    // Test oracle: the Cc/Cf/Zs filter is the only thing `visible_chars` does,
+    // so marks must come through unchanged while the invisible classes do not.
+    const MN: &str = "\u{0301}"; // COMBINING ACUTE ACCENT (Mn)
+    const MC: &str = "\u{093e}"; // DEVANAGARI VOWEL SIGN AA (Mc)
+    const ME: &str = "\u{20dd}"; // COMBINING ENCLOSING CIRCLE (Me)
+    for mark in [MN, MC, ME] {
+        let ch = mark.chars().next().expect("one mark per fixture");
+        assert!(
+            unicode_normalization::char::is_combining_mark(ch),
+            "{mark:?}"
+        );
+        assert!(!ch.is_control() && !ch.is_whitespace(), "{mark:?}");
+        assert!(!crate::limits::is_format_character(ch), "{mark:?}");
+        assert_eq!(super::visible_chars(mark), mark, "{mark:?}");
+        assert_eq!(super::visible_lowercase(mark), mark, "{mark:?}");
+    }
+    assert_eq!(super::visible_chars(COMBINING_MARKS), COMBINING_MARKS);
+
+    // The invisible characters the filter was built for are still removed,
+    // including when they sit between marks.
+    assert_eq!(super::visible_chars("\u{200b}\u{9f}\u{00a0}"), "");
+    let mixed = format!("\u{200b}{MN}\u{9f}{MC}\u{00a0}{ME}");
+    assert_eq!(super::visible_chars(&mixed), format!("{MN}{MC}{ME}"));
+
+    // A mark-only value is not "visually empty" for the reuse map, even though
+    // search/duplicate detection say it has no visible identity. Both halves
+    // of that distinction matter for the audit assertions below. Use the Mn
+    // subset for the identity rule so the premise needs no NFKD decomposition
+    // of the Mc/Me fixtures.
+    assert!(!crate::model::is_visually_empty(COMBINING_MARKS));
+    assert!(crate::model::has_no_visible_identity(
+        "\u{0300}\u{0301}\u{0302}"
+    ));
+}
+
+#[test]
+fn combining_marks_select_the_wide_pool_in_the_entropy_estimate() {
+    // Coverage item: `has_wide` at health.rs:370-375. A distinct Mn/Mc/Me run
+    // selects WIDE_POOL (100) even though the value has no standalone glyph.
+    assert_eq!(COMBINING_MARKS.chars().count(), 7);
+    assert!(COMBINING_MARKS
+        .chars()
+        .all(unicode_normalization::char::is_combining_mark));
+    assert_eq!(
+        estimate_entropy(COMBINING_MARKS),
+        entropy_bits(100, 7).round() as u32,
+        "a mark-only run must use the wide pool"
+    );
+
+    // A single mark beside the four ASCII classes adds WIDE_POOL on top of
+    // them; a Cf at the same position is filtered and adds nothing, even though
+    // both strings have the same five-character length. This isolates the pool
+    // decision from the length term.
+    const ASCII: &str = "aB3!";
+    let ascii_pool = LOWERCASE.len() + UPPERCASE.len() + DIGITS.len() + SYMBOLS.len();
+    let with_mark = format!("{ASCII}\u{0301}");
+    let with_cf = format!("{ASCII}\u{200b}");
+    assert_eq!(with_mark.chars().count(), 5);
+    assert_eq!(with_cf.chars().count(), 5);
+    assert_eq!(
+        estimate_entropy(&with_mark),
+        entropy_bits(ascii_pool + 100, 5).round() as u32,
+        "{with_mark:?}"
+    );
+    assert_eq!(
+        estimate_entropy(&with_cf),
+        entropy_bits(ascii_pool, 5).round() as u32,
+        "{with_cf:?}"
+    );
+    assert!(estimate_entropy(&with_mark) > estimate_entropy(&with_cf));
+}
+
+#[test]
+fn combining_mark_passwords_are_judged_by_the_audit_from_the_wide_pool_estimate() {
+    // Coverage item: the audit calls `estimate_entropy` (health.rs:937-940),
+    // so both sides of the weak threshold must see the mark-inclusive value.
+    const SHORT_MARKS: &str = "\u{0300}\u{0301}\u{0302}";
+    assert_eq!(SHORT_MARKS.chars().count(), 3);
+    let short_bits = estimate_entropy(SHORT_MARKS);
+    assert_eq!(short_bits, entropy_bits(100, 3).round() as u32);
+    assert!(short_bits < Thresholds::default().weak_bits, "{short_bits}");
+    let short = report_of(vec![login(
+        "marks-short",
+        "MarksShort",
+        SHORT_MARKS,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert_eq!(
+        short.items[0].findings,
+        vec![Finding::WeakPassword { bits: short_bits }],
+        "{short:?}"
+    );
+
+    // Characterization: seven marks clear the 40-bit threshold solely through
+    // WIDE_POOL, so the login is clean. Valid TOTP/HTTPS/name/revision keep
+    // every other finding out of the report.
+    let wide_bits = estimate_entropy(COMBINING_MARKS);
+    assert!(wide_bits >= Thresholds::default().weak_bits, "{wide_bits}");
+    let wide = report_of(vec![login(
+        "marks-wide",
+        "MarksWide",
+        COMBINING_MARKS,
+        "https://b.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert!(wide.items.is_empty(), "{wide:?}");
+
+    // Reuse still registers marks: unlike Cf/Cc/Zs, `is_visually_empty` does
+    // not fold them, so two logins sharing a mark-only password form a group.
+    let reused = report_of(vec![
+        login(
+            "marks-one",
+            "One",
+            SHORT_MARKS,
+            "https://c.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+        login(
+            "marks-two",
+            "Two",
+            SHORT_MARKS,
+            "https://d.example",
+            "GEZDGNBVGY3TQOJQ",
+        ),
+    ]);
+    assert_eq!(reused.items.len(), 2, "{reused:?}");
+    for item in &reused.items {
+        assert!(
+            item.findings
+                .contains(&Finding::ReusedPassword { count: 2 }),
+            "{item:?}"
+        );
+    }
+}

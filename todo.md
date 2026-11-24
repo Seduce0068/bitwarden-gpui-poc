@@ -24,10 +24,18 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第146弾で 3 件すべてを完了）。
+なし（第147弾で 2 件すべてを完了）。
 
 ## 完了
 
+- [x] 第147弾（16 担当・91 回目）の指摘 2 件を完結（2026-11-24）
+  - Unicode 結合文字混入パスワードの characterization をテスト。
+  - CHANGELOG に第145〜146弾を反映。
+  - 起動エージェント: 17 体（補充探索 16 + 実装 1）。
+  - 検証: fmt / check / test（1275 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第146弾（16 担当・90 回目）の指摘 3 件を完結（2026-11-24）
   - COMMON 完全一致の装飾変種、非 blank クエリ×他ソート、
     ADR redact 行参照を修正・テスト。
