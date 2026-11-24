@@ -749,6 +749,60 @@ fn email_length_ceiling_is_applied_after_trimming() {
 }
 
 #[test]
+fn email_cap_counts_characters_not_rfc_octets_at_the_auth_boundary() {
+    // `MAX_EMAIL_LEN` is derived from RFC 5321's 254-octet path limit, but the
+    // auth layer counts `str::chars()` (auth.rs:448-462) just like
+    // `truncate_to_limit` (limits.rs:6-22). Pin that documented mismatch at
+    // both auth entry points: an address exactly at the character cap is
+    // accepted even when its UTF-8 encoding and its local part blow past every
+    // RFC octet budget, and one extra character is rejected.
+    const SUFFIX: &str = "@example.com";
+    const RFC_LOCAL_PART_OCTETS: usize = 64;
+    assert_eq!(MAX_EMAIL_LEN, 254);
+
+    let local_len = MAX_EMAIL_LEN - SUFFIX.len();
+    let multibyte = format!("{}{SUFFIX}", "あ".repeat(local_len));
+    let expected_bytes = local_len * 'あ'.len_utf8() + SUFFIX.len();
+    assert_eq!(multibyte.chars().count(), MAX_EMAIL_LEN);
+    assert_eq!(multibyte.len(), expected_bytes);
+    assert!(
+        multibyte.len() > MAX_EMAIL_LEN,
+        "the wire budget is exceeded"
+    );
+    assert!(
+        local_len * 'あ'.len_utf8() > RFC_LOCAL_PART_OCTETS,
+        "no local-part/domain octet split is enforced"
+    );
+
+    assert!(valid_email(&multibyte));
+    let mut accepted = config();
+    accepted.email = multibyte.clone();
+    assert_eq!(validate_config(&accepted), Ok(()));
+
+    // The clamp uses the same character unit: an at-cap multibyte address is
+    // preserved byte-for-byte rather than truncated at an octet boundary.
+    let mut clamped = config();
+    clamped.email = multibyte.clone();
+    clamp_auth_config(&mut clamped);
+    assert_eq!(clamped.email, multibyte);
+
+    // A single extra ASCII byte still crosses the *character* cap: validation
+    // rejects it and the clamp trims it back to the same 254-character value.
+    let too_long = format!("{multibyte}a");
+    assert_eq!(too_long.chars().count(), MAX_EMAIL_LEN + 1);
+    assert_eq!(too_long.len(), expected_bytes + 1);
+    assert!(!valid_email(&too_long));
+    let mut rejected = config();
+    rejected.email = too_long.clone();
+    assert_eq!(validate_config(&rejected), Err(AuthError::InvalidEmail));
+    let mut trimmed = config();
+    trimmed.email = too_long;
+    clamp_auth_config(&mut trimmed);
+    assert_eq!(trimmed.email, multibyte);
+    assert_eq!(trimmed.email.chars().count(), MAX_EMAIL_LEN);
+}
+
+#[test]
 fn server_url_length_ceiling_is_applied_after_trimming() {
     // `validate_config` / `authenticate_inner` trim the URL before parsing it,
     // but the clamp used to count characters first (auth.rs:393-428). Padding

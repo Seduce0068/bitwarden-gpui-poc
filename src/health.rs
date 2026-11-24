@@ -331,19 +331,23 @@ pub fn estimate_entropy(password: &str) -> u32 {
     // ASCII control (NUL, tab, DEL, …) or the ASCII space separator renders no
     // symbol glyph, so charging SYMBOLS.len() for it inflated the estimate.
     // This is the ASCII-side counterpart of the `has_wide` filter below, which
-    // already drops non-ASCII `Cc`/`Cf`: the two paths must use the same rule.
+    // already drops non-ASCII `Cc`/`Cf`/`Zs`: the two paths must use the same rule.
     let has_symbol = chars.iter().any(|c| {
         c.is_ascii() && !c.is_ascii_alphanumeric() && !c.is_control() && !c.is_whitespace()
     });
-    // Unicode `Cf` (format) and `Cc` (control) characters render no glyph, so
-    // they are not draws from the wide glyph repertoire. Counting a zero-width
-    // space or a C1 control here added 100 to the pool and inflated the score
-    // of an otherwise weak guess. Only visible multi-byte characters keep the
-    // wide-pool allowance; `visible_lowercase` applies the same rule to the
-    // pattern checks below.
-    let has_wide = chars
-        .iter()
-        .any(|c| !c.is_ascii() && !c.is_control() && !crate::limits::is_format_character(*c));
+    // Unicode `Cf` (format), `Cc` (control) and `Zs` (space separator) characters
+    // render no glyph, so none of them is a draw from the wide glyph repertoire.
+    // Counting a zero-width space, a C1 control or an NBSP/ideographic space here
+    // added 100 to the pool and inflated the score of an otherwise weak guess.
+    // This is the multi-byte counterpart of the `has_symbol` filter above: both
+    // drop invisible characters and `is_whitespace()` also covers `Zs`, matching
+    // `visible_chars` used by the pattern checks below.
+    let has_wide = chars.iter().any(|c| {
+        !c.is_ascii()
+            && !c.is_control()
+            && !c.is_whitespace()
+            && !crate::limits::is_format_character(*c)
+    });
     // Use the generator's class sizes so the audit and the strength meter
     // agree with what the generator can actually draw. The wide pool is an
     // audit-only allowance: the generator emits ASCII only, but vault passwords

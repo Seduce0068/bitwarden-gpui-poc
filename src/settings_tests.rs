@@ -362,6 +362,64 @@ fn wrong_typed_fields_fall_back_without_discarding_siblings() {
 }
 
 #[test]
+fn server_url_type_mismatch_falls_back_per_field_without_discarding_siblings() {
+    use serde_json::json;
+
+    // `wrong_typed_fields_fall_back_without_discarding_siblings` pins the
+    // reverse case (a bad `email` beside a good URL). Here the URL itself has
+    // the wrong JSON type: `tolerant_struct` (settings.rs:564-605) must replace
+    // only that field with `Settings::default().server_url` and keep every
+    // correctly typed sibling. Each JSON tag is covered, including a number
+    // that no serde coercion can turn into a `String`.
+    let defaults = Settings::default();
+    for bad in [
+        json!(null),
+        json!(42),
+        json!(1.5),
+        json!(true),
+        json!(["https://array.example"]),
+        json!({"url": "https://object.example"}),
+    ] {
+        let input = json!({
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "server_url": bad,
+            "email": "keep@example.com",
+            "idle_lock_seconds": 600,
+            "login_timeout_seconds": 45,
+            "password_generator": {"length": 32},
+            "thresholds": {"weak_bits": 60, "stale_days": 30},
+        });
+        let loaded = Settings::parse_settings(&input.to_string()).unwrap();
+        assert_eq!(loaded.server_url, defaults.server_url, "bad url: {bad}");
+        assert_eq!(loaded.email, "keep@example.com", "bad url: {bad}");
+        assert_eq!(loaded.idle_lock_seconds, 600, "bad url: {bad}");
+        assert_eq!(loaded.login_timeout_seconds, 45, "bad url: {bad}");
+        assert_eq!(loaded.password_generator.length, 32, "bad url: {bad}");
+        assert!(loaded.password_generator.lowercase, "bad url: {bad}");
+        assert_eq!(loaded.thresholds.weak_bits, 60, "bad url: {bad}");
+        assert_eq!(loaded.thresholds.stale_days, 30, "bad url: {bad}");
+        assert_eq!(
+            loaded.schema_version, CURRENT_SCHEMA_VERSION,
+            "bad url: {bad}"
+        );
+    }
+
+    // The same fallback holds on the real file-load path, after `sanitized()`.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        br#"{"schema_version":1,"server_url":123,"email":"file@example.com","thresholds":{"stale_days":90}}"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.server_url, defaults.server_url);
+    assert_eq!(loaded.email, "file@example.com");
+    assert_eq!(loaded.thresholds.stale_days, 90);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn out_of_range_numbers_fall_back_per_field() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");

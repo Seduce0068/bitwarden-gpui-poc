@@ -4515,6 +4515,64 @@ fn permission_gate_is_checked_before_the_version_gate() {
     assert_eq!(cache_error_message(error), REASON_UNREADABLE);
 }
 
+#[cfg(unix)]
+#[test]
+fn permission_gate_wins_over_the_post_parse_body_size_gate() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // `load_detailed` checks the private-file mode before parsing the envelope
+    // (cache.rs:1175-1186), while the body-size cap is checked *after* parsing
+    // (cache.rs:1192-1194). A world-readable cache whose body is also over
+    // MAX_CACHE_BODY_BYTES must therefore be classified as unreadable; the
+    // post-parse size gate never gets a chance. This is the missing pair in the
+    // gate-priority matrix: the pre-parse metadata gate wins over permission
+    // (`oversized_world_readable_file_keeps_its_size_classification`) and the
+    // permission gate wins over the version gate
+    // (`permission_gate_is_checked_before_the_version_gate`).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wide-and-oversized-body.json");
+
+    // `save` refuses an over-large body, so build the envelope directly. A
+    // compact array of `0` bytes keeps the file below MAX_CACHE_BYTES: the
+    // earlier metadata size gate must not classify this fixture instead.
+    let mut envelope =
+        br#"{"version":1,"user_id":"user-1","server_url":"https://vault.example.com","body":["#
+            .to_vec();
+    for index in 0..=MAX_CACHE_BODY_BYTES {
+        if index > 0 {
+            envelope.push(b',');
+        }
+        envelope.push(b'0');
+    }
+    envelope.extend_from_slice(br#"],"created_at":null}"#);
+    assert!(
+        (envelope.len() as u64) <= MAX_CACHE_BYTES,
+        "fixture must fit the pre-parse file cap"
+    );
+    write_fixture(&path, &envelope);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o066,
+        0,
+        "premise: write_fixture created an owner-only file"
+    );
+
+    // Control at the same owner-only mode: the post-parse body gate really does
+    // fire, so the assertion below is about priority, not a disabled check.
+    assert!(matches!(
+        load_detailed(&path),
+        Err(CacheLoadError::CacheTooLarge)
+    ));
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let error = load_detailed(&path).unwrap_err();
+    assert!(
+        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        "permission gate must win over the post-parse body cap: {error:?}"
+    );
+    assert_eq!(cache_error_message(error), REASON_UNREADABLE);
+    assert!(load(&path).is_none());
+}
+
 #[test]
 fn server_mismatch_is_reported_before_the_body_is_parsed() {
     let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();

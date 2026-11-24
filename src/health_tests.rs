@@ -3967,3 +3967,99 @@ fn controls_and_spaces_are_not_charged_as_symbols() {
     // instead of gaining a symbol class from the padding.
     assert_eq!(estimate_entropy("password "), estimate_entropy("password"));
 }
+
+// --- R2-CORE-137: Unicode Zs must not select WIDE_POOL ---
+
+#[test]
+fn unicode_space_separators_do_not_add_the_wide_pool() {
+    // `has_wide` used to filter only non-ASCII `Cc`/`Cf`. Unicode space
+    // separators (`Zs`: NBSP U+00A0, OGHAM SPACE MARK U+1680, FIGURE SPACE
+    // U+2007, NARROW NBSP U+202F, IDEOGRAPHIC SPACE U+3000, …) are neither,
+    // so a run of them added WIDE_POOL (100) to the pool. Unlike the Cf-only
+    // case in `invisible_characters_do_not_add_the_wide_pool`, distinct code
+    // points are required here: one repeated Zs would already score zero via
+    // the all-same branch and hide the pool regression.
+    const ZS: &str = "\u{00a0}\u{1680}\u{2007}\u{202f}\u{205f}\u{3000}";
+    assert!(ZS.chars().all(|ch| !ch.is_ascii()
+        && ch.is_whitespace()
+        && !ch.is_control()
+        && !crate::limits::is_format_character(ch)));
+    let len = ZS.chars().count();
+    assert_eq!(len, 6);
+    assert_eq!(estimate_entropy(ZS), entropy_bits(0, len).round() as u32);
+    assert_eq!(estimate_entropy(ZS), 0);
+
+    // `Zl`/`Zp` are whitespace too, so the same `is_whitespace()` branch must
+    // drop them; the old filter counted them as wide glyphs as well.
+    let line_and_paragraph = "\u{2028}\u{2029}";
+    assert_eq!(estimate_entropy(line_and_paragraph), 0);
+
+    // A visible multi-byte character keeps the wide allowance even when Zs
+    // characters sit beside it: the filter removes only the invisible ones,
+    // matching the Cf/Cc mixed case already pinned in health_tests.rs.
+    let mixed = "あ\u{3000}い\u{00a0}";
+    assert_eq!(mixed.chars().count(), 4);
+    assert_eq!(
+        estimate_entropy(mixed),
+        entropy_bits(100, 4).round() as u32,
+        "{mixed:?}"
+    );
+    assert_eq!(
+        estimate_entropy(mixed),
+        estimate_entropy("\u{200b}あい\u{9f}")
+    );
+
+    // End to end: a Zs-only password is weak with a zero-bit estimate, not a
+    // high-entropy wide-string. The reuse map excludes it as visually empty.
+    let bits = estimate_entropy(ZS);
+    let report = report_of(vec![login(
+        "zs-pool",
+        "ZsPool",
+        ZS,
+        "https://a.example",
+        "GEZDGNBVGY3TQOJQ",
+    )]);
+    assert_eq!(bits, 0);
+    assert!(
+        report.items[0]
+            .findings
+            .contains(&Finding::WeakPassword { bits }),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn ascii_symbols_outside_the_generator_pool_are_charged_the_fixed_symbol_pool() {
+    // `has_symbol` charges `SYMBOLS.len()` for *any* visible ASCII
+    // non-alphanumeric character, not only the eight the generator emits.
+    // Pin that weighting for punctuation outside `SYMBOLS`: such a password
+    // gets the fixed eight-symbol pool -- neither zero nor the ~32 visible
+    // ASCII punctuation characters.
+    const OUTSIDE: &str = "()[]{};:?~|_-+=";
+    assert!(OUTSIDE.chars().all(|c| c.is_ascii()
+        && !c.is_ascii_alphanumeric()
+        && !c.is_control()
+        && !c.is_whitespace()
+        && !SYMBOLS.contains(c)));
+    let len = OUTSIDE.chars().count();
+    assert_eq!(len, 15);
+    assert_eq!(
+        estimate_entropy(OUTSIDE),
+        entropy_bits(SYMBOLS.len(), len).round() as u32
+    );
+    // An in-pool string of the same length scores identically: the pool size
+    // is fixed and does not depend on which punctuation was used.
+    let inside = format!("{SYMBOLS}{}", "!".repeat(len - SYMBOLS.len()));
+    assert_eq!(estimate_entropy(&inside), estimate_entropy(OUTSIDE));
+
+    // One out-of-pool symbol adds exactly the same class as one in-pool symbol,
+    // and a mixed-class value keeps the combined four-class pool.
+    assert_eq!(estimate_entropy("ab(cd"), estimate_entropy("ab!cd"));
+    let mixed = "aB3()[]{}";
+    let pool = LOWERCASE.len() + UPPERCASE.len() + DIGITS.len() + SYMBOLS.len();
+    assert_eq!(
+        estimate_entropy(mixed),
+        entropy_bits(pool, mixed.chars().count()).round() as u32,
+        "{mixed}"
+    );
+}

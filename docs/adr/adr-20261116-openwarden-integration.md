@@ -96,8 +96,10 @@ UI は直接 `openwarden` を触らず、lib クレートに統合層を置く�
 全件成功している（件数はコミットごとに増加するため固定値は記載しない）。
 ロック画面の `Enter` は常に実認証を試行し、モック vault は `m` で明示的に
 開く。認証成功後は `authenticate` → `unlock_and_import`（復号・同期データ
-取り込みは blocking thread）→ `import_logins_with_audit` の順で実 vault を
-読み込み、UI スレッドでは結果の適用のみを行う。
+取り込みは blocking thread）の順で実 vault を読み込み、内部で
+`unlock_and_import_with` が `vault_sync::import_logins` を呼び出す。
+`import_logins_with_audit` は監査付きの別経路で、本番ログインからは
+直接呼ばれない。UI スレッドでは結果の適用のみを行う。
 
 実サーバー接続の検証（履歴、2026-11-19）:
 `tests/real_server_e2e.rs`（opt-in、`E2E_*` 環境変数＋`--ignored`）を追加し、

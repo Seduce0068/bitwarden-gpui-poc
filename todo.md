@@ -24,10 +24,19 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第136弾で 6 件すべてを完了）。
+なし（第137弾で 5 件すべてを完了）。
 
 ## 完了
 
+- [x] 第137弾（16 担当・81 回目）の指摘 5 件を完結（2026-11-24）
+  - Zs の WIDE_POOL 計上、ADR の本番アンロック手順を修正。
+  - メールオクテット境界、server_url 型不一致、権限/サイズ
+    優先順位、SYMBOLS 外記号をテスト。
+  - 起動エージェント: 17 体（補充探索 16 + 実装 1）。
+  - 検証: fmt / check / test（1229 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo deny / markdownlint / Betterleaks 1.10.1
+    （dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第136弾（16 担当・80 回目）の指摘 6 件を完結（2026-11-24）
   - 監査タブ idle 更新、health の Unicode 空白/Cc 扱い、
     README の同期 body 表現を修正。
