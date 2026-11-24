@@ -4746,3 +4746,121 @@ fn mark_only_totp_value_is_present_for_the_badge_but_has_no_visible_identity() {
         "a mark-only needle must not widen the result"
     );
 }
+
+// --- R2-CORE-146: non-blank query through every sort except the default ---
+
+#[test]
+fn non_blank_query_sorts_by_name_desc_recently_modified_and_kind() {
+    // The existing sorting guards use a blank query. Here the non-blank query
+    // matches every item through a shared, searchable note, so each sort must
+    // order the matched subset differently (model.rs:1080-1106, 1221-1231).
+    // A stub that ignored `sort` cannot satisfy all four expectations at once.
+    let with_marker = |mut value: VaultItem, revision: i64| {
+        value.notes = Zeroizing::new("SHARED-marker".into());
+        value.revision_date = revision;
+        value
+    };
+    let vault = Vault {
+        items: vec![
+            with_marker(login("l-z", "Zulu", "u", "p", "https://z.example"), 100),
+            with_marker(login("l-a", "Alpha", "u", "p", "https://a.example"), 300),
+            with_marker(
+                VaultItem::new("c-m", "Mike", ItemData::Card(CardData::default())),
+                200,
+            ),
+            with_marker(
+                VaultItem::new("n-b", "Bravo", ItemData::SecureNote { text: "x".into() }),
+                400,
+            ),
+        ],
+        folders: Vec::new(),
+    };
+
+    let ids = |sort| -> Vec<&str> {
+        vault
+            .view(&Filter::All, "SHARED", sort)
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect()
+    };
+    assert_eq!(ids(SortKey::NameAsc), vec!["l-a", "n-b", "c-m", "l-z"]);
+    assert_eq!(ids(SortKey::NameDesc), vec!["l-z", "c-m", "n-b", "l-a"]);
+    assert_eq!(
+        ids(SortKey::RecentlyModified),
+        vec!["n-b", "l-a", "c-m", "l-z"]
+    );
+    // Login (wire 1), SecureNote (2), Card (3); same-kind ties by name.
+    assert_eq!(ids(SortKey::Kind), vec!["l-a", "l-z", "n-b", "c-m"]);
+}
+
+#[test]
+fn non_blank_query_sort_tiebreaks_survive_filtering() {
+    // With a non-blank query, `NameDesc` reverses the whole name+id key while
+    // `RecentlyModified` and `Kind` reuse its un-reversed form as a tiebreak
+    // (model.rs:1221-1231). A filter must narrow the set before either rule
+    // runs, never reintroduce a filtered-out item through sorting.
+    let with_marker = |mut value: VaultItem, revision: i64| {
+        value.notes = Zeroizing::new("SHARED-marker".into());
+        value.revision_date = revision;
+        value
+    };
+    let vault = Vault {
+        items: vec![
+            with_marker(login("z-login", "Same", "u", "p", "https://z.example"), 100),
+            with_marker(
+                VaultItem::new("a-card", "Same", ItemData::Card(CardData::default())),
+                100,
+            ),
+            with_marker(login("m-login", "Zulu", "u", "p", "https://m.example"), 900),
+        ],
+        folders: Vec::new(),
+    };
+
+    let ids = |filter: &Filter, query: &str, sort| -> Vec<&str> {
+        vault
+            .view(filter, query, sort)
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect()
+    };
+
+    // All three match: descending name flips the id tie ("z-login" before
+    // "a-card"), while revision/kind ties keep ascending id order.
+    assert_eq!(
+        ids(&Filter::All, "SHARED", SortKey::NameDesc),
+        vec!["m-login", "z-login", "a-card"]
+    );
+    assert_eq!(
+        ids(&Filter::All, "SHARED", SortKey::RecentlyModified),
+        vec!["m-login", "a-card", "z-login"]
+    );
+    assert_eq!(
+        ids(&Filter::All, "SHARED", SortKey::Kind),
+        vec!["z-login", "m-login", "a-card"]
+    );
+
+    // Narrowing to logins drops the card from every sort; the kind sort then
+    // reduces to the ascending name+id tiebreak.
+    for sort in [SortKey::NameDesc, SortKey::RecentlyModified] {
+        assert_eq!(
+            ids(&Filter::Kind(ItemKind::Login), "SHARED", sort),
+            vec!["m-login", "z-login"],
+            "{sort:?}"
+        );
+    }
+    assert_eq!(
+        ids(&Filter::Kind(ItemKind::Login), "SHARED", SortKey::Kind),
+        vec!["z-login", "m-login"]
+    );
+
+    // A non-blank query that matches one item keeps that one item under every
+    // sort; the sort order cannot widen the matched set.
+    for sort in [
+        SortKey::NameAsc,
+        SortKey::NameDesc,
+        SortKey::RecentlyModified,
+        SortKey::Kind,
+    ] {
+        assert_eq!(ids(&Filter::All, "ZULU", sort), vec!["m-login"], "{sort:?}");
+    }
+}

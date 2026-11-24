@@ -2849,16 +2849,19 @@ fn digit_run_with_trailing_decoration_keeps_its_numeric_core() {
     // return `"!"`. The all-same check then scored the varied PIN 0 bits,
     // far below the pure-digit estimate. The digit run is the core here, not
     // decoration before a word, so it must survive to the trailing stripper.
+    // Once it has, the stripped core is an exact COMMON entry, so the audit
+    // now awards the dictionary estimate instead of the raw PIN score: the
+    // guard below is "positive and weak", not "at least the bare PIN's bits".
     for password in ["12345678!", "12345678!!!", "!12345678!", "12345678!1"] {
         let body = super::strip_decoration(password);
-        assert!(
-            body.starts_with("12345678"),
+        assert_eq!(
+            body, "12345678",
             "{password:?} -> {body:?}: the digit core was discarded"
         );
         let bits = estimate_entropy(password);
         assert!(
-            bits >= estimate_entropy("12345678"),
-            "{password:?}: {bits} bits lost the numeric core"
+            bits > 0 && bits < Thresholds::default().weak_bits,
+            "{password:?}: {bits} bits lost the numeric core or escaped the weak check"
         );
     }
     // The all-same penalty still applies to a uniform digit core.
@@ -4362,4 +4365,117 @@ fn mark_only_totp_field_is_present_but_not_usable_and_reports_no_totp() {
     assert_eq!(report.logins, 1);
     assert_eq!(report.with_totp, 0);
     assert_eq!(report.totp_coverage(), 0.0);
+}
+
+// --- R2-CORE-146: decorated variants of exact COMMON entries ---
+
+#[test]
+fn decorated_exact_common_entries_take_the_dictionary_estimate() {
+    // `is_exact_common_password` stays a verbatim-membership predicate: a
+    // visible leading/trailing character must not make `near_miss` a member.
+    // `estimate_entropy` removes edge decoration at its call site (both the
+    // shared two-sided stripper and a symbols-only trim), so a decorated entry
+    // gets the same ~11-bit dictionary estimate as the bare word instead of a
+    // raw pool x length score that can clear 40 bits.
+    let weak_bits = Thresholds::default().weak_bits;
+    let dictionary_bits = entropy_bits(2_000, 1).round() as u32;
+    assert_eq!(dictionary_bits, 11);
+
+    for (decorated, core) in [
+        ("12345678!", "12345678"),
+        ("12345678!!!", "12345678"),
+        ("!12345678!", "12345678"),
+        ("12345678!1", "12345678"),
+        ("qwerty!", "qwerty"),
+        ("!qwerty!", "qwerty"),
+        ("qwerty!!!", "qwerty"),
+        ("admin!", "admin"),
+        ("trustno1!", "trustno1"),
+        ("abc123!", "abc123"),
+        ("correcthorsebatterystaple!", "correcthorsebatterystaple"),
+    ] {
+        let lower = decorated.to_lowercase();
+        let symbols_only = lower.trim_matches(|ch: char| !ch.is_alphanumeric());
+        assert!(
+            super::strip_decoration(&lower) == core || symbols_only == core,
+            "{decorated}: neither stripper produced {core}"
+        );
+        assert!(super::is_exact_common_password(core), "{core}");
+        assert!(
+            !super::is_exact_common_password(&lower),
+            "the exact predicate must stay verbatim: {decorated}"
+        );
+        let bits = estimate_entropy(decorated);
+        assert!(bits < weak_bits, "{decorated}: {bits} >= {weak_bits}");
+        if core.chars().all(|ch| ch.is_ascii_digit()) {
+            // A bare all-digit COMMON entry still takes the PIN branch
+            // (digits_only_common_entries_never_reach_the_common_cap), while
+            // its decorated spelling now reaches the dictionary shortcut.
+            assert_eq!(bits, dictionary_bits, "{decorated}");
+            assert!(bits < estimate_entropy(core), "{decorated}");
+        } else {
+            assert_eq!(bits, estimate_entropy(core), "{decorated} vs {core}");
+        }
+        assert_eq!(
+            password_strength(decorated).1,
+            Strength::Weak,
+            "{decorated}"
+        );
+    }
+
+    // Case folding still earns the generator's documented one-bit bonus and
+    // never turns the guess into an acceptable password.
+    assert_eq!(estimate_entropy("QWERTY!"), dictionary_bits + 1);
+    assert!(estimate_entropy("QWERTY!") < weak_bits);
+}
+
+#[test]
+fn decorated_common_entries_are_flagged_as_weak_by_the_audit() {
+    // The estimation reaches `Finding::WeakPassword` verbatim. Use a valid
+    // TOTP and an HTTPS URI, and name the items, so no other finding can be
+    // produced by these fixtures. `123456789!` is the case that used to score
+    // ~42 bits from the digit+symbol pool and clear the threshold; it is now
+    // recognized as a decorated exact COMMON entry.
+    let weak_bits = Thresholds::default().weak_bits;
+    let dictionary_bits = estimate_entropy("qwerty!");
+    assert!(dictionary_bits < weak_bits, "{dictionary_bits}");
+
+    for (index, password) in ["12345678!", "123456789!", "qwerty!!"]
+        .into_iter()
+        .enumerate()
+    {
+        let bits = estimate_entropy(password);
+        let report = report_of(vec![login(
+            &format!("decorated-{index}"),
+            "Decorated",
+            password,
+            "https://a.example",
+            "GEZDGNBVGY3TQOJQ",
+        )]);
+        assert_eq!(
+            report.items[0].findings,
+            vec![Finding::WeakPassword { bits }],
+            "{password}: {report:?}"
+        );
+        assert!(bits < weak_bits, "{password}: {bits}");
+    }
+}
+
+#[test]
+fn stripping_exact_common_decoration_does_not_widen_the_prefix_cap() {
+    // The new exact check must not turn every decorated value starting with a
+    // COMMON word into a dictionary guess. A long high-entropy value with a
+    // trailing symbol still keeps its real estimate.
+    let weak_bits = Thresholds::default().weak_bits;
+    for long in [
+        "qwertyVt7#kQm2!zR9wP4$xL8@!",
+        "passwordVt7#kQm2!zR9wP4$xL8@!",
+    ] {
+        assert!(!super::is_exact_common_password(&long.to_lowercase()));
+        assert!(
+            !super::is_exact_common_password(super::strip_decoration(&long.to_lowercase())),
+            "{long}"
+        );
+        assert!(estimate_entropy(long) >= weak_bits, "{long}");
+    }
 }

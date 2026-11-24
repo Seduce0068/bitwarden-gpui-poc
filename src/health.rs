@@ -304,6 +304,29 @@ impl Default for Thresholds {
     }
 }
 
+/// Whether `lower` is a dictionary guess once guessable edge decoration is
+/// removed.
+///
+/// [`is_exact_common_password`] deliberately matches its input verbatim — that
+/// contract is unchanged. This helper is the only place that widens the exact
+/// lookup, and [`estimate_entropy`] is its only caller. Two strip shapes are
+/// needed: [`strip_decoration`] removes leading/trailing symbols *and* ASCII
+/// digit runs and so recognizes `12345678!1`, but it would also reduce
+/// `abc123!` to the non-entry `abc`; a symbols-only trim keeps a literal
+/// trailing digit and recognizes `abc123` / `trustno1`. The untouched
+/// [`is_common_password`] branch still handles decorated `password` / `qwerty`
+/// guesses via its prefix caps.
+fn is_common_with_decoration(lower: &str) -> bool {
+    if is_common_password(lower) {
+        return true;
+    }
+    if is_exact_common_password(strip_decoration(lower)) {
+        return true;
+    }
+    let symbols_only = lower.trim_matches(|ch: char| !ch.is_alphanumeric());
+    is_exact_common_password(symbols_only)
+}
+
 /// Estimate a password's entropy in bits.
 ///
 /// The model: the character pool the password actually uses (the ASCII class
@@ -311,7 +334,9 @@ impl Default for Thresholds {
 /// penalty for the patterns that make a password far weaker than its pool size
 /// suggests (a single repeated character, including one with a trailing digit
 /// run, an all-digit string, a common word with optional leading or trailing
-/// decoration, or a short trailing-digit suffix on a word).
+/// decoration, or a short trailing-digit suffix on a word). Decoration is also
+/// removed before the exact COMMON lookup here, while
+/// `is_exact_common_password` itself stays a verbatim-membership predicate.
 pub fn estimate_entropy(password: &str) -> u32 {
     if password.is_empty() {
         return 0;
@@ -411,7 +436,10 @@ pub fn estimate_entropy(password: &str) -> u32 {
         // arbitrarily long digit run cannot report an uncapped score.
         return entropy_bits(10, chars.len()).round().clamp(0.0, 1000.0) as u32;
     }
-    let common = is_common_password(&lower);
+    // `lower` has already had invisible characters folded away. Widen the
+    // dictionary check with decoration removal at this call site only;
+    // `is_exact_common_password` itself stays a verbatim predicate.
+    let common = is_common_with_decoration(&lower);
     let mut adjusted = raw;
     if common {
         // A dictionary word: roughly the word list plus a little for casing.
