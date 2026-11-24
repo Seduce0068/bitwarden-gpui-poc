@@ -711,7 +711,14 @@ fn mask_param_pairs(pairs: &str, depth: usize) -> String {
             key.split_once(':').is_some_and(|(user, secret)| {
                 !user.is_empty()
                     && !secret.is_empty()
-                    && !secret.bytes().all(|byte| byte.is_ascii_digit())
+                    // The would-be key ends at the first '='. For a numeric
+                    // password such as `user:12345=x@host` that key is
+                    // `user:12345`, whose all-digit value used to fail this
+                    // guard and let the pair be copied verbatim. A non-canonical
+                    // digit run is a password ([`numeric_password_colon`]), so
+                    // treat the whole pair as userinfo instead.
+                    && (!secret.bytes().all(|byte| byte.is_ascii_digit())
+                        || numeric_password_colon(key))
             })
         }) && nested_authority_with_userinfo(pair);
         if bare_authority_with_equals {

@@ -5469,3 +5469,87 @@ fn raw_non_ascii_multibyte_characters_pass_through_the_url_redactor() {
     assert!(rendered.contains("vault.example.com/パス"), "{rendered}");
     assert_eq!(cache.server_url, url);
 }
+
+#[test]
+fn bare_authority_numeric_password_with_equals_is_masked() {
+    // `mask_param_pairs` reads the first '=' as a key/value separator. For a
+    // scheme-less bare authority such as `user:12345=x@host` that '=' belongs
+    // to the password, so the would-be key `user:12345` has an all-digit value.
+    // The `bare_authority_with_equals` guard used to reject that shape and copy
+    // the pair verbatim, leaking the numeric credential (cache.rs:710+).
+    let pairs = "user:12345=x@cb.example.com/done";
+    assert_eq!(
+        super::mask_param_pairs(pairs, 0),
+        "[redacted]@cb.example.com/done"
+    );
+
+    for (url, expected, secret) in [
+        (
+            "https://vault.example.com/login?user:12345=x@cb.example.com/done",
+            "https://vault.example.com/login?[redacted]@cb.example.com/done",
+            "12345=x",
+        ),
+        (
+            "https://vault.example.com/login?user:01234=x@cb.example.com/done",
+            "https://vault.example.com/login?[redacted]@cb.example.com/done",
+            "01234=x",
+        ),
+        (
+            "https://vault.example.com/login?user:9876543210=x@cb.example.com:8443/p",
+            "https://vault.example.com/login?[redacted]@cb.example.com:8443/p",
+            "9876543210=x",
+        ),
+    ] {
+        assert_eq!(super::mask_url_secrets(url), expected, "{url}");
+        let cache = SyncCache::from_body(body(), url).unwrap();
+        let rendered = format!("{cache:?}");
+        assert!(!rendered.contains(secret), "leaked {secret}: {rendered}");
+        assert!(rendered.contains("[redacted]@cb.example.com"), "{rendered}");
+        // Debug-only masking: the stored URL stays byte-for-byte identical.
+        assert_eq!(cache.server_url, url);
+    }
+
+    // A second query behind the authority is still descended into and redacted.
+    let two_queries = "user:12345=x@cb.example.com/done?token=SECOND_QUERY_SECRET&state=ok";
+    assert_eq!(
+        super::mask_param_pairs(two_queries, 0),
+        "[redacted]@cb.example.com/done?token=[redacted]&state=ok"
+    );
+    let url = format!("https://vault.example.com/login?{two_queries}");
+    let masked = super::mask_url_secrets(&url);
+    assert!(!masked.contains("12345=x"), "{masked}");
+    assert!(!masked.contains("SECOND_QUERY_SECRET"), "{masked}");
+    assert!(masked.contains("token=[redacted]"), "{masked}");
+}
+
+#[test]
+fn numeric_password_colon_guards_reject_invalid_users_and_values() {
+    // `numeric_password_colon` (cache.rs:382+) requires a non-empty user with
+    // no authority delimiter, and a non-empty all-digit value that is either
+    // leading-zero or at least five digits long. Each guard is pinned so the
+    // new bare-authority-with-'=' branch cannot start treating a `host:port`
+    // authority as a numeric password.
+    for authority in [
+        ":12345",       // empty user
+        "user:",        // empty value
+        "u@ser:12345",  // '@' in user
+        "u?ser:12345",  // '?' in user
+        "u#ser:12345",  // '#' in user
+        "u/ser:12345",  // '/' is a path split before the colon check
+        "user:9999",    // canonical port length
+        "user:1234a",   // not all digits
+        "user:12345=x", // '=' is not part of the digit run
+        "no-colon",     // no userinfo marker at all
+    ] {
+        assert!(
+            !super::numeric_password_colon(authority),
+            "must not be a numeric password: {authority}"
+        );
+    }
+    for authority in ["user:12345", "user:10000", "user:0123", "alice:9876543210"] {
+        assert!(
+            super::numeric_password_colon(authority),
+            "must be a numeric password: {authority}"
+        );
+    }
+}

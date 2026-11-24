@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 全体改善（第138〜141弾 / 2026-11-24）
+
+- bare authority の '=' 第2クエリマスク、BlockedServerUrl status、
+  数字コア 0bit、SAW_KDF フレーキーを修正
+- 検索 Backspace 案内、Argon2id 全パラメータ、
+  bare authority 深さ上限、IPv6 authority 境界を修正・テスト
+- ADR verified／redact 行参照を更新
+
 ### 全体改善（第134〜137弾 / 2026-11-24）
 
 - ADR ログ重複、暗号化 body 誤記述、本番アンロック手順を修正

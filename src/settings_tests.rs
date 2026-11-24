@@ -4278,3 +4278,38 @@ fn save_discards_unknown_top_level_and_nested_keys() {
     assert_eq!(reloaded.thresholds.weak_bits, 70);
     assert_eq!(reloaded.schema_version, CURRENT_SCHEMA_VERSION);
 }
+
+#[test]
+fn load_advisories_warns_about_padded_numeric_string_future_versions() {
+    // `schema_version_of` trims a string marker before parsing it
+    // (settings.rs:526-534), so a future version padded with whitespace must
+    // still produce the advisory -- with the trimmed number rendered -- rather
+    // than being silently treated as a legacy/current file. Serialize through
+    // serde_json so the tab/newline cases are valid JSON string escapes.
+    let future = CURRENT_SCHEMA_VERSION + 1;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    for marker in [format!("  {future}  "), format!("\t{future}\n")] {
+        let body = serde_json::json!({
+            "schema_version": marker,
+            "email": "e@example.com",
+        });
+        std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+        assert_eq!(
+            load_advisories(&path),
+            vec![format!(
+                "設定ファイルのバージョン {future} は未対応です。既定値で起動します"
+            )],
+            "{marker:?}"
+        );
+    }
+
+    // A padded current version is not future: no advisory is emitted.
+    let current = format!("  {CURRENT_SCHEMA_VERSION}  ");
+    let body = serde_json::json!({
+        "schema_version": current,
+        "email": "e@example.com",
+    });
+    std::fs::write(&path, serde_json::to_vec(&body).unwrap()).unwrap();
+    assert!(load_advisories(&path).is_empty(), "{current:?}");
+}
