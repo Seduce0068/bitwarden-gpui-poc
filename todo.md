@@ -27,7 +27,8 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 ### 中優先度
 
 - [ ] **TOTP シークレットの平文 String 複製を Zeroizing へ** —
-  根拠 `src/ui/actions.rs:20` / `src/ui/input.rs:708` / `README.md:42` / R3-IV01 + R2-FG01 / 中
+  根拠 `src/ui/actions.rs:20` / `src/ui/input.rs:708` / `README.md:42` /
+  R3-IV01 + R2-FG01 / 中
 - [ ] **AuthConfig の Debug で平文フィールドをマスク** —
   根拠 `src/auth.rs:29-38` / `src/auth_tests.rs:281` / R3-IV01 / 中
 - [ ] **Stale 判定の i64::MIN 境界を saturating_sub で固定** —
@@ -39,7 +40,8 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 - [ ] **E2E の XDG キャッシュ／設定パスを隔離** —
   根拠 `tests/real_server_e2e.rs:88-96` / R3-TQ01 / 中
 - [ ] **UI から openwarden の直接 import を消す** —
-  根拠 `src/ui/login_flow.rs:8,62-64` / `docs/adr/adr-20261116-openwarden-integration.md:47` / R1-AR01 / 中
+  根拠 `src/ui/login_flow.rs:8,62-64` /
+  `docs/adr/adr-20261116-openwarden-integration.md:47` / R1-AR01 / 中
 
 ### 低優先度
 
@@ -56,7 +58,8 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 - [ ] **E2E の env_state 3 状態を単体テスト** —
   根拠 `tests/real_server_e2e.rs:42-48` / R3-TQ01 / 低
 - [ ] **形骸化テスト（完全一致後の contains／score 重複）を整理** —
-  根拠 `src/health_tests.rs:3593-3601` / `src/generator_tests.rs:270-299` / R3-TQ01 / 低
+  根拠 `src/health_tests.rs:3593-3601` /
+  `src/generator_tests.rs:270-299` / R3-TQ01 / 低
 - [ ] **cargo-audit の版を固定し README のツール表へ追加** —
   根拠 `.github/workflows/ci.yml:24,28` / `README.md:350-354` / R4-DP01 / 低
 - [ ] **deny.toml に `unsound = "deny"` を明示** —
