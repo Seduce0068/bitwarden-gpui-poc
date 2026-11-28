@@ -24,10 +24,40 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第152弾で 4 件すべてを完了）。
+### 中優先度
+
+- [ ] **XDG_CONFIG_HOME 差し替えと Settings::default_path の OnceLock を競合させない** —
+  根拠 `src/auth_tests.rs:5355-5356` / `src/settings.rs:842-846` /
+  `src/settings_tests.rs:2408-2411` / R1-CO03 / 中
+
+### 低優先度
+
+- [ ] **ENV_LOCK の poison 扱いをテスト全体で統一** —
+  根拠 `src/auth_tests.rs:5447-5449` / `src/cache_tests.rs:1024` /
+  `src/settings_tests.rs:3839` / R1-CO03 / 低
+- [ ] **ループバックサーバーにタイムアウト付き accept と期待外リクエスト記録を追加** —
+  根拠 `src/auth_tests.rs:5391-5395` / R1-CO03 / 低
+- [ ] **README の E2E 成功記述に opt-in／既知値照合の条件を明記** —
+  根拠 `README.md:67-73` / `tests/real_server_e2e.rs:154-181` / R4-DC01 / 低
+- [ ] **ローカル検証手順に Betterleaks（dir＋git 履歴）を追加** —
+  根拠 `README.md:248-259,299` / `.github/workflows/ci.yml:57-64` / R4-DC01 / 低
+- [ ] **既知の制約へ p/u/y の実サーバー未確認を追記** —
+  根拠 `README.md:366-384,107-111` / R4-DC01 / 低
 
 ## 完了
 
+- [x] 第153弾（16 担当・97 回目）の指摘 6 件を完結（2026-11-28）
+  - 認証フィールドの空判定／マスク文字数を共有ルールへ集約。
+  - 200＋parse 失敗／200 正常系を実 production 経路でテストし、
+    キャッシュ復元テストを client_id と独立したアカウント id で強化。
+  - キャッシュ VERSION リテラルを `SyncCache::VERSION` 参照へ置換。
+  - 先頭結合文字の characterization、arrow 接頭辞ページキーをテスト。
+  - CHANGELOG 第151〜152弾／MSRV 1.95 を反映。
+  - 起動エージェント: 8 体（分析 4 + 実装 2 + レビュー 2）。
+  - 検証: fmt / check / test（1307 passed、E2E 1 ignored）/ clippy -D warnings /
+    rustdoc -D warnings / cargo audit（--no-fetch、18 allowed warnings）/
+    cargo deny / markdownlint / Betterleaks 1.10.1（dir＋git 履歴）すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第152弾（16 担当・96 回目）の指摘 4 件を完結（2026-11-24）
   - パネル遷移時の再編集案内、不可視文字混入 PIN 判定を修正。
   - prelogin/token 失敗、nested authority 反復、
@@ -1608,6 +1638,14 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## メモ
 
+- 要判断（第153弾 R4-SEC01）: 認証フィールドのマスクが可視文字数を漏らす
+  (`src/ui/panels.rs:883-897`)。既存テストが `"pw" → "••"` を固定しており
+  現在の挙動は意図的。固定長マスクへの変更は仕様変更にあたるため、
+  今回の差分には含めずユーザー判断を待つ。
+- 却下（第153弾 R4-DC01）: `docs/cross-review-findings.md:262` の
+  「未検証: 依存の実 MSRV」は 2026-11-17 時点のスナップショット記述であり、
+  現行の MSRV 1.95 は `Cargo.toml:5` / `README.md:246` / `ci.yml:27` で一致。
+  履歴記録の書き換えは不要。
 - 却下: `AppError` の `PartialEq` に discriminant 比較を入れる案は、
   「Cause 保持バリアントはプレーン版と等価」という明示設計と既存テスト
   5 件に反するため採用しない（`src/error.rs:343-349`）。

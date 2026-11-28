@@ -7,7 +7,7 @@ use gpui_kit::*;
 use crate::generator::{passphrase_entropy, password_entropy, Strength};
 use crate::health::{has_totp_field, has_usable_totp, ItemReport, Report, Severity};
 use crate::settings::Settings;
-use crate::ui::app::is_visually_empty;
+use crate::ui::app::{is_visually_empty, visible_char_count};
 use crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
 use crate::ui::logic::{settings_hint, unsaved_marker, FOCUS_RECOVERY_HINT};
 use crate::ui::state::{GeneratorState, Panel, SettingsField};
@@ -881,11 +881,15 @@ pub(super) fn panel_button<V: 'static>(
 /// must survive an empty value too: otherwise focusing an unset credential
 /// gives no visual feedback that the field is editable.
 fn auth_row_shown_text(value: &str, editing: bool, secret: bool) -> String {
-    if value.is_empty() {
+    if is_visually_empty(value) {
         format!("(未入力){}", if editing { " _" } else { "" })
     } else if secret {
         // Never render secret values in plain text, not even while editing.
-        let masked = "•".repeat(value.chars().count());
+        // Count only rendering characters so a zero-width `Cf`, a control
+        // character or a bare combining mark neither adds a phantom dot nor
+        // makes a value that looks empty show a mask. Shares the rule with the
+        // placeholder above and the rest of the UI.
+        let masked = "•".repeat(visible_char_count(value));
         format!("{masked}{}", if editing { " _" } else { "" })
     } else {
         format!("{value}{}", if editing { " _" } else { "" })
@@ -1308,6 +1312,35 @@ mod tests {
         assert_eq!(auth_row_shown_text("user", false, false), "user");
         assert_eq!(auth_row_shown_text("pw", true, true), "•• _");
         assert_eq!(auth_row_shown_text("pw", false, true), "••");
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_row_shown_text_uses_the_shared_visible_content_rules() {
+        // A value that renders nothing must read as "(未入力)" even though its
+        // raw string is not `is_empty()`. This covers whitespace, Unicode Cc,
+        // Cf (zero-width space / bidi override) and a bare combining mark.
+        for invisible in ["\u{200b}", " \t\n", "\u{200e}", "\u{0301}"] {
+            assert!(is_visually_empty(invisible), "{invisible:?}");
+            assert_eq!(
+                auth_row_shown_text(invisible, true, false),
+                "(未入力) _",
+                "{invisible:?}/plain/editing"
+            );
+            assert_eq!(
+                auth_row_shown_text(invisible, false, true),
+                "(未入力)",
+                "{invisible:?}/secret/idle"
+            );
+        }
+
+        // The mask counts only rendering characters: an embedded zero-width
+        // format character and a combining mark must not add phantom dots.
+        let secret = "a\u{200b}b\u{0301}";
+        assert_eq!(crate::ui::app::visible_char_count(secret), 2);
+        assert_eq!(auth_row_shown_text(secret, true, true), "•• _");
+        assert_eq!(auth_row_shown_text(secret, false, true), "••");
+        // A non-secret field keeps its literal value when it has visible content.
+        assert_eq!(auth_row_shown_text(secret, false, false), secret);
     }
 
     #[::core::prelude::v1::test]

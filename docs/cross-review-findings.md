@@ -259,7 +259,7 @@ r1-security / r1-ops / r1-correctness は途中終了したため、
   - File: docs/review-report.md:4 / Cargo.toml:3 / CHANGELOG.md:7
   - 意図的な可能性があり断定避ける。
   - Confidence: medium
-- 整合確認: 版、MSRV(1.88)、ライセンス(AGPL-3.0-or-later)、CI タグトリガー/uses/@v1/permissions、
+- 整合確認: 版、MSRV(1.95)、ライセンス(AGPL-3.0-or-later)、CI タグトリガー/uses/@v1/permissions、
   依存ピン理由、review-report 検証節。未検証: Cargo.lock、再利用ワークフロー実体、git タグ/リモート、依存の実 MSRV。
 
 #### r1-sec-secrets（秘密情報のライフサイクル、8件）

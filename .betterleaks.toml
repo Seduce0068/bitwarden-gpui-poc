@@ -13,6 +13,7 @@ filter.matchesAny(finding["secret"], [
   `テストアカウントのマスターパスワード`,
   `!password123`, `password123!`, `1!password`, `12345678!`,
   `r2-core-151-device`, `r2-core-152-prelogin`, `r2-core-152-token`,
+  `r2-core-153-parse`, `r2-core-153-live`,
 ])
 || filter.containsAny(finding["match"], [`2001:db8::1`, `https://user:pass@host`,  `https://u:p@host:8443`, `passwordあいうえお`,
   `secret=GEZDGNBVGY3TQOJQ`,

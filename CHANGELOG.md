@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### 全体改善（第153弾 / 2026-11-28）
+
+- 認証フィールドの空判定／マスク文字数を共有ルールへ集約
+- 200＋parse 失敗／200 正常系を実 production 経路でテストし、
+  キャッシュ復元テストを client_id と独立したアカウント id で強化
+- キャッシュ VERSION リテラルを `SyncCache::VERSION` 参照へ置換
+- 先頭結合文字の characterization、arrow 接頭辞ページキーをテスト
+- CHANGELOG 第151〜152弾／MSRV 1.95 を反映
+
+### 全体改善（第151〜152弾 / 2026-11-24）
+
+- from_cache 形骸化テストを実 production 経路へ置換
+- 再編集案内、不可視文字混入 PIN を修正・テスト
+
 ### 全体改善（第148〜150弾 / 2026-11-24）
 
 - mark-only UI 空判定、separator 上限、共有 ENV_LOCK、

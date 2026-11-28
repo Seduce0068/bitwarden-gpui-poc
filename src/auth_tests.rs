@@ -5336,3 +5336,186 @@ async fn token_exchange_failure_reaches_the_auth_error_with_the_server_detail() 
         "ログインに失敗しました（token returned HTTP 400 (invalid_client)）"
     );
 }
+
+// --- AS02: /api/sync が 200 を返す 2 分岐（parse 失敗時の復元と正常系） ---
+
+/// Isolate the process-global XDG roots so `save_default` / `load_default`
+/// cannot see a cache left by another test or by the host session.
+struct SyncRouteEnvGuard {
+    previous: [(&'static str, Option<std::ffi::OsString>); 2],
+}
+
+impl SyncRouteEnvGuard {
+    fn isolated() -> (tempfile::TempDir, Self) {
+        let temp = tempfile::tempdir().expect("a temporary directory");
+        let previous = [
+            ("XDG_CACHE_HOME", std::env::var_os("XDG_CACHE_HOME")),
+            ("XDG_CONFIG_HOME", std::env::var_os("XDG_CONFIG_HOME")),
+        ];
+        std::env::set_var("XDG_CACHE_HOME", temp.path().join("cache-home"));
+        std::env::set_var("XDG_CONFIG_HOME", temp.path().join("config-home"));
+        (temp, Self { previous })
+    }
+}
+
+impl Drop for SyncRouteEnvGuard {
+    fn drop(&mut self) {
+        for (key, previous) in self.previous.iter_mut() {
+            match previous.take() {
+                Some(value) => std::env::set_var(*key, value),
+                None => std::env::remove_var(*key),
+            }
+        }
+    }
+}
+
+/// A three-request loopback login: prelogin 200, token 200, then the supplied
+/// `/api/sync` response. The returned request lines prove which route the
+/// production code took after the sync response.
+fn loopback_login_server(
+    sync_status: &'static str,
+    sync_body: &'static str,
+) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn response(body: &str, status_line: &str) -> String {
+        format!(
+            "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status_line,
+            body.len(),
+            body
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let base = format!("http://{}", listener.local_addr().expect("a local address"));
+    let server = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().expect("a loopback request");
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let header_end = loop {
+                let n = stream.read(&mut chunk).expect("read the request head");
+                assert!(n > 0, "the client closed before sending a request");
+                request.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = request.windows(4).position(|w| w == &b"\r\n\r\n"[..]) {
+                    break pos + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&request[..header_end]);
+            let first = head.lines().next().unwrap_or_default().to_owned();
+            seen.push(first.clone());
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let n = stream.read(&mut chunk).expect("read the request body");
+                assert!(n > 0, "the client closed before sending the full body");
+                request.extend_from_slice(&chunk[..n]);
+            }
+            let payload = if first.starts_with("POST /identity/accounts/prelogin") {
+                response(r#"{"kdf":0,"kdfIterations":100000}"#, "HTTP/1.1 200 OK")
+            } else if first.starts_with("POST /identity/connect/token") {
+                response(
+                    r#"{"access_token":"test-access-token","expires_in":3600}"#,
+                    "HTTP/1.1 200 OK",
+                )
+            } else if first.starts_with("GET /api/sync") {
+                response(sync_body, sync_status)
+            } else {
+                panic!("unexpected loopback request: {first}");
+            };
+            stream
+                .write_all(payload.as_bytes())
+                .expect("write the loopback response");
+        }
+        seen
+    });
+    (base, server)
+}
+
+#[test]
+fn http_200_with_unparseable_sync_body_restores_the_seeded_cache() {
+    let _lock = crate::limits::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_temp, _env) = SyncRouteEnvGuard::isolated();
+    let (base, server) = loopback_login_server("HTTP/1.1 200 OK", "not-json");
+
+    // Seed the cache with the account id derived from the non-default client
+    // id (`cache-only-5678`), deliberately different from the default `1234`.
+    // The restored `profile.id` then proves the data came from the on-disk
+    // cache, not from the default client id or the unparsable live body.
+    let cached_body =
+        br#"{"profile":{"id":"cache-only-5678","key":"2.encrypted"},"folders":[],"ciphers":[]}"#;
+    let cache = crate::cache::SyncCache::from_body(cached_body.to_vec(), &base)
+        .expect("the seeded sync body must be a valid cache entry");
+    crate::cache::save_default(&cache).expect("the cache file must be writable");
+    // Premise: it is the live 200 body that `parse_sync` rejects, not the cache.
+    assert!(crate::vault_sync::parse_sync(b"not-json").is_err());
+
+    let mut auth_config = config();
+    auth_config.server_url = base;
+    // Derive that same non-default account id from the client id so the cache
+    // lookup matches; the default `user.1234` is intentionally not used here.
+    auth_config.client_id = "user.cache-only-5678".into();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a Tokio runtime for the loopback HTTP client");
+    let vault = runtime
+        .block_on(authenticate(&auth_config, "r2-core-153-parse"))
+        .expect("a 200 with an unparsable body must fall back to the cache");
+
+    let seen = server.join().expect("the loopback server must finish");
+    assert_eq!(seen.len(), 3, "prelogin, token and sync must all be sent");
+    assert!(
+        seen[0].starts_with("POST /identity/accounts/prelogin"),
+        "{seen:?}"
+    );
+    assert!(
+        seen[1].starts_with("POST /identity/connect/token"),
+        "{seen:?}"
+    );
+    assert!(seen[2].starts_with("GET /api/sync"), "{seen:?}");
+    assert!(vault.from_cache, "auth.rs:1197-1200 must restore the cache");
+    assert_eq!(vault.sync.user_id(), "cache-only-5678");
+}
+
+#[test]
+fn http_200_with_a_valid_sync_body_uses_the_live_response() {
+    let _lock = crate::limits::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_temp, _env) = SyncRouteEnvGuard::isolated();
+    // A fresh XDG cache root holds no cache, so a successful return can only
+    // come from the live 200 path (auth.rs:1183-1191).
+    let live = r#"{"profile":{"id":"live-user"},"folders":[],"ciphers":[]}"#;
+    let (base, server) = loopback_login_server("HTTP/1.1 200 OK", live);
+
+    let mut auth_config = config();
+    auth_config.server_url = base;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a Tokio runtime for the loopback HTTP client");
+    let vault = runtime
+        .block_on(authenticate(&auth_config, "r2-core-153-live"))
+        .expect("a valid 200 sync must be used directly");
+
+    let seen = server.join().expect("the loopback server must finish");
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert!(
+        !vault.from_cache,
+        "auth.rs:1190-1191 must clear the flag on a live 200"
+    );
+    assert_eq!(vault.sync.user_id(), "live-user");
+}

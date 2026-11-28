@@ -4872,3 +4872,109 @@ fn non_blank_query_sort_tiebreaks_survive_filtering() {
         assert_eq!(ids(&Filter::All, "ZULU", sort), vec!["m-login"], "{sort:?}");
     }
 }
+
+// --- AS10: 先頭結合文字付き needle / 名前の characterization ---
+
+#[test]
+fn leading_combining_mark_stays_before_its_base_in_comparison_keys() {
+    // `comparison_key` = NFKD + lowercase + Cf/Cc 除去 + trim (model.rs:96-110)。
+    // 正規順序化は先行する基準文字をまたいで結合文字を移動しないので、
+    // 先頭に付いた結合文字はそのままキー先頭に残る。事前合成形 (`é`) の
+    // キーでは結合文字が基準文字の後ろに来るため、両者は等しくならない。
+    // NFKD の正規順序は ccc=0 の基準文字をまたいで mark を動かさない点を固定する。
+    const LEADING: &str = "\u{301}e"; // ◌́ + e
+    const PRECOMPOSED: &str = "\u{e9}"; // é
+    assert_eq!(nfkd(LEADING), "\u{301}e");
+    assert_eq!(nfkd(PRECOMPOSED), "e\u{301}");
+    assert_eq!(comparison_key(LEADING), "\u{301}e");
+    assert_eq!(comparison_key(PRECOMPOSED), "e\u{301}");
+    assert_ne!(comparison_key(LEADING), comparison_key(PRECOMPOSED));
+    // 主張が定数によるものではなく実際のキーに由来することを確認する。
+    assert_eq!(
+        comparison_key(&comparison_key(LEADING)),
+        comparison_key(LEADING)
+    );
+    assert_eq!(
+        comparison_key(&comparison_key(PRECOMPOSED)),
+        comparison_key(PRECOMPOSED)
+    );
+    // 先頭 mark だけでは名前にならないが、基準文字が続けば通常の識別子になる。
+    assert!(super::has_no_visible_identity("\u{301}"));
+    assert!(!super::has_no_visible_identity(LEADING));
+    assert!(!super::is_visually_empty(LEADING));
+}
+
+#[test]
+fn leading_mark_needle_and_name_search_asymmetrically() {
+    // 先頭 mark 付きの名前のキーは "\u{301}cafe" なので、素の "cafe" は
+    // 部分文字列として依然見つかる。逆に事前合成形のキー "cafe\u{301}" は
+    // 先頭 mark 付き needle を含まない。この非対称性を characterization として
+    // 固定し、どちら向きにも「正規化すれば一致する」と誤って期待しないようにする。
+    let leading_name = "\u{301}Cafe";
+    let precomposed_name = "Caf\u{e9}";
+    let mut vault = Vault::new();
+    vault.items.push(login(
+        "leading",
+        leading_name,
+        "u",
+        "p",
+        "https://leading.example",
+    ));
+    vault.items.push(login(
+        "precomposed",
+        precomposed_name,
+        "u",
+        "p",
+        "https://precomposed.example",
+    ));
+
+    assert_eq!(comparison_key(leading_name), "\u{301}cafe");
+    assert_eq!(comparison_key(precomposed_name), "cafe\u{301}");
+
+    // 先頭 mark 付き needle は同じ綴りの名前だけをヒットさせる。
+    assert!(vault.items[0].matches_query("\u{301}cafe"));
+    assert!(!vault.items[1].matches_query("\u{301}cafe"));
+    assert_eq!(
+        vault
+            .view(&Filter::All, "\u{301}cafe", SortKey::NameAsc)
+            .len(),
+        1
+    );
+    // 素の needle は両方のキーの部分文字列として残る（非対称）。
+    assert!(vault.items[0].matches_query("Cafe"));
+    assert!(vault.items[1].matches_query("Cafe"));
+    assert_eq!(vault.view(&Filter::All, "Cafe", SortKey::NameAsc).len(), 2);
+    // 先頭 mark 単独の needle は mark-only として扱われ、全件を広げない。
+    assert!(vault
+        .view(&Filter::All, "\u{301}", SortKey::NameAsc)
+        .is_empty());
+
+    // 重複判定でも mark の位置が区別され、2 つは別グループのままになる。
+    assert!(vault.duplicate_names().is_empty());
+}
+
+#[test]
+fn leading_mark_names_still_fold_case_for_duplicate_detection() {
+    // 先頭 mark の位置は区別しつつ、同じ位置の名前どうしは従来どおり
+    // 大文字小文字を折って重複グループになる (model.rs:96-110, 1195-1218)。
+    let mut vault = Vault::new();
+    vault
+        .items
+        .push(login("upper", "\u{301}Cafe", "u", "p", "https://a.example"));
+    vault
+        .items
+        .push(login("lower", "\u{301}cafe", "u", "p", "https://b.example"));
+    // mark が末尾にある綴りは別のキーなのでグループに入らない。
+    vault.items.push(login(
+        "trailing",
+        "Cafe\u{301}",
+        "u",
+        "p",
+        "https://c.example",
+    ));
+
+    let groups = vault.duplicate_names();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].0, "\u{301}cafe");
+    assert_eq!(groups[0].1, vec!["upper".to_string(), "lower".to_string()]);
+}

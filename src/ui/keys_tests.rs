@@ -1146,9 +1146,9 @@ fn audit_panel_has_up_down_enter_keyboard_path() {
 
 #[test]
 fn audit_arrow_prefixed_page_and_edge_keys_match_plain_bindings() {
-    // keys.rs:527-530 binds PageUp/PageDown/Home/End in the audit panel.
+    // keys.rs:554-557 binds PageUp/PageDown/Home/End in the audit panel.
     // Backends spelling them with an `arrow` prefix must reach the very same
-    // actions, mirroring the vault assertions in keys.rs:1231-1247.
+    // actions, mirroring the vault assertions in keys.rs:1295-1311.
     let mut value = ctx("pageup");
     value.panel = Panel::Audit;
     for (key, expected) in [
@@ -1179,6 +1179,51 @@ fn audit_arrow_prefixed_page_and_edge_keys_match_plain_bindings() {
     ] {
         value.key = key;
         assert_eq!(classify_key(&value), expected, "audit/{key}");
+    }
+}
+
+#[test]
+fn confirmed_query_vault_keeps_arrow_prefixed_page_and_edge_bindings() {
+    // A confirmed query makes the vault panel a text-editing context, but only
+    // insertable characters fall through to `InsertQueryText` (keys.rs:690-692).
+    // PageUp/PageDown/Home/End are command keys (keys.rs:663-666) and must keep
+    // their list-navigation actions under both key spellings, with or without
+    // an echoed key name, instead of being swallowed as query text.
+    let mut value = ctx("pageup");
+    value.query_nonempty = true;
+    for (key, expected) in [
+        ("pageup", UiAction::MoveSelectionPage(-1)),
+        ("arrowpageup", UiAction::MoveSelectionPage(-1)),
+        ("ArrowPageUp", UiAction::MoveSelectionPage(-1)),
+        ("pagedown", UiAction::MoveSelectionPage(1)),
+        ("arrowpagedown", UiAction::MoveSelectionPage(1)),
+        ("ArrowPageDown", UiAction::MoveSelectionPage(1)),
+        ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+        (
+            "arrowhome",
+            UiAction::MoveSelectionToEdge(SelectionEdge::First),
+        ),
+        (
+            "ArrowHome",
+            UiAction::MoveSelectionToEdge(SelectionEdge::First),
+        ),
+        ("end", UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
+        (
+            "arrowend",
+            UiAction::MoveSelectionToEdge(SelectionEdge::Last),
+        ),
+        (
+            "ArrowEnd",
+            UiAction::MoveSelectionToEdge(SelectionEdge::Last),
+        ),
+    ] {
+        value.key = key;
+        assert_eq!(classify_key(&value), expected, "vault/query/{key}");
+        // A backend echoing the key name into `key_char` must not turn the
+        // command into inserted query text either.
+        value.key_char = Some(key);
+        assert_eq!(classify_key(&value), expected, "vault/query/{key}/echo");
+        value.key_char = None;
     }
 }
 

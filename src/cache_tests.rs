@@ -4764,12 +4764,16 @@ fn permission_gate_wins_over_the_post_parse_body_size_gate() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("wide-and-oversized-body.json");
 
-    // `save` refuses an over-large body, so build the envelope directly. A
-    // compact array of `0` bytes keeps the file below MAX_CACHE_BYTES: the
-    // earlier metadata size gate must not classify this fixture instead.
-    let mut envelope =
-        br#"{"version":1,"user_id":"user-1","server_url":"https://vault.example.com","body":["#
-            .to_vec();
+    // `save` refuses an over-large body, so build the envelope directly. Take
+    // the version from `SyncCache::VERSION` rather than a literal so a schema
+    // bump keeps this gate-priority fixture current. A compact array of `0`
+    // bytes keeps the file below MAX_CACHE_BYTES: the earlier metadata size gate
+    // must not classify this fixture instead.
+    let mut envelope = format!(
+        r#"{{"version":{},"user_id":"user-1","server_url":"https://vault.example.com","body":["#,
+        SyncCache::VERSION
+    )
+    .into_bytes();
     for index in 0..=MAX_CACHE_BODY_BYTES {
         if index > 0 {
             envelope.push(b',');
