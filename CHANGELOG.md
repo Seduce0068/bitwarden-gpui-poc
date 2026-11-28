@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第154弾 / 2026-11-28）
+
+- Settings の OnceLock 初期化を ENV_LOCK 配下へ移し競合を解消
+- ENV_LOCK の poison 回復を `env_lock()` に一元化
+- ループバックサーバーを期限付き accept へ統一しハングを排除
+- ゼロタイムアウトのテストを Tokio runtime 上で実行しフレークを解消
+- キャッシュ復元テストを非デフォルト client_id で強化
+- README の E2E opt-in／Betterleaks／既知の制約を現状へ整合
+
 ### 全体改善（第153弾 / 2026-11-28）
 
 - 認証フィールドの空判定／マスク文字数を共有ルールへ集約

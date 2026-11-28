@@ -12,6 +12,20 @@
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Acquire the shared test environment lock, recovering from a poisoned mutex.
+///
+/// A test that panics while holding `ENV_LOCK` poisons it; without recovery
+/// every later environment-touching test would fail at the acquisition point
+/// even though the guards' `Drop` already restored the variables. Funnelling
+/// every caller through this helper keeps one recovery policy for the whole
+/// test binary instead of repeating `unwrap_or_else` at each site.
+#[cfg(test)]
+pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Maximum length of an email address, in Unicode characters (not octets).
 ///
 /// The *number* comes from RFC 5321's octet limits: §4.5.3.1.1 caps the local

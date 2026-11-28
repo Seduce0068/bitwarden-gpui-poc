@@ -24,28 +24,23 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-### 中優先度
-
-- [ ] **XDG_CONFIG_HOME 差し替えと Settings::default_path の OnceLock を競合させない** —
-  根拠 `src/auth_tests.rs:5355-5356` / `src/settings.rs:842-846` /
-  `src/settings_tests.rs:2408-2411` / R1-CO03 / 中
-
-### 低優先度
-
-- [ ] **ENV_LOCK の poison 扱いをテスト全体で統一** —
-  根拠 `src/auth_tests.rs:5447-5449` / `src/cache_tests.rs:1024` /
-  `src/settings_tests.rs:3839` / R1-CO03 / 低
-- [ ] **ループバックサーバーにタイムアウト付き accept と期待外リクエスト記録を追加** —
-  根拠 `src/auth_tests.rs:5391-5395` / R1-CO03 / 低
-- [ ] **README の E2E 成功記述に opt-in／既知値照合の条件を明記** —
-  根拠 `README.md:67-73` / `tests/real_server_e2e.rs:154-181` / R4-DC01 / 低
-- [ ] **ローカル検証手順に Betterleaks（dir＋git 履歴）を追加** —
-  根拠 `README.md:248-259,299` / `.github/workflows/ci.yml:57-64` / R4-DC01 / 低
-- [ ] **既知の制約へ p/u/y の実サーバー未確認を追記** —
-  根拠 `README.md:366-384,107-111` / R4-DC01 / 低
+なし（第154弾で 6 件すべてを完了）。
 
 ## 完了
 
+- [x] 第154弾（16 担当・98 回目）の指摘 6 件を完結（2026-11-28）
+  - Settings::default_path の OnceLock 初期化を ENV_LOCK 配下へ移動。
+  - ENV_LOCK の poison 回復を `env_lock()` に一元化（29 箇所）。
+  - ループバックサーバーを共有の期限付き accept へ統一。
+  - ゼロタイムアウトテストを Tokio runtime 上で実行しフレークを解消。
+  - キャッシュ復元テストを非デフォルト client_id で強化。
+  - README の E2E opt-in／Betterleaks／既知の制約を現状へ整合。
+  - 起動エージェント: 6 体（分析 2 + 実装 2 + レビュー 2）。
+  - 検証: fmt / check / test（1307 passed、E2E 1 ignored、3 回連続）/ clippy
+    -D warnings / rustdoc -D warnings / cargo audit（--no-fetch、18 allowed
+    warnings）/ cargo deny / markdownlint / Betterleaks 1.10.1（dir＋git 履歴）
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 - [x] 第153弾（16 担当・97 回目）の指摘 6 件を完結（2026-11-28）
   - 認証フィールドの空判定／マスク文字数を共有ルールへ集約。
   - 200＋parse 失敗／200 正常系を実 production 経路でテストし、

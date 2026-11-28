@@ -991,7 +991,7 @@ fn cache_errors_are_not_all_reported_as_corruption() {
 // Environment variables are process-global. Use the same mutex as
 // `settings_tests` so an `XDG_CONFIG_HOME` swap there cannot overlap one here.
 #[cfg(target_os = "linux")]
-use crate::limits::ENV_LOCK;
+use crate::limits::env_lock;
 
 #[cfg(target_os = "linux")]
 struct EnvGuard {
@@ -1021,7 +1021,7 @@ impl Drop for EnvGuard {
 #[test]
 fn default_path_uses_cache_dir_and_legacy_path_uses_config_dir() {
     #[cfg(target_os = "linux")]
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let cache_name = std::path::Path::new("bitwarden-gpui-poc").join("sync-cache.json");
     assert_eq!(
         default_path(),
@@ -1036,7 +1036,7 @@ fn default_path_uses_cache_dir_and_legacy_path_uses_config_dir() {
 #[cfg(target_os = "linux")]
 #[test]
 fn xdg_cache_home_selects_cache_dir_and_new_writes_land_there() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let xdg = root.path().join("xdg-cache-home");
     let _env = EnvGuard::set("XDG_CACHE_HOME", &xdg);
@@ -1098,7 +1098,7 @@ fn legacy_cache_is_read_but_never_rewritten() {
 #[cfg(target_os = "linux")]
 #[test]
 fn save_default_never_rewrites_the_legacy_path() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let cache_home = root.path().join("xdg-cache-home");
     let config_home = root.path().join("xdg-config-home");
@@ -1239,7 +1239,7 @@ fn fallback_returns_not_found_when_both_locations_are_missing() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cached_sync_for_restores_only_a_usable_cache_for_this_server() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let cache_home = root.path().join("xdg-cache-home");
     let config_home = root.path().join("xdg-config-home");
@@ -1467,7 +1467,7 @@ fn every_corrupt_group_error_maps_to_the_corrupt_reason() {
 #[cfg(target_os = "linux")]
 #[test]
 fn expired_cache_is_rejected_by_the_restore_path() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let cache_home = root.path().join("xdg-cache-home");
     let config_home = root.path().join("xdg-config-home");
@@ -1648,7 +1648,7 @@ fn expired_primary_is_not_replaced_by_a_fresh_legacy_cache() {
     // expired. `load_default` falls back solely on NotFound, so the fresh
     // legacy file must not revive the offline restore: the caller sees the
     // primary's CacheExpired and the legacy file stays untouched.
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let cache_home = root.path().join("xdg-cache-home");
     let config_home = root.path().join("xdg-config-home");
@@ -1967,7 +1967,7 @@ fn double_encoded_nested_urls_are_decoded_twice_before_masking() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cached_sync_for_detailed_reports_a_direct_server_mismatch() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -2011,7 +2011,7 @@ fn sensitive_param_keys_match_camel_case_and_partial_names() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cached_sync_for_detailed_reports_a_broken_body_in_a_valid_envelope() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -2099,7 +2099,7 @@ fn mask_url_userinfo_without_a_path_delimiter_masks_the_authority() {
 #[cfg(target_os = "linux")]
 #[test]
 fn future_and_sentinel_created_at_are_expired_on_the_restore_path() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -2202,7 +2202,7 @@ fn legacy_cache_is_used_by_the_offline_restore_path() {
     // `cached_sync_for_detailed` goes through `load_default` (cache.rs:753),
     // so a cache left in the old config directory is restorable even though
     // all new writes land under the cache directory.
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let cache_home = root.path().join("xdg-cache-home");
     let config_home = root.path().join("xdg-config-home");
@@ -2357,7 +2357,7 @@ fn user_id_is_extracted_from_pascal_case_and_uppercase_bodies() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cached_sync_for_detailed_rejects_a_cache_for_another_account() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -2691,7 +2691,7 @@ fn validate_rejects_a_body_user_id_that_disagrees_with_the_envelope() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cached_sync_for_detailed_rejects_a_body_user_id_that_disagrees_with_the_envelope() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -2774,7 +2774,7 @@ fn protocol_relative_nested_urls_are_masked_within_the_depth_limit() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cached_sync_for_detailed_reports_not_found_with_no_cache_file() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -3421,7 +3421,7 @@ fn non_ascii_percent_escaped_keys_are_a_documented_masking_limit() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cached_sync_for_detailed_classifies_version_size_and_read_failures() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -3481,7 +3481,7 @@ fn cached_sync_for_detailed_classifies_version_size_and_read_failures() {
 #[cfg(target_os = "linux")]
 #[test]
 fn body_without_profile_id_fails_closed_on_both_validation_paths() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -3533,7 +3533,7 @@ fn body_without_profile_id_fails_closed_on_both_validation_paths() {
 #[cfg(target_os = "linux")]
 #[test]
 fn empty_profile_id_fails_closed_on_both_validation_paths() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -4214,7 +4214,7 @@ fn simultaneous_server_and_user_mismatch_prefers_server_in_validate() {
 #[cfg(target_os = "linux")]
 #[test]
 fn simultaneous_server_and_user_mismatch_prefers_server_on_restore() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -4321,7 +4321,7 @@ fn file_exactly_at_max_cache_bytes_is_loaded_and_one_byte_over_is_not() {
 #[cfg(target_os = "linux")]
 #[test]
 fn restore_guard_priority_puts_identity_checks_before_expiry() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -4358,7 +4358,7 @@ fn restore_guard_priority_puts_identity_checks_before_expiry() {
 #[cfg(target_os = "linux")]
 #[test]
 fn restore_guard_priority_puts_expiry_before_body_parse_and_body_user_check() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -5215,7 +5215,7 @@ fn empty_account_ids_fail_closed_on_validate() {
 #[cfg(target_os = "linux")]
 #[test]
 fn empty_account_ids_fail_closed_on_the_restore_path() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
@@ -5278,7 +5278,7 @@ fn save_writes_owner_only_permissions() {
 fn save_default_writes_owner_only_permissions() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let cache_home = root.path().join("xdg-cache-home");
     let _env = EnvGuard::set("XDG_CACHE_HOME", &cache_home);
@@ -5490,7 +5490,7 @@ fn hand_built_cache_server_url_credentials_are_plaintext_on_disk() {
 #[cfg(target_os = "linux")]
 #[test]
 fn non_string_profile_id_fails_closed_on_both_validation_paths() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = env_lock();
     let root = tempfile::tempdir().unwrap();
     let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
     let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));

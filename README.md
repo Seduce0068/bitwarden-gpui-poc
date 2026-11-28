@@ -71,6 +71,12 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
   検証する。2026-11-22 に kiri 上の Vaultwarden に対して再実行し、
   復号済みパスワードと TOTP コードの検証まで含めて 1 passed を確認済み。
   ただし UI のコピー操作 `p` / `u` / `y` の実サーバー確認は未実施
+  （「既知の制約」を参照）。このテストは `#[ignore]` の opt-in で、
+  既定の `cargo test` / CI には含まれず、実サーバーと `E2E_*`
+  認証情報が必要です（手順は後述）。上記 1 passed は復号済み
+  パスワード／TOTP の非空・使用可否の確認で、
+  `E2E_EXPECTED_*` の既知値照合は設定時のみ（3 つ全て設定時は同一
+  ログイン項目との一致を要求。実行手順は「opt-in E2E の実行」を参照）。
 - `src/cache.rs` に、暗号化済みアイテムを含む平文 JSON キャッシュを実装済み
   （鍵素材は保存しない、ファイルは 0600 で作成）。取得時刻から 7 日で期限切れ。
   読み出しは同期失敗時の復元経路へ接続済み。0.1.1 で生 body が取得できる
@@ -255,6 +261,9 @@ cargo audit
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 cargo deny check
 markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
+betterleaks dir --redact --config .betterleaks.toml .
+betterleaks git --redact --config .betterleaks.toml .
+# `betterleaks git` は全履歴を走査します。浅いクローンでは `git fetch --unshallow` を先に実行してください。
 cargo run
 ```
 
@@ -378,6 +387,9 @@ Betterleaks は CI 起動時に pre-commit の `rev` と一致するか検査し
 - 実ログイン時はログイン項目のみを変換し、他 kind は一覧に表示されない
   （PoC の既知制約。モックデータは `m` で開いた場合のみ表示）
 - パスワードと TOTP シークレットは機密のため検索対象外（監査での有無判定には使用）
+- 実ログイン後の `p` / `u` / `y` による復号済みパスワード／
+  ユーザー名／TOTP コードのクリップボードコピーは実サーバーで未確認
+  （E2E は同期・復号・取り込みまでが対象で UI 操作は含まない）
 - ログインのタイムアウトは設定ファイルの `login_timeout_seconds` で変更可能（既定30秒）
 - 実ログイン時は link-local アドレス / クラウドメタデータホスト / DNS 解決先の
   link-local IP を拒否するが、openwarden 0.1.1 がリダイレクトを追従しないため

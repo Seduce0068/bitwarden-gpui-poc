@@ -47,6 +47,150 @@ fn config() -> AuthConfig {
     }
 }
 
+/// Run a zero-budget timeout race inside a Tokio reactor.
+///
+/// A valid URL lets the login future reach `reqwest`, which needs a Tokio
+/// reactor even when the zero-length timer is expected to win. Scheduling can
+/// let the login future poll first; without a reactor that panics instead of
+/// returning `Timeout`. A current-thread runtime keeps the test deterministic
+/// under parallel load.
+fn timeout_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a Tokio runtime for the timeout race")
+}
+
+/// Wait for one loopback connection with a bounded deadline.
+///
+/// A plain `TcpListener::accept` blocks forever when the client never connects
+/// (for example when authentication fails before its first request), which
+/// hangs the whole test binary. Nonblocking mode plus a deadline turns that
+/// into a failure carrying the request lines seen so far. Once accepted, the
+/// stream goes back to blocking mode with finite read/write timeouts so a
+/// half-sent request cannot pin the server thread either.
+fn accept_loopback_request(
+    listener: &std::net::TcpListener,
+    timeout: std::time::Duration,
+    seen: &[String],
+) -> std::net::TcpStream {
+    use std::io::ErrorKind;
+
+    listener
+        .set_nonblocking(true)
+        .expect("put the loopback listener in nonblocking mode");
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream
+                    .set_nonblocking(false)
+                    .expect("restore blocking mode on the loopback stream");
+                stream
+                    .set_read_timeout(Some(timeout))
+                    .expect("set a read timeout on the loopback stream");
+                stream
+                    .set_write_timeout(Some(timeout))
+                    .expect("set a write timeout on the loopback stream");
+                return stream;
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "no loopback request within {timeout:?}; seen: {seen:?}"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("loopback accept failed: {error}; seen: {seen:?}"),
+        }
+    }
+}
+
+/// A three-request loopback login: prelogin 200, token 200, then the supplied
+/// `/api/sync` response. The returned request lines prove which route the
+/// production code took after the sync response. Shared by every loopback
+/// login test so the bounded-accept fix applies to all of them.
+fn loopback_login_server(
+    sync_status: &'static str,
+    sync_body: &'static str,
+) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    use std::io::{Read, Write};
+
+    fn response(body: &str, status_line: &str) -> String {
+        format!(
+            "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status_line,
+            body.len(),
+            body
+        )
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let base = format!("http://{}", listener.local_addr().expect("a local address"));
+    let server = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        // `Connection: close` makes reqwest open one connection per request, so
+        // the three production calls arrive in prelogin/token/sync order.
+        for _ in 0..3 {
+            let mut stream =
+                accept_loopback_request(&listener, std::time::Duration::from_secs(5), &seen);
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let header_end = loop {
+                let n = stream.read(&mut chunk).expect("read the request head");
+                assert!(
+                    n > 0,
+                    "the client closed before sending a request; seen: {seen:?}"
+                );
+                request.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = request.windows(4).position(|w| w == &b"\r\n\r\n"[..]) {
+                    break pos + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&request[..header_end]);
+            let first = head.lines().next().unwrap_or_default().to_owned();
+            seen.push(first.clone());
+            let content_length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let n = stream.read(&mut chunk).expect("read the request body");
+                assert!(
+                    n > 0,
+                    "the client closed before sending the full body; seen: {seen:?}"
+                );
+                request.extend_from_slice(&chunk[..n]);
+            }
+            let payload = if first.starts_with("POST /identity/accounts/prelogin") {
+                response(r#"{"kdf":0,"kdfIterations":100000}"#, "HTTP/1.1 200 OK")
+            } else if first.starts_with("POST /identity/connect/token") {
+                response(
+                    r#"{"access_token":"test-access-token","expires_in":3600}"#,
+                    "HTTP/1.1 200 OK",
+                )
+            } else if first.starts_with("GET /api/sync") {
+                response(sync_body, sync_status)
+            } else {
+                // Keep the server alive on an unexpected route: the request
+                // line stays in `seen` and surfaces in a later accept timeout,
+                // instead of the thread dying or the test hanging.
+                response("{}", "HTTP/1.1 400 Bad Request")
+            };
+            stream
+                .write_all(payload.as_bytes())
+                .expect("write the loopback response");
+        }
+        seen
+    });
+    (base, server)
+}
+
 #[test]
 fn valid_config_passes_validation() {
     assert_eq!(validate_config(&config()), Ok(()));
@@ -1800,7 +1944,7 @@ fn timeout_wins_when_the_login_budget_expires() {
     // future.
     let mut local = config();
     local.server_url = "http://127.0.0.1:8080".into();
-    let result = smol::block_on(authenticate_with_timeout(
+    let result = timeout_runtime().block_on(authenticate_with_timeout(
         &local,
         "device",
         std::time::Duration::ZERO,
@@ -2218,7 +2362,7 @@ fn the_clamped_copy_is_what_validation_sees() {
     assert_eq!(validate_config(&original), Err(AuthError::InvalidEmail));
 
     let before_email = original.email.clone();
-    let result = smol::block_on(authenticate_with_timeout(
+    let result = timeout_runtime().block_on(authenticate_with_timeout(
         &original,
         "device",
         std::time::Duration::ZERO,
@@ -2792,18 +2936,6 @@ fn sync_failure_restores_the_seeded_cache_and_marks_the_vault_from_cache() {
     // (auth.rs:1190-1209) must load the seeded cache and return a vault whose
     // `from_cache` is true. The cache-only folder id proves the data came from
     // disk rather than from a live response.
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
-    fn response(body: &str, status_line: &str) -> String {
-        format!(
-            "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            status_line,
-            body.len(),
-            body
-        )
-    }
-
     struct EnvGuard {
         previous: [(&'static str, Option<std::ffi::OsString>); 2],
     }
@@ -2820,9 +2952,7 @@ fn sync_failure_restores_the_seeded_cache_and_marks_the_vault_from_cache() {
 
     // `cached_sync_for_detailed` reads the platform cache path, so isolate the
     // process-global XDG variables under the lock the other suites also use.
-    let _lock = crate::limits::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::limits::env_lock();
     let temp = tempfile::tempdir().expect("a temporary directory");
     let cache_home = temp.path().join("cache-home");
     let config_home = temp.path().join("config-home");
@@ -2834,71 +2964,25 @@ fn sync_failure_restores_the_seeded_cache_and_marks_the_vault_from_cache() {
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
     let _env = EnvGuard { previous };
 
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-    let base = format!("http://{}", listener.local_addr().expect("a local address"));
+    // No fresh body: `sync_body` must fail so the real fallback runs. The
+    // shared server bounds every accept with a deadline.
+    let (base, server) = loopback_login_server("HTTP/1.1 503 Service Unavailable", "");
 
-    // The cache envelope must match both the server URL and the user id encoded
-    // in `user.1234`; the folder id is a marker no live response could supply.
-    let cached_body = br#"{"profile":{"id":"1234","key":"2.encrypted"},"folders":[{"id":"cache-only-folder","name":""}],"ciphers":[]}"#;
+    // The cache envelope must match both the server URL and the non-default
+    // account id `cache-only-5678` derived from the client id set below; the
+    // folder id is a marker no live response could supply. The restored
+    // `profile.id` then proves the data came from disk rather than from the
+    // default `user.1234` or a live response.
+    let cached_body = br#"{"profile":{"id":"cache-only-5678","key":"2.encrypted"},"folders":[{"id":"cache-only-folder","name":""}],"ciphers":[]}"#;
     let cache = crate::cache::SyncCache::from_body(cached_body.to_vec(), &base)
         .expect("the seeded sync body must be a valid cache entry");
     crate::cache::save_default(&cache).expect("the cache file must be writable");
 
-    let server = std::thread::spawn(move || {
-        let mut seen = Vec::new();
-        // `Connection: close` makes reqwest open one connection per request, so
-        // the three production calls arrive in prelogin/token/sync order.
-        for _ in 0..3 {
-            let (mut stream, _) = listener.accept().expect("a loopback request");
-            let mut request = Vec::new();
-            let mut chunk = [0u8; 1024];
-            let header_end = loop {
-                let n = stream.read(&mut chunk).expect("read the request head");
-                assert!(n > 0, "the client closed before sending a request");
-                request.extend_from_slice(&chunk[..n]);
-                if let Some(pos) = request.windows(4).position(|w| w == &b"\r\n\r\n"[..]) {
-                    break pos + 4;
-                }
-            };
-            let head = String::from_utf8_lossy(&request[..header_end]);
-            let first = head.lines().next().unwrap_or_default().to_owned();
-            seen.push(first.clone());
-            let content_length = head
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().ok())
-                        .flatten()
-                })
-                .unwrap_or(0);
-            while request.len() < header_end + content_length {
-                let n = stream.read(&mut chunk).expect("read the request body");
-                assert!(n > 0, "the client closed before sending the full body");
-                request.extend_from_slice(&chunk[..n]);
-            }
-            let payload = if first.starts_with("POST /identity/accounts/prelogin") {
-                response(r#"{"kdf":0,"kdfIterations":100000}"#, "HTTP/1.1 200 OK")
-            } else if first.starts_with("POST /identity/connect/token") {
-                response(
-                    r#"{"access_token":"test-access-token","expires_in":3600}"#,
-                    "HTTP/1.1 200 OK",
-                )
-            } else if first.starts_with("GET /api/sync") {
-                // No fresh body: `sync_body` must fail so the real fallback runs.
-                response("", "HTTP/1.1 503 Service Unavailable")
-            } else {
-                panic!("unexpected loopback request: {first}");
-            };
-            stream
-                .write_all(payload.as_bytes())
-                .expect("write the loopback response");
-        }
-        seen
-    });
-
     let mut auth_config = config();
     auth_config.server_url = base;
+    // Derive that same non-default account id from the client id so the cache
+    // lookup matches; the default `user.1234` is intentionally not used here.
+    auth_config.client_id = "user.cache-only-5678".into();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2922,12 +3006,11 @@ fn sync_failure_restores_the_seeded_cache_and_marks_the_vault_from_cache() {
         vault.from_cache,
         "auth.rs:1190-1209 must mark a restored vault"
     );
-    assert_eq!(vault.sync.user_id(), "1234");
     // `SyncData` keeps its folders private; the decisive observable is that
     // the failed live sync was rescued at all (`from_cache`) with the seeded
-    // account id. A live response would have taken the 200 path and returned
-    // `from_cache == false`.
-    assert_eq!(vault.sync.user_id(), "1234");
+    // non-default account id. A live response would have taken the 200 path
+    // and returned `from_cache == false`.
+    assert_eq!(vault.sync.user_id(), "cache-only-5678");
 }
 
 #[test]
@@ -5346,6 +5429,11 @@ struct SyncRouteEnvGuard {
 }
 
 impl SyncRouteEnvGuard {
+    /// The caller must hold `crate::limits::env_lock()` for the entire life of
+    /// the returned guard: XDG variables are process-global and the other
+    /// suites swap them under that same mutex. Do NOT take the lock in here —
+    /// callers already hold it while this runs, so re-locking would deadlock
+    /// recursively (std::sync::Mutex is not reentrant).
     fn isolated() -> (tempfile::TempDir, Self) {
         let temp = tempfile::tempdir().expect("a temporary directory");
         let previous = [
@@ -5369,84 +5457,9 @@ impl Drop for SyncRouteEnvGuard {
     }
 }
 
-/// A three-request loopback login: prelogin 200, token 200, then the supplied
-/// `/api/sync` response. The returned request lines prove which route the
-/// production code took after the sync response.
-fn loopback_login_server(
-    sync_status: &'static str,
-    sync_body: &'static str,
-) -> (String, std::thread::JoinHandle<Vec<String>>) {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
-    fn response(body: &str, status_line: &str) -> String {
-        format!(
-            "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            status_line,
-            body.len(),
-            body
-        )
-    }
-
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-    let base = format!("http://{}", listener.local_addr().expect("a local address"));
-    let server = std::thread::spawn(move || {
-        let mut seen = Vec::new();
-        for _ in 0..3 {
-            let (mut stream, _) = listener.accept().expect("a loopback request");
-            let mut request = Vec::new();
-            let mut chunk = [0u8; 1024];
-            let header_end = loop {
-                let n = stream.read(&mut chunk).expect("read the request head");
-                assert!(n > 0, "the client closed before sending a request");
-                request.extend_from_slice(&chunk[..n]);
-                if let Some(pos) = request.windows(4).position(|w| w == &b"\r\n\r\n"[..]) {
-                    break pos + 4;
-                }
-            };
-            let head = String::from_utf8_lossy(&request[..header_end]);
-            let first = head.lines().next().unwrap_or_default().to_owned();
-            seen.push(first.clone());
-            let content_length = head
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().ok())
-                        .flatten()
-                })
-                .unwrap_or(0);
-            while request.len() < header_end + content_length {
-                let n = stream.read(&mut chunk).expect("read the request body");
-                assert!(n > 0, "the client closed before sending the full body");
-                request.extend_from_slice(&chunk[..n]);
-            }
-            let payload = if first.starts_with("POST /identity/accounts/prelogin") {
-                response(r#"{"kdf":0,"kdfIterations":100000}"#, "HTTP/1.1 200 OK")
-            } else if first.starts_with("POST /identity/connect/token") {
-                response(
-                    r#"{"access_token":"test-access-token","expires_in":3600}"#,
-                    "HTTP/1.1 200 OK",
-                )
-            } else if first.starts_with("GET /api/sync") {
-                response(sync_body, sync_status)
-            } else {
-                panic!("unexpected loopback request: {first}");
-            };
-            stream
-                .write_all(payload.as_bytes())
-                .expect("write the loopback response");
-        }
-        seen
-    });
-    (base, server)
-}
-
 #[test]
 fn http_200_with_unparseable_sync_body_restores_the_seeded_cache() {
-    let _lock = crate::limits::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::limits::env_lock();
     let (_temp, _env) = SyncRouteEnvGuard::isolated();
     let (base, server) = loopback_login_server("HTTP/1.1 200 OK", "not-json");
 
@@ -5492,9 +5505,7 @@ fn http_200_with_unparseable_sync_body_restores_the_seeded_cache() {
 
 #[test]
 fn http_200_with_a_valid_sync_body_uses_the_live_response() {
-    let _lock = crate::limits::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::limits::env_lock();
     let (_temp, _env) = SyncRouteEnvGuard::isolated();
     // A fresh XDG cache root holds no cache, so a successful return can only
     // come from the live 200 path (auth.rs:1183-1191).
@@ -5512,7 +5523,16 @@ fn http_200_with_a_valid_sync_body_uses_the_live_response() {
         .expect("a valid 200 sync must be used directly");
 
     let seen = server.join().expect("the loopback server must finish");
-    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert_eq!(seen.len(), 3, "prelogin, token and sync must all be sent");
+    assert!(
+        seen[0].starts_with("POST /identity/accounts/prelogin"),
+        "{seen:?}"
+    );
+    assert!(
+        seen[1].starts_with("POST /identity/connect/token"),
+        "{seen:?}"
+    );
+    assert!(seen[2].starts_with("GET /api/sync"), "{seen:?}");
     assert!(
         !vault.from_cache,
         "auth.rs:1190-1191 must clear the flag on a live 200"

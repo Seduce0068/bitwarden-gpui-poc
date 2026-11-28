@@ -1,10 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use crate::limits::ENV_LOCK;
+use crate::limits::env_lock;
 use crate::settings::*;
 
-// `ENV_LOCK` lives in `crate::limits` so the settings and cache test modules
-// share one process-global mutex. The `EnvGuard` in
+// `ENV_LOCK` and its poison-tolerant `env_lock()` accessor live in
+// `crate::limits` so the settings and cache test modules share one
+// process-global mutex. The `EnvGuard` in
 // `default_path_is_unchanged_after_the_config_environment_changes` restores the
 // previous value on drop, but that alone does not stop two tests from changing
 // `XDG_CONFIG_HOME` at the same time. Every env-touching test must hold the
@@ -2406,6 +2407,10 @@ fn sanitized_clamps_idle_and_login_timeouts_at_the_upper_bound() {
 
 #[test]
 fn default_path_is_a_stable_settings_json_under_the_config_directory() {
+    // The OnceLock is initialized from the ambient XDG_CONFIG_HOME, which other
+    // tests swap under the same process-global mutex. Hold it across the first
+    // resolution so those swaps cannot race this test.
+    let _env = env_lock();
     // `default_path` caches its result in a OnceLock (settings.rs:805-811), so
     // every UI call site in one process observes the same location.
     let first = Settings::default_path();
@@ -3836,7 +3841,7 @@ fn save_persists_clamped_numeric_fields_and_leaves_self_untouched() {
 fn default_path_is_unchanged_after_the_config_environment_changes() {
     // XDG_CONFIG_HOME is process-global: hold ENV_LOCK so no other test can
     // observe or overwrite the value while this one swaps it.
-    let _env = ENV_LOCK.lock().unwrap();
+    let _env = env_lock();
     // `Settings::default_path` resolves once into a OnceLock (settings.rs), so
     // every later call must return that same path even if XDG_CONFIG_HOME is
     // changed or removed. The environment is process-global; the guard below
@@ -3865,10 +3870,11 @@ fn default_path_is_unchanged_after_the_config_environment_changes() {
 
     let root = tempfile::tempdir().unwrap();
     let first_root = root.path().join("first-config");
-    let _first = EnvGuard::set("XDG_CONFIG_HOME", &first_root);
-    // Initialize the OnceLock before changing the environment, so the test is
-    // independent of whether another test called default_path() first.
+    // Initialize the OnceLock from the ambient environment BEFORE the first
+    // swap, so the cached value is fixed independently of which test called
+    // `default_path()` first; every change below must then leave it untouched.
     let before = Settings::default_path();
+    let _first = EnvGuard::set("XDG_CONFIG_HOME", &first_root);
     assert_eq!(Settings::default_path(), before, "stable before the change");
 
     let second_root = root.path().join("second-config");
@@ -3924,7 +3930,7 @@ fn settings_load_error_other_carries_its_message_and_display() {
 
 #[test]
 fn default_path_mirrors_config_dir_including_the_none_branch() {
-    let _env = ENV_LOCK.lock().unwrap();
+    let _env = env_lock();
     // `default_path()` caches `dirs::config_dir().map(|dir| ...)` in a OnceLock
     // (settings.rs:805-811). The `Option` is mapped, not unwrapped: when no
     // config directory can be resolved the result stays None instead of a
@@ -3956,7 +3962,7 @@ fn default_path_mirrors_config_dir_including_the_none_branch() {
 
 #[test]
 fn default_path_maps_config_dir_to_the_app_settings_json() {
-    let _env = ENV_LOCK.lock().unwrap();
+    let _env = env_lock();
     // `default_path` maps `dirs::config_dir()` through
     // `.join("bitwarden-gpui-poc").join("settings.json")` and caches the
     // Option in a OnceLock (settings.rs:825-835). An env-touching test in the
