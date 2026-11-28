@@ -24,9 +24,61 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第154弾で 6 件すべてを完了）。
+### 中優先度
+
+- [ ] **TOTP シークレットの平文 String 複製を Zeroizing へ** —
+  根拠 `src/ui/actions.rs:20` / `src/ui/input.rs:708` / `README.md:42` / R3-IV01 + R2-FG01 / 中
+- [ ] **AuthConfig の Debug で平文フィールドをマスク** —
+  根拠 `src/auth.rs:29-38` / `src/auth_tests.rs:281` / R3-IV01 / 中
+- [ ] **Stale 判定の i64::MIN 境界を saturating_sub で固定** —
+  根拠 `src/health.rs:1039` / R3-TQ01 / 中
+- [ ] **オフライン復元の警告を一覧へ永続表示** —
+  根拠 `src/ui/logic.rs:268` / `src/ui/login_flow.rs:196` / R5-VU01 / 中
+- [ ] **キャッシュ権限エラーの詳細をステータスへ反映** —
+  根拠 `src/cache.rs:1241,1486,1508` / R5-VU01 / 中
+- [ ] **E2E の XDG キャッシュ／設定パスを隔離** —
+  根拠 `tests/real_server_e2e.rs:88-96` / R3-TQ01 / 中
+- [ ] **UI から openwarden の直接 import を消す** —
+  根拠 `src/ui/login_flow.rs:8,62-64` / `docs/adr/adr-20261116-openwarden-integration.md:47` / R1-AR01 / 中
+
+### 低優先度
+
+- [ ] **README の PageUp/PageDown を固定10行と明記** —
+  根拠 `README.md:175` / `src/ui/input.rs:36-54` / R2-FG01 / 低
+- [ ] **mock.rs の doc をデモ用 vault へ修正** —
+  根拠 `src/ui/mock.rs:8` / R1-ST01 / 低
+- [ ] **Strength::from_bits/score の NaN・無限大をテスト** —
+  根拠 `src/generator.rs:274-303` / R3-TQ01 / 低
+- [ ] **read_bounded の limit=0 境界をテスト** —
+  根拠 `src/cache.rs:1183-1192` / R3-TQ01 / 低
+- [ ] **ensure_device_id(None) の不正 ID 再生成をテスト** —
+  根拠 `src/settings.rs:771-785` / R3-TQ01 / 低
+- [ ] **E2E の env_state 3 状態を単体テスト** —
+  根拠 `tests/real_server_e2e.rs:42-48` / R3-TQ01 / 低
+- [ ] **形骸化テスト（完全一致後の contains／score 重複）を整理** —
+  根拠 `src/health_tests.rs:3593-3601` / `src/generator_tests.rs:270-299` / R3-TQ01 / 低
+- [ ] **cargo-audit の版を固定し README のツール表へ追加** —
+  根拠 `.github/workflows/ci.yml:24,28` / `README.md:350-354` / R4-DP01 / 低
+- [ ] **deny.toml に `unsound = "deny"` を明示** —
+  根拠 `deny.toml:4-11` / R4-DP01 / 低
+- [ ] **pre-commit の Betterleaks 実行バイナリ版を検証** —
+  根拠 `.pre-commit-config.yaml:2-6` / R4-DP01 / 低
+- [ ] **CI の Betterleaks rev grep を空白許容へ変更** —
+  根拠 `.github/workflows/ci.yml:44` / R4-DP01 / 低
 
 ## 完了
+
+- [x] バックログ補充（第155弾準備 / 2026-11-28）。
+  swarm-todo-discovery と swarm-project-review の R1〜R5 を8体並列で
+  実行し、重複・妥当性を吸収して上記18件を追記した。
+  - 却下: revision 小数秒の切り捨ては
+    `src/vault_sync_tests.rs:3377` が意図的な同値として固定済み。
+  - 却下: キャッシュの pretty 展開による上限往復差はテスト名に文書化済み。
+  - 却下: `created_at` 欠落キャッシュの best-effort 許可は ADR 決定。
+  - 却下: `UNKNOWN_REVISION = 0` は名前付きセンチネルとして意図的。
+  - 却下: `rust-toolchain.toml` 未固定は下部メモに既出（重複）。
+  - 却下: settings と cache のスキーマバージョン統合は第153弾で
+    意図的な分離と裁定済み。
 
 - [x] 第154弾（16 担当・98 回目）の指摘 6 件を完結（2026-11-28）
   - Settings::default_path の OnceLock 初期化を ENV_LOCK 配下へ移動。
@@ -1633,6 +1685,14 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## メモ
 
+- 要判断（第155弾 R1-ST01）: キャレット移動／実テキスト入力ウィジェット
+  （`src/ui/keys.rs:27,448`）は大規模機能であり、PoC のスコープ外とするか
+  既知制約として明記するかの判断が必要。
+- 要判断（第155弾 R1-ST01）: TOTP 次コードのプレビュー
+  （`src/totp.rs:7`）は未実装だが、PoC の対象外の可能性がある。
+- 要判断（第155弾 R1-AR01）: openwarden 型の model/UI 境界への漏れ、
+  settings のドメイン型直接依存、AppError と UI エラー列挙の重複は
+  いずれも設計判断を伴うため、個別の ADR 化を検討する。
 - 要判断（第153弾 R4-SEC01）: 認証フィールドのマスクが可視文字数を漏らす
   (`src/ui/panels.rs:883-897`)。既存テストが `"pw" → "••"` を固定しており
   現在の挙動は意図的。固定長マスクへの変更は仕様変更にあたるため、
