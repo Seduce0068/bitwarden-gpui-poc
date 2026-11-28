@@ -26,7 +26,7 @@ use openwarden::{
 use crate::error::{AppError, BoxedCause};
 
 /// Credentials supplied by the user at unlock time.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AuthConfig {
     /// Base URL of the Bitwarden or Vaultwarden server.
     pub server_url: String,
@@ -38,6 +38,36 @@ pub struct AuthConfig {
     pub email: String,
     /// Master password, used only to derive the decryption key.
     pub master_password: SecretString,
+}
+
+impl core::fmt::Debug for AuthConfig {
+    /// Keep every field name in the rendering but never print credential text.
+    ///
+    /// The derived `Debug` printed `server_url`, `client_id` and `email`
+    /// verbatim. A server URL may embed `user:password@` userinfo or secret
+    /// query/fragment parameters, and a personal-API-key client id or an email
+    /// is identifying data, so none of the three may reach a log line. They are
+    /// rendered as `[REDACTED]` while the field names remain for diagnostics.
+    ///
+    /// The two `SecretString` fields are delegated to the container's own
+    /// `Debug`, preserving the existing `[REDACTED]` rendering verbatim.
+    ///
+    /// Follow-up proposed to the owner, not implemented here:
+    /// `crate::cache::mask_url_secrets` already masks exactly this kind of URL
+    /// while keeping its structure, but the function (and its helpers) is
+    /// private to `cache.rs`. Making it `pub(crate)` would let this impl render
+    /// a more useful masked URL instead of a blanket `[REDACTED]`. That file is
+    /// outside this change's scope, so the masker is neither called nor
+    /// duplicated here.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("server_url", &"[REDACTED]")
+            .field("client_id", &"[REDACTED]")
+            .field("client_secret", &self.client_secret)
+            .field("email", &"[REDACTED]")
+            .field("master_password", &self.master_password)
+            .finish()
+    }
 }
 
 /// Errors the authentication layer can report.

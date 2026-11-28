@@ -5,7 +5,7 @@ use crate::model::{
 };
 use zeroize::Zeroizing;
 
-/// A small personal vault used until real sync is wired up.
+/// A small personal vault for the `m` demo; real sync is already connected.
 pub(super) fn mock_vault() -> Vault {
     fn login(
         id: &str,

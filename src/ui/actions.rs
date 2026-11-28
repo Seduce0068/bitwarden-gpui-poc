@@ -17,7 +17,11 @@ impl BitwardenApp {
                 cx.notify();
                 return;
             };
-            visible[index].totp_secret().unwrap_or("").to_string()
+            // Keep the owned copy zeroized on drop, matching the README's
+            // `Zeroizing<String>` guarantee for displayed TOTP secrets. The
+            // copy is required: the calls below take `&mut self` and cannot
+            // coexist with a borrow into `self.view`.
+            Zeroizing::new(visible[index].totp_secret().unwrap_or("").to_string())
         };
         // Copy the code that is actually on screen. Generating a fresh one here
         // could disagree with the cached display across a period boundary, so

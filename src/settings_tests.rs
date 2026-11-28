@@ -4524,3 +4524,39 @@ fn passphrase_separator_cap_is_applied_on_a_utf8_boundary_and_persisted() {
         expected
     );
 }
+
+#[test]
+fn ensure_device_id_without_a_path_replaces_an_invalid_in_memory_id() {
+    // The `path: None` branch of `ensure_device_id` (settings.rs:771-785)
+    // regenerates in memory only. Hold the shared env lock so no parallel test
+    // can create or rewrite the cached default path while it is compared.
+    let _env = env_lock();
+    let default_path = Settings::default_path();
+    let before = default_path
+        .as_ref()
+        .and_then(|path| std::fs::read(path).ok());
+
+    let invalid = "not-a-canonical-v4-uuid";
+    assert!(!is_valid_device_id(invalid), "the fixture must be invalid");
+    let mut settings = Settings {
+        device_id: invalid.to_string(),
+        ..Settings::default()
+    };
+
+    let generated = settings.ensure_device_id(None).unwrap().to_string();
+    assert!(is_valid_device_id(&generated), "{generated}");
+    assert_ne!(generated, invalid, "the malformed id must be replaced");
+    assert_eq!(settings.device_id, generated);
+    // The in-memory replacement is reused on the next call.
+    assert_eq!(settings.ensure_device_id(None).unwrap(), generated);
+
+    // No path was supplied, so the default settings file must be neither
+    // created nor modified by either call.
+    let after = default_path
+        .as_ref()
+        .and_then(|path| std::fs::read(path).ok());
+    assert_eq!(
+        after, before,
+        "ensure_device_id(None) must not touch the file"
+    );
+}

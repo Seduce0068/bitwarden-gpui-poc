@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第155弾 / 2026-11-28）
+
+- TOTP シークレットの平文複製を `Zeroizing<String>` へ変更
+- `AuthConfig` の手動 `Debug` で server_url / client_id / email をマスク
+- Stale 年齢計算を `saturating_sub` で明示的にオーバーフロー安全化
+- opt-in E2E の XDG キャッシュ／設定パスを一時ディレクトリへ隔離
+- README の PageUp/PageDown を固定10行、mock.rs の doc をデモ用へ修正
+- NaN/±∞、`read_bounded(0)`、`ensure_device_id(None)` 等のテストを追加
+
 ### 全体改善（第154弾 / 2026-11-28）
 
 - Settings の OnceLock 初期化を ENV_LOCK 配下へ移し競合を解消

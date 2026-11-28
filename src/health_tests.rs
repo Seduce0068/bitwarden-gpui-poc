@@ -2006,6 +2006,63 @@ fn future_revision_never_produces_a_stale_finding() {
 }
 
 #[test]
+fn extreme_revision_dates_do_not_overflow_the_stale_check() {
+    // `revision_date` is a public i64, so both extremes can reach `audit()`.
+    // Runtime Proof: the `revision_date > UNKNOWN_REVISION(0)` guard at
+    // health.rs:1039 rejects i64::MIN before any subtraction, while the
+    // `now > revision_date` guard rejects i64::MAX. With both guards the age
+    // difference is always in 1..=now, so saturating_sub is defensive only.
+    // This pins that neither extreme panics nor produces a bogus Stale.
+    let mut min = login(
+        "min",
+        "Min",
+        "vT7#kQm2!zR9wP4$xL8@",
+        "https://a.example",
+        "S",
+    );
+    min.revision_date = i64::MIN;
+    let mut max = login(
+        "max",
+        "Max",
+        "qB5@nM3!kV7pR2#wT9$",
+        "https://b.example",
+        "S",
+    );
+    max.revision_date = i64::MAX;
+    let mut vault = Vault::new();
+    vault.items = vec![min, max];
+    let report = audit(&vault, Thresholds::default(), NOW);
+
+    // i64::MIN is not a usable revision: the unknown-sentinel guard skips the
+    // stale check instead of computing an impossibly large age.
+    let min_report = report
+        .items
+        .iter()
+        .find(|item| item.id == "min")
+        .expect("the i64::MIN item must still be reported");
+    assert!(
+        min_report
+            .findings
+            .iter()
+            .all(|finding| !matches!(finding, Finding::Stale { .. })),
+        "{report:?}"
+    );
+    // i64::MAX is a future revision: the existing `now > revision_date`
+    // guard must still skip it, so no Stale finding appears for that item.
+    assert!(
+        report
+            .items
+            .iter()
+            .filter(|item| item.id == "max")
+            .all(|item| !item
+                .findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::Stale { .. }))),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn severity_labels_cover_medium_and_high() {
     // health.rs:144-152 maps all three severities to Japanese labels; the
     // sibling test already pins Low, so pin the other two here.

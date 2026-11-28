@@ -172,7 +172,7 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 | `m` | モック vault を開く（デモ専用） |
 | `r` | ログイン失敗時に再試行 |
 | `↑` / `↓` | 項目を選択 |
-| `PageUp` / `PageDown` | 一覧／監査をページ単位で移動 |
+| `PageUp` / `PageDown` | 一覧／監査を固定10行ずつ移動（表示行数には連動しない） |
 | `Home` / `End` | 一覧／監査の先頭／末尾へ移動 |
 | `F1` | フォーカス復帰の案内を表示 |
 | `f` | お気に入りを切り替え |

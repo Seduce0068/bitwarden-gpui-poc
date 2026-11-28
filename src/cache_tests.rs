@@ -5826,3 +5826,23 @@ fn hash_continues_nested_password_scans_every_query_pair() {
     assert!(!rendered.contains("user:p"), "{rendered}");
     assert_eq!(cache.server_url, url);
 }
+
+#[test]
+fn bounded_read_with_a_zero_limit_accepts_empty_and_rejects_one_byte() {
+    // `read_bounded` (cache.rs:1183-1192) reads `limit.saturating_add(1)` bytes
+    // and then compares the length with `limit`. At limit=0 the single probing
+    // byte is still read, so an empty reader succeeds and a one-byte reader is
+    // rejected as CacheTooLarge rather than silently accepted.
+    let mut empty = std::io::Cursor::new(Vec::<u8>::new());
+    assert_eq!(
+        super::read_bounded(&mut empty, 0).unwrap(),
+        Vec::<u8>::new()
+    );
+
+    let mut one_byte = std::io::Cursor::new(vec![b'x']);
+    assert_eq!(
+        super::read_bounded(&mut one_byte, 0),
+        Err(CacheLoadError::CacheTooLarge)
+    );
+    assert_eq!(one_byte.position(), 1, "the probing byte is consumed");
+}

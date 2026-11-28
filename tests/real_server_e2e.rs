@@ -47,9 +47,56 @@ fn env_state(name: &str) -> Result<String, &'static str> {
     }
 }
 
+/// Redirect the process-wide XDG cache and config roots to a throwaway
+/// directory for this test.
+///
+/// The cache loader resolves the primary (`XDG_CACHE_HOME`) and legacy
+/// (`XDG_CONFIG_HOME`) paths from the environment. A leftover cache for the
+/// same account in the developer's environment would otherwise turn the
+/// `!from_cache` assertion below into a false negative. `Drop` restores the
+/// exact previous values on every exit, including a panicking assertion, and
+/// keeps the temporary directory alive until then.
+struct IsolatedXdgDirs {
+    _root: tempfile::TempDir,
+    previous: [(&'static str, Option<std::ffi::OsString>); 2],
+}
+
+impl IsolatedXdgDirs {
+    fn new() -> Self {
+        let root = tempfile::tempdir().expect("a temporary XDG root for the E2E test");
+        let keys = ["XDG_CACHE_HOME", "XDG_CONFIG_HOME"];
+        let previous = [
+            (keys[0], std::env::var_os(keys[0])),
+            (keys[1], std::env::var_os(keys[1])),
+        ];
+        std::env::set_var(keys[0], root.path().join("cache-home"));
+        std::env::set_var(keys[1], root.path().join("config-home"));
+        Self {
+            _root: root,
+            previous,
+        }
+    }
+}
+
+impl Drop for IsolatedXdgDirs {
+    fn drop(&mut self) {
+        for (key, previous) in &mut self.previous {
+            match previous.take() {
+                Some(value) => std::env::set_var(*key, value),
+                None => std::env::remove_var(*key),
+            }
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires a real server and test credentials via E2E_* environment variables"]
 async fn real_server_login_sync_and_unlock() {
+    // Isolate the platform cache/config paths before touching anything else:
+    // `authenticate_with_timeout` may fall back to a cache for this account,
+    // and an ambient one would make `!from_cache` below a false negative.
+    let _xdg = IsolatedXdgDirs::new();
+
     let names = [
         "E2E_SERVER_URL",
         "E2E_CLIENT_ID",

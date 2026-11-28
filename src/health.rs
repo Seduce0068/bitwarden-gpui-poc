@@ -1037,7 +1037,11 @@ fn audit_item(
     }
 
     if item.revision_date > crate::model::UNKNOWN_REVISION && now > item.revision_date {
-        let days = (now - item.revision_date) / 86_400;
+        // Both guards above keep the difference in 1..=now: `revision_date`
+        // must be positive and strictly earlier than `now`. `saturating_sub`
+        // is therefore defensive only; it makes the overflow safety explicit
+        // without changing any reachable stale classification.
+        let days = now.saturating_sub(item.revision_date) / 86_400;
         if days >= thresholds.stale_days {
             findings.push(Finding::Stale { days });
         }

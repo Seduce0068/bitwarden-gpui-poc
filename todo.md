@@ -26,40 +26,20 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ### 中優先度
 
-- [ ] **TOTP シークレットの平文 String 複製を Zeroizing へ** —
-  根拠 `src/ui/actions.rs:20` / `src/ui/input.rs:708` / `README.md:42` /
-  R3-IV01 + R2-FG01 / 中
-- [ ] **AuthConfig の Debug で平文フィールドをマスク** —
-  根拠 `src/auth.rs:29-38` / `src/auth_tests.rs:281` / R3-IV01 / 中
-- [ ] **Stale 判定の i64::MIN 境界を saturating_sub で固定** —
-  根拠 `src/health.rs:1039` / R3-TQ01 / 中
 - [ ] **オフライン復元の警告を一覧へ永続表示** —
   根拠 `src/ui/logic.rs:268` / `src/ui/login_flow.rs:196` / R5-VU01 / 中
 - [ ] **キャッシュ権限エラーの詳細をステータスへ反映** —
   根拠 `src/cache.rs:1241,1486,1508` / R5-VU01 / 中
-- [ ] **E2E の XDG キャッシュ／設定パスを隔離** —
-  根拠 `tests/real_server_e2e.rs:88-96` / R3-TQ01 / 中
 - [ ] **UI から openwarden の直接 import を消す** —
   根拠 `src/ui/login_flow.rs:8,62-64` /
   `docs/adr/adr-20261116-openwarden-integration.md:47` / R1-AR01 / 中
 
 ### 低優先度
 
-- [ ] **README の PageUp/PageDown を固定10行と明記** —
-  根拠 `README.md:175` / `src/ui/input.rs:36-54` / R2-FG01 / 低
-- [ ] **mock.rs の doc をデモ用 vault へ修正** —
-  根拠 `src/ui/mock.rs:8` / R1-ST01 / 低
-- [ ] **Strength::from_bits/score の NaN・無限大をテスト** —
-  根拠 `src/generator.rs:274-303` / R3-TQ01 / 低
-- [ ] **read_bounded の limit=0 境界をテスト** —
-  根拠 `src/cache.rs:1183-1192` / R3-TQ01 / 低
-- [ ] **ensure_device_id(None) の不正 ID 再生成をテスト** —
-  根拠 `src/settings.rs:771-785` / R3-TQ01 / 低
 - [ ] **E2E の env_state 3 状態を単体テスト** —
   根拠 `tests/real_server_e2e.rs:42-48` / R3-TQ01 / 低
-- [ ] **形骸化テスト（完全一致後の contains／score 重複）を整理** —
-  根拠 `src/health_tests.rs:3593-3601` /
-  `src/generator_tests.rs:270-299` / R3-TQ01 / 低
+- [ ] **health message の完全一致後の contains 重複を整理** —
+  根拠 `src/health_tests.rs:3593-3601` / R3-TQ01 / 低
 - [ ] **cargo-audit の版を固定し README のツール表へ追加** —
   根拠 `.github/workflows/ci.yml:24,28` / `README.md:350-354` / R4-DP01 / 低
 - [ ] **deny.toml に `unsound = "deny"` を明示** —
@@ -70,6 +50,24 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
   根拠 `.github/workflows/ci.yml:44` / R4-DP01 / 低
 
 ## 完了
+
+- [x] 第155弾（16 担当・99 回目）の指摘 9 件を完結（2026-11-28）
+  - TOTP シークレットの平文複製を `Zeroizing<String>` へ変更。
+  - `AuthConfig` の手動 `Debug` で server_url / client_id / email をマスク。
+  - Stale 年齢計算を `saturating_sub` 化（既到達分岐の挙動は不変）。
+  - opt-in E2E の XDG パスを一時ディレクトリへ隔離。
+  - README の PageUp/PageDown、mock.rs の doc を実装へ整合。
+  - NaN/±∞、`read_bounded(0)`、`ensure_device_id(None)`、
+    `Strength::score` の重複アサートをテスト面上で整理。
+  - 起動エージェント: 8 体（実装 6 + レビュー 2）。
+  - 検証: fmt / check / test（1311 passed、E2E 1 ignored、2 回連続）/
+    clippy -D warnings / rustdoc -D warnings / cargo audit（--no-fetch）/
+    cargo deny（offline）/ markdownlint / Betterleaks 1.10.1（dir＋git 履歴）
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
+  - 却下: `i64::MIN` による減算オーバーフローという指摘は
+    `revision_date > UNKNOWN_REVISION(0)` ガードで到達不能だった。
+    テストは実挙動（Stale 不出）へ修正し、Runtime Proof を優先した。
 
 - [x] バックログ補充（第155弾準備 / 2026-11-28）。
   swarm-todo-discovery と swarm-project-review の R1〜R5 を8体並列で

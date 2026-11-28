@@ -10,6 +10,7 @@ use crate::ui::keys::{
 };
 use crate::ui::state::Panel;
 use gpui_kit::*;
+use zeroize::Zeroizing;
 
 /// The dedicated key that re-acquires the view's focus handle after focus has
 /// moved elsewhere (for example via Tab).
@@ -704,8 +705,14 @@ impl BitwardenApp {
     fn copy_totp_with_status(&mut self, cx: &mut Context<Self>) {
         let secret = {
             let visible = self.view.visible_items();
-            crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible)
-                .map(|index| visible[index].totp_secret().unwrap_or("").to_string())
+            crate::ui::logic::required_item_index(self.view.selected_id.as_deref(), &visible).map(
+                |index| {
+                    // Owned so the borrow of `self.view` ends before the
+                    // dispatcher mutates `self`; zeroized on drop like every
+                    // displayed TOTP secret (README.md:42).
+                    Zeroizing::new(visible[index].totp_secret().unwrap_or("").to_string())
+                },
+            )
         };
         let Some(secret) = secret else {
             self.status = crate::ui::app::status_with_unsaved(

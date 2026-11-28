@@ -269,8 +269,14 @@ fn entropy_and_strength_buckets() {
     assert_eq!(Strength::Weak.score(-10.0), 0, "negative bits clamp to 0");
     assert_eq!(Strength::Weak.score(0.0), 0);
     assert_eq!(Strength::Fair.score(64.0), 50, "64/128 maps to 50");
-    assert_eq!(Strength::Strong.score(128.0), 100);
-    assert_eq!(Strength::Good.score(1000.0), 100);
+    assert_eq!(
+        Strength::Strong.score(128.0),
+        100,
+        "the 128-bit ceiling is a full bar"
+    );
+    // Just above the ceiling the clamp hands `round` exactly 128.0, so the
+    // percentage never sees the extra 0.1 bit.
+    assert_eq!(Strength::Good.score(128.1), 100);
     assert_eq!(Strength::Good.label(), "良い");
 }
 
@@ -292,9 +298,10 @@ fn strength_score_rounds_fractional_bits_to_the_nearest_integer() {
     assert_eq!(Strength::Strong.score(127.9), 100, "99.921875 -> 100");
 
     // Clamping happens before the percentage conversion and applies in both
-    // directions; the 128-bit ceiling is a full bar.
+    // directions. The ceiling and its just-above neighbour (128.0 / 128.1)
+    // are pinned in `entropy_and_strength_buckets`; this test keeps the lower
+    // clamp and a far-above value instead of repeating that same boundary.
     assert_eq!(Strength::Weak.score(-10.0), 0);
-    assert_eq!(Strength::Strong.score(128.0), 100);
     assert_eq!(Strength::Strong.score(1000.0), 100);
 
     // `self` only selects the label; every bucket shares the same numeric
@@ -306,6 +313,30 @@ fn strength_score_rounds_fractional_bits_to_the_nearest_integer() {
         Strength::Strong,
     ] {
         assert_eq!(strength.score(48.0), 38, "{strength:?}");
+    }
+}
+
+#[test]
+fn non_finite_entropy_is_characterized_not_normalized() {
+    // `from_bits` compares with `<` only, so NaN misses every arm and falls
+    // through to `Strong`; +infinity does the same while -infinity takes the
+    // first (`Weak`) arm. `score` clamps first: NaN survives the clamp and
+    // saturates to 0 on the `as i64` cast, while ±infinity hit the endpoints.
+    assert_eq!(Strength::from_bits(f64::NAN), Strength::Strong);
+    assert_eq!(Strength::from_bits(f64::INFINITY), Strength::Strong);
+    assert_eq!(Strength::from_bits(f64::NEG_INFINITY), Strength::Weak);
+
+    // `self` only selects the label, so every bucket shares the same
+    // non-finite score behaviour.
+    for strength in [
+        Strength::Weak,
+        Strength::Fair,
+        Strength::Good,
+        Strength::Strong,
+    ] {
+        assert_eq!(strength.score(f64::NAN), 0, "{strength:?}");
+        assert_eq!(strength.score(f64::INFINITY), 100, "{strength:?}");
+        assert_eq!(strength.score(f64::NEG_INFINITY), 0, "{strength:?}");
     }
 }
 

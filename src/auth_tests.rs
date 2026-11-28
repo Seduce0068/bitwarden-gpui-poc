@@ -33,9 +33,11 @@ use crate::auth::*;
 use crate::error::OTHER_ERROR_MESSAGE;
 use openwarden::{EncString, Kdf, KdfPolicy, MasterKey};
 
-/// A unique, non-production canary so a leak of the client secret can be
-/// detected unambiguously in debug output.
+/// Unique, non-production canaries so a leak of either secret can be
+/// detected unambiguously in debug output. Both the fixture and the
+/// non-containment assertions must derive from the same constant.
 const CLIENT_SECRET_CANARY: &str = "client-secret-CANARY-7f3a9b21";
+const MASTER_PASSWORD_CANARY: &str = "master-password-CANARY-4c1d9e02";
 
 fn config() -> AuthConfig {
     AuthConfig {
@@ -43,7 +45,7 @@ fn config() -> AuthConfig {
         client_id: "user.1234".into(),
         client_secret: SecretString::from(CLIENT_SECRET_CANARY.to_string()),
         email: "alice@example.com".into(),
-        master_password: SecretString::from("correct horse".to_string()),
+        master_password: SecretString::from(MASTER_PASSWORD_CANARY.to_string()),
     }
 }
 
@@ -278,16 +280,39 @@ fn device_for_installation_forwards_the_identifier_verbatim() {
 
 #[test]
 fn debug_output_does_not_leak_secrets() {
-    let rendered = format!("{:?}", config());
+    let value = config();
+    let rendered = format!("{:?}", value);
     assert!(rendered.contains("[REDACTED]"), "{rendered}");
     // The debug output really contains both secret fields, so the redaction
     // assertion below has something to act on.
     assert!(rendered.contains("client_secret"), "{rendered}");
     assert!(rendered.contains("master_password"), "{rendered}");
-    assert!(!rendered.contains("correct horse"), "{rendered}");
+    assert!(
+        !rendered.contains(MASTER_PASSWORD_CANARY),
+        "master_password value leaked: {rendered}"
+    );
     assert!(
         !rendered.contains(CLIENT_SECRET_CANARY),
         "client_secret value leaked: {rendered}"
+    );
+    // The three non-`SecretString` fields used to be printed verbatim by the
+    // derived `Debug`. Their field names must survive, but their actual values
+    // must never appear in the rendering: a server URL can embed credentials,
+    // and a client id or an email identifies the account.
+    assert!(rendered.contains("server_url"), "{rendered}");
+    assert!(rendered.contains("client_id"), "{rendered}");
+    assert!(rendered.contains("email"), "{rendered}");
+    assert!(
+        !rendered.contains(&value.server_url),
+        "server_url value leaked: {rendered}"
+    );
+    assert!(
+        !rendered.contains(&value.client_id),
+        "client_id value leaked: {rendered}"
+    );
+    assert!(
+        !rendered.contains(&value.email),
+        "email value leaked: {rendered}"
     );
 }
 
