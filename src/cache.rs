@@ -102,10 +102,14 @@ pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 /// secret being copied into the message.
 const EXPECTED_CACHE_MODE: u32 = 0o600;
 
-/// Stable prefix of the cause text emitted by [`load_detailed`] for a Unix
-/// permission violation. The producer and [`CacheReadFailureKind::classify`]
-/// share this constant so the classification cannot drift from the text.
-/// Only octal mode digits follow it, never a path or a URL.
+/// Prefix of the *legacy* cause text for a Unix permission violation.
+///
+/// Current `load_detailed` failures carry the modes as
+/// [`crate::error::AppError::CacheInsecureMode`], so classification no longer
+/// depends on this wording. The prefix is kept only so errors produced or
+/// cloned by older builds can still be classified by
+/// [`CacheReadFailureKind::classify`]; a wording change here cannot downgrade
+/// a typed failure. Only octal mode digits follow it, never a path or a URL.
 const INSECURE_MODE_CAUSE_PREFIX: &str = "キャッシュファイルの権限が安全ではありません";
 
 /// A cached sync response, still encrypted.
@@ -1252,14 +1256,15 @@ pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<SyncCache, Cac
         let mode = metadata.permissions().mode();
         if mode & 0o066 != 0 {
             // `PermissionsExt::mode()` includes the file-type bits (0o100000
-            // for a regular file). Report only the permission bits so both the
-            // status text and the classifier see the familiar `0644` form.
+            // for a regular file). Keep only the permission bits so the detail
+            // text shows the familiar `0644` form. Both values are structured
+            // fields now: no Japanese wording has to be parsed to classify the
+            // failure, and `AppError::clone()` cannot flatten them into text.
             let permission_bits = mode & 0o7777;
-            return Err(CacheLoadError::ReadFailedCause(
-                crate::error::BoxedCause::text(format!(
-                    "{INSECURE_MODE_CAUSE_PREFIX}（mode {permission_bits:04o}、期待 {EXPECTED_CACHE_MODE:04o}）"
-                )),
-            ));
+            return Err(CacheLoadError::CacheInsecureMode {
+                actual_mode: permission_bits,
+                expected_mode: EXPECTED_CACHE_MODE,
+            });
         }
     }
     // Read one byte past the limit so a file that grew after `metadata` is
@@ -1566,7 +1571,12 @@ pub fn cache_error_message(error: SyncCacheError) -> &'static str {
         SyncCacheError::UserMismatch => REASON_USER_MISMATCH,
         SyncCacheError::ServerMismatch => REASON_SERVER_MISMATCH,
         SyncCacheError::NotFound => REASON_MISSING,
-        SyncCacheError::ReadFailed | SyncCacheError::ReadFailedCause(_) => REASON_UNREADABLE,
+        // Same unreadable family as a plain I/O failure: the observed mode is
+        // added only by `cache_error_status_with_detail`, never to this static
+        // reason, so callers limited to `&'static str` see unchanged wording.
+        SyncCacheError::ReadFailed
+        | SyncCacheError::ReadFailedCause(_)
+        | SyncCacheError::CacheInsecureMode { .. } => REASON_UNREADABLE,
         SyncCacheError::VersionMismatch => REASON_OUTDATED,
         SyncCacheError::CacheExpired => REASON_EXPIRED,
         SyncCacheError::CacheTooLarge => REASON_TOO_LARGE,
@@ -1578,11 +1588,12 @@ pub fn cache_error_message(error: SyncCacheError) -> &'static str {
 
 /// Refined classification of a cache read failure.
 ///
-/// `AppError` has no permission-specific variant and adding one would require
-/// editing `src/error.rs`, which is outside this module. The classification is
-/// derived from the cause retained by [`crate::error::AppError::ReadFailedCause`], so it
-/// also works after `AppError::clone()` flattens a boxed cause into text. Only
-/// octal mode digits are inspected: no path, URL or secret is carried.
+/// The typed [`crate::error::AppError::CacheInsecureMode`] variant is the
+/// primary source: its mode fields survive `AppError::clone()` and cannot be
+/// changed by reworded status text. The string fallback only handles legacy
+/// [`crate::error::AppError::ReadFailedCause`] values whose cause text still
+/// carries the old marker. Only octal mode digits are inspected there: no path,
+/// URL or secret is carried.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CacheReadFailureKind {
     /// Group/other permission bits were set on the cache file.
@@ -1592,11 +1603,19 @@ pub enum CacheReadFailureKind {
 }
 
 impl CacheReadFailureKind {
-    /// Classify a cache error from the cause retained by `ReadFailedCause`.
+    /// Classify a cache error by variant first, falling back to legacy text.
     ///
-    /// Only the text this module emits for a Unix permission violation matches;
-    /// an unrelated I/O cause stays [`Self::Other`] instead of being guessed at.
+    /// A structured permission failure is recognised by its discriminant and
+    /// mode fields, so rewording a Japanese status string cannot silently
+    /// downgrade it to [`Self::Other`]. The text path is retained only for
+    /// legacy `ReadFailedCause` values; an unrelated I/O cause still stays
+    /// [`Self::Other`] instead of being guessed at.
     pub fn classify(error: &SyncCacheError) -> Self {
+        if let SyncCacheError::CacheInsecureMode { actual_mode, .. } = error {
+            return Self::InsecurePermissions {
+                actual_mode: *actual_mode,
+            };
+        }
         let SyncCacheError::ReadFailedCause(cause) = error else {
             return Self::Other;
         };

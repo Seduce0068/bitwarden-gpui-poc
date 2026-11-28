@@ -6,43 +6,46 @@
 //! this module instead of on each other, which removes the former
 //! `logic.rs <-> app.rs` cycle.
 
-/// Whether `value` carries no visible content or identity.
+/// Whether `value` has no visible identifier: the strict placeholder rule.
 ///
-/// Whitespace, Unicode `Cc` (control) characters and Unicode `Cf` (format)
-/// characters such as zero-width spaces or bidi overrides all render nothing,
-/// whether at the edges or between visible letters. `Cc` is not whitespace
-/// (`str::trim()` alone keeps NUL and C1 controls), so it is listed explicitly
-/// to match `crate::auth::credential_is_blank`. Otherwise a value that looks
-/// empty still passes a plain `trim().is_empty()` guard.
-///
-/// A value made only of Unicode marks (`Mn`/`Mc`/`Me`, optionally separated by
-/// whitespace or `Cc`/`Cf` characters) has no visible identity either: bare
-/// marks have no base character to decorate. The strict rule is delegated to
-/// `crate::model::has_no_visible_identity`, the same one search and duplicate
-/// detection use, so a mark-only item name / username cannot leave a blank
-/// cell in the list while the rest of the app sees it as an identity. Shared
-/// with the list row renderer so the two places agree on what "empty" means.
+/// Whitespace, Unicode `Cc` (control) and `Cf` (format) characters render
+/// nothing, and a value made only of Unicode marks (`Mn`/`Mc`/`Me`) has no base
+/// character to decorate. Delegates to [`crate::model::has_no_visible_identity`],
+/// the rule search and duplicate detection share, so a mark-only item name /
+/// username cannot leave a blank cell in the list. This is **not** the rule for
+/// credentials: use [`credential_is_blank`] for password / TOTP presence, or a
+/// mark-only secret accepted by `crate::auth::credential_is_blank` would be
+/// shown as "なし" and refused on copy.
 pub(super) fn is_visually_empty(value: &str) -> bool {
     crate::model::has_no_visible_identity(value)
 }
 
-/// Count only characters that actually render, using the same invisibility rule
-/// as [`is_visually_empty`]. Whitespace and Unicode `Cc`/`Cf` characters (zero
-/// width spaces, bidi overrides, controls, ...) draw nothing, so including them
-/// in a user-facing "n文字" length made a value such as `a\u{200b}b` read as
-/// "3文字". Combining marks draw only together with a base character, so they
-/// are not counted either; a mark-only value then reports zero just like
-/// [`is_visually_empty`]. Pure so the wording can be pinned without a GPUI
-/// window.
+/// Whether `value` is blank as a credential: the narrow rule.
+///
+/// Only whitespace, Unicode `Cc` and `Cf` characters count as blank, matching
+/// [`crate::model::is_visually_empty`] and `crate::auth::credential_is_blank`.
+/// A value made only of combining marks is a *present* credential here, even
+/// though [`is_visually_empty`] (the identifier placeholder) treats it as an
+/// absent identity. This is the predicate used by the password / TOTP detail
+/// labels and by the copy gate.
+pub(super) fn credential_is_blank(value: &str) -> bool {
+    crate::model::is_visually_empty(value)
+}
+
+/// Count code points that contribute a visible glyph, derived from the same
+/// per-character predicate as [`is_visually_empty`]:
+/// [`crate::model::is_invisible_identity_char`] excludes whitespace, Unicode
+/// `Cc`/`Cf` (zero-width spaces, bidi overrides, controls, ...) and bare
+/// combining marks. Invisible characters around or between visible ones no
+/// longer inflate a user-facing "n文字" label (`a\u{200b}b` reads "2文字"), and
+/// a mark-only value reports zero, matching the placeholder rule. Note that
+/// this is deliberately stricter than [`credential_is_blank`]: a mark-only
+/// credential is present but has no glyph to count. Pure so the wording can be
+/// pinned without a GPUI window.
 pub(super) fn visible_char_count(value: &str) -> usize {
     value
         .chars()
-        .filter(|ch| {
-            !ch.is_whitespace()
-                && !ch.is_control()
-                && !crate::limits::is_format_character(*ch)
-                && !unicode_normalization::char::is_combining_mark(*ch)
-        })
+        .filter(|ch| !crate::model::is_invisible_identity_char(*ch))
         .count()
 }
 
@@ -95,6 +98,18 @@ mod tests {
         // Invisible characters between visible ones do not inflate the count.
         assert_eq!(visible_char_count("a\u{200b}b"), 2);
         assert_eq!(visible_char_count("\u{200b}"), 0);
+        // The two rules differ exactly on mark-only values: the identifier
+        // placeholder and the character count exclude marks; the credential
+        // blank rule (like `auth::credential_is_blank`) keeps them present.
+        assert!(is_visually_empty("\u{0301}"));
+        assert!(!credential_is_blank("\u{0301}"));
+        assert_eq!(visible_char_count("\u{0301}"), 0);
+        assert_eq!(visible_char_count("Caf\u{0301}"), 3);
+        // Whitespace / Cc / Cf are blank under both rules.
+        for blank in ["", " \t ", "\u{200b}", "\u{0}\u{202e}"] {
+            assert!(is_visually_empty(blank), "{blank:?}");
+            assert!(credential_is_blank(blank), "{blank:?}");
+        }
         // The unsaved suffix and its composition keep the established wording.
         assert_eq!(unsaved_status_suffix(false), "");
         assert_eq!(

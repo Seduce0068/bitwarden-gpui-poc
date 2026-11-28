@@ -3443,6 +3443,38 @@ fn sync_fallback_keeps_the_insecure_permission_mode_in_the_status() {
 }
 
 #[test]
+fn typed_insecure_mode_survives_the_auth_boundary_and_sync_fallback() {
+    use crate::error::AppError;
+
+    // The typed variant must render the same status as the legacy text form
+    // (see the preceding test), even when it enters `AuthError` directly
+    // rather than through `cache_restore_failure`.
+    let direct = AuthError::from(AppError::CacheInsecureMode {
+        actual_mode: 0o644,
+        expected_mode: 0o600,
+    });
+    assert!(matches!(&direct, AuthError::OtherDetail(text)
+        if text.contains("mode 0644") && text.contains("期待 0600")));
+
+    let via_restore = super::cache_restore_failure(AppError::CacheInsecureMode {
+        actual_mode: 0o644,
+        expected_mode: 0o600,
+    });
+    assert_eq!(direct.status_message(), via_restore.status_message());
+
+    let combined = super::sync_fallback_failure(
+        direct,
+        Some(AppError::SyncCause(crate::error::BoxedCause::text(
+            "HTTP 503",
+        ))),
+    );
+    let status = combined.status_message();
+    assert!(status.contains("mode 0644"), "{status}");
+    assert!(status.contains("期待 0600"), "{status}");
+    assert!(status.contains("HTTP 503"), "{status}");
+}
+
+#[test]
 fn plain_auth_errors_convert_forward_to_the_matching_app_error_variant() {
     use crate::error::AppError;
 
@@ -4521,6 +4553,75 @@ fn detail_variants_convert_forward_to_their_cause_app_error_arms() {
         let source = std::error::Error::source(&converted).map(ToString::to_string);
         assert_eq!(source.as_deref(), Some(detail), "{name}");
     }
+}
+
+#[test]
+fn typed_cause_is_flattened_to_text_at_the_auth_ui_boundary() {
+    use crate::error::{AppError, BoxedCause};
+
+    // Known PoC constraint: `AuthError`'s `Detail` variants own only a `String`.
+    // A typed cause therefore keeps its whole `source()` chain while the value
+    // is an `AppError`, but the reverse conversion rebuilds it as
+    // `BoxedCause::text()`: the rendered detail and the family survive, the
+    // concrete type and the nested chain do not. Preserving the type would need
+    // a new `BoxedCause`-holding `AuthError` variant plus edits to the exhaustive
+    // `AuthError` matches in `src/ui/login_flow.rs`, outside this change's file
+    // scope. Pin the text-preserving behaviour instead of implying more.
+    #[derive(Debug)]
+    struct Inner(&'static str);
+    impl std::fmt::Display for Inner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Inner {}
+
+    #[derive(Debug)]
+    struct Outer(Inner);
+    impl std::fmt::Display for Outer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "outer: {}", self.0)
+        }
+    }
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let app = AppError::SyncCause(BoxedCause::new(Outer(Inner("HTTP 503"))));
+    let typed = std::error::Error::source(&app).expect("typed source before the boundary");
+    assert_eq!(typed.to_string(), "outer: HTTP 503");
+    assert_eq!(
+        std::error::Error::source(typed)
+            .expect("nested chain before the boundary")
+            .to_string(),
+        "HTTP 503"
+    );
+
+    let small = AuthError::from(app);
+    assert!(
+        matches!(&small, AuthError::SyncDetail(detail) if detail == "outer: HTTP 503"),
+        "the rendered detail must survive: {small:?}"
+    );
+    assert!(std::error::Error::source(&small).is_none());
+
+    let restored = AppError::from(small);
+    assert!(
+        matches!(&restored, AppError::SyncCause(cause) if cause.to_string() == "outer: HTTP 503"),
+        "the detail must become the cause again: {restored:?}"
+    );
+    let flat = std::error::Error::source(&restored).expect("a cause after the round trip");
+    assert_eq!(flat.to_string(), "outer: HTTP 503");
+    assert!(
+        std::error::Error::source(flat).is_none(),
+        "the concrete nested cause is not recoverable from a String"
+    );
+    assert_eq!(
+        restored,
+        AppError::Sync,
+        "cause is diagnostic, not identity"
+    );
 }
 
 #[test]

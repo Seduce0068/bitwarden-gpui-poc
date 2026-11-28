@@ -1526,7 +1526,13 @@ fn group_or_world_access_is_refused_on_read() {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
         let error = load_detailed(&path).unwrap_err();
         assert!(
-            matches!(&error, CacheLoadError::ReadFailedCause(_)),
+            matches!(
+                &error,
+                CacheLoadError::CacheInsecureMode {
+                    actual_mode,
+                    expected_mode: 0o600,
+                } if *actual_mode == mode
+            ),
             "mode {mode:04o} must be refused: {error:?}"
         );
         assert_eq!(cache_error_message(error), REASON_UNREADABLE);
@@ -1569,7 +1575,7 @@ fn special_mode_bits_do_not_change_the_permission_verdict() {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
         let error = load_detailed(&path).unwrap_err();
         assert!(
-            matches!(&error, CacheLoadError::ReadFailedCause(_)),
+            matches!(&error, CacheLoadError::CacheInsecureMode { .. }),
             "mode {mode:04o} must still be refused: {error:?}"
         );
     }
@@ -1605,7 +1611,7 @@ fn oversized_world_readable_file_keeps_its_size_classification() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     let error = load_detailed(&path).unwrap_err();
     assert!(
-        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        matches!(&error, CacheLoadError::CacheInsecureMode { .. }),
         "mode 0644 must be unreadable for a normal-sized file: {error:?}"
     );
     assert_eq!(cache_error_message(error), REASON_UNREADABLE);
@@ -1699,7 +1705,7 @@ fn unreadable_primary_is_not_replaced_by_the_legacy_fallback() {
     std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o644)).unwrap();
     let error = load_with_fallback(&new, &old).unwrap_err();
     assert!(
-        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        matches!(&error, CacheLoadError::CacheInsecureMode { .. }),
         "unreadable primary must be reported as-is: {error:?}"
     );
     assert_eq!(cache_error_message(error), REASON_UNREADABLE);
@@ -3451,9 +3457,9 @@ fn cached_sync_for_detailed_classifies_version_size_and_read_failures() {
         REASON_TOO_LARGE
     );
 
-    // ReadFailedCause: a valid envelope left group-readable is refused by the
-    // private-file policy, and the io/permission cause stays reachable
-    // (cache.rs:816-827).
+    // CacheInsecureMode: a valid envelope left group-readable is refused by the
+    // private-file policy. The two modes are structured fields rather than a
+    // flattened cause string, so no source chain is needed here.
     let valid = SyncCache::from_body(body(), url).unwrap();
     save_default(&valid).unwrap();
     #[cfg(unix)]
@@ -3463,10 +3469,16 @@ fn cached_sync_for_detailed_classifies_version_size_and_read_failures() {
     }
     let error = cached_sync_for_detailed(url, "user-1").unwrap_err();
     assert!(
-        matches!(&error, SyncCacheError::ReadFailedCause(_)),
+        matches!(
+            &error,
+            SyncCacheError::CacheInsecureMode {
+                actual_mode: 0o644,
+                expected_mode: 0o600,
+            }
+        ),
         "{error:?}"
     );
-    assert!(std::error::Error::source(&error).is_some());
+    assert!(std::error::Error::source(&error).is_none());
     assert_eq!(cache_error_message(error), REASON_UNREADABLE);
 
     // A matching, owner-only cache still restores, so the three classifications
@@ -4741,7 +4753,7 @@ fn permission_gate_is_checked_before_the_version_gate() {
 
     let error = load_detailed(&path).unwrap_err();
     assert!(
-        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        matches!(&error, CacheLoadError::CacheInsecureMode { .. }),
         "permission gate must win over version mismatch: {error:?}"
     );
     assert_eq!(cache_error_message(error), REASON_UNREADABLE);
@@ -4802,7 +4814,7 @@ fn permission_gate_wins_over_the_post_parse_body_size_gate() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     let error = load_detailed(&path).unwrap_err();
     assert!(
-        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        matches!(&error, CacheLoadError::CacheInsecureMode { .. }),
         "permission gate must win over the post-parse body cap: {error:?}"
     );
     assert_eq!(cache_error_message(error), REASON_UNREADABLE);
@@ -4842,7 +4854,7 @@ fn permission_gate_wins_over_json_parse_failure() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     let error = load_detailed(&path).unwrap_err();
     assert!(
-        matches!(&error, CacheLoadError::ReadFailedCause(_)),
+        matches!(&error, CacheLoadError::CacheInsecureMode { .. }),
         "permission gate must win over the JSON parse failure: {error:?}"
     );
     assert_eq!(cache_error_message(error), REASON_UNREADABLE);
@@ -5869,7 +5881,13 @@ fn insecure_mode_error_keeps_fixed_status_and_exposes_both_modes() {
     ] {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
         let error = load_detailed(&path).unwrap_err();
-        assert!(matches!(&error, CacheLoadError::ReadFailedCause(_)));
+        assert!(matches!(
+            &error,
+            CacheLoadError::CacheInsecureMode {
+                actual_mode,
+                expected_mode: 0o600,
+            } if *actual_mode == mode
+        ));
 
         // Callers limited to a `&'static str` keep the exact old wording.
         assert_eq!(cache_error_message(error.clone()), REASON_UNREADABLE);
@@ -5903,9 +5921,11 @@ fn permission_detail_survives_clone_and_carries_no_path_or_secret() {
     save(&path, &cache).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o606)).unwrap();
 
-    // `AppError::clone()` flattens a boxed cause into text; classification must
-    // still work on that cloned text and not depend on a typed downcast.
+    // The modes are structured fields now, so `AppError::clone()` keeps the
+    // type instead of flattening a cause into parsed text. The legacy text
+    // fallback below is exercised separately by the octal-normalization test.
     let error = load_detailed(&path).unwrap_err().clone();
+    assert!(matches!(&error, CacheLoadError::CacheInsecureMode { .. }));
     assert_eq!(
         CacheReadFailureKind::classify(&error),
         CacheReadFailureKind::InsecurePermissions { actual_mode: 0o606 }
@@ -5945,6 +5965,51 @@ fn unrelated_cache_errors_are_not_mislabelled_as_permission_denied() {
             cache_error_message(error)
         );
     }
+}
+
+#[test]
+fn typed_permission_error_classifies_without_parsing_status_text() {
+    let error = SyncCacheError::CacheInsecureMode {
+        actual_mode: 0o644,
+        expected_mode: 0o600,
+    };
+    // This variant has no cause string at all: classification comes from the
+    // discriminant and its mode fields, so rewording a Japanese status message
+    // cannot silently downgrade it to `Other`.
+    assert!(std::error::Error::source(&error).is_none());
+    assert_eq!(
+        CacheReadFailureKind::classify(&error),
+        CacheReadFailureKind::InsecurePermissions { actual_mode: 0o644 }
+    );
+    assert_eq!(
+        CacheReadFailureKind::classify(&error).detail(),
+        Some("mode 0644、期待 0600".to_string())
+    );
+
+    // Every status surface keeps the exact previously shipped wording.
+    assert_eq!(cache_error_message(error.clone()), REASON_UNREADABLE);
+    assert_eq!(
+        super::cache_restore_status(error.clone()),
+        Some("同期に失敗しました（キャッシュを読み込めません）")
+    );
+    assert_eq!(
+        cache_error_status_with_detail(&error),
+        "同期に失敗しました（キャッシュを読み込めません（mode 0644、期待 0600））"
+    );
+
+    // A clone keeps the typed fields, and two different observed modes remain
+    // distinct failures even though they share one static family label.
+    assert_eq!(
+        CacheReadFailureKind::classify(&error.clone()),
+        CacheReadFailureKind::InsecurePermissions { actual_mode: 0o644 }
+    );
+    assert_ne!(
+        error,
+        SyncCacheError::CacheInsecureMode {
+            actual_mode: 0o640,
+            expected_mode: 0o600,
+        }
+    );
 }
 
 #[test]

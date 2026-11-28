@@ -159,6 +159,14 @@ pub enum AppError {
     CacheRedact(BoxedCause),
     /// The sanitized body could not be serialized.
     CacheSerialize(BoxedCause),
+    /// A cache file whose Unix mode grants group/other access. The observed and
+    /// expected modes stay structured so permission classification cannot drift
+    /// when a Japanese status string is reworded. Status and detail text belong
+    /// to the cache layer; this variant carries no cause chain.
+    CacheInsecureMode {
+        actual_mode: u32,
+        expected_mode: u32,
+    },
     /// The cache belongs to a different account.
     UserMismatch,
     /// The cache was fetched from a different server.
@@ -283,6 +291,11 @@ impl AppError {
             | Self::CacheParse(_)
             | Self::CacheRedact(_)
             | Self::CacheSerialize(_) => "キャッシュが破損しています",
+            // The cache layer maps this family to its own unreadable reason and
+            // appends the structured modes to the owned detail text. Keeping the
+            // family label here free of runtime text preserves the `&str`
+            // contract while the two mode values stay typed on the variant.
+            Self::CacheInsecureMode { .. } => "キャッシュを読み込めません",
             Self::UserMismatch => "キャッシュが別のアカウントのものです",
             Self::ServerMismatch => "キャッシュが別のサーバーのものです",
             Self::NotFound => "設定ファイルが未作成です（既定値を使用）",
@@ -358,6 +371,13 @@ impl Clone for AppError {
             Self::CacheParse(cause) => Self::CacheParse(cause.clone()),
             Self::CacheRedact(cause) => Self::CacheRedact(cause.clone()),
             Self::CacheSerialize(cause) => Self::CacheSerialize(cause.clone()),
+            Self::CacheInsecureMode {
+                actual_mode,
+                expected_mode,
+            } => Self::CacheInsecureMode {
+                actual_mode: *actual_mode,
+                expected_mode: *expected_mode,
+            },
             Self::ReadFailedCause(cause) => Self::ReadFailedCause(cause.clone()),
             Self::ParseFailedCause(cause) => Self::ParseFailedCause(cause.clone()),
             Self::InvalidCause(cause) => Self::InvalidCause(cause.clone()),
@@ -400,6 +420,22 @@ impl PartialEq for AppError {
     /// and carry the same detail. A boxed cause is deliberately not compared:
     /// it is diagnostic context, not part of the failure's identity.
     fn eq(&self, other: &Self) -> bool {
+        // The permission family carries two structured values but no text
+        // detail, so the generic message/detail comparison would call two
+        // different observed modes the same failure. Compare the modes by type.
+        if let (
+            Self::CacheInsecureMode {
+                actual_mode: left,
+                expected_mode: left_expected,
+            },
+            Self::CacheInsecureMode {
+                actual_mode: right,
+                expected_mode: right_expected,
+            },
+        ) = (self, other)
+        {
+            return left == right && left_expected == right_expected;
+        }
         self.message() == other.message() && self.detail() == other.detail()
     }
 }
@@ -498,5 +534,33 @@ mod tests {
                 "{name}: missing source"
             );
         }
+    }
+
+    #[test]
+    fn cache_insecure_mode_keeps_structured_modes_without_a_text_cause() {
+        let error = AppError::CacheInsecureMode {
+            actual_mode: 0o644,
+            expected_mode: 0o600,
+        };
+        assert_eq!(error.message(), "キャッシュを読み込めません");
+        assert_eq!(error.to_string(), "キャッシュを読み込めません");
+        // The mode is data on the variant, not a cause chain that clone can
+        // flatten into text.
+        assert!(std::error::Error::source(&error).is_none());
+        assert_eq!(error.clone(), error);
+        assert_ne!(
+            error,
+            AppError::CacheInsecureMode {
+                actual_mode: 0o660,
+                expected_mode: 0o600,
+            }
+        );
+        assert_ne!(
+            error,
+            AppError::CacheInsecureMode {
+                actual_mode: 0o644,
+                expected_mode: 0o640,
+            }
+        );
     }
 }

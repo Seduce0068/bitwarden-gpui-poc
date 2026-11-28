@@ -323,6 +323,16 @@ impl core::fmt::Display for AuthError {
 
 impl std::error::Error for AuthError {}
 
+/// Rebuild a cause-carrying `AppError` from the small UI enum.
+///
+/// Known constraint: `AuthError`'s `Detail` variants own only a `String`, so a
+/// typed cause that crossed `From<AppError> for AuthError` returns as
+/// `BoxedCause::text()`. The family variant, the rendered detail and a reachable
+/// `Error::source()` are preserved; the concrete cause type is not. Adding a
+/// `BoxedCause`-holding `AuthError` variant would also require updating the
+/// exhaustive `AuthError` matches in `src/ui/login_flow.rs`, which is outside
+/// this change's file scope. The text-preserving round trip is pinned by
+/// `typed_cause_is_flattened_to_text_at_the_auth_ui_boundary`.
 impl From<AuthError> for AppError {
     fn from(error: AuthError) -> Self {
         match error {
@@ -390,6 +400,19 @@ impl From<AppError> for AuthError {
             AppError::KdfRejected => AuthError::KdfRejected,
             AppError::KdfRejectedCause(cause) => AuthError::KdfRejectedDetail(cause.to_string()),
             AppError::Timeout => AuthError::Timeout,
+            // A structured permission failure can reach this boundary without
+            // going through `cache_restore_failure`. Keep the observed mode by
+            // rendering the same detail text the normal restore path uses;
+            // the generic catch-all below would flatten it to a fixed string.
+            AppError::CacheInsecureMode {
+                actual_mode,
+                expected_mode,
+            } => AuthError::OtherDetail(crate::cache::cache_error_status_with_detail(
+                &AppError::CacheInsecureMode {
+                    actual_mode,
+                    expected_mode,
+                },
+            )),
             // `AuthError::Other` holds a `&'static str`, so an owned
             // `AppError::Other(String)` cannot survive this boundary. The
             // generic message is used instead of mislabelling it as a known

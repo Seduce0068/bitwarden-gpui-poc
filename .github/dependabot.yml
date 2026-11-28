@@ -21,6 +21,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
-  # 制約: CI の extra_gates 内 `cargo install cargo-deny@0.21.0 --exact --locked`
-  # は Dependabot の追跡対象外（cargo ecosystem は Cargo.toml / lock のみを走査）。
-  # 版上げは ci.yml と README を手動で同時更新する。自動追跡の仕組みは提案のみ。
+  # 制約: 上記 cargo ecosystem は Cargo.toml / ロックファイルのみを走査し、
+  # CI の extra_gates 内 cargo-deny 固定版（ci.yml:32 の CARGO_DENY_VERSION、
+  # 現行 0.21.0）は Dependabot の追跡対象外で更新 PR が来ない。
+  # 版上げは ci.yml と README（ツール版の管理）を手動で同時に更新する
+  # 運用ルールとする。自動追跡の仕組みは提案のみ。

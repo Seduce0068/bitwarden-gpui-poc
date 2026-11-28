@@ -111,31 +111,54 @@ mod unicode_normalize {
 }
 pub(crate) use unicode_normalize::comparison_key;
 
-/// Whether `value` carries no visible content.
+/// One code point that renders nothing by itself: whitespace, Unicode `Cc`
+/// (control) or `Cf` (format).
+///
+/// `Cc` is not whitespace (`str::trim()` alone keeps NUL and C1 controls), so
+/// it is listed explicitly. This is the per-character rule behind
+/// [`is_visually_empty`], which mirrors `crate::auth::credential_is_blank`.
+pub(crate) fn is_non_rendering_char(ch: char) -> bool {
+    ch.is_whitespace() || ch.is_control() || crate::limits::is_format_character(ch)
+}
+
+/// One code point with no standalone identity under the strict UI rule.
+///
+/// Besides the non-rendering characters above, a bare Unicode mark (`Mn`/`Mc`/
+/// `Me`) draws only together with a base character. This is the shared
+/// per-character predicate behind [`has_no_visible_identity`] and the UI's
+/// `visible_char_count`, so the item-name placeholder and the "n文字" label
+/// cannot disagree about which code points contribute a visible glyph. It is
+/// deliberately *not* the credential rule: a mark-only password or TOTP is
+/// still a present credential (see [`is_visually_empty`] and
+/// `crate::auth::credential_is_blank`).
+pub(crate) fn is_invisible_identity_char(ch: char) -> bool {
+    is_non_rendering_char(ch) || unicode_normalize::is_mark(ch)
+}
+
+/// Whether `value` carries no visible content: the credential blank rule.
 ///
 /// Whitespace, Unicode `Cc` (control) characters and `Cf` (format) characters
 /// render nothing, whether they sit at the edges or between visible letters.
-/// `Cc` is not whitespace (`str::trim()` alone keeps NUL and C1 controls), so
-/// it is listed explicitly to match the credential blank rule in
-/// `crate::auth::credential_is_blank`. This is the same rule the UI uses for
-/// empty-looking text; search, duplicate detection and the TOTP badge share it
-/// so an invisible-only value is not mistaken for a present one (for example a
-/// Cf-only TOTP field or a zero-width-space name). Search and duplicate
-/// detection use `has_no_visible_identity`, which adds the mark-only rule.
+/// This mirrors `crate::auth::credential_is_blank` exactly, including the fact
+/// that a value made only of combining marks is **present** here. Password /
+/// TOTP presence in the detail row and on the copy path uses this rule, so a
+/// mark-only secret accepted by the auth side is not reported as "なし".
+/// Search, duplicate detection and the item-name placeholder use the stricter
+/// [`has_no_visible_identity`], which adds the mark-only case.
 pub(crate) fn is_visually_empty(value: &str) -> bool {
-    value
-        .chars()
-        .all(|ch| ch.is_whitespace() || ch.is_control() || crate::limits::is_format_character(ch))
+    value.chars().all(is_non_rendering_char)
 }
 
-/// Whether `value` carries no visible identifier at all.
+/// Whether `value` carries no visible identifier at all: the strict rule.
 ///
 /// This is the rule already used by [`Vault::duplicate_names`], lifted here so
 /// search cannot disagree with it: besides whitespace, `Cc` and `Cf`, a value
 /// made only of Unicode marks (`Mn`/`Mc`/`Me`, optionally separated by
 /// whitespace) has no base character to decorate and therefore renders as bare
 /// decoration. A mark-only query must not widen the result set the way a blank
-/// query does, and two mark-only names must not form a duplicate group.
+/// query does, and two mark-only names must not form a duplicate group. The
+/// UI's identifier placeholder relies on the same rule; credentials must use
+/// [`is_visually_empty`] instead.
 pub(crate) fn has_no_visible_identity(value: &str) -> bool {
     if is_visually_empty(value) {
         return true;
@@ -143,9 +166,7 @@ pub(crate) fn has_no_visible_identity(value: &str) -> bool {
     // NFKD keeps combining marks; `comparison_key` drops whitespace, `Cc` and
     // `Cf` only, so a non-blank key left with nothing but marks is decoration.
     let key = comparison_key(value);
-    key.chars()
-        .filter(|ch| !ch.is_whitespace())
-        .all(unicode_normalize::is_mark)
+    key.chars().all(is_invisible_identity_char)
 }
 
 /// Sentinel for a missing or unparsable revision date.

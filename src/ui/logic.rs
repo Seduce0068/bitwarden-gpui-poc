@@ -105,9 +105,15 @@ pub(super) fn card_last_four(number: &str) -> String {
 ///
 /// Values with no visible content and the undecryptable marker are refused so
 /// no placeholder or blank string is written into the user's clipboard. The
-/// blank check goes through [`crate::ui::text::is_visually_empty`] so whitespace
-/// and invisible Unicode `Cf` characters count as empty, matching the list
-/// row's own "empty username" rule.
+/// rule is chosen per field, matching the corresponding display cell:
+///
+/// * a password is a credential, so [`crate::ui::text::credential_is_blank`]
+///   (whitespace / `Cc` / `Cf` only, like `crate::auth::credential_is_blank`)
+///   decides. A mark-only password is present on the auth side, in the detail
+///   row and on the copy path alike.
+/// * a username is an identifier, so the stricter
+///   [`crate::ui::text::is_visually_empty`] decides, matching the "なし"
+///   placeholder drawn in the list row for a mark-only username.
 pub(super) fn select_copy_value(data: &crate::model::ItemData, password: bool) -> Option<String> {
     match data {
         crate::model::ItemData::Login {
@@ -120,9 +126,12 @@ pub(super) fn select_copy_value(data: &crate::model::ItemData, password: bool) -
             } else {
                 username.as_str()
             };
-            if crate::ui::text::is_visually_empty(raw)
-                || (password && crate::vault_sync::is_undecryptable_password(raw))
-            {
+            let blank = if password {
+                crate::ui::text::credential_is_blank(raw)
+            } else {
+                crate::ui::text::is_visually_empty(raw)
+            };
+            if blank || (password && crate::vault_sync::is_undecryptable_password(raw)) {
                 None
             } else {
                 Some(raw.to_string())
@@ -803,6 +812,46 @@ mod tests {
             text: "body".to_string().into(),
         };
         assert_eq!(select_copy_value(&note, true), None);
+    }
+
+    #[test]
+    fn select_copy_value_splits_the_credential_and_identifier_blank_rules() {
+        use crate::model::ItemData;
+        use zeroize::Zeroizing;
+
+        const MARKS: &str = "\u{0301}\u{093e}";
+
+        // A mark-only password is a present credential (the auth side accepts
+        // it) and must reach the clipboard instead of being refused as blank.
+        let password = ItemData::Login {
+            username: "alice".to_string(),
+            password: Zeroizing::new(MARKS.to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert!(!crate::ui::text::credential_is_blank(MARKS));
+        assert!(crate::ui::text::is_visually_empty(MARKS));
+        assert_eq!(select_copy_value(&password, true).as_deref(), Some(MARKS));
+
+        // The same string as a username is an absent identifier, matching the
+        // placeholder the list row draws for it.
+        let username = ItemData::Login {
+            username: MARKS.to_string(),
+            password: Zeroizing::new("p".to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(select_copy_value(&username, false), None);
+
+        // Whitespace / Cf remain absent for both fields.
+        let blank = ItemData::Login {
+            username: "\u{200b}".to_string(),
+            password: Zeroizing::new(" \t ".to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(select_copy_value(&blank, false), None);
+        assert_eq!(select_copy_value(&blank, true), None);
     }
 
     #[test]

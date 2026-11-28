@@ -26,33 +26,42 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ### 中優先度
 
-- [ ] **is_visually_empty と空認証情報判定を分離** —
-  根拠 `src/ui/app.rs:273-291` / `src/auth.rs:535-539` / e-ar / 中
-- [ ] **権限分類をローカライズ文字列パースから構造化へ** —
-  根拠 `src/cache.rs:1257,1534-1576` / `src/error.rs` / e-ar / 中
-- [ ] **AuthError→AppError 逆変換で型付き cause を保持** —
+- [ ] **AuthError→AppError 逆変換で一般の型付き cause を保持** —
   根拠 `src/auth.rs:298-329` / `src/error.rs:46-60` / e-ar / 中
+  （`CacheInsecureMode` は明示アームで対応済み。他 Detail 系の
+  `BoxedCause::text()` 平坦化は未対応）
 
 ### 低優先度
 
 - [ ] **起動時の設定警告を永続的／再表示可能に** —
   根拠 `src/ui/app.rs:938-961` / `src/ui/actions.rs:170-178` / e-vu / 低
-- [ ] **CI の cargo-deny 導入をキャッシュ／バイナリ化** —
-  根拠 `.github/workflows/ci.yml:32-34` / e-dp / 低
-- [ ] **Dependabot が CI 内の cargo-deny 版も追跡するよう調整** —
-  根拠 `.github/dependabot.yml:6` / `.github/workflows/ci.yml:33` / e-dp / 低
 - [ ] **検索終了 API を単一メソッドへ集約** —
   根拠 `src/ui/app.rs:188-200,224-235` / e-ar / 低
 - [ ] **dead_code 抑止の本番未使用シンボル4件を整理** —
   根拠 `src/limits.rs:88,94` / `src/ui/input.rs:53,219` / e-st / 低
-- [ ] **サイズ上限超過と不正 UTF-8 の境界分類を先勝ちに** —
-  根拠 `src/settings.rs:423-437` / v4-core / 低
-- [ ] **path=None の ID 再利用に関する旧コメントを訂正** —
-  根拠 `src/settings.rs:733-734,870-871` / v4-core / 低
-- [ ] **不正 UTF-8 ファイルの書き込みガード回帰テストを追加** —
-  根拠 `src/settings_tests.rs:1546` / v4-core / 低
+- [ ] **model 側の狭窄述語を credential_is_blank へリネーム** —
+  根拠 `src/model.rs:148-150` / `src/ui/text.rs:19-33` / v5-core / 低
 
 ## 完了
+
+- [x] 第159弾（16 担当・103 回目）の指摘 8 件を完結（2026-11-28）
+  - `AppError::CacheInsecureMode` で権限分類を構造化し、
+    `CacheReadFailureKind::classify` は型付き経路を優先（旧テキスト形式は
+    フォールバックとして維持）。
+  - `credential_is_blank`（結合文字のみは「あり」）と
+    `is_visually_empty`（厳格）を分離し、コピーゲート／文字数表示を修正。
+  - 設定ファイルは生バイト数で上限を先に判定し、UTF-8 失敗を
+    ParseFailed へ分離。旧コメントとテスト名も実装に整合。
+  - CI の cargo-deny コスト／Dependabot 非追跡を README と
+    dependabot.yml へ明記（共通ワークフローは未変更）。
+  - R4 指摘を反映: `CacheInsecureMode` の直接 AuthError 変換と
+    型付き経路の sync_fallback 回帰テスト、旧コメントの訂正。
+  - 起動エージェント: 6 体（実装 4 + レビュー 2）。
+  - 検証: fmt / check / test（1364 passed、E2E 1 ignored）/ clippy
+    -D warnings / rustdoc -D warnings / cargo audit（--no-fetch）/
+    cargo deny（offline）/ markdownlint / Betterleaks 1.10.1（dir＋git 履歴）
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 
 - [x] 第158弾（16 担当・102 回目）の指摘 10 件を完結（2026-11-28）
   - ログイン残秒のカウントダウンと retryable/permanent の再試行案内。
@@ -1756,6 +1765,10 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## メモ
 
+- 保留（第159弾 v5-core）: 型付き `CacheInsecureMode` と同じ内容を表す旧
+  `ReadFailedCause` テキストは `classify()` では同値だが `AppError::eq()`
+  では異なる。交叉表現の非同等を意図的な契約とするか、共通アクセサで
+  正規化するかは設計判断として残す（不具合の実害は未観測）。
 - 要判断（第157弾 e-dp）: `rust-gates.yml@v1` は方針でタグピンが指定されて
   おり、SHA pin への変更はユーザー承認が必要。まず週次監査で解決 SHA を
   記録する手順を README に追加する案は低優先度タスクとして採用済み。

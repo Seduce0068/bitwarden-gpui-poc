@@ -405,12 +405,13 @@ impl core::fmt::Debug for Settings {
 /// write-path marker guard all go through this one function so their
 /// classifications cannot drift apart despite the missing seam.
 ///
-/// `read_to_string` reports undecodable bytes as `ErrorKind::InvalidData`. The
-/// bytes were read successfully; only their content is unusable as JSON text,
-/// so that error is mapped through `AppError::ParseFailedCause` to
-/// `SettingsLoadError::ParseFailed` ("corrupt file"), not to `ReadFailed`
-/// ("cannot read the file"). A regular file read never produces `InvalidData`,
-/// so every other error kind stays a genuine I/O failure.
+/// The cap is decided from the raw byte count *before* decoding: a file larger
+/// than [`MAX_SETTINGS_BYTES`] is `TooLarge` even when the `take` window ends in
+/// the middle of a multibyte character. Only after that check are the bytes
+/// decoded; undecodable content is mapped through `AppError::ParseFailedCause`
+/// to `SettingsLoadError::ParseFailed` ("corrupt file"), not to `ReadFailed`
+/// ("cannot read the file"). Any error from reading the bytes themselves stays
+/// a genuine I/O failure.
 fn read_bounded_settings_text(path: &std::path::Path) -> Result<String, SettingsLoadError> {
     let file = std::fs::File::open(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -419,24 +420,25 @@ fn read_bounded_settings_text(path: &std::path::Path) -> Result<String, Settings
             SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
         }
     })?;
-    let mut contents = String::new();
+    // Read at most one byte past the cap into bytes so the size check cannot be
+    // pre-empted by a mid-character UTF-8 decode error: `read_to_string` reports
+    // that as InvalidData, which would classify an oversized file as ParseFailed
+    // and hide the TooLarge verdict.
+    let mut bytes = Vec::new();
     file.take(MAX_SETTINGS_BYTES.saturating_add(1))
-        .read_to_string(&mut contents)
+        .read_to_end(&mut bytes)
         .map_err(|error| {
-            // Invalid UTF-8 is a content failure, not an I/O failure. Route it
-            // through the same parse family as broken JSON so both produce the
-            // "corrupt file" status text; keep every other io error as a read
-            // failure so an unreadable file remains distinguishable.
-            if error.kind() == std::io::ErrorKind::InvalidData {
-                SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::new(error)))
-            } else {
-                SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
-            }
+            SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
         })?;
-    if contents.len() as u64 > MAX_SETTINGS_BYTES {
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
         return Err(SettingsLoadError::TooLarge);
     }
-    Ok(contents)
+    String::from_utf8(bytes).map_err(|error| {
+        // Invalid UTF-8 is a content failure, not an I/O failure. Route it
+        // through the same parse family as broken JSON so both produce the
+        // "corrupt file" status text.
+        SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::new(error)))
+    })
 }
 
 /// Read a settings file under the shared size cap and parse it as JSON.
@@ -730,8 +732,11 @@ impl Settings {
     /// should keep the separator non-alphanumeric (the default `-`) or empty.
     pub fn sanitized(&self) -> Self {
         let mut result = self.clone();
-        // A hand-edited, malformed identifier must not be sent to the server;
-        // clearing it makes the next `ensure_device_id` generate a fresh one.
+        // A hand-edited, malformed identifier must not be sent to the server,
+        // so clear it and let `ensure_device_id` supply a valid one. As the
+        // "# Contract change for `None`" section of `ensure_device_id`
+        // documents, a supplied path generates and persists a new id, while
+        // `None` reuses the process-wide `NO_PATH_DEVICE_ID` cache value.
         if !is_valid_device_id(&result.device_id) {
             result.device_id.clear();
         }
@@ -868,8 +873,12 @@ impl Settings {
     /// ([`Settings::ensure_device_id`]); a direct caller can therefore persist
     /// an arbitrary string as the device id. `load_detailed` keeps such an id,
     /// but [`Settings::sanitized`] clears it and [`Settings::ensure_device_id`]
-    /// generates a fresh one on the next sync, so no invalid id is sent to the
-    /// server. This is a documented limitation rather than a silent contract.
+    /// replaces it on the next sync: with `Some(path)` a new id is generated
+    /// and persisted, while with `None` the process-wide `NO_PATH_DEVICE_ID`
+    /// cache value is reused (see the "# Contract change for `None`" section
+    /// of [`Settings::ensure_device_id`]). Either way no invalid id is sent to
+    /// the server. This is a documented limitation rather than a silent
+    /// contract.
     ///
     /// # Errors
     ///

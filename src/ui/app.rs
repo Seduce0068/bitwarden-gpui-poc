@@ -13,9 +13,13 @@ use gpui_kit::*;
 
 // Re-exported so existing `ui::app::*` callers (input/render/panels/login_flow)
 // keep working; the definitions now live in the GPUI-free `ui::text` leaf.
+// `is_visually_empty` is the strict identifier-placeholder rule;
+// `credential_is_blank` is the narrow password/TOTP presence rule used by the
+// detail rows and the copy gate. Keeping both names here makes the choice at
+// each call site explicit.
 pub(super) use crate::ui::text::{
-    idle_lock_minutes_text, is_visually_empty, status_with_unsaved, unsaved_status_suffix,
-    visible_char_count,
+    credential_is_blank, idle_lock_minutes_text, is_visually_empty, status_with_unsaved,
+    unsaved_status_suffix, visible_char_count,
 };
 
 /// Number-free status installed when a real login starts.
@@ -525,16 +529,20 @@ pub(super) fn totp_detail_text(secret: &str, generated: String, error: Option<St
 /// The copy path (`ui::logic::select_copy_value`) refuses a password with no
 /// visible content, but the detail row used to count every `char` and render
 /// e.g. "3文字" for a whitespace/Unicode `Cf`-only value. Both now go through
-/// [`crate::ui::text::is_visually_empty`], so an absent password reads "なし" on both sides.
-/// For a present password the count uses [`crate::ui::text::visible_char_count`], so invisible
-/// characters *between* visible ones do not inflate the label either.
-/// The undecryptable sentinel keeps its own label and is checked first because
-/// it carries visible text. Pure so the wording can be pinned without a GPUI
-/// window.
+/// [`crate::ui::text::credential_is_blank`], so an absent password reads "なし"
+/// on both sides. The narrow credential rule (whitespace / `Cc` / `Cf` only)
+/// matches `crate::auth::credential_is_blank`: a mark-only password is present
+/// (never "なし"), not shown as absent the way a mark-only *name* is by the
+/// stricter [`is_visually_empty`] placeholder rule. For a present password the
+/// count uses [`crate::ui::text::visible_char_count`], so invisible characters
+/// *between* visible ones do not inflate the label either; bare marks have no
+/// glyph of their own and contribute zero to that count. The undecryptable
+/// sentinel keeps its own label and is checked first because it carries visible
+/// text. Pure so the wording can be pinned without a GPUI window.
 pub(super) fn password_detail_label(password: &str) -> String {
     if crate::vault_sync::is_undecryptable_password(password) {
         "復号不可".to_string()
-    } else if is_visually_empty(password) {
+    } else if credential_is_blank(password) {
         "なし".to_string()
     } else {
         format!("{}文字", visible_char_count(password))
@@ -556,8 +564,12 @@ pub(super) fn secure_note_detail_label(text: &str) -> String {
 ///
 /// A blank or invisible-only (`Cf`) secret is *absent*, not malformed: sending
 /// it to code generation would show `コード生成失敗` instead of the "なし"
-/// placeholder. `generate` stays lazy so generation is skipped for absent
-/// secrets and the branch can be tested without a GPUI-backed `TotpState`.
+/// placeholder. The check uses [`crate::ui::text::credential_is_blank`], the
+/// same narrow rule as `crate::auth::credential_is_blank`, so a mark-only field
+/// is a generation target instead of being shown as "なし" the way a mark-only
+/// item name is by [`is_visually_empty`]. `generate` stays lazy so generation
+/// is skipped for absent secrets and the branch can be tested without a
+/// GPUI-backed `TotpState`.
 ///
 /// `generate` returns both the display code and the cached failure reason,
 /// read *after* the re-sample. Reading the reason before calling `generate`
@@ -568,7 +580,7 @@ pub(super) fn totp_code_text(
     secret: &str,
     generate: impl FnOnce(&str) -> (String, Option<String>),
 ) -> String {
-    if is_visually_empty(secret) {
+    if credential_is_blank(secret) {
         "なし".to_string()
     } else {
         let (generated, error) = generate(secret);
@@ -581,7 +593,9 @@ pub(super) fn totp_code_text(
 /// The detail row already renders a blank or Unicode `Cf`-only secret as
 /// "なし" through [`totp_code_text`]. Feeding that same value to code
 /// generation reports a parse failure instead, so copying must short-circuit
-/// on the same [`crate::ui::text::is_visually_empty`] rule. Composing here also keeps the
+/// on the same [`crate::ui::text::credential_is_blank`] rule (whitespace / `Cc`
+/// / `Cf` only, matching `crate::auth::credential_is_blank`); a mark-only
+/// secret is not absent and reaches generation. Composing here also keeps the
 /// persistent unsaved marker on the resulting status.
 pub(super) fn totp_copy_absent_status(dirty: bool) -> String {
     status_with_unsaved(
@@ -614,7 +628,7 @@ pub(super) fn totp_copy_undecryptable_status(dirty: bool) -> String {
 pub(super) fn totp_copy_absent_status_for(secret: &str, dirty: bool) -> Option<String> {
     if crate::vault_sync::is_undecryptable_totp(secret) {
         Some(totp_copy_undecryptable_status(dirty))
-    } else if is_visually_empty(secret) {
+    } else if credential_is_blank(secret) {
         Some(totp_copy_absent_status(dirty))
     } else {
         None
@@ -3589,6 +3603,84 @@ mod tests {
             select_copy_value(&login(UNDECRYPTABLE_PASSWORD), true),
             None
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn credential_blank_and_identifier_placeholder_rules_are_distinct() {
+        // Characterization of the two rules that used to share one name:
+        // `is_visually_empty` (strict, identifiers) also treats mark-only text
+        // as absent, while `credential_is_blank` (password/TOTP) mirrors
+        // `auth::credential_is_blank` and keeps it present.
+        const MARKS: &str = "\u{0301}\u{093e}\u{20dd}";
+
+        assert!(is_visually_empty(MARKS));
+        assert!(crate::model::has_no_visible_identity(MARKS));
+        assert!(!credential_is_blank(MARKS));
+        assert!(!crate::model::is_visually_empty(MARKS));
+        assert!(!crate::auth::credential_is_blank(MARKS));
+
+        // Identifier placeholder: a mark-only name is "(名称未設定)".
+        assert_eq!(item_name_text(MARKS), ITEM_NAME_PLACEHOLDER);
+
+        // Password detail + copy gate: the same value is present, so the
+        // detail row no longer says "なし" and the copy gate copies it.
+        // `visible_char_count` keeps marks out of the glyph count, so a
+        // mark-only *present* password reads "0文字" rather than "なし".
+        assert_eq!(password_detail_label(MARKS), "0文字");
+        let marks_password = ItemData::Login {
+            username: "alice".to_string(),
+            password: Zeroizing::new(MARKS.to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(
+            crate::ui::logic::select_copy_value(&marks_password, true).as_deref(),
+            Some(MARKS)
+        );
+        // The username stays an identifier: strict rule, no hidden copy.
+        assert_eq!(
+            crate::ui::logic::select_copy_value(&marks_password, false).as_deref(),
+            Some("alice")
+        );
+        let marks_username = ItemData::Login {
+            username: MARKS.to_string(),
+            password: Zeroizing::new("p".to_string()),
+            totp: Zeroizing::new(String::new()),
+            uris: Vec::new(),
+        };
+        assert_eq!(
+            crate::ui::logic::select_copy_value(&marks_username, false),
+            None,
+            "a mark-only username is an absent identifier on the copy path too"
+        );
+
+        // TOTP detail + copy gate: the mark-only secret reaches generation and
+        // is not refused as absent.
+        let mut called = false;
+        let code = totp_code_text(MARKS, |_| {
+            called = true;
+            ("123456".to_string(), None)
+        });
+        assert!(called, "a present credential must reach the generator");
+        assert_eq!(code, "123456");
+        for dirty in [false, true] {
+            assert_eq!(totp_copy_absent_status_for(MARKS, dirty), None);
+        }
+
+        // Whitespace / Cc / Cf are absent under *both* rules: the distinction
+        // is exclusively the mark arm.
+        for blank in ["", " \t ", "\u{0}", "\u{200b}", "\u{200b}\u{feff}\u{202e}"] {
+            assert!(is_visually_empty(blank), "{blank:?}");
+            assert!(credential_is_blank(blank), "{blank:?}");
+            assert_eq!(password_detail_label(blank), "なし", "{blank:?}");
+            for dirty in [false, true] {
+                assert_eq!(
+                    totp_copy_absent_status_for(blank, dirty),
+                    Some(totp_copy_absent_status(dirty)),
+                    "{blank:?}"
+                );
+            }
+        }
     }
 
     #[::core::prelude::v1::test]

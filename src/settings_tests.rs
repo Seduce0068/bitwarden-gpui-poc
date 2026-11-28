@@ -347,7 +347,8 @@ fn load_detailed_distinguishes_missing_and_malformed() {
 fn invalid_utf8_is_a_parse_failure_not_a_read_failure() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
-    // `read_to_string` rejects an invalid UTF-8 sequence with `InvalidData`.
+    // The bounded reader decodes with `String::from_utf8`; an invalid
+    // UTF-8 sequence is reported as `ParseFailed`, not `ReadFailed`.
     // The bytes were read; only their content is undecodable as JSON text, so
     // the file is corrupt rather than unreadable. The classification must stay
     // ParseFailed all the way to the UI enum.
@@ -1030,7 +1031,7 @@ fn settings_load_error_messages_are_pinned() {
 fn save_device_id_only_aborts_on_a_read_failed_file() {
     let dir = tempfile::tempdir().unwrap();
     // A directory cannot be read as a settings file: File::open succeeds but
-    // read_to_string fails with EISDIR, which `read_bounded_settings_text`
+    // read_to_end fails with EISDIR, which `read_bounded_settings_text`
     // classifies as ReadFailed (settings.rs:383-401). No other load failure
     // (malformed / oversized) is accepted on the id-only write path.
     let path = dir.path();
@@ -1565,6 +1566,48 @@ fn save_device_id_only_aborts_on_a_malformed_file() {
 }
 
 #[test]
+fn save_device_id_only_aborts_on_invalid_utf8_without_touching_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    // A literal 0xFF byte is never valid UTF-8: the bounded reader maps it to
+    // ParseFailed (undecodable content), not ReadFailed. The id-only writer
+    // aborts on every load error other than NotFound, so an undecodable file
+    // must keep its exact bytes just like the malformed/oversized cases above.
+    let original = b"{\"email\":\"\xff\"}".to_vec();
+    std::fs::write(&path, &original).unwrap();
+    assert_eq!(
+        Settings::load_detailed(&path).err(),
+        Some(SettingsLoadError::ParseFailed)
+    );
+
+    let id = generate_device_id().unwrap();
+    let error = Settings::save_device_id_only(&path, &id).unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("中止"), "{text}");
+    assert!(text.contains("ParseFailed"), "{text}");
+    assert!(!text.contains("既定値"), "{text}");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "an undecodable file must not be overwritten with defaults"
+    );
+
+    // `Settings::save` intentionally keeps the opposite contract for corrupt
+    // files: only a *future* marker aborts, so a ParseFailed file is replaced
+    // with the sanitized struct (see `save_replaces_an_undecodable_file`).
+    // That documented default fallback is unchanged by this guard test.
+    Settings {
+        email: "new@example.com".to_string(),
+        ..Default::default()
+    }
+    .save(&path)
+    .expect("save must still replace an undecodable file");
+    let loaded = Settings::load_detailed(&path).unwrap();
+    assert_eq!(loaded.email, "new@example.com");
+    assert_ne!(std::fs::read(&path).unwrap(), original);
+}
+
+#[test]
 fn save_device_id_only_aborts_on_an_oversized_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
@@ -1677,7 +1720,7 @@ fn load_advisories_is_empty_for_valid_or_oversized_files() {
 fn load_advisories_is_empty_when_the_file_cannot_be_read() {
     let dir = tempfile::tempdir().unwrap();
 
-    // `File::open` on a directory succeeds but `read_to_string` fails with
+    // `File::open` on a directory succeeds but `read_to_end` fails with
     // EISDIR, which `read_bounded_settings_text` classifies as ReadFailed.
     // The advisory scan shares that reader and collapses the failure to
     // "no metadata" (settings.rs:409-412).
@@ -2880,13 +2923,12 @@ fn load_advisories_messages_match_exactly() {
 }
 
 #[test]
-fn multibyte_utf8_at_the_read_limit_is_classified_by_char_boundaries() {
-    // `read_bounded_settings_text` takes MAX_SETTINGS_BYTES + 1 bytes and then
-    // compares the decoded string's length (settings.rs:413-433). A multibyte
-    // character straddling that *take* boundary leaves an incomplete UTF-8
-    // sequence, so `read_to_string` fails with `InvalidData` and the file is
-    // ParseFailed (undecodable content). When the boundary falls between
-    // characters, MAX+1 decodable bytes are read and the file is TooLarge.
+fn multibyte_utf8_at_the_read_limit_is_too_large_by_byte_count() {
+    // `read_bounded_settings_text` takes MAX_SETTINGS_BYTES + 1 bytes and
+    // decides TooLarge from the raw byte count before decoding (size-first
+    // classification). A multibyte character straddling the *take* boundary
+    // must therefore still be TooLarge when the file exceeds the cap; only a
+    // file at or below the cap can be ParseFailed for undecodable content.
     // Every file below is valid UTF-8 in full; only the truncation
     // distinguishes the classifications.
     const MAX: usize = MAX_SETTINGS_BYTES as usize;
@@ -2931,7 +2973,9 @@ fn multibyte_utf8_at_the_read_limit_is_classified_by_char_boundaries() {
 
     // (3) Same content, but the character starts one byte later, so the
     //     take boundary cuts through its 3-byte sequence. The file itself is
-    //     valid UTF-8; only its first MAX+1 bytes are not.
+    //     valid UTF-8; only its first MAX+1 bytes are not. The byte-count check
+    //     wins over the mid-character decode error, so the oversized file is
+    //     TooLarge rather than being reclassified as ParseFailed.
     let split = content(MAX - 1, MAX + 4);
     assert_eq!(split.len(), MAX + 4);
     assert!(
@@ -2945,7 +2989,7 @@ fn multibyte_utf8_at_the_read_limit_is_classified_by_char_boundaries() {
     std::fs::write(&path, &split).unwrap();
     assert_eq!(
         Settings::load_detailed(&path).err(),
-        Some(SettingsLoadError::ParseFailed)
+        Some(SettingsLoadError::TooLarge)
     );
     assert_eq!(Settings::load(&path), Settings::default());
 }
@@ -3253,7 +3297,7 @@ fn non_not_found_open_errors_are_classified_as_read_failed() {
     // silent missing case; every other `File::open` error becomes
     // `ReadFailedCause` and then `SettingsLoadError::ReadFailed`
     // (settings.rs:383-401). The existing directory test exercises a failing
-    // `read_to_string` *after* a successful open, so it does not cover this
+    // `read_to_end` *after* a successful open, so it does not cover this
     // arm. Using a regular file as an intermediate path component makes
     // `open(2)` fail with ENOTDIR, which is distinct from ENOENT/NotFound.
     let dir = tempfile::tempdir().unwrap();

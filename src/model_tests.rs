@@ -4755,6 +4755,51 @@ fn mark_only_totp_value_is_present_for_the_badge_but_has_no_visible_identity() {
     );
 }
 
+#[test]
+fn shared_visibility_predicates_pin_the_credential_vs_identifier_split() {
+    // The per-character predicates are the single source for both whole-string
+    // rules and for the UI's glyph count. Whitespace, `Cc` and `Cf` are
+    // invisible to both; only marks separate the credential rule from the
+    // strict identifier rule.
+    for ch in [
+        ' ', '\t', '\0', '\u{1f}', '\u{200b}', '\u{feff}', '\u{202e}',
+    ] {
+        assert!(is_non_rendering_char(ch), "U+{:04X}", ch as u32);
+        assert!(is_invisible_identity_char(ch), "U+{:04X}", ch as u32);
+    }
+    for ch in ['\u{0301}', '\u{093e}', '\u{20dd}'] {
+        assert!(!is_non_rendering_char(ch), "U+{:04X}", ch as u32);
+        assert!(is_invisible_identity_char(ch), "U+{:04X}", ch as u32);
+    }
+    assert!(!is_non_rendering_char('e'));
+    assert!(!is_invisible_identity_char('e'));
+
+    // Whole-string rules derived from them differ exactly on mark-only text.
+    const MARKS: &str = "\u{0301}\u{093e}\u{20dd}";
+    assert!(!is_visually_empty(MARKS));
+    assert!(has_no_visible_identity(MARKS));
+    assert!(!crate::auth::credential_is_blank(MARKS));
+    for blank in ["", " \t ", "\u{0}\u{202e}", "\u{200b}\u{feff}"] {
+        assert!(is_visually_empty(blank), "{blank:?}");
+        assert!(has_no_visible_identity(blank), "{blank:?}");
+        assert!(crate::auth::credential_is_blank(blank), "{blank:?}");
+    }
+
+    // A mark attached to a base is a real identifier under the strict rule,
+    // and the shared predicate still excludes the bare mark from the glyph
+    // count ("Café" -> 3 glyphs, not 4).
+    const DECORATED: &str = "Caf\u{0301}";
+    assert!(!is_visually_empty(DECORATED));
+    assert!(!has_no_visible_identity(DECORATED));
+    assert_eq!(
+        DECORATED
+            .chars()
+            .filter(|ch| !is_invisible_identity_char(*ch))
+            .count(),
+        3
+    );
+}
+
 // --- R2-CORE-146: non-blank query through every sort except the default ---
 
 #[test]

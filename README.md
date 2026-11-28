@@ -362,6 +362,12 @@ CI（`.github/workflows/ci.yml`）と pre-commit で共通して使うツール�
 
 Dependabot が更新すると `package.json` と `package-lock.json` は自動更新され、README 更新は不要。
 
+cargo-deny の版は CI の `extra_gates`（`.github/workflows/ci.yml`）内で
+`CARGO_DENY_VERSION` として固定します。Dependabot の `cargo` ecosystem は
+`Cargo.toml` とロックファイルのみを走査するため、CI 内の固定値は追跡されず、
+更新 PR は作成されません。版上げは `ci.yml` の `CARGO_DENY_VERSION` と
+README（上表）を手動で同時に更新する運用ルールとします。
+
 Betterleaks は CI 起動時に pre-commit の `rev` と一致するか検査し、ずれがあれば
 ゲートを失敗させます。markdownlint-cli を除く固定ツールも CI が README の
 記載と突き合わせ、片方だけの更新を検出します。最新版の確認は週次の
@@ -406,4 +412,13 @@ Betterleaks は CI 起動時に pre-commit の `rev` と一致するか検査し
   link-local IP を拒否するが、openwarden 0.1.1 がリダイレクトを追従しないため
   リダイレクト先の検査と DNS rebinding 後の IP ピン留めは未対応
 - 構造化ログ・メトリクス・監視は未実装
+- CI の `cargo deny check` ゲートは、共通ワークフローの呼び出し側
+  （`extra_gates`）で `cargo install cargo-deny@0.21.0 --exact --locked`
+  を毎回実行するため、毎回ソースビルドが発生しゲートが遅い。
+  版を上げるときは上表（`cargo install cargo-deny@0.21.0`）が CI の
+  照合対象であり、両方を同じ版へ更新する。
+  呼び出し側の `extra_gates` にはキャッシュ step を挿入できないため、
+  現状は既知の制約として許容する。改善は共通ワークフロー
+  `Seduce0068/workflows` 側へ `Swatinem/rust-cache` 等のキャッシュ step
+  追加を提案する（このリポジトリでは共通ワークフローを変更しない）。
 - 本番利用を意図したものではありません
