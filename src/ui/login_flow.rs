@@ -22,19 +22,78 @@ pub(super) enum LoginResult {
 /// A failed login attempt, tagged by the family that decides the guidance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum LoginFailure {
-    /// A network/authentication failure: `r` re-runs the pipeline and may
-    /// recover from a transient problem.
+    /// A network/authentication failure. Only the transient variants advertise
+    /// `r`; a blocked URL, a rejected KDF or a cache-permission failure names
+    /// the setting to fix instead.
     Auth(AuthError),
     /// An unlock/import failure after a successful login: the same
     /// credentials will fail again, so the user is asked to correct them.
     Unlock(UnlockError),
 }
 
+/// Whether pressing `r` can clear an authentication failure.
+///
+/// Prelogin, login and sync are network/protocol steps that can recover on a
+/// second run against the same configuration, and a timeout is transient by
+/// definition. Every other variant is decided by a setting (server URL, KDF
+/// policy, email, cache file permissions) or by a missing field, so a retry
+/// reproduces it verbatim. Kept pure so both sides are testable.
+fn auth_error_is_retryable(error: &AuthError) -> bool {
+    matches!(
+        error,
+        AuthError::Prelogin
+            | AuthError::PreloginDetail(_)
+            | AuthError::Login
+            | AuthError::LoginDetail(_)
+            | AuthError::Sync
+            | AuthError::SyncDetail(_)
+            | AuthError::Timeout
+    )
+}
+
+/// The knob a permanent authentication failure asks the user to correct.
+///
+/// Mirrors [`auth_error_is_retryable`] so every non-retryable variant names a
+/// concrete fix instead of an ineffective `r`. All retryable variants are
+/// listed here too (with a generic fallback) to keep the match exhaustive: a
+/// future reclassification then has to update the hint as well.
+fn auth_error_fix_hint(error: &AuthError) -> &'static str {
+    match error {
+        AuthError::InvalidServerUrl
+        | AuthError::InvalidServerUrlDetail(_)
+        | AuthError::BlockedServerUrl
+        | AuthError::ClientSetup
+        | AuthError::ClientSetupDetail(_) => "server_url を確認してください",
+        AuthError::KdfRejected | AuthError::KdfRejectedDetail(_) => "KDF 設定を確認してください",
+        AuthError::OtherDetail(_) => "キャッシュの権限を確認してください",
+        AuthError::InvalidEmail => "メールアドレスを確認してください",
+        AuthError::MissingField(_) => "認証情報を確認してください",
+        // A generic failure names no knob: ask for a settings review rather
+        // than promising a retry that may not help. The retryable arms below
+        // are unreachable from `status()` but keep this helper exhaustive.
+        AuthError::Other(_)
+        | AuthError::Prelogin
+        | AuthError::PreloginDetail(_)
+        | AuthError::Login
+        | AuthError::LoginDetail(_)
+        | AuthError::Sync
+        | AuthError::SyncDetail(_)
+        | AuthError::Timeout => "設定を確認してください",
+    }
+}
+
 impl LoginFailure {
     /// Status-bar guidance. "r で再試行" is shown only for retryable failures.
     fn status(&self) -> String {
         match self {
-            Self::Auth(error) => format!("ログイン失敗: {}（r で再試行）", error.status_message()),
+            Self::Auth(error) => {
+                let detail = error.status_message();
+                if auth_error_is_retryable(error) {
+                    format!("ログイン失敗: {detail}（r で再試行）")
+                } else {
+                    format!("ログイン失敗: {detail}（{}）", auth_error_fix_hint(error))
+                }
+            }
             // A wrong master password/protected key will fail again with the
             // same input, so ask for corrected credentials and do not advertise
             // `r`. Every other unlock-family failure is about the vault data or
@@ -51,6 +110,19 @@ impl LoginFailure {
             },
         }
     }
+}
+
+/// Concrete guidance for a device-id preparation failure.
+///
+/// Both possible causes are local and permanent: no random source, or a
+/// settings file that cannot be read/written. Pressing `r` reruns the same
+/// operation against the same machine and cannot fix either, so the status
+/// names the knob to correct instead of promising a retry.
+pub(super) const DEVICE_ID_FIX_HINT: &str = "設定ファイルの権限と保存先を確認してください";
+
+/// Status for a device-id preparation failure, keeping the underlying detail.
+pub(super) fn device_id_failure_status(error: &str) -> String {
+    format!("デバイス ID を準備できませんでした（{error}）（{DEVICE_ID_FIX_HINT}）")
 }
 
 impl BitwardenApp {
@@ -80,7 +152,10 @@ impl BitwardenApp {
     /// action, so `Enter` always means a real login attempt.
     pub(super) fn unlock_with_auth(&mut self, cx: &mut Context<Self>) {
         // Any new attempt cancels an in-flight one, even when validation fails.
-        self.login_generation.invalidate();
+        // The single helper invalidates the generation and clears the start
+        // timestamp/token together, so no exit below can leave a stale
+        // countdown behind.
+        self.cancel_login();
         // Clear the previous attempt's failure marker before validation: a
         // validation error must not leave the stale "login failed" UI state on.
         self.auth.set_login_failed(false);
@@ -94,7 +169,17 @@ impl BitwardenApp {
             return;
         }
         let generation = self.login_generation.begin();
-        self.status = crate::ui::app::status_with_unsaved("ログイン中…", self.settings_dirty);
+        // The start status stays deliberately number-free: no timeout or
+        // elapsed/remaining figure is shown until the existing 1s ticker turns
+        // this Instant into "ログイン中…（残り N 秒）".
+        self.login_started_at = Some(std::time::Instant::now());
+        // Pair the timestamp with the generation this attempt owns: the 1s
+        // ticker uses this token to tell a live countdown from a cancelled one.
+        self.login_started_generation = Some(generation);
+        self.status = crate::ui::app::status_with_unsaved(
+            crate::ui::app::LOGIN_IN_PROGRESS_STATUS,
+            self.settings_dirty,
+        );
         cx.notify();
         // The initial login and the resync/retry path (the `r` key maps to
         // this same method) both resolve the identifier here, so every
@@ -107,8 +192,11 @@ impl BitwardenApp {
             Ok(id) => id.to_string(),
             Err(error) => {
                 self.auth.set_login_failed(true);
+                // The attempt never reached the network: stop its countdown
+                // and consume the token as on any other failure.
+                self.cancel_login();
                 self.status = crate::ui::app::status_with_unsaved(
-                    &format!("デバイス ID を準備できませんでした（{error}）（r で再試行）"),
+                    &device_id_failure_status(&error.to_string()),
                     self.settings_dirty,
                 );
                 cx.notify();
@@ -173,8 +261,10 @@ impl BitwardenApp {
         if !self.login_generation.is_current(generation) {
             return;
         }
-        // Consume the token so a duplicate callback cannot apply twice.
-        self.login_generation.invalidate();
+        // Consume the token so a duplicate callback cannot apply twice, and
+        // clear the paired start timestamp so the ticker stops refreshing its
+        // countdown over the success/failure status written below.
+        self.cancel_login();
         let (vault, from_cache) = match result {
             LoginResult::Vault { vault, from_cache } => (vault, from_cache),
             LoginResult::AuthFailed(error) => {
@@ -249,8 +339,9 @@ impl BitwardenApp {
     }
 
     pub(super) fn unlock_mock(&mut self, cx: &mut Context<Self>) {
-        // A pending real login must not overwrite the demo vault.
-        self.login_generation.invalidate();
+        // A pending real login must not overwrite the demo vault, and its
+        // countdown must stop with it.
+        self.cancel_login();
         let vault = mock_vault();
         let status = crate::ui::app::status_with_unsaved(
             &format!(
@@ -288,6 +379,78 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn auth_error_retryable_classification_covers_both_sides() {
+        // Transient network/protocol steps plus the timeout are retryable.
+        for error in [
+            AuthError::Prelogin,
+            AuthError::PreloginDetail("detail".into()),
+            AuthError::Login,
+            AuthError::LoginDetail("detail".into()),
+            AuthError::Sync,
+            AuthError::SyncDetail("detail".into()),
+            AuthError::Timeout,
+        ] {
+            assert!(auth_error_is_retryable(&error), "{error:?}");
+        }
+        // Everything decided by a setting, a missing field or the cache file
+        // is permanent and must not advertise `r`.
+        for error in [
+            AuthError::MissingField("server_url"),
+            AuthError::InvalidServerUrl,
+            AuthError::InvalidServerUrlDetail("detail".into()),
+            AuthError::BlockedServerUrl,
+            AuthError::InvalidEmail,
+            AuthError::ClientSetup,
+            AuthError::ClientSetupDetail("detail".into()),
+            AuthError::KdfRejected,
+            AuthError::KdfRejectedDetail("detail".into()),
+            AuthError::Other("generic"),
+            AuthError::OtherDetail("mode 0644、期待 0600".into()),
+        ] {
+            assert!(!auth_error_is_retryable(&error), "{error:?}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn permanent_auth_failures_name_the_setting_instead_of_the_retry_key() {
+        for (error, hint) in [
+            (AuthError::BlockedServerUrl, "server_url を確認してください"),
+            (
+                AuthError::InvalidServerUrlDetail("bad url".into()),
+                "server_url を確認してください",
+            ),
+            (AuthError::KdfRejected, "KDF 設定を確認してください"),
+            (
+                AuthError::KdfRejectedDetail("detail".into()),
+                "KDF 設定を確認してください",
+            ),
+            (
+                AuthError::OtherDetail("mode 0644、期待 0600".into()),
+                "キャッシュの権限を確認してください",
+            ),
+        ] {
+            let status = LoginFailure::Auth(error).status();
+            assert!(!status.contains("r で再試行"), "{status}");
+            assert!(status.contains(hint), "{status}");
+            assert!(status.contains("ログイン失敗:"), "{status}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn retryable_auth_failures_keep_the_retry_key_guidance() {
+        for error in [
+            AuthError::PreloginDetail("detail".into()),
+            AuthError::LoginDetail("detail".into()),
+            AuthError::SyncDetail("detail".into()),
+            AuthError::Timeout,
+        ] {
+            let status = LoginFailure::Auth(error).status();
+            assert!(status.contains("r で再試行"), "{status}");
+            assert!(!status.contains("を確認してください"), "{status}");
+        }
+    }
+
+    #[::core::prelude::v1::test]
     fn unlock_failures_do_not_advertise_retry() {
         // A bad password or protected key will fail identically on retry, so
         // the guidance asks for corrected credentials and never offers `r`.
@@ -317,6 +480,19 @@ mod tests {
             assert!(status.contains("vault の状態を確認"), "{status}");
             assert!(status.contains(&expected), "{status}");
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn device_id_failure_names_the_fix_instead_of_the_retry_key() {
+        let status = device_id_failure_status("保存先を読み込めません");
+        assert!(
+            status.contains("デバイス ID を準備できませんでした"),
+            "{status}"
+        );
+        assert!(status.contains("保存先を読み込めません"), "{status}");
+        assert!(status.contains(DEVICE_ID_FIX_HINT), "{status}");
+        // Retrying cannot make the settings file writable or the RNG appear.
+        assert!(!status.contains("r で再試行"), "{status}");
     }
 
     #[::core::prelude::v1::test]

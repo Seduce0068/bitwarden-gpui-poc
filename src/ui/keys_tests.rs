@@ -1264,19 +1264,20 @@ fn escape_uses_the_warn_first_sentinel_outside_editing_modes() {
         }
     }
 
-    // Editing modes keep their own confirm/finish behaviour.
+    // Editing modes cancel instead of confirming: Escape must never reach
+    // quit_or_warn while a field is focused.
     let mut value = ctx("escape");
     value.panel = Panel::Settings;
     value.editing_settings = true;
-    assert_eq!(classify_key(&value), UiAction::FinishSettingsEdit);
+    assert_eq!(classify_key(&value), UiAction::CancelSettingsEdit);
     value.screen = Screen::Locked;
     value.editing_auth = true;
     value.editing_settings = false;
-    assert_eq!(classify_key(&value), UiAction::FinishAuthEdit);
+    assert_eq!(classify_key(&value), UiAction::CancelAuthEdit);
     value.screen = Screen::Unlocked;
     value.editing_auth = false;
     value.searching = true;
-    assert_eq!(classify_key(&value), UiAction::FinishSearch);
+    assert_eq!(classify_key(&value), UiAction::CancelSearch);
 }
 
 #[test]
@@ -1935,7 +1936,7 @@ fn searching_takes_priority_over_a_nonempty_confirmed_query() {
     for (key, expected) in [
         ("backspace", UiAction::BackspaceSearch),
         ("enter", UiAction::FinishSearch),
-        ("escape", UiAction::FinishSearch),
+        ("escape", UiAction::CancelSearch),
         ("l", UiAction::InsertSearchText("l".into())),
         ("n", UiAction::InsertSearchText("n".into())),
         // `/` stays literal text while searching; it only starts a *fresh*
@@ -1961,12 +1962,12 @@ fn searching_takes_priority_over_a_nonempty_confirmed_query() {
 fn generator_editing_settings_swallows_every_key_before_the_bindings() {
     // `keys.rs` returns `UiAction::None` at the top of the Generator arm while
     // a settings field is focused: no generator command, no global navigation
-    // and no text insertion may escape.
+    // and no text insertion may escape. Escape is the one exception: it cancels
+    // the shared settings edit (asserted separately below).
     let mut value = ctx("x");
     value.panel = Panel::Generator;
     value.editing_settings = true;
     for key in [
-        "escape",
         "n",
         "l",
         "p",
@@ -2009,12 +2010,22 @@ fn generator_editing_settings_swallows_every_key_before_the_bindings() {
         );
     }
 
-    // Clearing the flag restores the ordinary generator bindings.
+    // Escape is the cancel binding in this shared editing mode; every other
+    // key above stays inert and no generator/global command is reached.
+    value.key = "escape";
+    assert_eq!(classify_key(&value), UiAction::CancelSettingsEdit);
+    value.key = "esc";
+    assert_eq!(classify_key(&value), UiAction::CancelSettingsEdit);
+
+    // Clearing the flag restores the ordinary generator bindings, including
+    // the quit-or-warn meaning of Escape outside editing.
     value.editing_settings = false;
     value.key = "p";
     assert_eq!(classify_key(&value), UiAction::GeneratePassword);
     value.key = "n";
     assert_eq!(classify_key(&value), UiAction::SetPanel(Panel::Vault));
+    value.key = "escape";
+    assert_eq!(classify_key(&value), UiAction::quit_or_warn());
 }
 
 #[test]
@@ -2083,4 +2094,59 @@ fn panel_scroll_action_matches_only_the_six_navigation_keys() {
     for key in ["left", "right", "enter", "escape", "p", "w", "a"] {
         assert_eq!(panel_scroll_action(key), None, "{key}");
     }
+}
+
+#[test]
+fn escape_cancels_and_enter_confirms_in_every_editing_mode() {
+    // Enter keeps the pre-existing confirmation bindings in all four modes.
+    let mut value = ctx("enter");
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::FinishSearch);
+    value.searching = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    assert_eq!(classify_key(&value), UiAction::FinishSettingsEdit);
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    value.editing_settings = false;
+    assert_eq!(classify_key(&value), UiAction::FinishAuthEdit);
+
+    // Escape now yields a distinct cancel action in each mode, never the
+    // finish action and never the quit-or-warn action used outside editing.
+    value.key = "escape";
+    assert_eq!(classify_key(&value), UiAction::CancelAuthEdit);
+    value.screen = Screen::Unlocked;
+    value.editing_auth = false;
+    value.searching = true;
+    assert_eq!(classify_key(&value), UiAction::CancelSearch);
+    value.searching = false;
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    assert_eq!(classify_key(&value), UiAction::CancelSettingsEdit);
+    value.panel = Panel::Generator;
+    assert_eq!(classify_key(&value), UiAction::CancelSettingsEdit);
+
+    for action in [
+        UiAction::CancelAuthEdit,
+        UiAction::CancelSearch,
+        UiAction::CancelSettingsEdit,
+    ] {
+        assert_ne!(action, UiAction::quit_or_warn(), "{action:?}");
+    }
+    assert_ne!(UiAction::CancelAuthEdit, UiAction::FinishAuthEdit);
+    assert_ne!(UiAction::CancelSearch, UiAction::FinishSearch);
+    assert_ne!(UiAction::CancelSettingsEdit, UiAction::FinishSettingsEdit);
+
+    // Both alias spellings reach the same cancel binding.
+    value.key = "esc";
+    value.panel = Panel::Settings;
+    value.editing_settings = true;
+    assert_eq!(classify_key(&value), UiAction::CancelSettingsEdit);
+    value.searching = true;
+    value.editing_settings = false;
+    assert_eq!(classify_key(&value), UiAction::CancelSearch);
+    value.searching = false;
+    value.screen = Screen::Locked;
+    value.editing_auth = true;
+    assert_eq!(classify_key(&value), UiAction::CancelAuthEdit);
 }

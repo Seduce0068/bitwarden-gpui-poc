@@ -159,47 +159,85 @@ pub(super) fn unsaved_marker(dirty: bool) -> &'static str {
     }
 }
 
-/// Guidance for the dedicated focus-recovery key.
+/// Define the shared inline-hint wording and every hint that embeds it.
 ///
-/// `F1` is watched by the global keystroke observer installed in `app.rs`.
-/// Listing it in the UI hints makes the way back from a lost focus discoverable
-/// instead of leaving it documented only in the source.
-pub(super) const FOCUS_RECOVERY_HINT: &str = "F1: フォーカス復帰";
+/// Both literals are written exactly once here and substituted into each
+/// `concat!` expansion. `concat!` receives literal tokens (not `const` names,
+/// which it rejects), so the generated hints keep their original
+/// `&'static str` signature: no `format!`, no allocation on the lock/settings
+/// render path, and no chance of the four F1 copies or the twice-repeated
+/// settings warning drifting apart.
+macro_rules! define_inline_hints {
+    ($focus:literal, $no_save:literal) => {
+        /// Guidance for the dedicated focus-recovery key.
+        ///
+        /// `F1` is watched by the global keystroke observer installed in `app.rs`.
+        /// Listing it in the UI hints makes the way back from a lost focus discoverable
+        /// instead of leaving it documented only in the source.
+        pub(super) const FOCUS_RECOVERY_HINT: &str = $focus;
 
-/// Hint for the lock screen. While a field is active `1`-`5` insert text and
-/// `Enter` only confirms that field; it never starts authentication.
-///
-/// The status bar already announces the editing state through
-/// `ui::input::text_edit_start_status`, whose text begins with the shared
-/// "入力中:" prefix from `TEXT_EDIT_ARROW_KEYS_HINT`. This inline hint
-/// deliberately starts with the field-specific keys instead, mirroring
-/// `settings_hint`, so the prefix is drawn only once on the lock screen.
-pub(super) fn auth_hint(editing: bool) -> &'static str {
-    if editing {
-        "1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 確定 / F1: フォーカス復帰"
-    } else {
-        // After Enter/Escape confirms a field this text replaces the "入力中:"
-        // status, so it must keep advertising the lock-screen shortcuts that
-        // are otherwise only shown by the initial lock status.
-        "1-5: 欄を選択 / Enter: 検証して開く / m: デモボルト / r: ログイン失敗時の再試行 / Esc: 終了 / F1: フォーカス復帰"
-    }
+        /// Warning carried by the settings editing hint: typed characters do
+        /// not change a stored setting until `w` confirms the save.
+        ///
+        /// The editing hint needs it twice (on the key list and again after
+        /// `Enter`), so naming it prevents the two copies from diverging.
+        #[cfg(test)]
+        pub(super) const EDITING_NO_SAVE_HINT: &str = $no_save;
+
+        /// Hint for the lock screen. While a field is active `1`-`5` insert text and
+        /// `Enter` only confirms that field; it never starts authentication.
+        ///
+        /// The status bar already announces the editing state through
+        /// `ui::input::text_edit_start_status`, whose text begins with the shared
+        /// "入力中:" prefix from `TEXT_EDIT_ARROW_KEYS_HINT`. This inline hint
+        /// deliberately starts with the field-specific keys instead, mirroring
+        /// `settings_hint`, so the prefix is drawn only once on the lock screen.
+        pub(super) fn auth_hint(editing: bool) -> &'static str {
+            if editing {
+                concat!(
+                    "1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 取り消し / ",
+                    $focus
+                )
+            } else {
+                // After Enter/Escape confirms a field this text replaces the "入力中:"
+                // status, so it must keep advertising the lock-screen shortcuts that
+                // are otherwise only shown by the initial lock status.
+                concat!(
+                    "1-5: 欄を選択 / Enter: 検証して開く / m: デモボルト / r: ログイン失敗時の再試行 / Esc: 終了 / ",
+                    $focus
+                )
+            }
+        }
+
+        /// Hint for the settings panel, switched while a field is being edited.
+        ///
+        /// The status bar already announces the editing state through
+        /// `ui::input::text_edit_start_status` (which starts with the shared
+        /// "入力中:" prefix from `TEXT_EDIT_ARROW_KEYS_HINT`), and the panel no
+        /// longer draws that shared constant itself. Mirroring the status bar's F1
+        /// de-duplication policy, the inline hint drops the prefix too so the two
+        /// lines do not both open with "入力中:" while a field is active.
+        pub(super) fn settings_hint(editing: bool) -> &'static str {
+            if editing {
+                concat!(
+                    "w/c/l/d も文字として入力（",
+                    $no_save,
+                    "） / Backspace: 削除 / Enter: 確定（",
+                    $no_save,
+                    "） / Esc: 取り消し / ",
+                    $focus
+                )
+            } else {
+                concat!(
+                    "1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログインタイムアウト / 5,6: 復元 / w: 保存 / d: 破棄 / c: 戻る / l: ロック / Esc: 終了 / ",
+                    $focus
+                )
+            }
+        }
+    };
 }
 
-/// Hint for the settings panel, switched while a field is being edited.
-///
-/// The status bar already announces the editing state through
-/// `ui::input::text_edit_start_status` (which starts with the shared
-/// "入力中:" prefix from `TEXT_EDIT_ARROW_KEYS_HINT`), and the panel no
-/// longer draws that shared constant itself. Mirroring the status bar's F1
-/// de-duplication policy, the inline hint drops the prefix too so the two
-/// lines do not both open with "入力中:" while a field is active.
-pub(super) fn settings_hint(editing: bool) -> &'static str {
-    if editing {
-        "w/c/l/d も文字として入力（保存はしません） / Backspace: 削除 / Enter: 確定（保存はしません） / Esc: 確定 / F1: フォーカス復帰"
-    } else {
-        "1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログイン制限 / 5,6: 復元 / w: 保存 / d: 破棄 / c: 戻る / l: ロック / Esc: 終了 / F1: フォーカス復帰"
-    }
-}
+define_inline_hints!("F1: フォーカス復帰", "保存はしません");
 
 /// Convert a day count since 1970-01-01 to a proleptic-Gregorian calendar date.
 ///
@@ -232,7 +270,9 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 ///
 /// `std` has no local-timezone API and adding a date crate would require a
 /// `Cargo.toml` change outside this task's scope, so the production caller uses
-/// the UTC form. The offset parameter keeps the conversion pure and testable.
+/// the UTC form via [`REVISION_DATE_UTC_OFFSET_SECS`]. The offset parameter
+/// keeps the conversion pure and testable, and is the extension point for a
+/// future caller that has a real local offset to supply.
 pub(super) fn format_revision_date_at(revision: i64, offset_secs: i64) -> String {
     if revision == crate::model::UNKNOWN_REVISION {
         return "不明".to_string();
@@ -258,10 +298,27 @@ pub(super) fn format_revision_date_at(revision: i64, offset_secs: i64) -> String
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} {zone}")
 }
 
+/// Explicit zero offset used by the detail-line revision formatter.
+///
+/// The detail line renders every revision in UTC because `std` offers no
+/// local-timezone offset and adding a date/time crate would need a `Cargo.toml`
+/// change outside this module's scope. Naming the offset makes that deliberate
+/// choice greppable instead of hiding a bare `0` at the call, and
+/// [`format_revision_date_at`] still prints the `UTC` zone so the value can
+/// never be mistaken for local time.
+pub(super) const REVISION_DATE_UTC_OFFSET_SECS: i64 = 0;
+
 /// Revision formatter used by the detail line (UTC until a timezone source is
-/// wired in; see [`format_revision_date_at`]).
+/// wired in; see [`REVISION_DATE_UTC_OFFSET_SECS`]).
+///
+/// The signature is deliberately kept as `fn(i64) -> String` because the
+/// production caller lives in `ui::app`, outside this module's write scope.
+/// When a timezone source becomes available, that caller can switch to
+/// [`format_revision_date_at`] with a real offset without changing this
+/// helper's remaining callers. That is a proposal only: no signature and no
+/// out-of-scope caller is changed here, and the existing format tests are kept.
 pub(super) fn format_revision_date(revision: i64) -> String {
-    format_revision_date_at(revision, 0)
+    format_revision_date_at(revision, REVISION_DATE_UTC_OFFSET_SECS)
 }
 
 /// Marker embedded in the post-login status when the vault came from cache.
@@ -555,6 +612,48 @@ mod tests {
     }
 
     #[test]
+    fn inline_hints_match_the_shared_wording_byte_for_byte() {
+        // Exact-match pinning: every hint is its key list plus the single
+        // shared F1 text, and the settings warning comes from its own constant
+        // (used twice) instead of two hand-written copies.
+        let focus = FOCUS_RECOVERY_HINT;
+        let no_save = EDITING_NO_SAVE_HINT;
+
+        assert_eq!(
+            auth_hint(true).to_string(),
+            format!("1-5 も文字として入力 / Backspace: 削除 / Enter: 確定のみ（認証はしません） / Esc: 取り消し / {focus}")
+        );
+        assert_eq!(
+            auth_hint(false).to_string(),
+            format!("1-5: 欄を選択 / Enter: 検証して開く / m: デモボルト / r: ログイン失敗時の再試行 / Esc: 終了 / {focus}")
+        );
+        assert_eq!(
+            settings_hint(true).to_string(),
+            format!("w/c/l/d も文字として入力（{no_save}） / Backspace: 削除 / Enter: 確定（{no_save}） / Esc: 取り消し / {focus}")
+        );
+        assert_eq!(
+            settings_hint(false).to_string(),
+            format!("1,2: 編集 / +/-: 閾値 / i/u: 自動ロック / 3,4: ログインタイムアウト / 5,6: 復元 / w: 保存 / d: 破棄 / c: 戻る / l: ロック / Esc: 終了 / {focus}")
+        );
+
+        // The constants are pinned too, so a typo cannot silently rewrite all
+        // four hints at once, and neither literal may be repeated by a hint.
+        assert_eq!(focus, "F1: フォーカス復帰");
+        assert_eq!(no_save, "保存はしません");
+        for hint in [
+            auth_hint(true),
+            auth_hint(false),
+            settings_hint(true),
+            settings_hint(false),
+        ] {
+            assert_eq!(hint.matches(focus).count(), 1, "{hint}");
+            assert!(hint.ends_with(focus), "{hint}");
+        }
+        assert_eq!(settings_hint(true).matches(no_save).count(), 2);
+        assert!(!auth_hint(true).contains(no_save));
+    }
+
+    #[test]
     fn revision_dates_format_to_a_calendar_date_and_name_unknown() {
         assert_eq!(
             format_revision_date(crate::model::UNKNOWN_REVISION),
@@ -579,6 +678,24 @@ mod tests {
             format_revision_date(1_700_000_000),
             format_revision_date(1_700_000_000)
         );
+    }
+
+    #[test]
+    fn detail_line_revision_uses_the_named_utc_offset() {
+        // Exact match: the detail-line helper is the UTC form of the
+        // offset-aware formatter, with the offset supplied by the shared
+        // constant rather than a bare literal at the call site. The existing
+        // calendar/zone assertions above are kept unchanged.
+        assert_eq!(REVISION_DATE_UTC_OFFSET_SECS, 0);
+        for revision in [crate::model::UNKNOWN_REVISION, 1_700_000_000, -1] {
+            assert_eq!(
+                format_revision_date(revision),
+                format_revision_date_at(revision, REVISION_DATE_UTC_OFFSET_SECS),
+                "revision {revision} must use the named UTC offset"
+            );
+        }
+        let utc = format_revision_date(1_700_000_000);
+        assert!(utc.ends_with(" UTC"), "{utc}");
     }
 
     #[test]

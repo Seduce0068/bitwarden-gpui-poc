@@ -136,12 +136,21 @@ pub(super) enum UiAction {
     Quit,
     Authenticate,
     OpenDemoVault,
+    /// `r` always retries: it maps to the same `unlock_with_auth` path as
+    /// `Enter`. The binding is only gated on a failed login state; once bound,
+    /// the key never means anything other than "start the login over".
     RetryLogin,
     EditAuthField(AuthField),
     EditSettingsField(SettingsField),
     FinishAuthEdit,
     FinishSearch,
     FinishSettingsEdit,
+    /// Discard the in-progress auth edit and leave the field without saving.
+    CancelAuthEdit,
+    /// Discard the in-progress search query and leave search mode.
+    CancelSearch,
+    /// Discard the in-progress settings edit and leave the field.
+    CancelSettingsEdit,
     InsertAuthText(String),
     InsertSearchText(String),
     /// Append printable text to an already-confirmed vault query.
@@ -521,7 +530,11 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
     if ctx.screen == Screen::Locked {
         if ctx.editing_auth {
             return match key {
-                "escape" | "enter" => UiAction::FinishAuthEdit,
+                // Enter confirms; Escape cancels (the two used to share one
+                // "finish" action, which gave the user no way to discard a
+                // half-typed credential).
+                "enter" => UiAction::FinishAuthEdit,
+                "escape" => UiAction::CancelAuthEdit,
                 "backspace" => UiAction::BackspaceAuth,
                 // Arrow/Home/End are inert while editing: no text-input widget
                 // consumes them yet, so caret movement is unsupported (see
@@ -539,6 +552,11 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             "escape" => UiAction::quit_or_warn(),
             "enter" => UiAction::Authenticate,
             "m" => UiAction::OpenDemoVault,
+            // Guidance may say "r で再試行" only where a retry can help, but
+            // the key itself is unconditional once bound: `RetryLogin` and
+            // `Authenticate` share one handler, so `r` always retries rather
+            // than performing a different action. Deliberately no behaviour
+            // change here; only the guard's meaning is documented.
             "r" if ctx.login_failed => UiAction::RetryLogin,
             "1" => UiAction::EditAuthField(AuthField::ServerUrl),
             "2" => UiAction::EditAuthField(AuthField::Email),
@@ -551,7 +569,9 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
 
     if ctx.searching {
         return match key {
-            "escape" | "enter" => UiAction::FinishSearch,
+            // Enter keeps the query and confirms it; Escape drops the query.
+            "enter" => UiAction::FinishSearch,
+            "escape" => UiAction::CancelSearch,
             "backspace" => UiAction::BackspaceSearch,
             // No caret widget in search mode yet, so these keys stay inert;
             // Up/Down keep their MoveSelection meaning only outside editing.
@@ -589,7 +609,14 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
         },
         Panel::Generator => {
             if ctx.editing_settings {
-                return UiAction::None;
+                // The generator shares the settings edit flag with the
+                // settings panel. Escape cancels the field there too; every
+                // other key stays inert (no generator text-input mode).
+                return if key == "escape" {
+                    UiAction::CancelSettingsEdit
+                } else {
+                    UiAction::None
+                };
             }
             // The one deliberately case-sensitive binding: `Y` copies the
             // passphrase while `y` copies the password. `command_key` folds
@@ -646,7 +673,10 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                 // Enter/Escape confirms the field (mirrored by the inline
                 // hint in `ui::panels::settings_panel_key_hint`).
                 return match key {
-                    "escape" | "enter" => UiAction::FinishSettingsEdit,
+                    // Enter confirms the field; Escape restores its previous
+                    // value. Other keys stay literal text exactly as before.
+                    "enter" => UiAction::FinishSettingsEdit,
+                    "escape" => UiAction::CancelSettingsEdit,
                     "backspace" => UiAction::BackspaceSettings,
                     // Same contract as auth/search editing: inert because there
                     // is no caret widget yet, so no vault-list navigation while
@@ -1584,7 +1614,7 @@ mod r2_ui_150_tests {
         let mut auth = ctx("escape");
         auth.screen = Screen::Locked;
         auth.editing_auth = true;
-        assert_alias_matches(auth, "esc", UiAction::FinishAuthEdit);
+        assert_alias_matches(auth, "esc", UiAction::CancelAuthEdit);
 
         let mut locked = ctx("escape");
         locked.screen = Screen::Locked;
@@ -1592,12 +1622,19 @@ mod r2_ui_150_tests {
 
         let mut search = ctx("escape");
         search.searching = true;
-        assert_alias_matches(search, "esc", UiAction::FinishSearch);
+        assert_alias_matches(search, "esc", UiAction::CancelSearch);
 
         let mut settings_editing = ctx("escape");
         settings_editing.panel = Panel::Settings;
         settings_editing.editing_settings = true;
-        assert_alias_matches(settings_editing, "esc", UiAction::FinishSettingsEdit);
+        assert_alias_matches(settings_editing, "esc", UiAction::CancelSettingsEdit);
+
+        // The generator shares the settings edit flag: Escape cancels there
+        // too, while other keys stay inert (pinned in keys_tests.rs).
+        let mut generator_editing = ctx("escape");
+        generator_editing.panel = Panel::Generator;
+        generator_editing.editing_settings = true;
+        assert_alias_matches(generator_editing, "esc", UiAction::CancelSettingsEdit);
 
         for panel in [
             Panel::Audit,

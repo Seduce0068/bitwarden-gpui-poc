@@ -3,12 +3,13 @@
 //! Key classification lives in the pure [`crate::ui::keys`] module; this file
 //! only applies the resulting action to the app state.
 
-use crate::ui::app::BitwardenApp;
+use crate::settings::SharedSettingsField;
+use crate::ui::app::{BitwardenApp, EditSnapshot, EditTarget};
 use crate::ui::keys::{
     classify_key, GeneratorOption, KeyContext, KeyModifiers, SelectionEdge, UiAction,
     TEXT_EDIT_ARROW_KEYS_HINT,
 };
-use crate::ui::state::Panel;
+use crate::ui::state::{AuthField, Panel};
 use gpui_kit::*;
 use zeroize::Zeroizing;
 
@@ -135,19 +136,158 @@ pub(super) const TEXT_EDIT_BACKSPACE_HINT: &str = "Backspace: 削除";
 pub(super) fn text_edit_start_status(dirty: bool) -> String {
     crate::ui::app::status_with_unsaved(
         &format!(
-            "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter または Esc で確定"
+            "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter: 確定 / Esc: 取り消し"
         ),
         dirty,
     )
 }
 
-/// Status after confirming a settings field with Enter/Escape.
+/// Status after confirming a settings field with Enter.
 ///
 /// Confirming a field is not a save, so any unsaved marker must survive just
 /// like it does on every other transient status. Kept as a pure helper so the
 /// contract can be exercised without a GPUI window.
 pub(super) fn settings_edit_finished_status(dirty: bool) -> String {
     crate::ui::app::status_with_unsaved("入力を確定しました（w: 保存 / d: 破棄）", dirty)
+}
+
+/// Status written when an auth field edit is cancelled with Escape.
+///
+/// The normal lock-screen guidance is restored just like on confirmation, but
+/// the transient wording says the edit was discarded so Enter/Esc are no
+/// longer indistinguishable to the user. Cancelling is not a save, so the
+/// persistent unsaved marker follows the same contract.
+pub(super) fn auth_edit_cancelled_status(dirty: bool) -> String {
+    text_edit_finished_status("入力を取り消しました（編集内容を破棄）", dirty)
+}
+
+/// Status written when a settings field edit is cancelled with Escape.
+///
+/// The field has already been rolled back, so the wording must not claim a
+/// save; the usual `w`/`d` hint remains the correct next step.
+pub(super) fn settings_edit_cancelled_status(dirty: bool) -> String {
+    text_edit_finished_status("入力を取り消しました（w: 保存 / d: 破棄）", dirty)
+}
+
+/// Status written when a search is cancelled with Escape.
+///
+/// Cancelling clears the query, so unlike a confirmed search there is no
+/// re-edit hint to advertise. The count-dependent base text and the unsaved
+/// marker are otherwise unchanged.
+pub(super) fn cancelled_search_status(result_count: usize, dirty: bool) -> String {
+    search_finished_status_with_query(false, result_count, dirty)
+}
+
+/// Last persisted value of a settings field shared with the lock screen.
+///
+/// This is the *fallback* for a cancel that has no edit snapshot (for example
+/// an older state restored without one). A missing or unreadable file falls
+/// back to defaults, matching the existing discard-settings path. When a
+/// snapshot exists, [`restore_edit_value`] is used instead: the disk value
+/// would silently discard a value the user already confirmed with Enter.
+pub(super) fn restored_shared_value(field: SharedSettingsField) -> String {
+    let settings = match crate::settings::Settings::default_path() {
+        Some(path) => crate::settings::Settings::load_detailed(&path).unwrap_or_default(),
+        None => crate::settings::Settings::default(),
+    };
+    match field {
+        SharedSettingsField::ServerUrl => settings.server_url,
+        SharedSettingsField::Email => settings.email,
+    }
+}
+
+/// Discard the in-progress text of one owned credential field.
+///
+/// `AuthState` deliberately exposes no per-field clear, so cancellation
+/// drains the active field with the same `pop_char` the Backspace path uses.
+/// The caller must invoke this while `field` is still active; `take_field`
+/// happens afterwards.
+pub(super) fn discard_owned_auth_field(
+    auth: &mut crate::ui::auth_state::AuthState,
+    field: AuthField,
+) {
+    loop {
+        let has_text = match field {
+            AuthField::ClientId => !auth.client_id().is_empty(),
+            AuthField::ClientSecret => !auth.client_secret().is_empty(),
+            AuthField::MasterPassword => !auth.master_password().is_empty(),
+            AuthField::ServerUrl | AuthField::Email => false,
+        };
+        if !has_text {
+            break;
+        }
+        auth.pop_char();
+    }
+}
+
+/// Value a text edit starts from, captured before the first keystroke.
+///
+/// Shared fields read from the in-memory `Settings` (which may hold a
+/// confirmed-but-unsaved edit), owned credentials from `AuthState`, and a
+/// search from the live view query. The returned buffer is zeroizing because
+/// secret credentials can be among the captured values. Kept as a free
+/// function over plain state so the confirm → re-edit → Escape sequence is
+/// testable without a GPUI window.
+pub(super) fn capture_edit_value(
+    target: EditTarget,
+    auth: &crate::ui::auth_state::AuthState,
+    settings: &crate::settings::Settings,
+    view: &crate::ui::vault_view::VaultViewState,
+) -> Zeroizing<String> {
+    let value = match target {
+        EditTarget::Auth(field) => match field.shared() {
+            Some(shared) => match shared {
+                SharedSettingsField::ServerUrl => settings.server_url.clone(),
+                SharedSettingsField::Email => settings.email.clone(),
+            },
+            None => match field {
+                AuthField::ClientId => auth.client_id().to_string(),
+                AuthField::ClientSecret => auth.client_secret().to_string(),
+                AuthField::MasterPassword => auth.master_password().to_string(),
+                AuthField::ServerUrl | AuthField::Email => unreachable!("shared field above"),
+            },
+        },
+        EditTarget::Settings(field) => match SharedSettingsField::from(field) {
+            SharedSettingsField::ServerUrl => settings.server_url.clone(),
+            SharedSettingsField::Email => settings.email.clone(),
+        },
+        EditTarget::Search => view.query.clone(),
+    };
+    Zeroizing::new(value)
+}
+
+/// Put a captured value back into the field `target` names.
+///
+/// Owned credentials are restored through the same active-field buffer the
+/// user edited: clear it with [`discard_owned_auth_field`] and push the
+/// snapshot back, leaving the field active so the caller's `take_field`
+/// still ends the edit. Shared fields and the search query are assigned
+/// directly. Pure over plain state for the same reason as the capture.
+pub(super) fn restore_edit_value(
+    target: EditTarget,
+    value: &str,
+    auth: &mut crate::ui::auth_state::AuthState,
+    settings: &mut crate::settings::Settings,
+    view: &mut crate::ui::vault_view::VaultViewState,
+) {
+    match target {
+        EditTarget::Auth(field) => match field.shared() {
+            Some(shared) => match shared {
+                SharedSettingsField::ServerUrl => settings.server_url = value.to_string(),
+                SharedSettingsField::Email => settings.email = value.to_string(),
+            },
+            None => {
+                auth.set_field(Some(field));
+                discard_owned_auth_field(auth, field);
+                auth.push_text(value);
+            }
+        },
+        EditTarget::Settings(field) => match SharedSettingsField::from(field) {
+            SharedSettingsField::ServerUrl => settings.server_url = value.to_string(),
+            SharedSettingsField::Email => settings.email = value.to_string(),
+        },
+        EditTarget::Search => view.query = value.to_string(),
+    }
 }
 
 /// Base text of the status shown when the audit panel is requested before a
@@ -802,27 +942,41 @@ impl BitwardenApp {
             UiAction::Authenticate | UiAction::RetryLogin => self.unlock_with_auth(cx),
             UiAction::OpenDemoVault => self.unlock_mock(cx),
             UiAction::EditAuthField(field) => {
-                // Changing credentials invalidates any in-flight attempt.
-                self.login_generation.invalidate();
+                // Capture the value before the first keystroke so Escape
+                // restores a previously confirmed (but unsaved) value instead
+                // of the disk/default one.
+                let target = EditTarget::Auth(field);
+                let value = capture_edit_value(target, &self.auth, &self.settings, &self.view);
+                self.edit_snapshot = Some(EditSnapshot { target, value });
+                // Changing credentials invalidates any in-flight attempt and
+                // stops its countdown in one step.
+                self.cancel_login();
                 self.auth.set_field(Some(field));
                 self.status = text_edit_start_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::EditSettingsField(field) => {
+                let target = EditTarget::Settings(field);
+                let value = capture_edit_value(target, &self.auth, &self.settings, &self.view);
+                self.edit_snapshot = Some(EditSnapshot { target, value });
                 self.editing = Some(field);
                 self.status = text_edit_start_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::FinishAuthEdit => {
-                self.login_generation.invalidate();
+                self.cancel_login();
+                // Enter confirms the snapshot: consume it so a later Escape
+                // restores the confirmed value captured at the *next* edit.
+                self.edit_snapshot = None;
                 self.auth.take_field();
-                // Enter/Escape only confirm the field; drop the "入力中"
-                // guidance installed by EditAuthField.
+                // Enter only confirms the field (Escape now cancels it); drop
+                // the "入力中" guidance installed by EditAuthField.
                 self.status = auth_edit_finished_status(self.settings_dirty);
                 cx.notify();
             }
             UiAction::FinishSearch => {
                 self.view.finish_search();
+                self.edit_snapshot = None;
                 // Same contract as the auth field: confirmation is not still
                 // an editing session, so restore the normal vault status. The
                 // view still owns the query, so derive both the "no matches"
@@ -832,13 +986,98 @@ impl BitwardenApp {
             }
             UiAction::FinishSettingsEdit => {
                 self.editing = None;
-                // Enter/Escape only confirm the field; point at the explicit
-                // save/discard keys and keep the unsaved marker visible.
+                self.edit_snapshot = None;
+                // Enter only confirms the field (Escape now cancels it); point
+                // at the explicit save/discard keys and keep the marker visible.
                 self.status = settings_edit_finished_status(self.settings_dirty);
                 cx.notify();
             }
+            UiAction::CancelAuthEdit => {
+                // Editing a credential invalidates an in-flight login just as
+                // confirmation does; only the text typed in this session is
+                // discarded, not a value confirmed by an earlier Enter.
+                self.cancel_login();
+                let snapshot = self.edit_snapshot.take();
+                if let Some(field) = self.auth.field() {
+                    let target = EditTarget::Auth(field);
+                    if let Some(snapshot) = snapshot.filter(|s| s.target == target) {
+                        restore_edit_value(
+                            target,
+                            &snapshot.value,
+                            &mut self.auth,
+                            &mut self.settings,
+                            &mut self.view,
+                        );
+                    } else {
+                        // No snapshot (or a stale one): keep the legacy
+                        // disk/default fallback for this field.
+                        match field.shared() {
+                            Some(shared) => {
+                                let original = restored_shared_value(shared);
+                                match shared {
+                                    SharedSettingsField::ServerUrl => {
+                                        self.settings.server_url = original;
+                                    }
+                                    SharedSettingsField::Email => self.settings.email = original,
+                                }
+                            }
+                            None => discard_owned_auth_field(&mut self.auth, field),
+                        }
+                    }
+                }
+                self.auth.take_field();
+                self.status = auth_edit_cancelled_status(self.settings_dirty);
+                cx.notify();
+            }
+            UiAction::CancelSearch => {
+                // Restore the query this edit session started from. Without a
+                // snapshot, keep the old behaviour and drop the whole query so
+                // no confirmed value leaks back into search mode.
+                let snapshot = self.edit_snapshot.take();
+                if let Some(snapshot) = snapshot.filter(|s| s.target == EditTarget::Search) {
+                    restore_edit_value(
+                        EditTarget::Search,
+                        &snapshot.value,
+                        &mut self.auth,
+                        &mut self.settings,
+                        &mut self.view,
+                    );
+                } else {
+                    self.view.query.clear();
+                }
+                self.view.finish_search();
+                self.status =
+                    cancelled_search_status(self.view.visible_items().len(), self.settings_dirty);
+                cx.notify();
+            }
+            UiAction::CancelSettingsEdit => {
+                let snapshot = self.edit_snapshot.take();
+                if let Some(field) = self.editing {
+                    let target = EditTarget::Settings(field);
+                    if let Some(snapshot) = snapshot.filter(|s| s.target == target) {
+                        restore_edit_value(
+                            target,
+                            &snapshot.value,
+                            &mut self.auth,
+                            &mut self.settings,
+                            &mut self.view,
+                        );
+                    } else {
+                        // No snapshot: keep the legacy disk/default fallback.
+                        let shared = SharedSettingsField::from(field);
+                        let original = restored_shared_value(shared);
+                        match shared {
+                            SharedSettingsField::ServerUrl => self.settings.server_url = original,
+                            SharedSettingsField::Email => self.settings.email = original,
+                        }
+                    }
+                }
+                self.editing = None;
+                self.status = settings_edit_cancelled_status(self.settings_dirty);
+                cx.notify();
+            }
             UiAction::InsertAuthText(text) => {
-                self.login_generation.invalidate();
+                self.cancel_login();
                 self.edit_auth_field(&text);
                 cx.notify();
             }
@@ -851,7 +1090,7 @@ impl BitwardenApp {
                 cx.notify();
             }
             UiAction::BackspaceAuth => {
-                self.login_generation.invalidate();
+                self.cancel_login();
                 self.backspace_auth_field();
                 cx.notify();
             }
@@ -936,6 +1175,12 @@ impl BitwardenApp {
                 cx.notify();
             }
             UiAction::StartSearch => {
+                // Snapshot the current query before `start_search` clears it,
+                // so Escape restores a previously confirmed query instead of
+                // an empty string.
+                let target = EditTarget::Search;
+                let value = capture_edit_value(target, &self.auth, &self.settings, &self.view);
+                self.edit_snapshot = Some(EditSnapshot { target, value });
                 // Delegate to the shared helper instead of duplicating its
                 // query reset here: its query-clearing contract is covered by
                 // `vault_view::tests::start_search_discards_a_previous_query_and_its_selection`.
@@ -997,14 +1242,17 @@ impl BitwardenApp {
                 if adjustment.changed {
                     self.mark_settings_dirty();
                     self.status = seconds_adjust_status(
-                        "ログインタイムアウト",
+                        crate::ui::panels::LOGIN_TIMEOUT_LABEL,
                         self.settings.login_timeout_seconds,
                         self.settings_dirty,
                     );
                     cx.notify();
                 } else {
-                    self.status =
-                        seconds_boundary_status("ログイン制限", delta, self.settings_dirty);
+                    self.status = seconds_boundary_status(
+                        crate::ui::panels::LOGIN_TIMEOUT_LABEL,
+                        delta,
+                        self.settings_dirty,
+                    );
                     cx.notify();
                 }
             }
@@ -1193,7 +1441,7 @@ mod tests {
         assert_eq!(
             status,
             format!(
-                "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter または Esc で確定"
+                "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter: 確定 / Esc: 取り消し"
             )
         );
     }
@@ -1233,7 +1481,7 @@ mod tests {
         assert_eq!(
             clean,
             format!(
-                "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter または Esc で確定"
+                "{TEXT_EDIT_ARROW_KEYS_HINT} / {TEXT_EDIT_BACKSPACE_HINT} / Enter: 確定 / Esc: 取り消し"
             )
         );
         assert!(!clean.contains("[未保存"), "{clean}");
@@ -2769,5 +3017,139 @@ mod tests {
         ] {
             assert_eq!(generator_clamp_edge(option), None, "{option:?}");
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn discard_owned_auth_field_clears_only_the_active_field() {
+        let mut auth = crate::ui::auth_state::AuthState::new();
+        auth.set_field(Some(AuthField::ClientId));
+        auth.push_text("client");
+        auth.set_field(Some(AuthField::ClientSecret));
+        auth.push_text("secret");
+        auth.set_field(Some(AuthField::MasterPassword));
+        auth.push_text("master");
+
+        // Cancelling the password edit drains only that field; the other
+        // credentials and the active-field marker are left intact.
+        discard_owned_auth_field(&mut auth, AuthField::MasterPassword);
+        assert_eq!(auth.master_password(), "");
+        assert_eq!(auth.client_id(), "client");
+        assert_eq!(auth.client_secret(), "secret");
+        assert_eq!(auth.field(), Some(AuthField::MasterPassword));
+
+        // A shared field has no buffer in AuthState, so the helper is inert.
+        discard_owned_auth_field(&mut auth, AuthField::ServerUrl);
+        assert_eq!(auth.client_id(), "client");
+        assert_eq!(auth.client_secret(), "secret");
+    }
+
+    /// Capture exactly as the `Edit*` / `StartSearch` branches do.
+    fn edit_snapshot(
+        target: EditTarget,
+        auth: &crate::ui::auth_state::AuthState,
+        settings: &crate::settings::Settings,
+        view: &crate::ui::vault_view::VaultViewState,
+    ) -> EditSnapshot {
+        EditSnapshot {
+            target,
+            value: capture_edit_value(target, auth, settings, view),
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn cancel_after_confirm_restores_the_confirmed_value_not_the_disk_value() {
+        // Regression: Enter confirms a value in memory but does not save it.
+        // Escape of a later re-edit used to fall back to the disk/default
+        // value (or an empty field), silently losing that confirmed value.
+        let mut auth = crate::ui::auth_state::AuthState::new();
+        let mut settings = crate::settings::Settings::default();
+        let mut view = crate::ui::vault_view::VaultViewState::new();
+
+        // Shared auth field.
+        let target = EditTarget::Auth(AuthField::ServerUrl);
+        settings.server_url = "https://confirmed.example".into();
+        let snapshot = edit_snapshot(target, &auth, &settings, &view);
+        settings.server_url.push_str("/edited");
+        restore_edit_value(target, &snapshot.value, &mut auth, &mut settings, &mut view);
+        assert_eq!(settings.server_url, "https://confirmed.example");
+
+        // Owned secret field: the legacy fallback drained it to empty.
+        let target = EditTarget::Auth(AuthField::ClientSecret);
+        auth.set_field(Some(AuthField::ClientSecret));
+        auth.push_text("confirmed-secret");
+        let snapshot = edit_snapshot(target, &auth, &settings, &view);
+        auth.push_text("!");
+        assert_eq!(auth.client_secret(), "confirmed-secret!");
+        restore_edit_value(target, &snapshot.value, &mut auth, &mut settings, &mut view);
+        assert_eq!(auth.client_secret(), "confirmed-secret");
+
+        // Settings panel field.
+        let target = EditTarget::Settings(crate::ui::state::SettingsField::Email);
+        settings.email = "confirmed@example.com".into();
+        let snapshot = edit_snapshot(target, &auth, &settings, &view);
+        settings.email = "edited@example.com".into();
+        restore_edit_value(target, &snapshot.value, &mut auth, &mut settings, &mut view);
+        assert_eq!(settings.email, "confirmed@example.com");
+
+        // Search: confirm a query, re-edit with `/`, then cancel.
+        let target = EditTarget::Search;
+        view.query = "confirmed".into();
+        view.finish_search();
+        let snapshot = edit_snapshot(target, &auth, &settings, &view);
+        view.start_search();
+        view.push_query("edited");
+        assert_eq!(view.query, "edited");
+        restore_edit_value(target, &snapshot.value, &mut auth, &mut settings, &mut view);
+        assert_eq!(view.query, "confirmed");
+    }
+
+    #[::core::prelude::v1::test]
+    fn cancelled_search_status_drops_the_reedit_hint() {
+        let hint = crate::ui::keys::CONFIRMED_QUERY_REEDIT_HINT;
+        for count in [0, 2] {
+            for dirty in [false, true] {
+                let status = cancelled_search_status(count, dirty);
+                assert!(!status.contains(hint), "{status}");
+                assert_eq!(
+                    status,
+                    crate::ui::app::status_with_unsaved(
+                        &crate::ui::logic::no_selection_status_for_count(count),
+                        dirty
+                    )
+                );
+            }
+        }
+        let clean = cancelled_search_status(2, false);
+        assert_eq!(
+            cancelled_search_status(2, true),
+            crate::ui::app::status_with_unsaved(&clean, true)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn cancelled_edit_statuses_report_discard_and_keep_the_unsaved_marker() {
+        for (clean, dirty) in [
+            (
+                auth_edit_cancelled_status(false),
+                auth_edit_cancelled_status(true),
+            ),
+            (
+                settings_edit_cancelled_status(false),
+                settings_edit_cancelled_status(true),
+            ),
+        ] {
+            assert!(clean.contains("取り消し"), "{clean}");
+            assert!(!clean.contains("[未保存"), "{clean}");
+            assert_eq!(dirty, crate::ui::app::status_with_unsaved(&clean, true));
+            assert!(dirty.contains("[未保存の設定変更があります]"), "{dirty}");
+        }
+        assert_ne!(
+            auth_edit_cancelled_status(false),
+            auth_edit_finished_status(false)
+        );
+        assert_ne!(
+            settings_edit_cancelled_status(false),
+            settings_edit_finished_status(false)
+        );
     }
 }

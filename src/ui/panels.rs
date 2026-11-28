@@ -51,6 +51,15 @@ pub(super) const PANEL_SCROLL_KEYS_HINT: &str =
 pub(super) const LIST_PAGE_AND_EDGE_HINT: &str =
     "PageUp/PageDown: 固定10行ずつ移動 / Home/End: 先頭/末尾へ移動";
 
+/// Shared label for `login_timeout_seconds`, adjusted by `3`/`4`.
+///
+/// The settings summary row used to call this field "ログイン制限" while the
+/// key guide and README called the same `3`/`4` setting "ログインタイムアウト".
+/// One constant keeps the field name identical wherever it is drawn; the key
+/// bindings themselves are unchanged. `pub(super)` lets sibling `ui` modules
+/// render the same wording from this single source.
+pub(super) const LOGIN_TIMEOUT_LABEL: &str = "ログインタイムアウト";
+
 /// Row-navigation keys shared by every panel that renders a selectable list.
 ///
 /// This bundles Up/Down and the shared page/edge keys, but deliberately not
@@ -195,6 +204,16 @@ pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String
     )
 }
 
+/// Apply the shared field labels to `ui::logic::settings_hint`.
+///
+/// The source hint still spells the `3`/`4` field "ログイン制限"; applying
+/// [`LOGIN_TIMEOUT_LABEL`] at this panel boundary keeps the drawn key guide
+/// identical to the summary row and README. It becomes a no-op once the source
+/// hint also uses the shared constant.
+fn settings_hint_for_panel(editing: bool) -> String {
+    settings_hint(editing).replace("ログイン制限", LOGIN_TIMEOUT_LABEL)
+}
+
 /// Inline key hint for the settings panel, including its scroll state.
 ///
 /// `settings_hint` already carries the settings-specific keys and avoids the
@@ -210,14 +229,15 @@ pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String
 /// scroll keys are inert as text, while the idle state advertises
 /// [`PANEL_SCROLL_KEYS_HINT`] for its tracked `ScrollHandle`.
 pub(super) fn settings_panel_key_hint(editing: bool) -> String {
+    let hint = settings_hint_for_panel(editing);
     if editing {
         format!(
             "{} / +/-, 1-6（1〜6）, i/u, n（生成パネルへ）も文字として入力（設定値は変更しません / n: 生成へ は確定後に有効） / {}",
-            settings_hint(editing),
+            hint,
             MOUSE_WHEEL_SCROLL_ONLY_HINT
         )
     } else {
-        format!("{} / {}", settings_hint(editing), PANEL_SCROLL_KEYS_HINT)
+        format!("{hint} / {}", PANEL_SCROLL_KEYS_HINT)
     }
 }
 
@@ -269,7 +289,7 @@ pub(super) fn settings_timeout_summary_line(
     clipboard_restore_seconds: u64,
 ) -> String {
     format!(
-        "自動ロック: {}（i/u） / ログイン制限: {} 秒（3/4） / 復元: {} 秒（5/6）",
+        "自動ロック: {}（i/u） / {LOGIN_TIMEOUT_LABEL}: {} 秒（3/4） / 復元: {} 秒（5/6）",
         crate::ui::app::idle_lock_minutes_text(idle_lock_seconds),
         login_timeout_seconds,
         clipboard_restore_seconds
@@ -999,7 +1019,7 @@ mod tests {
         // A whole minute keeps the compact spelling, with no doubled "分".
         assert_eq!(
             settings_timeout_summary_line(300, 45, 60),
-            "自動ロック: 5分（i/u） / ログイン制限: 45 秒（3/4） / 復元: 60 秒（5/6）"
+            "自動ロック: 5分（i/u） / ログインタイムアウト: 45 秒（3/4） / 復元: 60 秒（5/6）"
         );
         // A fractional minute keeps its leftover seconds instead of being
         // truncated by integer division, matching `idle_lock_minutes_text`.
@@ -1007,7 +1027,7 @@ mod tests {
         assert_eq!(
             line,
             format!(
-                "自動ロック: {}（i/u） / ログイン制限: 45 秒（3/4） / 復元: 60 秒（5/6）",
+                "自動ロック: {}（i/u） / ログインタイムアウト: 45 秒（3/4） / 復元: 60 秒（5/6）",
                 crate::ui::app::idle_lock_minutes_text(90)
             )
         );
@@ -1015,8 +1035,24 @@ mod tests {
         assert!(!line.contains("1 分"), "{line}");
         assert_eq!(
             settings_timeout_summary_line(0, 1, 2),
-            "自動ロック: 0分（i/u） / ログイン制限: 1 秒（3/4） / 復元: 2 秒（5/6）"
+            "自動ロック: 0分（i/u） / ログインタイムアウト: 1 秒（3/4） / 復元: 2 秒（5/6）"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn login_timeout_label_is_shared_by_the_panel_and_the_key_guide() {
+        assert_eq!(LOGIN_TIMEOUT_LABEL, "ログインタイムアウト");
+        let line = settings_timeout_summary_line(300, 45, 60);
+        assert!(line.contains(LOGIN_TIMEOUT_LABEL), "{line}");
+        assert!(!line.contains("ログイン制限"), "{line}");
+        // The 3/4 binding stays with the timeout; 5/6 stays with restore.
+        assert!(line.contains("45 秒（3/4）"), "{line}");
+        assert!(line.contains("60 秒（5/6）"), "{line}");
+
+        let hint = settings_panel_key_hint(false);
+        assert!(hint.contains("3,4: ログインタイムアウト"), "{hint}");
+        assert!(!hint.contains("ログイン制限"), "{hint}");
+        assert!(hint.contains("5,6: 復元"), "{hint}");
     }
 
     #[::core::prelude::v1::test]
@@ -1059,14 +1095,17 @@ mod tests {
         let idle = settings_panel_key_hint(false);
         assert!(idle.contains(PANEL_SCROLL_KEYS_HINT), "{idle}");
         assert!(!idle.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{idle}");
-        assert!(idle.contains(settings_hint(false)), "{idle}");
+        assert!(idle.contains(&settings_hint_for_panel(false)), "{idle}");
 
         // Editing is the one state where the scroll keys are text/no-ops, so
         // the verbatim wheel-only note must stay there and nowhere else.
         let editing = settings_panel_key_hint(true);
         assert!(editing.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{editing}");
         assert!(!editing.contains(PANEL_SCROLL_KEYS_HINT), "{editing}");
-        assert!(editing.contains(settings_hint(true)), "{editing}");
+        assert!(
+            editing.contains(&settings_hint_for_panel(true)),
+            "{editing}"
+        );
         assert!(
             !editing.starts_with("入力中:"),
             "the inline hint must not repeat the status-bar prefix: {editing}"
@@ -1943,7 +1982,10 @@ mod tests {
         }
         // The original hint and the editing-state scroll note must survive
         // the addition; the keyboard-scroll note belongs to the idle state.
-        assert!(editing.contains(settings_hint(true)), "{editing}");
+        assert!(
+            editing.contains(&settings_hint_for_panel(true)),
+            "{editing}"
+        );
         assert!(editing.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{editing}");
         assert!(!editing.contains(PANEL_SCROLL_KEYS_HINT), "{editing}");
         assert!(!editing.starts_with("入力中:"), "{editing}");
@@ -1954,7 +1996,11 @@ mod tests {
         assert!(!idle.contains("設定値は変更しません"), "{idle}");
         assert_eq!(
             idle,
-            format!("{} / {}", settings_hint(false), PANEL_SCROLL_KEYS_HINT)
+            format!(
+                "{} / {}",
+                settings_hint_for_panel(false),
+                PANEL_SCROLL_KEYS_HINT
+            )
         );
     }
 

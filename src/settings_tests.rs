@@ -344,17 +344,55 @@ fn load_detailed_distinguishes_missing_and_malformed() {
 }
 
 #[test]
-fn invalid_utf8_is_a_read_failure_not_a_parse_failure() {
+fn invalid_utf8_is_a_parse_failure_not_a_read_failure() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
-    // `read_to_string` rejects an invalid UTF-8 sequence with an io error
-    // (settings.rs:391-396), so the file is unreadable rather than bad JSON.
-    // The classification must stay ReadFailed all the way to the UI enum.
+    // `read_to_string` rejects an invalid UTF-8 sequence with `InvalidData`.
+    // The bytes were read; only their content is undecodable as JSON text, so
+    // the file is corrupt rather than unreadable. The classification must stay
+    // ParseFailed all the way to the UI enum.
     std::fs::write(&path, b"{\"email\":\"\xff\"}").unwrap();
     let error = Settings::load_detailed(&path).unwrap_err();
-    assert!(matches!(error, SettingsLoadError::ReadFailed), "{error:?}");
-    assert_eq!(error, SettingsLoadError::ReadFailed);
+    assert!(matches!(error, SettingsLoadError::ParseFailed), "{error:?}");
+    assert_eq!(error, SettingsLoadError::ParseFailed);
     assert_eq!(Settings::load(&path), Settings::default());
+}
+
+#[test]
+fn load_detailed_distinguishes_io_failure_from_content_corruption() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // (1) Undecodable bytes and (2) broken JSON are both content failures.
+    // They share the "corrupt file" status text, distinct from "unreadable".
+    let undecodable = dir.path().join("undecodable.json");
+    std::fs::write(&undecodable, [b'{', b'"', b'e', 0xff, b'"', b'}']).unwrap();
+    let bad_json = dir.path().join("bad-json.json");
+    std::fs::write(&bad_json, b"not json").unwrap();
+    for path in [&undecodable, &bad_json] {
+        assert_eq!(
+            Settings::load_detailed(path).err(),
+            Some(SettingsLoadError::ParseFailed),
+            "{path:?}"
+        );
+    }
+    assert_ne!(
+        SettingsLoadError::ParseFailed.message(),
+        SettingsLoadError::ReadFailed.message()
+    );
+
+    // (3) A genuine I/O failure (EISDIR on Unix) stays ReadFailed, so the UI
+    // still says the file could not be read rather than that it is corrupted.
+    let directory = dir.path().join("directory");
+    std::fs::create_dir_all(&directory).unwrap();
+    assert_eq!(
+        Settings::load_detailed(&directory).err(),
+        Some(SettingsLoadError::ReadFailed)
+    );
+
+    // Both content failures collapse to "no metadata" for the advisory and
+    // marker guards — they share the same bounded reader.
+    assert!(load_advisories(&undecodable).is_empty());
+    assert_eq!(super::file_schema_version(&undecodable), None);
 }
 
 // --- Robustness regressions: nested defaults, per-field fallback, size cap ---
@@ -1646,13 +1684,14 @@ fn load_advisories_is_empty_when_the_file_cannot_be_read() {
     assert!(load_advisories(dir.path()).is_empty());
     assert_eq!(super::file_schema_version(dir.path()), None);
 
-    // Invalid UTF-8 is another ReadFailed path, not a parse failure. A file
-    // that cannot be decoded cannot yield top-level keys to warn about.
+    // Invalid UTF-8 is a ParseFailed path (undecodable content), not an I/O
+    // failure. A file that cannot be decoded cannot yield top-level keys to
+    // warn about, so the advisory result stays empty for either classification.
     let path = dir.path().join("settings.json");
     std::fs::write(&path, b"{\"email\":\"\xff\"}").unwrap();
     assert_eq!(
         Settings::load_detailed(&path).err(),
-        Some(SettingsLoadError::ReadFailed)
+        Some(SettingsLoadError::ParseFailed)
     );
     assert!(load_advisories(&path).is_empty());
     assert_eq!(super::file_schema_version(&path), None);
@@ -2843,12 +2882,13 @@ fn load_advisories_messages_match_exactly() {
 #[test]
 fn multibyte_utf8_at_the_read_limit_is_classified_by_char_boundaries() {
     // `read_bounded_settings_text` takes MAX_SETTINGS_BYTES + 1 bytes and then
-    // compares the decoded string's length (settings.rs:392-399). A multibyte
+    // compares the decoded string's length (settings.rs:413-433). A multibyte
     // character straddling that *take* boundary leaves an incomplete UTF-8
-    // sequence, so `read_to_string` fails and the file is ReadFailed. When the
-    // boundary falls between characters, MAX+1 decodable bytes are read and
-    // the file is TooLarge. Every file below is valid UTF-8 in full; only the
-    // truncation distinguishes the two classifications.
+    // sequence, so `read_to_string` fails with `InvalidData` and the file is
+    // ParseFailed (undecodable content). When the boundary falls between
+    // characters, MAX+1 decodable bytes are read and the file is TooLarge.
+    // Every file below is valid UTF-8 in full; only the truncation
+    // distinguishes the classifications.
     const MAX: usize = MAX_SETTINGS_BYTES as usize;
 
     fn content(char_start: usize, total: usize) -> Vec<u8> {
@@ -2905,7 +2945,7 @@ fn multibyte_utf8_at_the_read_limit_is_classified_by_char_boundaries() {
     std::fs::write(&path, &split).unwrap();
     assert_eq!(
         Settings::load_detailed(&path).err(),
-        Some(SettingsLoadError::ReadFailed)
+        Some(SettingsLoadError::ParseFailed)
     );
     assert_eq!(Settings::load(&path), Settings::default());
 }
@@ -3299,19 +3339,19 @@ fn finite_huge_float_schema_version_saturates_to_u64_max() {
 }
 
 #[test]
-fn save_replaces_an_unreadable_file() {
+fn save_replaces_an_undecodable_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
-    // Invalid UTF-8 makes `read_bounded_settings_text` fail with ReadFailed
-    // (settings.rs:383-401). `file_schema_version` deliberately collapses that
-    // to "no marker", and `save` refuses only *future* markers, so an
-    // unreadable file must be replaced with the sanitized struct rather than
-    // being preserved like a future-version file.
+    // Invalid UTF-8 makes `read_bounded_settings_text` fail with `InvalidData`,
+    // which is classified as ParseFailed (undecodable content). `file_schema_version`
+    // deliberately collapses that to "no marker", and `save` refuses only
+    // *future* markers, so a corrupt file must be replaced with the sanitized
+    // struct rather than being preserved like a future-version file.
     let broken = b"{\"schema_version\":1,\"email\":\"\xff\"}".to_vec();
     std::fs::write(&path, &broken).unwrap();
     assert_eq!(
         Settings::load_detailed(&path).err(),
-        Some(SettingsLoadError::ReadFailed)
+        Some(SettingsLoadError::ParseFailed)
     );
     assert_eq!(super::file_schema_version(&path), None);
 
@@ -4559,4 +4599,30 @@ fn ensure_device_id_without_a_path_replaces_an_invalid_in_memory_id() {
         after, before,
         "ensure_device_id(None) must not touch the file"
     );
+}
+
+#[test]
+fn no_path_device_id_is_stable_process_wide() {
+    // With no persistence target the identifier cannot survive a restart, but
+    // it must not rotate between retries/resyncs inside one process: otherwise
+    // the server sees a different device on every call. The process-wide
+    // fallback cache makes every `None` caller observe the same value.
+    let mut first = Settings::default();
+    let first_id = first.ensure_device_id(None).unwrap().to_string();
+    assert!(is_valid_device_id(&first_id), "{first_id}");
+
+    // A distinct in-memory instance (e.g. after a UI reload with no config
+    // directory) must reuse the same fallback rather than drawing a new UUID.
+    let mut second = Settings::default();
+    let second_id = second.ensure_device_id(None).unwrap().to_string();
+    assert_eq!(second_id, first_id, "no-path id must be process-wide");
+
+    // Replacing a malformed in-memory id takes the generation arm again, but
+    // still lands on the cached fallback, not a fresh random value.
+    let mut malformed = Settings {
+        device_id: "not-a-canonical-v4-uuid".to_string(),
+        ..Settings::default()
+    };
+    assert_eq!(malformed.ensure_device_id(None).unwrap(), first_id.as_str());
+    assert!(is_valid_device_id(&malformed.device_id));
 }

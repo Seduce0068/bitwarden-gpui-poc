@@ -18,6 +18,84 @@ pub(super) use crate::ui::text::{
     visible_char_count,
 };
 
+/// Number-free status installed when a real login starts.
+///
+/// `login_flow` writes exactly this text at the start of an attempt; the 1s
+/// ticker later replaces it with [`login_progress_status`]. The ticker no
+/// longer sniffs this prefix to decide whether a login is live (a transient
+/// status from another key path could freeze the countdown): it uses the
+/// state-based [`live_login_started_at`] instead. The constant stays to keep
+/// the start and countdown wording in one place.
+pub(super) const LOGIN_IN_PROGRESS_STATUS: &str = "ログイン中…";
+
+/// Whole seconds left in an in-flight login, rounded up.
+///
+/// The ticker fires on a fixed one-second grid independent of when the login
+/// began, so a tick at `start + 0.3s` must still read the full configured
+/// timeout instead of skipping a number. `saturating_duration_since` and
+/// `saturating_sub` keep the value at zero when the clock moves backwards or
+/// the budget is already spent, instead of panicking or wrapping to a huge
+/// number. Pure so the rounding and saturation are pinned by tests.
+pub(super) fn login_remaining_seconds(
+    started_at: std::time::Instant,
+    timeout: std::time::Duration,
+    now: std::time::Instant,
+) -> u64 {
+    let left = timeout.saturating_sub(now.saturating_duration_since(started_at));
+    left.as_secs() + u64::from(left.subsec_nanos() > 0)
+}
+
+/// Countdown status for a live login, keeping the unsaved-settings marker.
+pub(super) fn login_progress_status(remaining_seconds: u64, dirty: bool) -> String {
+    status_with_unsaved(
+        &format!("{LOGIN_IN_PROGRESS_STATUS}（残り {remaining_seconds} 秒）"),
+        dirty,
+    )
+}
+
+/// Start time of the live login, decided from state alone.
+///
+/// A login is in progress only when its start timestamp and the generation
+/// token captured at that moment are both present *and* the token is still
+/// current. Cancelling advances the generation, which invalidates the token
+/// even if a caller forgot to clear the timestamp, so a stale countdown can
+/// never resume. Status text is deliberately not consulted: another key path
+/// may overwrite it, and the remaining seconds must restart on the next tick.
+/// Pure so the state contract is testable without a GPUI window.
+pub(super) fn live_login_started_at(
+    started_at: Option<std::time::Instant>,
+    started_generation: Option<crate::ui::login_generation::LoginGeneration>,
+    generation: crate::ui::login_generation::LoginGeneration,
+) -> Option<std::time::Instant> {
+    match (started_at, started_generation) {
+        (Some(at), Some(token)) if generation.is_current(token) => Some(at),
+        _ => None,
+    }
+}
+
+/// Field whose value was captured when an edit session started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EditTarget {
+    /// A credential field on the lock screen.
+    Auth(crate::ui::state::AuthField),
+    /// A persistent settings text field.
+    Settings(SettingsField),
+    /// The vault search query.
+    Search,
+}
+
+/// Value an edit started from, restored verbatim when Escape cancels it.
+///
+/// Both UI paths write into their backing state directly, so confirming with
+/// Enter leaves the value in memory but unsaved. A later Escape must roll
+/// back only to *that* value, not past it to the disk/default value. The
+/// payload is zeroizing because auth fields may hold secrets.
+#[derive(Clone)]
+pub(super) struct EditSnapshot {
+    pub(super) target: EditTarget,
+    pub(super) value: zeroize::Zeroizing<String>,
+}
+
 pub struct BitwardenApp {
     pub(super) screen: Screen,
     pub(super) status: String,
@@ -46,6 +124,17 @@ pub struct BitwardenApp {
     pub(super) editing: Option<SettingsField>,
     pub(super) auth: crate::ui::auth_state::AuthState,
     pub(super) login_generation: crate::ui::login_generation::LoginGeneration,
+    /// Start of the in-flight real login, consumed by the 1s ticker to refresh
+    /// the remaining-seconds countdown. `None` whenever no login is running.
+    pub(super) login_started_at: Option<std::time::Instant>,
+    /// Generation token paired with [`Self::login_started_at`]. The ticker
+    /// checks it against `login_generation` so a cancelled attempt can never
+    /// keep a stale countdown alive (see [`live_login_started_at`]).
+    pub(super) login_started_generation: Option<crate::ui::login_generation::LoginGeneration>,
+    /// Value captured when the active text edit (auth, settings or search)
+    /// began. Escape restores it; Enter consumes it so a later edit snapshots
+    /// the confirmed in-memory value instead of the disk value.
+    pub(super) edit_snapshot: Option<EditSnapshot>,
     /// Whether the unlocked vault was restored from the encrypted offline cache.
     ///
     /// `login_flow.rs` (outside this task's write scope) is the only place that
@@ -933,6 +1022,9 @@ impl BitwardenApp {
             editing: None,
             auth: crate::ui::auth_state::AuthState::new(),
             login_generation: crate::ui::login_generation::LoginGeneration::default(),
+            login_started_at: None,
+            login_started_generation: None,
+            edit_snapshot: None,
             offline_restore: false,
             offline_restore_reason: None,
             clipboard: crate::ui::clipboard::ClipboardState::new(),
@@ -1048,6 +1140,31 @@ impl BitwardenApp {
                                         }
                                     }
                                 }
+                                // A real login is in flight on the lock screen:
+                                // refresh its remaining-seconds label on this same
+                                // tick. Liveness comes from state (start time +
+                                // still-current generation), not from the status
+                                // text: a transient message from another key path
+                                // used to freeze the countdown forever. The
+                                // remaining seconds now resume on the next tick;
+                                // `status_with_unsaved` is applied by the composer,
+                                // so the unsaved marker survives each tick.
+                                if let Some(started_at) = live_login_started_at(
+                                    view.login_started_at,
+                                    view.login_started_generation,
+                                    view.login_generation,
+                                ) {
+                                    let remaining = login_remaining_seconds(
+                                        started_at,
+                                        std::time::Duration::from_secs(
+                                            view.settings.login_timeout_seconds,
+                                        ),
+                                        instant,
+                                    );
+                                    view.status =
+                                        login_progress_status(remaining, view.settings_dirty);
+                                    cx.notify();
+                                }
                             })
                         });
                         // A silent loop exit used to hide both a released view
@@ -1084,11 +1201,30 @@ impl BitwardenApp {
         self.offline_restore_reason = reason;
     }
 
+    /// Cancel an in-flight real login and stop its countdown in one step.
+    ///
+    /// Generation invalidation and the start timestamp/token must always move
+    /// together: invalidating only the generation left the ticker able to
+    /// resume a stale countdown, while clearing only the timestamp let a
+    /// superseded task's result still be accepted. Every competing action
+    /// (new login, auth edit, lock, mock unlock, failure) goes through here.
+    pub(super) fn cancel_login(&mut self) {
+        self.login_generation.invalidate();
+        self.login_started_at = None;
+        self.login_started_generation = None;
+    }
+
     /// Apply the input-mode reset shared by all lock/unlock transitions.
     ///
     /// Also stamps `last_activity`; the caller keeps ownership of the vault,
     /// audit report, clipboard, screen, panel and status message.
     pub(super) fn reset_input_state(&mut self) {
+        // No login is in flight after a lock/unlock transition, so the ticker
+        // must stop refreshing the previous attempt's countdown. Clear the
+        // paired token as well, and any edit snapshot tied to the old screen.
+        self.login_started_at = None;
+        self.login_started_generation = None;
+        self.edit_snapshot = None;
         apply_state_reset(
             &mut self.editing,
             &mut self.auth,
@@ -1116,8 +1252,9 @@ impl BitwardenApp {
 
     /// Lock the vault: discard the data and clear every transient input mode.
     pub(super) fn lock(&mut self, cx: &mut Context<Self>) {
-        // A login finishing after this point must not unlock the vault again.
-        self.login_generation.invalidate();
+        // A login finishing after this point must not unlock the vault again,
+        // and its countdown must not keep running into the locked screen.
+        self.cancel_login();
         // One service handles the clipboard I/O; the lock status below
         // intentionally takes precedence over the restore notice.
         self.restore_clipboard(cx);
@@ -1157,6 +1294,10 @@ impl BitwardenApp {
         };
         self.editing = None;
         self.auth.take_field();
+        // No Cancel* action runs on a panel switch, so the captured value has
+        // no owner: dropping it prevents a later Escape from restoring a
+        // field that is no longer being edited.
+        self.edit_snapshot = None;
         finish_search_on_panel_transition(&mut self.view);
         // Leaving an active search deselects the row; consume the stale-TOTP
         // signal it raised so no secret from that row survives the transition.
@@ -1631,6 +1772,108 @@ mod tests {
         // Lock/unlock clearing is unconditional (reset_input_state), so an
         // unrelated first status must never set the marker on its own.
         assert!(!next_offline_restore(false, None, "ログイン中…").0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn login_remaining_seconds_rounds_up_and_saturates() {
+        use std::time::{Duration, Instant};
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs(5);
+        // The ticker fires on its own grid, so a partial second must still show
+        // the full configured timeout instead of skipping a number.
+        assert_eq!(login_remaining_seconds(start, timeout, start), 5);
+        assert_eq!(
+            login_remaining_seconds(start, timeout, start + Duration::from_millis(1)),
+            5
+        );
+        assert_eq!(
+            login_remaining_seconds(start, timeout, start + Duration::from_secs(1)),
+            4
+        );
+        assert_eq!(
+            login_remaining_seconds(start, timeout, start + Duration::from_millis(4_999)),
+            1
+        );
+        assert_eq!(login_remaining_seconds(start, timeout, start + timeout), 0);
+        // A slow attempt past its budget, or a clock that moved backwards,
+        // never wraps into a huge remaining count.
+        assert_eq!(
+            login_remaining_seconds(start, timeout, start + Duration::from_secs(30)),
+            0
+        );
+        assert_eq!(
+            login_remaining_seconds(start + Duration::from_secs(2), timeout, start),
+            5
+        );
+        // The one-second minimum still reads "残り 1 秒" right after start.
+        assert_eq!(
+            login_remaining_seconds(start, Duration::from_secs(1), start),
+            1
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn login_progress_status_keeps_the_login_prefix_and_unsaved_marker() {
+        let clean = login_progress_status(7, false);
+        assert_eq!(clean, "ログイン中…（残り 7 秒）");
+        assert_eq!(LOGIN_IN_PROGRESS_STATUS, "ログイン中…");
+        assert!(clean.starts_with(LOGIN_IN_PROGRESS_STATUS));
+        assert!(!clean.contains("[未保存"));
+        let dirty = login_progress_status(7, true);
+        assert_eq!(dirty, status_with_unsaved(&clean, true));
+        assert!(dirty.contains("[未保存の設定変更があります]"));
+        // The number-free start status never leaks a timeout/elapsed figure.
+        for digit in '0'..='9' {
+            assert!(!LOGIN_IN_PROGRESS_STATUS.contains(digit));
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn live_login_started_at_uses_state_not_status_text() {
+        use crate::ui::login_generation::LoginGeneration;
+        use std::time::Instant;
+
+        let now = Instant::now();
+        let mut generation = LoginGeneration::default();
+
+        // No attempt has begun: nothing for the ticker to refresh.
+        assert_eq!(live_login_started_at(None, None, generation), None);
+        assert_eq!(live_login_started_at(Some(now), None, generation), None);
+        assert_eq!(
+            live_login_started_at(None, Some(LoginGeneration::default()), generation),
+            None
+        );
+
+        let token = generation.begin();
+        assert_eq!(
+            live_login_started_at(Some(now), Some(token), generation),
+            Some(now)
+        );
+
+        // Editing credentials or locking advances the generation through
+        // `cancel_login`. A stale timestamp must not revive the countdown.
+        generation.invalidate();
+        assert_eq!(
+            live_login_started_at(Some(now), Some(token), generation),
+            None
+        );
+        // A token from an attempt that never started is never live either.
+        assert_eq!(
+            live_login_started_at(Some(now), Some(LoginGeneration::default()), generation),
+            None
+        );
+
+        // A second attempt installs a new pair; the old token stays dead.
+        let second = generation.begin();
+        assert_eq!(
+            live_login_started_at(Some(now), Some(second), generation),
+            Some(now)
+        );
+        assert_eq!(
+            live_login_started_at(Some(now), Some(token), generation),
+            None
+        );
     }
 
     #[::core::prelude::v1::test]

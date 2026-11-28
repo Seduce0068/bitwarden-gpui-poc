@@ -187,6 +187,25 @@ fn vault_row_username(login: Option<(&str, &str, &str, &[crate::model::LoginUri]
     }
 }
 
+/// Colour of the favourite star drawn in a vault list row.
+///
+/// The unfilled star used to reuse the selected row background (`0x45475a`),
+/// which is only ~1.8:1 against the default row background `0x1e1e2e` —
+/// below WCAG 1.4.11's 3:1 minimum for a non-text status indicator.
+/// The default row now uses the lighter `0x6c7086`; the selected row keeps
+/// its distinctly brighter `0x9399b2`, so the two empty-star states cannot
+/// be told apart only by which row happens to be highlighted. Pure so the
+/// palette contract can be pinned without a GPUI window.
+fn favorite_star_color(favorite: bool, selected: bool) -> u32 {
+    if favorite {
+        0xf9e2af
+    } else if selected {
+        0x9399b2
+    } else {
+        0x6c7086
+    }
+}
+
 impl BitwardenApp {
     fn render_locked(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -282,16 +301,10 @@ impl BitwardenApp {
                         } else {
                             rgb(0x89b4fa)
                         };
-                        // The default non-favorite star colour (0x45475a) is
-                        // exactly the selected row background; give the empty
-                        // star a visible muted grey on that background.
-                        let star_color = if item.favorite {
-                            rgb(0xf9e2af)
-                        } else if selected {
-                            rgb(0x9399b2)
-                        } else {
-                            rgb(0x45475a)
-                        };
+                        // The empty star is a non-text indicator, so it must
+                        // clear WCAG 1.4.11 on both row backgrounds. See
+                        // `favorite_star_color` for the pinned palette.
+                        let star_color = favorite_star_color(item.favorite, selected);
                         let username = vault_row_username(item.login());
                         let badge = totp_badge(item);
                         // Row identity here is the render-position `index`, not
@@ -339,7 +352,7 @@ impl BitwardenApp {
                                         .id(SharedString::from(format!("favorite-{index}")))
                                         .w(px(18.0))
                                         .text_xs()
-                                        .text_color(star_color)
+                                        .text_color(rgb(star_color))
                                         .on_click(cx.listener(move |this, _event, _window, cx| {
                                             // The parent row also has a click
                                             // handler; stop the bubble so it
@@ -998,5 +1011,63 @@ mod tests {
             crate::ui::app::item_name_text(""),
             "the list row and the detail row must share the same placeholder"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn empty_favorite_star_meets_non_text_contrast_and_marks_the_row_state() {
+        fn contrast_ratio(foreground: u32, background: u32) -> f64 {
+            fn channel(rgb: u32, shift: u32) -> f64 {
+                let value = ((rgb >> shift) & 0xff) as f64 / 255.0;
+                if value <= 0.03928 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            }
+            fn luminance(rgb: u32) -> f64 {
+                0.2126 * channel(rgb, 16) + 0.7152 * channel(rgb, 8) + 0.0722 * channel(rgb, 0)
+            }
+            let (light, dark) = match (luminance(foreground), luminance(background)) {
+                (fg, bg) if fg > bg => (fg, bg),
+                (fg, bg) => (bg, fg),
+            };
+            (light + 0.05) / (dark + 0.05)
+        }
+
+        const DEFAULT_BG: u32 = 0x1e1e2e;
+        const SELECTED_BG: u32 = 0x45475a;
+
+        let idle = favorite_star_color(false, false);
+        let selected = favorite_star_color(false, true);
+
+        // Pin both empty-star tints: the default row is the fix, the selected
+        // row is deliberately brighter so the states stay distinguishable.
+        assert_eq!(idle, 0x6c7086);
+        assert_eq!(selected, 0x9399b2);
+        assert_ne!(idle, selected, "empty stars must distinguish row state");
+
+        // Each tint is drawn on a *different* background: idle rows use
+        // DEFAULT_BG, selected rows SELECTED_BG. Compare each colour against
+        // the surface it is actually drawn on. Comparing both against one
+        // shared background flattered the selected tint (~5.8:1 on DEFAULT_BG)
+        // while hiding its true ratio on its own row (~3.2:1).
+        let idle_ratio = contrast_ratio(idle, DEFAULT_BG);
+        let selected_ratio = contrast_ratio(selected, SELECTED_BG);
+
+        // The old colour was exactly the selected background: ~1.8:1 on the
+        // default row, below WCAG 1.4.11's 3:1 for non-text indicators.
+        assert!(contrast_ratio(0x45475a, DEFAULT_BG) < 3.0);
+        assert!(
+            idle_ratio >= 3.0,
+            "default-row empty star is too faint: {idle:#08x}"
+        );
+        assert!(
+            selected_ratio >= 3.0,
+            "selected-row empty star is too faint: {selected:#08x}"
+        );
+
+        // A filled star keeps the established amber on either background.
+        assert_eq!(favorite_star_color(true, false), 0xf9e2af);
+        assert_eq!(favorite_star_color(true, true), 0xf9e2af);
     }
 }

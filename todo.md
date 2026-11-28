@@ -26,12 +26,6 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ### 中優先度
 
-- [ ] **ログイン待機に残秒／進捗を表示** —
-  根拠 `src/ui/login_flow.rs:96-98` / `src/ui/app.rs:1052-1063` / e-vu / 中
-- [ ] **永続的認証失敗に「r で再試行」を出さない** —
-  根拠 `src/ui/login_flow.rs:34-37,277-287` / e-vu + e-fg / 中
-- [ ] **未お気に入りの星アイコンのコントラストを 3:1 以上へ** —
-  根拠 `src/ui/render.rs:269,288-294` / e-ax / 中
 - [ ] **is_visually_empty と空認証情報判定を分離** —
   根拠 `src/ui/app.rs:273-291` / `src/auth.rs:535-539` / e-ar / 中
 - [ ] **権限分類をローカライズ文字列パースから構造化へ** —
@@ -41,32 +35,39 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ### 低優先度
 
-- [ ] **無効 UTF-8 の設定ファイルを ParseFailed に分類** —
-  根拠 `src/settings.rs:415-420` / e-er / 低
-- [ ] **永続先なしの device_id 再生成を明示的に扱う** —
-  根拠 `src/settings.rs:771-786` / `src/ui/login_flow.rs:103-117` / e-er / 低
 - [ ] **起動時の設定警告を永続的／再表示可能に** —
   根拠 `src/ui/app.rs:938-961` / `src/ui/actions.rs:170-178` / e-vu / 低
-- [ ] **キー案内と未保存警告の重複文言を定数化** —
-  根拠 `src/ui/logic.rs:164-197` / `src/ui/app.rs:94,640,699,1163` / e-vu / 低
-- [ ] **「ログイン制限」と「ログインタイムアウト」の表記を統一** —
-  根拠 `src/ui/panels.rs:256` / `src/ui/input.rs:996-1003` / e-vu + e-fg / 低
 - [ ] **CI の cargo-deny 導入をキャッシュ／バイナリ化** —
   根拠 `.github/workflows/ci.yml:32-34` / e-dp / 低
 - [ ] **Dependabot が CI 内の cargo-deny 版も追跡するよう調整** —
   根拠 `.github/dependabot.yml:6` / `.github/workflows/ci.yml:33` / e-dp / 低
-- [ ] **更新日時の UTC 固定を選択可能化または明記** —
-  根拠 `src/ui/logic.rs:233-262` / e-ax / 低
-- [ ] **Esc を確定ではなく取り消しへ分離** —
-  根拠 `src/ui/keys.rs:502,532,621` / `README.md:191` / e-ax / 低
-- [ ] **UI 文言のワンソース化（段階移行）** —
-  根拠 `src/ui/logic.rs:46,174-199` / `src/ui/panels.rs:640-688` / e-ax / 低
 - [ ] **検索終了 API を単一メソッドへ集約** —
   根拠 `src/ui/app.rs:188-200,224-235` / e-ar / 低
 - [ ] **dead_code 抑止の本番未使用シンボル4件を整理** —
   根拠 `src/limits.rs:88,94` / `src/ui/input.rs:53,219` / e-st / 低
+- [ ] **サイズ上限超過と不正 UTF-8 の境界分類を先勝ちに** —
+  根拠 `src/settings.rs:423-437` / v4-core / 低
+- [ ] **path=None の ID 再利用に関する旧コメントを訂正** —
+  根拠 `src/settings.rs:733-734,870-871` / v4-core / 低
+- [ ] **不正 UTF-8 ファイルの書き込みガード回帰テストを追加** —
+  根拠 `src/settings_tests.rs:1546` / v4-core / 低
 
 ## 完了
+
+- [x] 第158弾（16 担当・102 回目）の指摘 10 件を完結（2026-11-28）
+  - ログイン残秒のカウントダウンと retryable/permanent の再試行案内。
+  - 星アイコンの WCAG 1.4.11 準拠色と「ログインタイムアウト」表記統一。
+  - 無効 UTF-8 の ParseFailed 分類と device_id のプロセス内安定化。
+  - Esc=取り消し（編集開始時スナップショット復元へ改善）、
+    共有文言の定数化と UTC 固定の明記。
+  - R4 指摘を反映: `cancel_login()` で状態を一括クリアし、ticker を
+    状態ベースへ。device_id 失敗を permanent として扱う。
+  - 起動エージェント: 8 体（実装 5 + レビュー 2 + R5 1）。
+  - 検証: fmt / check / test（1356 passed、E2E 1 ignored）/ clippy
+    -D warnings / rustdoc -D warnings / cargo audit（--no-fetch）/
+    cargo deny（offline）/ markdownlint / Betterleaks 1.10.1（dir＋git 履歴）
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
 
 - [x] 第157弾（16 担当・101 回目）の指摘 18 件を完結（2026-11-28）
   - 生成／設定パネルをキーボードでスクロール可能化（ScrollHandle 配線、

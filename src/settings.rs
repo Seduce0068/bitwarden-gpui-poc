@@ -404,6 +404,13 @@ impl core::fmt::Debug for Settings {
 /// file (see `settings_tests.rs`). The full load, the advisory scan and the
 /// write-path marker guard all go through this one function so their
 /// classifications cannot drift apart despite the missing seam.
+///
+/// `read_to_string` reports undecodable bytes as `ErrorKind::InvalidData`. The
+/// bytes were read successfully; only their content is unusable as JSON text,
+/// so that error is mapped through `AppError::ParseFailedCause` to
+/// `SettingsLoadError::ParseFailed` ("corrupt file"), not to `ReadFailed`
+/// ("cannot read the file"). A regular file read never produces `InvalidData`,
+/// so every other error kind stays a genuine I/O failure.
 fn read_bounded_settings_text(path: &std::path::Path) -> Result<String, SettingsLoadError> {
     let file = std::fs::File::open(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -416,7 +423,15 @@ fn read_bounded_settings_text(path: &std::path::Path) -> Result<String, Settings
     file.take(MAX_SETTINGS_BYTES.saturating_add(1))
         .read_to_string(&mut contents)
         .map_err(|error| {
-            SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
+            // Invalid UTF-8 is a content failure, not an I/O failure. Route it
+            // through the same parse family as broken JSON so both produce the
+            // "corrupt file" status text; keep every other io error as a read
+            // failure so an unreadable file remains distinguishable.
+            if error.kind() == std::io::ErrorKind::InvalidData {
+                SettingsLoadError::from(AppError::ParseFailedCause(BoxedCause::new(error)))
+            } else {
+                SettingsLoadError::from(AppError::ReadFailedCause(BoxedCause::new(error)))
+            }
         })?;
     if contents.len() as u64 > MAX_SETTINGS_BYTES {
         return Err(SettingsLoadError::TooLarge);
@@ -671,6 +686,23 @@ pub fn is_valid_device_id(value: &str) -> bool {
     bytes[14] == b'4' && matches!(bytes[19], b'8' | b'9' | b'a' | b'b' | b'A' | b'B')
 }
 
+/// Process-wide fallback device identifier for callers with no persistence path.
+///
+/// `Settings::default_path()` is `None` when the host exposes no config
+/// directory, so `ensure_device_id(None)` has nowhere to store the identifier.
+/// Without this cache every login, resync or retry would draw a fresh UUID and
+/// present a different device identity to the server, making one installation
+/// look like many (duplicate sessions and misleading audit trails). The first
+/// successful draw is cached here and reused by every later `None` call in the
+/// process, so the identifier is stable for the process lifetime even though
+/// it cannot survive a restart. A `getrandom` failure is not cached, so a later
+/// call may retry.
+///
+/// Callers that do supply a path keep the original contract: generate, persist
+/// and reuse the on-disk value. This cache is consulted only on the `None`
+/// branch and never replaces a stored identifier.
+static NO_PATH_DEVICE_ID: OnceLock<String> = OnceLock::new();
+
 impl Settings {
     /// Clamp editable fields to safe ranges before persisting or applying
     /// them. Bounds match the UI adjusters: 1..=60 minutes for idle lock,
@@ -755,11 +787,25 @@ impl Settings {
     ///
     /// The initial login and every resync/retry go through this method, so a
     /// valid stored value is always reused unchanged. When the value is empty
-    /// or malformed, a version 4 UUID is generated from the OS CSPRNG and,
-    /// if `path` is supplied, written back immediately so later launches see
-    /// the same identifier. A failed write is reported to the caller and leaves
-    /// the in-memory value unchanged, so the next call generates and persists a
+    /// or malformed, a version 4 UUID is generated from the OS CSPRNG. With
+    /// `Some(path)` it is written back immediately so later launches see the
+    /// same identifier. A failed write is reported to the caller and leaves the
+    /// in-memory value unchanged, so the next call generates and persists a
     /// fresh identifier instead of silently using an unsaved one.
+    ///
+    /// # Contract change for `None`
+    ///
+    /// With `None` there is no persistence target — notably when
+    /// [`Settings::default_path`] is `None` because the host has no config
+    /// directory. The first generated value is now cached in `NO_PATH_DEVICE_ID`
+    /// and reused by every later `None` call in this process. Previously each
+    /// call drew a new UUID, so retries and resyncs reported a different device
+    /// to the server and one installation looked like several. The cache makes
+    /// the identifier stable for the process lifetime; it cannot survive a
+    /// restart without a writable path, which is the tradeoff for having no
+    /// storage location. Callers that can supply a path should do so for
+    /// cross-launch stability. The cached value is never written to a file, and
+    /// a `getrandom` failure is never cached, so a later call may retry.
     ///
     /// # Errors
     ///
@@ -770,16 +816,37 @@ impl Settings {
     /// per-installation uniqueness.
     pub fn ensure_device_id(&mut self, path: Option<&std::path::Path>) -> Result<&str, AppError> {
         if !is_valid_device_id(&self.device_id) {
-            let generated = generate_device_id()
-                .map_err(|error| AppError::RandomUnavailableCause(BoxedCause::new(error)))?;
-            if let Some(path) = path {
-                if let Err(error) = Self::save_device_id_only(path, &generated) {
-                    // Never use an identifier that was not persisted: the next
-                    // call must generate and try again.
-                    let detail = format!("デバイス ID を保存できませんでした: {error}");
-                    return Err(AppError::SettingsSaveCause(detail, BoxedCause::new(error)));
+            let generated = match path {
+                Some(path) => {
+                    let generated = generate_device_id().map_err(|error| {
+                        AppError::RandomUnavailableCause(BoxedCause::new(error))
+                    })?;
+                    if let Err(error) = Self::save_device_id_only(path, &generated) {
+                        // Never use an identifier that was not persisted: the next
+                        // call must generate and try again.
+                        let detail = format!("デバイス ID を保存できませんでした: {error}");
+                        return Err(AppError::SettingsSaveCause(detail, BoxedCause::new(error)));
+                    }
+                    generated
                 }
-            }
+                None => {
+                    // No file to persist into: reuse the process-wide fallback
+                    // so a retry cannot rotate the id sent to the server.
+                    // `OnceLock::get_or_try_init` is still unstable on the
+                    // pinned toolchain, so generate first (keeping a RNG
+                    // failure retryable) and publish the winner explicitly.
+                    match NO_PATH_DEVICE_ID.get() {
+                        Some(id) => id.clone(),
+                        None => {
+                            let generated = generate_device_id().map_err(|error| {
+                                AppError::RandomUnavailableCause(BoxedCause::new(error))
+                            })?;
+                            let _ = NO_PATH_DEVICE_ID.set(generated.clone());
+                            NO_PATH_DEVICE_ID.get().cloned().unwrap_or(generated)
+                        }
+                    }
+                }
+            };
             self.device_id = generated;
         }
         Ok(&self.device_id)
