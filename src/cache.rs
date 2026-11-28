@@ -122,9 +122,10 @@ pub struct SyncCache {
     /// Known constraint (embedded-credential persistence): this value is stored
     /// **verbatim** and may contain URL-embedded credentials (for example
     /// `https://user:pass@host`). [`SyncCache::from_body`] does not strip
-    /// userinfo from the URL because the offline-mismatch check compares the
-    /// stored value byte-for-byte with the URL used at restore time, and no
-    /// production writer currently feeds this path. [`save`] serializes the
+    /// userinfo from the URL because the offline-mismatch check keeps userinfo
+    /// significant: only host casing, a scheme-default port and a trailing
+    /// slash are normalized by `server_urls_match`. No production writer
+    /// currently feeds this path. [`save`] serializes the
     /// envelope as-is, so any userinfo or query credentials present in this
     /// string are **persisted to disk in cleartext** inside the JSON cache
     /// file (envelopes written by earlier builds and provisioned files keep
@@ -1379,6 +1380,38 @@ fn save_to_path(path: Option<PathBuf>, cache: &SyncCache) -> Result<(), std::io:
     save(path, cache)
 }
 
+/// Compare two stored/supplied server URLs after authority-only normalization.
+///
+/// [`url::Url`] already lowercases the host, drops a port equal to the
+/// scheme's default, and canonicalizes an empty path to the root `/`, so
+/// `https://HOST:443/` and `https://host` name one server. Everything else is
+/// significant and compared byte-for-byte: scheme, userinfo, path, query and
+/// fragment must match exactly. In particular a trailing slash inside a path
+/// (`/path/` vs `/path`) or a query (`?next=/` vs `?next=`) is **not** ignored,
+/// so a cache carrying credentials or a query secret is never accepted for a
+/// different URL. Unparseable input falls back to an exact byte comparison — a
+/// hand-built cache cannot gain a looser match by failing to parse.
+///
+/// This is a comparison-only normalization: [`SyncCache::server_url`] is kept
+/// verbatim on disk, preserving the credential-persistence contract.
+fn server_urls_match(cached: &str, supplied: &str) -> bool {
+    match (url::Url::parse(cached), url::Url::parse(supplied)) {
+        (Ok(left), Ok(right)) => normalized_server_url(&left) == normalized_server_url(&right),
+        _ => cached == supplied,
+    }
+}
+
+/// Serialized URL used as the comparison key for [`server_urls_match`].
+///
+/// The parser has already normalized the authority (lowercase host, default
+/// port removed, empty path canonicalized to `/`). Returning `as_str()`
+/// unchanged keeps the path, query and fragment — including their trailing
+/// slashes — significant. Trimming the whole serialized string used to make
+/// distinct endpoints (`?next=/` vs `?next=`) compare equal.
+fn normalized_server_url(url: &url::Url) -> &str {
+    url.as_str()
+}
+
 /// Load the encrypted cache for a best-effort offline restore.
 ///
 /// The auth layer calls this when `/api/sync` fails but the API-key login has
@@ -1402,6 +1435,11 @@ fn save_to_path(path: Option<PathBuf>, cache: &SyncCache) -> Result<(), std::io:
 /// the live `Session` supplies the protected key at unlock time. A key change
 /// since the cache was written can therefore leave cached items undecryptable.
 ///
+/// The server comparison uses `server_urls_match`, so equivalent spellings
+/// of one server (host casing, an explicit scheme-default port, a root-only
+/// trailing slash) restore the same entry while a different scheme, userinfo,
+/// path or query — including its trailing slash — is still refused.
+///
 /// Returns the classified failure so the caller can tell a missing cache from
 /// a corrupt or outdated one instead of collapsing every case into `None`.
 ///
@@ -1420,7 +1458,7 @@ pub fn cached_sync_for_detailed(
     user_id: &str,
 ) -> Result<openwarden::SyncData, SyncCacheError> {
     let cache = load_default()?;
-    if cache.server_url != server_url {
+    if !server_urls_match(&cache.server_url, server_url) {
         return Err(SyncCacheError::ServerMismatch);
     }
     if !account_ids_match(&cache.user_id, user_id) {
@@ -1446,10 +1484,11 @@ pub fn cached_sync_for(server_url: &str, user_id: &str) -> Option<openwarden::Sy
 
 /// Validate the parts of a cache that do not need a filesystem read.
 ///
-/// Both the server URL and `user_id` are compared with the stored values, and
-/// the parsed body's `Profile.Id` is checked against the envelope `user_id`,
-/// matching [`cached_sync_for_detailed`] so a caller that already holds a
-/// cache cannot accept another account's entry by skipping the restore path.
+/// Both the server URL (via `server_urls_match`) and `user_id` are compared
+/// with the stored values, and the parsed body's `Profile.Id` is checked
+/// against the envelope `user_id`, matching [`cached_sync_for_detailed`] so a
+/// caller that already holds a cache cannot accept another account's entry by
+/// skipping the restore path.
 /// The auth layer supplies the id derived from the personal API key's
 /// `client_id`; callers without a trusted id must not use this helper. Empty
 /// ids are rejected on both sides, so two blanks never match.
@@ -1469,7 +1508,7 @@ pub fn cached_sync_for(server_url: &str, user_id: &str) -> Option<openwarden::Sy
 /// [`SyncCacheError::UserMismatch`] when the account differs, or a parse error
 /// when the body cannot be read back.
 pub fn validate(cache: &SyncCache, user_id: &str, server_url: &str) -> Result<(), SyncCacheError> {
-    if cache.server_url != server_url {
+    if !server_urls_match(&cache.server_url, server_url) {
         return Err(SyncCacheError::ServerMismatch);
     }
     if !account_ids_match(&cache.user_id, user_id) {
@@ -1491,6 +1530,12 @@ pub(crate) const REASON_EXPIRED: &str = "キャッシュが有効期限を過ぎ
 pub(crate) const REASON_USER_MISMATCH: &str = "キャッシュが別のアカウントのものです";
 pub(crate) const REASON_SERVER_MISMATCH: &str = "キャッシュが別のサーバーのものです";
 pub(crate) const REASON_TOO_LARGE: &str = "キャッシュがサイズ上限を超えています";
+
+/// Family heading shared by every [`cache_restore_status`] branch and the
+/// owned-detail path in [`cache_error_status_with_detail`]. The former returns
+/// `&'static str` literals, so the heading is repeated there; the latter uses
+/// this constant to build the same family wording at runtime.
+const SYNC_FAILURE_HEADING: &str = "同期に失敗しました";
 
 /// Full status text for a failed cache fallback, or `None` when the missing
 /// cache is the normal first-launch case. Keeping these strings next to the
@@ -1590,17 +1635,21 @@ impl CacheReadFailureKind {
     }
 }
 
-/// Fixed [`cache_error_message`] text with the permission detail attached.
+/// Full `cache_restore_status`-style text with the permission detail attached.
 ///
 /// The static-text API stays unchanged for callers that can only show a
 /// `&'static str`. Callers able to carry an owned `String` should use this
-/// function: a permission violation then renders
-/// `キャッシュを読み込めません（mode 0644、期待 0600）` instead of hiding the
-/// observed mode behind the generic "unreadable" wording.
+/// function: a permission violation renders
+/// `同期に失敗しました（キャッシュを読み込めません（mode 0644、期待 0600））`
+/// instead of hiding the observed mode behind the generic "unreadable"
+/// wording. The sync-family heading keeps this branch consistent with every
+/// other cache fallback status; the detail stays in the owned text because
+/// `AuthError::message()` can only return a `&'static str`. With no classified
+/// detail the bare [`cache_error_message`] reason is returned unchanged.
 pub fn cache_error_status_with_detail(error: &SyncCacheError) -> String {
     let status = cache_error_message(error.clone());
     match CacheReadFailureKind::classify(error).detail() {
-        Some(detail) => format!("{status}（{detail}）"),
+        Some(detail) => format!("{SYNC_FAILURE_HEADING}（{status}（{detail}））"),
         None => status.to_owned(),
     }
 }

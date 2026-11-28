@@ -34,10 +34,13 @@ jobs:
         cargo deny check
         # ドキュメント書式ゲート（共通ワークフローにまだ無いためここで導入）。
         grep -Fq "cargo install cargo-deny@${CARGO_DENY_VERSION}" README.md
-        MARKDOWNLINT_VERSION=0.50.0
-        npm install --global markdownlint-cli@${MARKDOWNLINT_VERSION}
-        grep -Fq "markdownlint-cli@${MARKDOWNLINT_VERSION}" README.md
-        markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
+        # markdownlint-cli の版は package.json の devDependency を唯一の真実源とする。
+        # ハードコードせず Dependabot の更新に追従させ、README との照合は行わない。
+        MARKDOWNLINT_VERSION=$(node -p "require('./package.json').devDependencies['markdownlint-cli']")
+        grep -Fq "\"markdownlint-cli\": \"${MARKDOWNLINT_VERSION}\"" package.json
+        # Dependabot が更新する devDependency をロックファイルから導入する。
+        npm ci --ignore-scripts
+        npx --no-install markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
         # cargo audit の実体は共通ワークフローが実行するため変更せず、
         # 版だけを README と突き合わせて片方だけの更新を検出する。
         CARGO_AUDIT_VERSION=0.23.0

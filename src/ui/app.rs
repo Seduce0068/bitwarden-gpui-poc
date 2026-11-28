@@ -11,6 +11,13 @@ use crate::ui::vault_view::VaultViewState;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+// Re-exported so existing `ui::app::*` callers (input/render/panels/login_flow)
+// keep working; the definitions now live in the GPUI-free `ui::text` leaf.
+pub(super) use crate::ui::text::{
+    idle_lock_minutes_text, is_visually_empty, status_with_unsaved, unsaved_status_suffix,
+    visible_char_count,
+};
+
 pub struct BitwardenApp {
     pub(super) screen: Screen,
     pub(super) status: String,
@@ -32,6 +39,10 @@ pub struct BitwardenApp {
     /// Scroll handle for the audit panel, kept so keyboard row selection can
     /// bring the highlighted row into view.
     pub(super) audit_scroll_handle: ScrollHandle,
+    /// Scroll handles owned here so the keyboard path can move the generator
+    /// and settings panels, whose bodies are scrollable but not uniform lists.
+    pub(super) generator_scroll_handle: ScrollHandle,
+    pub(super) settings_scroll_handle: ScrollHandle,
     pub(super) editing: Option<SettingsField>,
     pub(super) auth: crate::ui::auth_state::AuthState,
     pub(super) login_generation: crate::ui::login_generation::LoginGeneration,
@@ -234,23 +245,6 @@ pub(super) fn finish_search_and_sync_totp(view: &mut VaultViewState, totp: &mut 
     sync_totp_to_selection_state(view, totp);
 }
 
-/// Marker appended to transient statuses and to the list detail line.
-///
-/// Keeping it in one place makes the unsaved state visible outside the
-/// settings panels without depending on GPUI's rendering internals.
-pub(super) fn unsaved_status_suffix(dirty: bool) -> &'static str {
-    if dirty {
-        " | [未保存の設定変更があります]"
-    } else {
-        ""
-    }
-}
-
-/// Compose a status message with the persistent unsaved marker.
-pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
-    format!("{base}{}", unsaved_status_suffix(dirty))
-}
-
 /// Pure transition for the persistent offline-restore latch.
 ///
 /// Only a login completion status changes the flag: a cache restore turns it
@@ -268,46 +262,6 @@ fn next_offline_restore(
         Some(false) => (false, None),
         None => (offline, reason),
     }
-}
-
-/// Whether `value` carries no visible content or identity.
-///
-/// Whitespace, Unicode `Cc` (control) characters and Unicode `Cf` (format)
-/// characters such as zero-width spaces or bidi overrides all render nothing,
-/// whether at the edges or between visible letters. `Cc` is not whitespace
-/// (`str::trim()` alone keeps NUL and C1 controls), so it is listed explicitly
-/// to match `crate::auth::credential_is_blank`. Otherwise a value that looks
-/// empty still passes a plain `trim().is_empty()` guard.
-///
-/// A value made only of Unicode marks (`Mn`/`Mc`/`Me`, optionally separated by
-/// whitespace or `Cc`/`Cf` characters) has no visible identity either: bare
-/// marks have no base character to decorate. The strict rule is delegated to
-/// `crate::model::has_no_visible_identity`, the same one search and duplicate
-/// detection use, so a mark-only item name / username cannot leave a blank
-/// cell in the list while the rest of the app sees it as an identity. Shared
-/// with the list row renderer so the two places agree on what "empty" means.
-pub(super) fn is_visually_empty(value: &str) -> bool {
-    crate::model::has_no_visible_identity(value)
-}
-
-/// Count only characters that actually render, using the same invisibility rule
-/// as [`is_visually_empty`]. Whitespace and Unicode `Cc`/`Cf` characters (zero
-/// width spaces, bidi overrides, controls, ...) draw nothing, so including them
-/// in a user-facing "n文字" length made a value such as `a\u{200b}b` read as
-/// "3文字". Combining marks draw only together with a base character, so they
-/// are not counted either; a mark-only value then reports zero just like
-/// [`is_visually_empty`]. Pure so the wording can be pinned without a GPUI
-/// window.
-pub(super) fn visible_char_count(value: &str) -> usize {
-    value
-        .chars()
-        .filter(|ch| {
-            !ch.is_whitespace()
-                && !ch.is_control()
-                && !crate::limits::is_format_character(*ch)
-                && !unicode_normalization::char::is_combining_mark(*ch)
-        })
-        .count()
 }
 
 /// Placeholder drawn for a vault item whose name has no visible content.
@@ -382,7 +336,7 @@ pub(super) fn audit_focus_status(name: &str, found: bool, dirty: bool) -> String
 /// to tell *which* finding failed. This variant carries the internal item id
 /// so the failed row is identifiable. The id goes through [`item_name_text`]:
 /// an id made only of invisible `Cf` characters must not leave a blank after
-/// the label. Composed through [`status_with_unsaved`] so the unsaved-settings
+/// the label. Composed through [`crate::ui::text::status_with_unsaved`] so the unsaved-settings
 /// warning survives leaving the audit panel. Pure so the contract can be
 /// tested without a GPUI window.
 pub(super) fn audit_focus_missing_status(id: &str, dirty: bool) -> String {
@@ -482,8 +436,8 @@ pub(super) fn totp_detail_text(secret: &str, generated: String, error: Option<St
 /// The copy path (`ui::logic::select_copy_value`) refuses a password with no
 /// visible content, but the detail row used to count every `char` and render
 /// e.g. "3文字" for a whitespace/Unicode `Cf`-only value. Both now go through
-/// [`is_visually_empty`], so an absent password reads "なし" on both sides.
-/// For a present password the count uses [`visible_char_count`], so invisible
+/// [`crate::ui::text::is_visually_empty`], so an absent password reads "なし" on both sides.
+/// For a present password the count uses [`crate::ui::text::visible_char_count`], so invisible
 /// characters *between* visible ones do not inflate the label either.
 /// The undecryptable sentinel keeps its own label and is checked first because
 /// it carries visible text. Pure so the wording can be pinned without a GPUI
@@ -503,7 +457,7 @@ pub(super) fn password_detail_label(password: &str) -> String {
 /// The old label used `text.chars().count()`, so invisible whitespace and
 /// Unicode `Cc`/`Cf` characters (zero-width spaces, bidi overrides, controls)
 /// inflated the displayed length: `a\u{200b}b` read "3文字". Reuse
-/// [`visible_char_count`], the same rule as the password cell, so both counts
+/// [`crate::ui::text::visible_char_count`], the same rule as the password cell, so both counts
 /// agree. Kept pure so the wording can be pinned without a GPUI window.
 pub(super) fn secure_note_detail_label(text: &str) -> String {
     format!("メモ: {}文字", visible_char_count(text))
@@ -538,7 +492,7 @@ pub(super) fn totp_code_text(
 /// The detail row already renders a blank or Unicode `Cf`-only secret as
 /// "なし" through [`totp_code_text`]. Feeding that same value to code
 /// generation reports a parse failure instead, so copying must short-circuit
-/// on the same [`is_visually_empty`] rule. Composing here also keeps the
+/// on the same [`crate::ui::text::is_visually_empty`] rule. Composing here also keeps the
 /// persistent unsaved marker on the resulting status.
 pub(super) fn totp_copy_absent_status(dirty: bool) -> String {
     status_with_unsaved(
@@ -603,32 +557,13 @@ fn lock_guidance() -> String {
     format!("（Enter: ログイン / m: モック / {FOCUS_RECOVERY_HINT}）")
 }
 
-/// Idle-lock timeout in minutes, matching the settings panel's display.
-///
-/// The settings panel shows `idle_lock_seconds / 60` minutes while this status
-/// used to show the raw seconds, so the same setting appeared as `5 分` and
-/// `300秒` in two places. A plain integer division would fix that by silently
-/// dropping the remainder (90 s -> "1 分"), which reports a shorter lock than
-/// the one actually configured; the leftover seconds are therefore appended
-/// whenever the value is not a whole minute. Kept pure so the wording can be
-/// tested without a GPUI window.
-pub(super) fn idle_lock_minutes_text(idle_lock_seconds: u64) -> String {
-    let minutes = idle_lock_seconds / 60;
-    let seconds = idle_lock_seconds % 60;
-    if seconds == 0 {
-        format!("{minutes}分")
-    } else {
-        format!("{minutes}分{seconds}秒")
-    }
-}
-
 /// Status the ticker leaves on screen after an idle auto-lock.
 ///
 /// `lock()` composes its own status (including the unsaved-settings warning),
 /// but the ticker then replaces it to explain *why* the vault locked. Without
 /// re-applying the marker here an idle lock silently drops that warning; the
 /// same applies to the lock screen's key guidance. The timeout is shown in
-/// minutes, like the settings panel (see [`idle_lock_minutes_text`]).
+/// minutes, like the settings panel (see [`crate::ui::text::idle_lock_minutes_text`]).
 pub(super) fn auto_lock_status(idle_lock_seconds: u64, dirty: bool) -> String {
     let timeout = idle_lock_minutes_text(idle_lock_seconds);
     // Keep both pieces of information: the persistent unsaved marker *and*
@@ -926,6 +861,32 @@ pub(super) fn audit_refresh_status_for_panel(
     audit_refresh_status_for(report, selection, dirty)
 }
 
+/// Pixel height of one row in the generator/settings scroll bodies.
+pub(super) const PANEL_SCROLL_ROW_PX: f32 = 24.0;
+
+/// Normalize a scroll handle's max offset before using it as a clamp bound.
+///
+/// A body whose content fits the viewport can report a negative `max_offset`
+/// (scroll extent smaller than the view). Passing that straight to
+/// `f32::clamp(0.0, max)` panics because the lower bound exceeds the upper one.
+/// Both the keyboard step and the `End` jump go through this normalization so
+/// they agree on the same upper bound; `NaN` also resolves to `0.0`.
+pub(super) fn normalized_panel_scroll_max(max: f32) -> f32 {
+    max.max(0.0)
+}
+
+/// Clamp a generator/settings keyboard scroll step into `0..=max`.
+///
+/// `delta` is a row count: ±1 for Up/Down and ±`crate::ui::input::PAGE_MOVE_ROWS`
+/// for PageUp/PageDown. One row is [`PANEL_SCROLL_ROW_PX`], so a page step is
+/// exactly 240px regardless of the window height. A stale `current` above the
+/// upper bound is pulled back in, and a negative `max` is normalized first so
+/// this cannot panic. Kept pure so the step and edge cases can be pinned
+/// without a GPUI window.
+pub(super) fn clamp_panel_scroll_offset(current: f32, max: f32, delta: isize) -> f32 {
+    (current + PANEL_SCROLL_ROW_PX * delta as f32).clamp(0.0, normalized_panel_scroll_max(max))
+}
+
 impl BitwardenApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let path = Settings::default_path();
@@ -967,6 +928,8 @@ impl BitwardenApp {
             settings_dirty: false,
             audit_row_selection: None,
             audit_scroll_handle: ScrollHandle::new(),
+            generator_scroll_handle: ScrollHandle::new(),
+            settings_scroll_handle: ScrollHandle::new(),
             editing: None,
             auth: crate::ui::auth_state::AuthState::new(),
             login_generation: crate::ui::login_generation::LoginGeneration::default(),
@@ -1140,6 +1103,10 @@ impl BitwardenApp {
         // Replacing the handle (instead of only zeroing its offset) also drops
         // any queued `scroll_to_item` target before the next audit render.
         reset_audit_scroll(&mut self.audit_scroll_handle, &mut self.audit_row_selection);
+        // Panel scroll positions belong to the vault being left as well;
+        // fresh handles avoid carrying a stale offset into a new unlock.
+        self.generator_scroll_handle = ScrollHandle::new();
+        self.settings_scroll_handle = ScrollHandle::new();
         // The offline-restore notice belongs to the vault being left: lock and
         // every new unlock start without it. A cache-restore login re-latches
         // it from the status on the next render; a real sync stays cleared.
@@ -1327,12 +1294,69 @@ impl BitwardenApp {
     ///
     /// Both key paths dispatch `MoveSelection`; routing by the effective panel
     /// keeps the keyboard intent aligned with what is actually drawn.
+    /// Move a non-list panel's scroll offset by whole lines.
+    ///
+    /// Generator and settings bodies are scrollable divs, not uniform lists,
+    /// so there is no row to highlight. `delta` arrives as ±1 for Up/Down and
+    /// ±`PAGE_MOVE_ROWS` for Page keys; one line is a fixed
+    /// [`PANEL_SCROLL_ROW_PX`] step. [`clamp_panel_scroll_offset`] owns the step
+    /// and the 0/max clamp so a panel with no overflow simply stays put.
+    fn move_panel_scroll(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let handle =
+            match crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some()) {
+                Panel::Generator => &self.generator_scroll_handle,
+                _ => &self.settings_scroll_handle,
+            };
+        let current: f32 = handle.offset().y.into();
+        let max: f32 = handle.max_offset().y.into();
+        let next = clamp_panel_scroll_offset(current, max, delta);
+        handle.set_offset(Point {
+            x: px(0.0),
+            y: px(next),
+        });
+        cx.notify();
+    }
+
+    /// Jump a scrollable panel to the first or last visible position.
+    pub(super) fn move_panel_scroll_to_edge(
+        &mut self,
+        edge: crate::ui::keys::SelectionEdge,
+        cx: &mut Context<Self>,
+    ) {
+        let handle =
+            match crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some()) {
+                Panel::Generator => &self.generator_scroll_handle,
+                _ => &self.settings_scroll_handle,
+            };
+        let target = match edge {
+            crate::ui::keys::SelectionEdge::First => px(0.0),
+            crate::ui::keys::SelectionEdge::Last => {
+                // Same normalization as the clamped keyboard step: a handle
+                // with no overflow may report a negative max, which must not
+                // scroll the panel backwards.
+                let max: f32 = handle.max_offset().y.into();
+                px(normalized_panel_scroll_max(max))
+            }
+        };
+        handle.set_offset(Point {
+            x: px(0.0),
+            y: target,
+        });
+        cx.notify();
+    }
+
     pub(super) fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some())
-            == Panel::Audit
-        {
-            self.move_audit_selection(delta, cx);
-            return;
+        let panel = crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some());
+        match panel {
+            Panel::Audit => {
+                self.move_audit_selection(delta, cx);
+                return;
+            }
+            Panel::Generator | Panel::Settings => {
+                self.move_panel_scroll(delta, cx);
+                return;
+            }
+            _ => {}
         }
         let visible = self.view.visible_items();
         let Some(next) = self.view.next_index_in(&visible, delta) else {
@@ -2538,6 +2562,62 @@ mod tests {
             old.offset(),
             "the surviving path queues a target on the same handle instead of resetting it"
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn clamp_panel_scroll_offset_uses_the_fixed_row_and_page_steps() {
+        use crate::ui::input::PAGE_MOVE_ROWS;
+
+        assert_eq!(PAGE_MOVE_ROWS, 10);
+        assert_eq!(PANEL_SCROLL_ROW_PX, 24.0);
+        // One row is 24px; a page is exactly ten of them, whatever the window.
+        assert_eq!(clamp_panel_scroll_offset(0.0, 1000.0, 1), 24.0);
+        assert_eq!(clamp_panel_scroll_offset(100.0, 1000.0, 1), 124.0);
+        assert_eq!(
+            clamp_panel_scroll_offset(0.0, 1000.0, PAGE_MOVE_ROWS),
+            240.0
+        );
+        assert_eq!(
+            clamp_panel_scroll_offset(100.0, 1000.0, PAGE_MOVE_ROWS),
+            340.0
+        );
+        assert_eq!(clamp_panel_scroll_offset(240.0, 1000.0, -1), 216.0);
+        assert_eq!(
+            clamp_panel_scroll_offset(500.0, 1000.0, -PAGE_MOVE_ROWS),
+            260.0
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn clamp_panel_scroll_offset_handles_zero_negative_max_and_endpoints() {
+        use crate::ui::input::PAGE_MOVE_ROWS;
+
+        // A body with no overflow may report a negative max; clamping must
+        // neither panic nor scroll backwards.
+        assert_eq!(clamp_panel_scroll_offset(0.0, 0.0, 1), 0.0);
+        assert_eq!(clamp_panel_scroll_offset(0.0, -120.0, 1), 0.0);
+        assert_eq!(clamp_panel_scroll_offset(0.0, -120.0, -PAGE_MOVE_ROWS), 0.0);
+        // Relative page moves clamp at both endpoints, and a max below one
+        // page caps the move instead of overshooting it.
+        assert_eq!(
+            clamp_panel_scroll_offset(230.0, 240.0, PAGE_MOVE_ROWS),
+            240.0
+        );
+        assert_eq!(clamp_panel_scroll_offset(10.0, 240.0, -PAGE_MOVE_ROWS), 0.0);
+        assert_eq!(clamp_panel_scroll_offset(0.0, 100.0, PAGE_MOVE_ROWS), 100.0);
+        // A stale offset outside the range is pulled back even with no delta.
+        assert_eq!(clamp_panel_scroll_offset(500.0, 240.0, 0), 240.0);
+        assert_eq!(clamp_panel_scroll_offset(-20.0, 240.0, 0), 0.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn normalized_panel_scroll_max_is_the_shared_end_target() {
+        // `End` and the keyboard step must use the same bound, including the
+        // negative/NaN cases that would otherwise make `f32::clamp` panic.
+        assert_eq!(normalized_panel_scroll_max(240.0), 240.0);
+        assert_eq!(normalized_panel_scroll_max(0.0), 0.0);
+        assert_eq!(normalized_panel_scroll_max(-1.0), 0.0);
+        assert_eq!(normalized_panel_scroll_max(f32::NAN), 0.0);
     }
 
     #[::core::prelude::v1::test]

@@ -454,6 +454,28 @@ fn is_text_cursor_key(key: &str) -> bool {
     )
 }
 
+/// Scroll intents for the generator and settings bodies while they are idle.
+///
+/// Both bodies now track a `ScrollHandle` and advertise
+/// `ui::panels::PANEL_SCROLL_KEYS_HINT`. Reusing the existing
+/// `MoveSelection*` intents keeps the vault and audit key tables untouched:
+/// `ui::input` already dispatches them and `BitwardenApp::move_selection` /
+/// `move_selection_to_edge` route by the effective panel, so the same key can
+/// scroll these panels without a new action or a second dispatcher. Editing
+/// modes return before this helper, so a focused text field still receives no
+/// scroll action from these names.
+pub(super) fn panel_scroll_action(key: &str) -> Option<UiAction> {
+    match key {
+        "up" => Some(UiAction::MoveSelection(-1)),
+        "down" => Some(UiAction::MoveSelection(1)),
+        "pageup" => Some(UiAction::MoveSelectionPage(-1)),
+        "pagedown" => Some(UiAction::MoveSelectionPage(1)),
+        "home" => Some(UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+        "end" => Some(UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
+        _ => None,
+    }
+}
+
 /// Map a keystroke to a UI intent.
 ///
 /// Editing modes take priority so that typing `l` into a password field does
@@ -578,6 +600,12 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
             if raw_key == "Y" {
                 return UiAction::CopyPassphrase;
             }
+            // The generator body tracks a `ScrollHandle`; idle navigation keys
+            // scroll it through the same intents the list panels use, instead
+            // of falling through to `UiAction::None`.
+            if let Some(action) = panel_scroll_action(key) {
+                return action;
+            }
             match key {
                 "escape" => UiAction::quit_or_warn(),
                 "n" => UiAction::SetPanel(Panel::Vault),
@@ -629,6 +657,11 @@ pub(super) fn classify_key(ctx: &KeyContext<'_>) -> UiAction {
                         text_action(text, UiAction::InsertSettingsText)
                     }),
                 };
+            }
+            // Once the field is confirmed, these keys scroll the settings body
+            // (which tracks a `ScrollHandle`) instead of inserting text.
+            if let Some(action) = panel_scroll_action(key) {
+                return action;
             }
             match key {
                 "escape" => UiAction::quit_or_warn(),
@@ -947,6 +980,11 @@ mod cursor_key_tests {
             ctx.panel = Panel::Settings;
             ctx.editing_settings = true;
             assert_eq!(classify_key(&ctx), UiAction::None, "settings/{key}");
+
+            // The generator shares the settings edit flag: its early return
+            // must also suppress the new scroll bindings.
+            ctx.panel = Panel::Generator;
+            assert_eq!(classify_key(&ctx), UiAction::None, "generator/{key}");
         }
     }
 }
@@ -991,7 +1029,7 @@ mod page_navigation_key_tests {
     }
 
     #[::core::prelude::v1::test]
-    fn paging_does_not_replace_single_row_or_leak_to_other_panels() {
+    fn paging_reaches_scrollable_panels_without_changing_list_keys() {
         for panel in [Panel::Vault, Panel::Audit] {
             assert_eq!(
                 classify_key(&panel_ctx(panel, "up")),
@@ -1004,13 +1042,21 @@ mod page_navigation_key_tests {
                 "{panel:?}/down"
             );
         }
-        // Only the two list-owning panels get a scroll handle; generator and
-        // settings must keep these keys inert (see MOUSE_WHEEL_SCROLL_ONLY_HINT).
+        // The generator and settings bodies track a `ScrollHandle` too, so the
+        // page/edge keys reuse the list intents to scroll them. Both key tables
+        // above remain byte-for-byte unchanged.
         for panel in [Panel::Generator, Panel::Settings] {
-            for key in ["pageup", "pagedown", "home", "end"] {
+            for (key, expected) in [
+                ("up", UiAction::MoveSelection(-1)),
+                ("down", UiAction::MoveSelection(1)),
+                ("pageup", UiAction::MoveSelectionPage(-1)),
+                ("pagedown", UiAction::MoveSelectionPage(1)),
+                ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+                ("end", UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
+            ] {
                 assert_eq!(
                     classify_key(&panel_ctx(panel, key)),
-                    UiAction::None,
+                    expected,
                     "{panel:?}/{key}"
                 );
             }
@@ -1028,6 +1074,10 @@ mod page_navigation_key_tests {
             ctx.panel = Panel::Settings;
             ctx.editing_settings = true;
             assert_eq!(classify_key(&ctx), UiAction::None, "settings/{key}");
+
+            // The generator's editing guard returns before the scroll helper.
+            ctx.panel = Panel::Generator;
+            assert_eq!(classify_key(&ctx), UiAction::None, "generator/{key}");
 
             ctx.editing_settings = false;
             ctx.screen = Screen::Locked;

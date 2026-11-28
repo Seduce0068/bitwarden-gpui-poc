@@ -582,13 +582,20 @@ impl Render for BitwardenApp {
                 .into_any_element(),
                 None => self.render_unlocked(cx).into_any_element(),
             },
-            (Screen::Unlocked, Panel::Generator) => {
-                generator_panel(&self.settings, &self.generator, self.settings_dirty)
-                    .into_any_element()
-            }
-            (Screen::Unlocked, Panel::Settings) => {
-                settings_panel(&self.settings, self.editing, self.settings_dirty).into_any_element()
-            }
+            (Screen::Unlocked, Panel::Generator) => generator_panel(
+                &self.settings,
+                &self.generator,
+                self.settings_dirty,
+                &self.generator_scroll_handle,
+            )
+            .into_any_element(),
+            (Screen::Unlocked, Panel::Settings) => settings_panel(
+                &self.settings,
+                self.editing,
+                self.settings_dirty,
+                &self.settings_scroll_handle,
+            )
+            .into_any_element(),
             (Screen::Unlocked, _) => self.render_unlocked(cx).into_any_element(),
         };
 

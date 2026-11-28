@@ -633,25 +633,27 @@ impl BitwardenApp {
     /// Only the delta computation is panel-specific; the actual selection,
     /// scroll adjustment and status update stay in `BitwardenApp::move_selection`.
     fn move_selection_to_edge(&mut self, edge: SelectionEdge, cx: &mut Context<Self>) {
-        let delta =
-            if crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some())
-                == Panel::Audit
-            {
-                let len = self
-                    .view
-                    .audit_report
-                    .as_ref()
-                    .map_or(0, |report| report.items.len());
-                edge_move_delta(self.audit_row_selection, len, edge)
-            } else {
-                let visible = self.view.visible_items();
-                let current = self
-                    .view
-                    .selected_id
-                    .as_deref()
-                    .and_then(|id| visible.iter().position(|item| item.id == id));
-                edge_move_delta(current, visible.len(), edge)
-            };
+        let panel = crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some());
+        if matches!(panel, Panel::Generator | Panel::Settings) {
+            self.move_panel_scroll_to_edge(edge, cx);
+            return;
+        }
+        let delta = if panel == Panel::Audit {
+            let len = self
+                .view
+                .audit_report
+                .as_ref()
+                .map_or(0, |report| report.items.len());
+            edge_move_delta(self.audit_row_selection, len, edge)
+        } else {
+            let visible = self.view.visible_items();
+            let current = self
+                .view
+                .selected_id
+                .as_deref()
+                .and_then(|id| visible.iter().position(|item| item.id == id));
+            edge_move_delta(current, visible.len(), edge)
+        };
         if let Some(delta) = delta {
             self.move_selection(delta, cx);
             self.report_keyboard_selection(cx);
@@ -672,10 +674,12 @@ impl BitwardenApp {
     /// click already reported its name. Only the vault branch is handled here:
     /// on the audit panel `move_selection` delegates to `move_audit_selection`,
     /// which installs its own row description and must not be overwritten.
+    /// Generator and settings have no row selection at all — Up/Down/Page/Home/
+    /// End only move the tracked scroll viewport — so there is no row name to
+    /// announce and their current status must not be overwritten here either.
     fn report_keyboard_selection(&mut self, cx: &mut Context<Self>) {
-        if crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some())
-            == Panel::Audit
-        {
+        let panel = crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some());
+        if matches!(panel, Panel::Audit | Panel::Generator | Panel::Settings) {
             return;
         }
         if let Some(status) = selected_row_status(&self.view, self.settings_dirty) {
@@ -2345,19 +2349,30 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn generator_and_settings_panels_keep_up_down_unbound() {
-        // Only the vault list and audit panel own a scroll handle; generator
-        // and settings must not turn Up/Down into a hidden list selection.
+    fn generator_and_settings_panels_scroll_with_navigation_keys() {
+        // These panels now own ScrollHandles: the same actions that move a
+        // vault selection drive their vertical scroll offset instead.
+        use crate::ui::keys::SelectionEdge;
         for panel in [Panel::Generator, Panel::Settings] {
-            for key in ["up", "down", "arrowup", "arrowdown", "pageup", "pagedown"] {
+            for (key, expected) in [
+                ("up", UiAction::MoveSelection(-1)),
+                ("down", UiAction::MoveSelection(1)),
+                ("arrowup", UiAction::MoveSelection(-1)),
+                ("arrowdown", UiAction::MoveSelection(1)),
+                ("pageup", UiAction::MoveSelectionPage(-1)),
+                ("pagedown", UiAction::MoveSelectionPage(1)),
+                ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+                ("end", UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
+            ] {
                 assert_eq!(
                     classify_key(&context(Screen::Unlocked, panel, key)),
-                    UiAction::None,
+                    expected,
                     "{panel:?}/{key}"
                 );
             }
         }
-        // The vault list still owns the same keys, so this is panel-local.
+        // The vault list still maps Up to the same action, so the dispatcher
+        // (not the classifier) decides whether it moves a row or a scroll.
         assert_eq!(
             classify_key(&context(Screen::Unlocked, Panel::Vault, "up")),
             UiAction::MoveSelection(-1)

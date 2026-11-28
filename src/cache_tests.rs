@@ -5860,11 +5860,11 @@ fn insecure_mode_error_keeps_fixed_status_and_exposes_both_modes() {
     for (mode, expected_detail) in [
         (
             0o644u32,
-            "キャッシュを読み込めません（mode 0644、期待 0600）",
+            "同期に失敗しました（キャッシュを読み込めません（mode 0644、期待 0600））",
         ),
         (
             0o660u32,
-            "キャッシュを読み込めません（mode 0660、期待 0600）",
+            "同期に失敗しました（キャッシュを読み込めません（mode 0660、期待 0600））",
         ),
     ] {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
@@ -5911,7 +5911,10 @@ fn permission_detail_survives_clone_and_carries_no_path_or_secret() {
         CacheReadFailureKind::InsecurePermissions { actual_mode: 0o606 }
     );
     let detail = cache_error_status_with_detail(&error);
-    assert_eq!(detail, "キャッシュを読み込めません（mode 0606、期待 0600）");
+    assert_eq!(
+        detail,
+        "同期に失敗しました（キャッシュを読み込めません（mode 0606、期待 0600））"
+    );
     assert!(!detail.contains("TOP_SECRET"), "{detail}");
     assert!(!detail.contains("host.example.com"), "{detail}");
     assert!(
@@ -5937,6 +5940,240 @@ fn unrelated_cache_errors_are_not_mislabelled_as_permission_denied() {
         let kind = CacheReadFailureKind::classify(&error);
         assert_eq!(kind, CacheReadFailureKind::Other, "{error:?}");
         assert_eq!(kind.detail(), None);
+        assert_eq!(
+            cache_error_status_with_detail(&error),
+            cache_error_message(error)
+        );
+    }
+}
+
+#[test]
+fn server_urls_match_normalizes_only_equivalent_server_spellings() {
+    let stored = "https://vault.example.com";
+
+    // `url::Url` lowercases the host and drops a scheme-default port; a
+    // trailing slash is ignored here as well (cache.rs server_urls_match).
+    for equivalent in [
+        "https://vault.example.com/",
+        "https://VAULT.example.com",
+        "https://VAULT.EXAMPLE.COM:443/",
+        "https://vault.example.com:443",
+    ] {
+        assert!(
+            super::server_urls_match(stored, equivalent),
+            "{equivalent} must name the stored server"
+        );
+        assert!(
+            super::server_urls_match(equivalent, stored),
+            "the comparison must be symmetric: {equivalent}"
+        );
+    }
+
+    // Everything else stays significant: a different scheme, port, path,
+    // userinfo, query or an unparseable URL must not match the same server.
+    for different in [
+        "https://other.example.com",
+        "http://vault.example.com",
+        "https://vault.example.com:8443",
+        "https://vault.example.com/path",
+        "https://user:pass@vault.example.com",
+        "https://vault.example.com/?token=SECRET",
+        "",
+    ] {
+        assert!(
+            !super::server_urls_match(stored, different),
+            "{different} must be refused"
+        );
+    }
+}
+
+#[test]
+fn server_urls_match_keeps_path_query_and_fragment_trailing_slashes_significant() {
+    // A trailing slash inside the path, query or fragment is data, not an
+    // equivalent spelling of the same server. The old whole-string
+    // `trim_end_matches('/')` erased it, so a cache written for one endpoint
+    // could be restored for another (e.g. `?next=/` vs `?next=`).
+    for (stored, supplied) in [
+        (
+            "https://vault.example.com/path/",
+            "https://vault.example.com/path",
+        ),
+        (
+            "https://vault.example.com/?next=/",
+            "https://vault.example.com/?next=",
+        ),
+        (
+            "https://vault.example.com/path?next=/",
+            "https://vault.example.com/path?next=",
+        ),
+        (
+            "https://vault.example.com/#frag/",
+            "https://vault.example.com/#frag",
+        ),
+    ] {
+        assert!(
+            !super::server_urls_match(stored, supplied),
+            "{stored} and {supplied} must be different servers"
+        );
+        assert!(
+            !super::server_urls_match(supplied, stored),
+            "the comparison must be symmetric: {stored} vs {supplied}"
+        );
+    }
+}
+
+#[test]
+fn server_urls_match_accepts_only_host_case_and_root_slash_differences() {
+    let stored = "https://vault.example.com";
+
+    // Host casing, an explicit scheme-default port and the root slash added
+    // by the parser are the only accepted spelling differences.
+    for equivalent in [
+        "https://vault.example.com/",
+        "https://VAULT.example.com",
+        "https://VAULT.EXAMPLE.COM:443/",
+        "https://vault.example.com:443",
+    ] {
+        assert!(
+            super::server_urls_match(stored, equivalent),
+            "{equivalent} must name the stored server"
+        );
+        assert!(
+            super::server_urls_match(equivalent, stored),
+            "the comparison must be symmetric: {equivalent}"
+        );
+    }
+    assert!(super::server_urls_match(
+        "https://vault.example.com/",
+        "https://VAULT.EXAMPLE.COM:443"
+    ));
+
+    // An extra slash beyond the root is a path difference, not a spelling
+    // difference, and must stay significant.
+    assert!(!super::server_urls_match(
+        "https://vault.example.com//",
+        "https://vault.example.com/"
+    ));
+}
+
+#[test]
+fn validate_rejects_a_cache_with_a_different_query_or_path_trailing_slash() {
+    let cache = SyncCache::from_body(body(), "https://vault.example.com/path/?next=/").unwrap();
+
+    assert!(validate(&cache, "user-1", "https://vault.example.com/path/?next=/").is_ok());
+    assert!(matches!(
+        validate(&cache, "user-1", "https://vault.example.com/path?next=/"),
+        Err(SyncCacheError::ServerMismatch)
+    ));
+    assert!(matches!(
+        validate(&cache, "user-1", "https://vault.example.com/path/?next="),
+        Err(SyncCacheError::ServerMismatch)
+    ));
+    // Equivalent authority spellings are still accepted by the same gate.
+    assert!(validate(
+        &cache,
+        "user-1",
+        "https://VAULT.EXAMPLE.COM:443/path/?next=/"
+    )
+    .is_ok());
+}
+
+#[test]
+fn validate_accepts_the_same_normalized_server_as_the_restore_path() {
+    let cache = SyncCache::from_body(body(), "https://VAULT.example.com:443/").unwrap();
+    assert!(validate(&cache, "user-1", "https://vault.example.com").is_ok());
+    assert!(matches!(
+        validate(&cache, "user-1", "https://other.example.com"),
+        Err(SyncCacheError::ServerMismatch)
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cached_sync_for_detailed_accepts_equivalent_server_urls() {
+    let _lock = env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let _cache_env = EnvGuard::set("XDG_CACHE_HOME", &root.path().join("xdg-cache-home"));
+    let _config_env = EnvGuard::set("XDG_CONFIG_HOME", &root.path().join("xdg-config-home"));
+
+    save_default(&SyncCache::from_body(body(), "https://vault.example.com").unwrap()).unwrap();
+
+    // Stored without a trailing slash; each of these still names that server.
+    for equivalent in [
+        "https://vault.example.com/",
+        "https://VAULT.example.com",
+        "https://VAULT.EXAMPLE.COM:443/",
+    ] {
+        assert!(
+            cached_sync_for_detailed(equivalent, "user-1").is_ok(),
+            "{equivalent} must restore the cache"
+        );
+    }
+    // A genuinely different server is still refused.
+    assert!(matches!(
+        cached_sync_for_detailed("https://other.example.com", "user-1"),
+        Err(SyncCacheError::ServerMismatch)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_error_status_with_detail_uses_the_sync_family_heading() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("private-cache.json");
+    save(
+        &path,
+        &SyncCache::from_body(body(), "https://vault.example.com").unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let error = load_detailed(&path).unwrap_err();
+
+    // Exact wording: the owned-detail branch keeps the sync family heading
+    // used by every `cache_restore_status` branch, plus the observed mode.
+    assert_eq!(
+        cache_error_status_with_detail(&error),
+        "同期に失敗しました（キャッシュを読み込めません（mode 0644、期待 0600））"
+    );
+    assert_eq!(
+        cache_restore_status(error.clone()),
+        Some("同期に失敗しました（キャッシュを読み込めません）")
+    );
+}
+
+#[test]
+fn permission_classification_normalizes_file_type_bits_and_rejects_bad_octal() {
+    use crate::error::BoxedCause;
+
+    let cause = |octal: &str| {
+        SyncCacheError::ReadFailedCause(BoxedCause::text(format!(
+            "{}（mode {octal}、期待 0600）",
+            super::INSECURE_MODE_CAUSE_PREFIX
+        )))
+    };
+
+    // Older cause text may include the Unix regular-file type bits. Only the
+    // 0o7777 permission bits are kept, so 100644 and 0644 classify alike.
+    assert_eq!(
+        CacheReadFailureKind::classify(&cause("100644")),
+        CacheReadFailureKind::InsecurePermissions { actual_mode: 0o644 }
+    );
+    assert_eq!(
+        CacheReadFailureKind::classify(&cause("100606")),
+        CacheReadFailureKind::InsecurePermissions { actual_mode: 0o606 }
+    );
+
+    // Malformed or out-of-range octal text fails closed as `Other` instead of
+    // being guessed at or mislabelled as a permission violation.
+    for bad in ["8", "", "999999999999999999999999999999999"] {
+        let error = cause(bad);
+        assert_eq!(
+            CacheReadFailureKind::classify(&error),
+            CacheReadFailureKind::Other,
+            "{error:?}"
+        );
         assert_eq!(
             cache_error_status_with_detail(&error),
             cache_error_message(error)

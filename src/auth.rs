@@ -194,6 +194,10 @@ impl PartialEq for AuthError {
     /// A `Detail` variant is the same failure as its plain sibling: the cause
     /// is diagnostic context, not identity. This mirrors [`AppError`]'s rule,
     /// so adding a cause does not change how callers match or compare errors.
+    /// [`Self::OtherDetail`] is the deliberate exception: it owns the only
+    /// runtime text in this enum, so equality compares that text verbatim and
+    /// it is never equal to [`Self::Other`] even when both render alike. Two
+    /// different observed modes are therefore two different failures.
     fn eq(&self, other: &Self) -> bool {
         use self::AuthError::*;
         match (self, other) {
@@ -223,8 +227,14 @@ impl PartialEq for AuthError {
 impl Eq for AuthError {}
 
 impl AuthError {
-    /// A short message for the status bar.
-    pub const fn message(&self) -> &'static str {
+    /// The cheap family label shared by every variant.
+    ///
+    /// This is the text used for matching, comparison and the short headline.
+    /// It never carries runtime detail: the observed cache mode held by
+    /// [`Self::OtherDetail`] lives only in [`Self::status_message`] and in the
+    /// [`core::fmt::Display`] rendering, so the family label cannot disagree
+    /// with the full status text.
+    pub const fn family_message(&self) -> &'static str {
         match self {
             Self::MissingField(_) => "認証情報が未入力です",
             Self::InvalidServerUrl | Self::InvalidServerUrlDetail(_) => INVALID_SERVER_URL_MESSAGE,
@@ -242,14 +252,23 @@ impl AuthError {
             // The permission detail is runtime text and cannot satisfy this
             // `&'static str` contract. Keep the sync family headline here;
             // `status_message()` is the accessor that carries the mode.
-            Self::OtherDetail(_) => Self::Sync.message(),
+            Self::OtherDetail(_) => Self::Sync.family_message(),
         }
+    }
+
+    /// A short family message for the status bar.
+    ///
+    /// Kept as an alias of [`Self::family_message`] for existing callers that
+    /// only need the cheap, static family label.
+    pub const fn message(&self) -> &'static str {
+        self.family_message()
     }
 
     /// A status-bar message that keeps the distinguishing detail.
     ///
-    /// `message()` stays a cheap `&'static str` for callers that only need the
-    /// family; this method appends the field name for [`Self::MissingField`]
+    /// [`Self::family_message`] (and its alias [`Self::message`]) stay a cheap
+    /// `&'static str` for callers that only need the family; this method appends
+    /// the field name for [`Self::MissingField`]
     /// and the retained cause text for the `Detail` variants, so a user can see
     /// *which* credential is missing, why the API-key login failed, or which
     /// URL/client setup error the server reported. An empty cause adds no
@@ -289,7 +308,16 @@ impl AuthError {
 
 impl core::fmt::Display for AuthError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.message())
+        match self {
+            // `OtherDetail` has no static family text of its own: the observed
+            // mode exists only in the owned detail. Delegate to
+            // `status_message()` so Display and the status bar cannot disagree
+            // about that mode. Every other variant keeps its family label here;
+            // the six `Detail` siblings deliberately share it with their plain
+            // counterparts (see `family_message`).
+            Self::OtherDetail(_) => f.write_str(&self.status_message()),
+            _ => f.write_str(self.family_message()),
+        }
     }
 }
 
@@ -1159,15 +1187,17 @@ pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
 /// authenticates a specific account: Bitwarden personal client ids carry that
 /// account's id after the `user.` prefix. The offline cache is therefore
 /// matched by both server URL and this derived id. A client id without the
-/// prefix (or with nothing after it) is returned unchanged, so the comparison
-/// against the cache's `profile.id` fails closed instead of restoring another
-/// account's vault.
+/// prefix, or with nothing after it, yields an empty id instead: the cache
+/// layer rejects empty ids on both sides with `UserMismatch`, so a malformed
+/// key cannot restore another account's vault. Returning the raw client id
+/// would only *look* fail-closed - it could still equal a hand-edited cache's
+/// envelope id - and must not be used as an account id.
 fn user_id_from_client_id(client_id: &str) -> &str {
     let trimmed = client_id.trim();
     trimmed
         .strip_prefix("user.")
         .filter(|id| !id.is_empty())
-        .unwrap_or(trimmed)
+        .unwrap_or("")
 }
 
 /// Compose the status when both the live sync and its cache fallback fail.
@@ -1285,8 +1315,19 @@ async fn authenticate_inner(
         // personal API key's `client_id`, so the cache is matched by server URL
         // *and* account (see the `from_cache` field docs).
         None => {
-            let user_id = user_id_from_client_id(&config.client_id);
-            match crate::cache::cached_sync_for_detailed(config.server_url.trim(), user_id) {
+            let user_id = user_id_from_client_id(&config.client_id).to_string();
+            let server_url = config.server_url.trim().to_string();
+            // The cache restore reads and parses a file synchronously. Move it
+            // off the executor with `smol::unblock` so the login watchdog in
+            // `authenticate_with_timeout` keeps being polled while the file is
+            // read. Owned strings are moved in because the closure must be
+            // `'static`; the timeout budget and the restore result are
+            // otherwise unchanged.
+            let restored = smol::unblock(move || {
+                crate::cache::cached_sync_for_detailed(&server_url, &user_id)
+            })
+            .await;
+            match restored {
                 Ok(sync) => (sync, true),
                 Err(cache_error) => {
                     return Err(sync_fallback_failure(

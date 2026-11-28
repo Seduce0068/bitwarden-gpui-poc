@@ -1,4 +1,5 @@
 /target
+/node_modules
 
 # ローカル秘密情報・生成物（Betterleaks の最終ゲートと併用）
 .env

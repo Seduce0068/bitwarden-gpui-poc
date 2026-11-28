@@ -1,5 +1,17 @@
 # ADR 変更ログ
 
+## 2026-11-28
+
+- 第156弾で `AuthConfig::from_credentials` を lib 層に追加し、UI／E2E から
+  openwarden の直接 import を削除（ADR の境界を維持）
+- 権限詳細の構造を記録: `AuthError` の6個の `Detail` バリアントと
+  `OtherDetail` が `String` を保持し、キャッシュ権限違反の mode と期待値
+  （0600）をステータスへ反映（`sync_fallback_failure` は `status_message()`）
+- UI のテキストヘルパを `ui/text.rs` リーフへ集約し、`ui::app` 側は
+  re-export を維持して既存呼び出し元の互換性を保持
+- Generator／Settings の各スクロール本体へ `ScrollHandle` を配線し、
+  キー操作（↑↓／PageUp・PageDown／Home・End）でビューポートを移動可能に
+
 ## 2026-11-24
 
 - redact の大小文字・区切り文字折りたたみと回帰テストの現行位置を記録

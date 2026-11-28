@@ -55,7 +55,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
 - KDF 計算と同期データの復号は blocking thread で実行し、待機中も UI は操作できる
 - ログインのタイムアウトは認証（prelogin / API key ログイン / sync）から
   KDF による復号鍵導出までを対象とし（設定ファイルで指定、既定30秒）、
-  失敗時は `r` で再試行できる。タイムアウト後の vault 復号・取り込みは対象外
+  認証系の失敗時は `r` で再試行できる。タイムアウト後の vault 復号・取り込みは対象外
 - 実ログインではログイン項目の名前 / username / URI に加え、パスワードと
   TOTP シークレットも復号してメモリ上のモデルへ保持する。パスワードは
   監査の強度判定にのみ使い、UI には桁数だけを表示して平文は出さない。
@@ -98,7 +98,7 @@ Bitwarden / Vaultwarden の個人 vault 向けクライアントを
    マスターパスワードを入力する。`3`〜`5` はメモリ上の認証状態に保持され
    `settings.json` には保存されない。`1` / `2` は設定の共有項目を直接編集するため、
    保存する場合は設定パネルで `w` を押す（`d` で破棄可能）。
-3. `Enter` で実認証を試行する。失敗時は `r` で再試行できる。
+3. `Enter` で実認証を試行する。認証系の失敗時は `r` で再試行できる。
 
 注意事項:
 
@@ -167,14 +167,14 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 
 | キー | 動作 |
 | --- | --- |
-| `1`〜`5` | サーバーURL / メール / Client ID / Client Secret / パスワードを編集（ロック画面） |
+| `1`〜`5` | サーバーURL / メール / Client ID / Client Secret / マスターパスワードを編集（ロック画面） |
 | `Enter` | 認証情報でログイン（常に実認証を試行） |
 | `m` | モック vault を開く（デモ専用） |
-| `r` | ログイン失敗時に再試行 |
+| `r` | 認証系の失敗時に再試行 |
 | `↑` / `↓` | 項目を選択 |
 | `PageUp` / `PageDown` | 一覧／監査を固定10行ずつ移動（表示行数には連動しない） |
 | `Home` / `End` | 一覧／監査の先頭／末尾へ移動 |
-| `F1` | フォーカス復帰の案内を表示 |
+| `F1` | フォーカスが外れたときの復帰案内を表示 |
 | `f` | お気に入りを切り替え |
 | `t` | フィルタを切り替え |
 | `s` | 並び順を切り替え |
@@ -195,6 +195,7 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 
 マウスでも操作できます。一覧の行をクリックすると選択でき、ヘッダーの
 `[一覧]` / `[監査]` / `[生成]` / `[設定]` ボタンでパネルを切り替えられます。
+`[監査]` は監査結果がないとパネルへ遷移せず、案内のみを表示します。
 
 生成パネルでは `1`〜`7` で文字種・オプションを切り替え、
 `+` / `-` で長さと単語数、`,` で区切り文字を変更します。
@@ -218,7 +219,7 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 
 | JSON パス | 型 | 既定値 | 範囲・説明 |
 | --- | --- | --- | --- |
-| `schema_version` | number | `1` | 将来版は破棄。欠落は legacy(0) |
+| `schema_version` | number | `1` | 将来版は `device_id` のみ救済し保存拒否。欠落は legacy(0) |
 | `server_url` | string | `https://vault.bitwarden.com` | 最大 2048 文字 |
 | `email` | string | `""` | 最大 254 文字 |
 | `device_id` | string | `""` | UUID v4。初回ログイン時に生成・永続化 |
@@ -238,9 +239,10 @@ cargo test --test real_server_e2e -- --ignored --nocapture
 | `login_timeout_seconds` | number | `30` | 1〜3600 |
 | `clipboard_restore_seconds` | number | `30` | 1〜3600 |
 
-`schema_version` は文字列や整数浮動小数の将来版も拒否します。欠落や不正な
-型、および明示的な `0` / `0.0` は legacy(0) として扱い、保存時に現行版へ
-昇格します。
+`schema_version` は文字列や整数浮動小数の将来版も拒否します。ただし将来版の
+ファイルからは有効な `device_id` のみ救済し、そのファイルへの保存は拒否します。
+欠落や不正な型、明示的な `0` / `0.0`、および数値を表す文字列は現行値の
+`"1"` でも legacy(0) として扱い、保存時に現行版へ昇格します。
 
 数値は型として表現できる範囲外の値がクランプされ、負数・小数など型として
 表現できない値は既定値へ置き換えられます。`server_url` / `email` の上限は
@@ -261,7 +263,8 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo audit
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 cargo deny check
-markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
+npm ci --ignore-scripts
+npx --no-install markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
 betterleaks dir --redact --config .betterleaks.toml .
 betterleaks git --redact --config .betterleaks.toml .
 # `betterleaks git` は全履歴を走査します。浅いクローンでは `git fetch --unshallow` を先に実行してください。
@@ -301,8 +304,8 @@ mise use rust@1.95
 `Seduce0068/workflows/.github/workflows/rust-gates.yml@v1` を呼び出します。
 fmt → check → test → clippy → `cargo audit` → doc → `cargo deny check` →
 markdownlint → Betterleaks（dir と git 履歴）のゲートを実行します。
-markdownlint は CI で
-`markdownlint-cli@0.50.0` に固定しています。
+markdownlint の版は `package.json` の devDependency を参照し、
+Dependabot の更新に追従します（CI は README の版を照合しません）。
 clippy の `unwrap_used` / `expect_used` / `panic` /
 `undocumented_unsafe_blocks` deny は `Cargo.toml` の `[lints.clippy]` で
 一元管理しているため、ローカルコマンドでは `-D clippy::<lint>` の個別指定は
@@ -311,7 +314,8 @@ clippy の `unwrap_used` / `expect_used` / `panic` /
 
 変更を送る前に、上記のローカルゲートを同じ順序で実行してください。
 CI の結果は GitHub の Actions タブで確認できます（`master` は `origin/master`
-を追跡しています）。
+を追跡しています）。週次ゲートは毎週月曜 03:00 UTC に cron で実行します。
+失敗の確認先は GitHub Actions タブの該当スケジュール run です。
 
 ## 依存のセキュリティ更新
 
@@ -354,12 +358,14 @@ CI（`.github/workflows/ci.yml`）と pre-commit で共通して使うツール�
 | betterleaks | `BETTERLEAKS_VERSION` = 1.10.1 | `rev`（pre-commit config） |
 | cargo-audit | `cargo audit@0.23.0`（共通ワークフロー） | — |
 | cargo-deny | `cargo install cargo-deny@0.21.0 --exact --locked` | — |
-| markdownlint-cli | `npm install --global markdownlint-cli@0.50.0` | — |
+| markdownlint-cli | `package.json` devDependency を参照（Dependabot が更新） | — |
+
+Dependabot が更新すると `package.json` と `package-lock.json` は自動更新され、README 更新は不要。
 
 Betterleaks は CI 起動時に pre-commit の `rev` と一致するか検査し、ずれがあれば
-ゲートを失敗させます。他の固定ツールも CI が README の記載と突き合わせ、
-片方だけの更新を検出します。最新版の確認は週次の依存監査時に行い、
-更新する場合は CI と README の両方を同じ版へ変更してください。
+ゲートを失敗させます。markdownlint-cli を除く固定ツールも CI が README の
+記載と突き合わせ、片方だけの更新を検出します。最新版の確認は週次の
+依存監査時に行い、更新する場合は CI と README の両方を同じ版へ変更してください。
 
 ## ドキュメント
 

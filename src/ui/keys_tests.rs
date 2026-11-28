@@ -1989,6 +1989,15 @@ fn generator_editing_settings_swallows_every_key_before_the_bindings() {
         ",",
         "backspace",
         "enter",
+        "up",
+        "down",
+        "pageup",
+        "pagedown",
+        "home",
+        "end",
+        "arrowup",
+        "arrowpagedown",
+        "ArrowEnd",
         "a",
         "space",
     ] {
@@ -2006,4 +2015,72 @@ fn generator_editing_settings_swallows_every_key_before_the_bindings() {
     assert_eq!(classify_key(&value), UiAction::GeneratePassword);
     value.key = "n";
     assert_eq!(classify_key(&value), UiAction::SetPanel(Panel::Vault));
+}
+
+#[test]
+fn generator_and_settings_scroll_keys_reuse_the_list_intents() {
+    // Both bodies track a ScrollHandle and advertise
+    // `panels::PANEL_SCROLL_KEYS_HINT`. Page/edge keys reuse the existing
+    // intents so the vault and audit bindings (and their hints) stay unchanged;
+    // `ui::input` routes the intents to the active panel's scroll handle.
+    let expected = [
+        ("up", UiAction::MoveSelection(-1)),
+        ("arrowup", UiAction::MoveSelection(-1)),
+        ("ArrowUp", UiAction::MoveSelection(-1)),
+        ("down", UiAction::MoveSelection(1)),
+        ("arrowdown", UiAction::MoveSelection(1)),
+        ("ArrowDown", UiAction::MoveSelection(1)),
+        ("pageup", UiAction::MoveSelectionPage(-1)),
+        ("arrowpageup", UiAction::MoveSelectionPage(-1)),
+        ("ArrowPageUp", UiAction::MoveSelectionPage(-1)),
+        ("pagedown", UiAction::MoveSelectionPage(1)),
+        ("arrowpagedown", UiAction::MoveSelectionPage(1)),
+        ("ArrowPageDown", UiAction::MoveSelectionPage(1)),
+        ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+        (
+            "arrowhome",
+            UiAction::MoveSelectionToEdge(SelectionEdge::First),
+        ),
+        (
+            "ArrowHome",
+            UiAction::MoveSelectionToEdge(SelectionEdge::First),
+        ),
+        ("end", UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
+        (
+            "arrowend",
+            UiAction::MoveSelectionToEdge(SelectionEdge::Last),
+        ),
+        (
+            "ArrowEnd",
+            UiAction::MoveSelectionToEdge(SelectionEdge::Last),
+        ),
+    ];
+    for panel in [Panel::Generator, Panel::Settings] {
+        for (key, action) in &expected {
+            let mut value = ctx(key);
+            value.panel = panel;
+            assert_eq!(classify_key(&value), *action, "{panel:?}/{key}");
+            // A backend echoing the key name must not turn it into text or
+            // suppress the scroll intent.
+            value.key_char = Some(*key);
+            assert_eq!(classify_key(&value), *action, "{panel:?}/{key}/echo");
+        }
+    }
+}
+
+#[test]
+fn panel_scroll_action_matches_only_the_six_navigation_keys() {
+    for (key, expected) in [
+        ("up", UiAction::MoveSelection(-1)),
+        ("down", UiAction::MoveSelection(1)),
+        ("pageup", UiAction::MoveSelectionPage(-1)),
+        ("pagedown", UiAction::MoveSelectionPage(1)),
+        ("home", UiAction::MoveSelectionToEdge(SelectionEdge::First)),
+        ("end", UiAction::MoveSelectionToEdge(SelectionEdge::Last)),
+    ] {
+        assert_eq!(panel_scroll_action(key), Some(expected), "{key}");
+    }
+    for key in ["left", "right", "enter", "escape", "p", "w", "a"] {
+        assert_eq!(panel_scroll_action(key), None, "{key}");
+    }
 }

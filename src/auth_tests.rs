@@ -2815,20 +2815,18 @@ fn user_id_is_derived_from_the_personal_api_key_client_id() {
         "00000000-0000-0000-0000-000000000000"
     );
     assert_eq!(super::user_id_from_client_id("  user.abc  "), "abc");
-    // A malformed id fails closed instead of matching a different account.
-    assert_eq!(super::user_id_from_client_id("user."), "user.");
-    assert_eq!(super::user_id_from_client_id("user"), "user");
-    assert_eq!(
-        super::user_id_from_client_id("organization.abc"),
-        "organization.abc"
-    );
+    // A malformed id fails closed: with no usable `user.` prefix there is no
+    // account id at all, which the cache layer rejects with `UserMismatch`.
+    assert_eq!(super::user_id_from_client_id("user."), "");
+    assert_eq!(super::user_id_from_client_id("user"), "");
+    assert_eq!(super::user_id_from_client_id("organization.abc"), "");
 }
 
 #[test]
 fn user_id_from_client_id_trims_and_fails_closed() {
-    // `user_id_from_client_id` trims before looking for `user.`, then returns
-    // the (trimmed) original when the prefix is missing or has nothing after
-    // it. That fail-closed shape cannot equal a real cache `profile.id`, so a
+    // `user_id_from_client_id` trims before looking for `user.`. If the prefix
+    // is missing or has nothing after it, the result is empty rather than the
+    // raw client id: the cache rejects an empty id with `UserMismatch`, so a
     // malformed API key cannot restore another account's vault.
     for (client_id, expected) in [
         ("\t user.abc \n", "abc"),
@@ -2841,8 +2839,8 @@ fn user_id_from_client_id_trims_and_fails_closed() {
             "{client_id:?}"
         );
     }
-    // No recognized prefix, or no id after it: the trimmed value is returned
-    // unchanged instead of inventing an account id.
+    // No recognized prefix, or no id after it: no account id is invented and
+    // the raw client id is not leaked into the cache comparison either.
     for malformed in [
         "",
         "   ",
@@ -2855,9 +2853,38 @@ fn user_id_from_client_id_trims_and_fails_closed() {
         ".user.abc",
     ] {
         let derived = super::user_id_from_client_id(malformed);
-        assert_eq!(derived, malformed.trim(), "{malformed:?}");
+        assert_eq!(derived, "", "{malformed:?}");
         assert_ne!(derived, "abc", "{malformed:?} must not impersonate an id");
+        if !malformed.trim().is_empty() {
+            assert_ne!(derived, malformed.trim(), "{malformed:?} is not an id");
+        }
     }
+}
+
+#[test]
+fn empty_derived_user_id_is_rejected_by_the_cache_as_a_user_mismatch() {
+    // The fail-closed contract is completed on the cache side without changing
+    // `cache.rs`: an empty supplied id is rejected before the cache body is
+    // even parsed (cache.rs `account_ids_match` / `validate`).
+    let cache = crate::cache::SyncCache {
+        version: 1,
+        user_id: "real-account".to_string(),
+        server_url: "https://vault.example.com".to_string(),
+        body: Vec::new(),
+        created_at: None,
+    };
+    let derived = super::user_id_from_client_id("organization.abc");
+    assert_eq!(derived, "");
+    assert_eq!(
+        crate::cache::validate(&cache, derived, &cache.server_url),
+        Err(crate::cache::SyncCacheError::UserMismatch)
+    );
+    // The rejection is specific to the missing id: a matching non-empty id
+    // gets past the account check (the empty body then fails to parse).
+    assert!(!matches!(
+        crate::cache::validate(&cache, "real-account", &cache.server_url),
+        Err(crate::cache::SyncCacheError::UserMismatch)
+    ));
 }
 
 #[test]
@@ -2910,6 +2937,30 @@ fn auth_error_family_messages_are_fixed() {
         assert_eq!(detailed.message(), plain.message(), "{detailed:?}");
         assert_eq!(detailed.to_string(), plain.to_string(), "{detailed:?}");
     }
+}
+
+#[test]
+fn other_detail_display_agrees_with_status_message() {
+    const DETAIL: &str = "キャッシュを読み込めません（mode 0644、期待 0600）";
+    let error = AuthError::OtherDetail(DETAIL.to_string());
+    // Display must not hide the observed mode behind the generic sync family:
+    // it delegates to `status_message()` for this owned-detail variant.
+    assert_eq!(error.to_string(), error.status_message());
+    assert!(error.to_string().contains("mode 0644"));
+    assert!(error.to_string().contains("期待 0600"));
+    // The family label stays a cheap, separate accessor with no runtime text,
+    // so the two roles cannot be confused by callers.
+    assert_eq!(error.family_message(), AuthError::Sync.message());
+    assert_eq!(error.message(), error.family_message());
+    let empty = AuthError::OtherDetail(String::new());
+    assert_eq!(empty.to_string(), empty.status_message());
+    assert_eq!(empty.to_string(), AuthError::Sync.message());
+    // Every other variant keeps its family label in Display, including the
+    // six cause-carrying siblings pinned by the existing wording tests.
+    assert_eq!(
+        AuthError::LoginDetail("x".into()).to_string(),
+        AuthError::Login.message()
+    );
 }
 
 #[test]
@@ -3456,6 +3507,17 @@ fn plain_auth_errors_convert_forward_to_the_matching_app_error_variant() {
         assert_eq!(converted.to_string(), family_message, "{name}");
         assert!(std::error::Error::source(&converted).is_none(), "{name}");
     }
+
+    // `OtherDetail` is the owned-text exception: forward conversion maps it to
+    // `AppError::Other`, keeping the rendered text (there is no typed cause to
+    // retain at this boundary). Its message is the detail itself, not the sync
+    // family label used by the plain cases above.
+    const DETAIL: &str = "キャッシュを読み込めません（mode 0644、期待 0600）";
+    let converted: AppError = AuthError::OtherDetail(DETAIL.to_string()).into();
+    assert_eq!(converted, AppError::Other(DETAIL.to_string()));
+    assert_eq!(converted.message(), DETAIL);
+    assert_eq!(converted.to_string(), DETAIL);
+    assert!(std::error::Error::source(&converted).is_none());
 }
 
 #[test]
@@ -3530,6 +3592,31 @@ fn plain_app_error_variants_convert_back_to_plain_auth_errors() {
         // The forward direction still lands back in the same family.
         assert_eq!(AppError::from(converted).message(), family_message);
     }
+
+    // Round trip for the owned-text exception: `AppError::Other` converts back
+    // to plain `AuthError::Other`, so the detail text survives but the
+    // `OtherDetail` variant does not. Equality must still separate the two
+    // AuthError variants, while two identical `OtherDetail` values compare
+    // equal and two different observed modes do not.
+    const DETAIL: &str = "owned diagnostic text";
+    let app = AppError::from(AuthError::OtherDetail(DETAIL.to_string()));
+    assert_eq!(app, AppError::Other(DETAIL.to_string()));
+    let back = AuthError::from(app);
+    // `AuthError::Other` only holds a `&'static str`, so the reverse boundary
+    // falls back to the generic message rather than leaking an owned string.
+    let generic = crate::error::OTHER_ERROR_MESSAGE;
+    assert_eq!(back, AuthError::Other(generic));
+    assert_eq!(back.message(), generic);
+    assert_eq!(back.status_message(), generic);
+    assert_ne!(back, AuthError::OtherDetail(DETAIL.to_string()));
+    assert_eq!(
+        AuthError::OtherDetail("a".to_string()),
+        AuthError::OtherDetail("a".to_string())
+    );
+    assert_ne!(
+        AuthError::OtherDetail("a".to_string()),
+        AuthError::OtherDetail("b".to_string())
+    );
 }
 
 #[test]

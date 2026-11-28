@@ -1,0 +1,9 @@
+{
+  "name": "bitwarden-gpui-poc",
+  "version": "0.1.101",
+  "private": true,
+  "description": "Bitwarden/Vaultwarden client PoC built with GPUI (gpui-kit)",
+  "devDependencies": {
+    "markdownlint-cli": "0.50.0"
+  }
+}

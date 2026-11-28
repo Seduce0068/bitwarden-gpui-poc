@@ -1,4 +1,7 @@
 //! Pure UI predicates that can be tested without a GPUI window.
+//!
+//! Display-text helpers used by these predicates live in the GPUI-free leaf
+//! module [`crate::ui::text`], so this module never reaches into `ui::app`.
 
 use crate::health::{audit, Report, Thresholds};
 use crate::model::Vault;
@@ -102,7 +105,7 @@ pub(super) fn card_last_four(number: &str) -> String {
 ///
 /// Values with no visible content and the undecryptable marker are refused so
 /// no placeholder or blank string is written into the user's clipboard. The
-/// blank check goes through [`crate::ui::app::is_visually_empty`] so whitespace
+/// blank check goes through [`crate::ui::text::is_visually_empty`] so whitespace
 /// and invisible Unicode `Cf` characters count as empty, matching the list
 /// row's own "empty username" rule.
 pub(super) fn select_copy_value(data: &crate::model::ItemData, password: bool) -> Option<String> {
@@ -117,7 +120,7 @@ pub(super) fn select_copy_value(data: &crate::model::ItemData, password: bool) -
             } else {
                 username.as_str()
             };
-            if crate::ui::app::is_visually_empty(raw)
+            if crate::ui::text::is_visually_empty(raw)
                 || (password && crate::vault_sync::is_undecryptable_password(raw))
             {
                 None
@@ -312,7 +315,7 @@ pub(super) fn offline_restore_header_label(offline: bool, reason: Option<&str>) 
     if !offline {
         return String::new();
     }
-    match reason.filter(|reason| !crate::ui::app::is_visually_empty(reason)) {
+    match reason.filter(|reason| !crate::ui::text::is_visually_empty(reason)) {
         Some(reason) => format!(" | [オフライン復元: {reason}]"),
         None => " | [オフライン復元]".to_string(),
     }
@@ -335,7 +338,7 @@ pub(super) fn clipboard_copy_status(seconds: u64, has_original: bool) -> String 
 /// minutes.
 ///
 /// The setting is stored in seconds but displayed with leftover seconds (see
-/// [`crate::ui::app::idle_lock_minutes_text`]), so the step must be added in
+/// [`crate::ui::text::idle_lock_minutes_text`]), so the step must be added in
 /// seconds: truncating to whole minutes first made 90 s ("1分30秒") jump to
 /// 120 s instead of 150 s on `i`, disagreeing with the displayed value.
 /// Out-of-range values are still clamped before the step, and the result is
@@ -755,7 +758,7 @@ mod tests {
 
         // The unsaved-settings suffix is appended after the login status and
         // must not hide the latch source.
-        let dirty = crate::ui::app::status_with_unsaved(&restored, true);
+        let dirty = crate::ui::text::status_with_unsaved(&restored, true);
         assert_eq!(offline_restore_from_login_status(&dirty), Some(true));
 
         for other in [
@@ -801,7 +804,7 @@ mod tests {
         assert_eq!(adjust_idle_lock(150, -1), 90);
         assert_eq!(adjust_idle_lock(90, 0), 90);
         assert_eq!(
-            crate::ui::app::idle_lock_minutes_text(adjust_idle_lock(90, 1)),
+            crate::ui::text::idle_lock_minutes_text(adjust_idle_lock(90, 1)),
             "2分30秒"
         );
 

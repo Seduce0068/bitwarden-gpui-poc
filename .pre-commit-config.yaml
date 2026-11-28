@@ -4,3 +4,17 @@ repos:
     hooks:
       - id: betterleaks-system
         entry: betterleaks git --pre-commit --redact --staged --verbose --config .betterleaks.toml
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --all -- --check
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: markdownlint
+        name: markdownlint
+        entry: markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
+        language: system
+        types: [markdown]
+        pass_filenames: false

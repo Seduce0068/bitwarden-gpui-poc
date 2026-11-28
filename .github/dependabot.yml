@@ -8,9 +8,19 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+  # markdownlint-cli は package.json / package-lock.json で固定する。
+  # 固定版への更新を週次で検出する（ロックファイルは別途生成・コミットする）。
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
   # 再利用ワークフローの @v1 タグ更新を検出する。
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+  # 制約: CI の extra_gates 内 `cargo install cargo-deny@0.21.0 --exact --locked`
+  # は Dependabot の追跡対象外（cargo ecosystem は Cargo.toml / lock のみを走査）。
+  # 版上げは ci.yml と README を手動で同時更新する。自動追跡の仕組みは提案のみ。

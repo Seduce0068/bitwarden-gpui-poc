@@ -16,15 +16,30 @@ use crate::vault_sync::is_undecryptable_totp;
 /// Number of header rows rendered before the first audit item.
 pub(super) const AUDIT_HEADER_ROWS: usize = 3;
 
-/// Scroll guidance for panels with no keyboard-reachable scroll handle.
+/// Scroll guidance for the one state where no keyboard scroll path exists.
 ///
-/// Only `audit_panel` receives a `ScrollHandle`, and only the vault list owns
-/// `VaultViewState::scroll_handle`. The generator and settings roots keep their
-/// offset in element state, so there is no handle for `ui::input` to scroll on
-/// Up/Down; adding one would require new state outside this module. Up/Down
-/// therefore stay `UiAction::None` in those panels, and the inline hints say
-/// so explicitly instead of implying a keyboard path exists.
+/// The generator and settings bodies now receive a `ScrollHandle` just like
+/// `audit_panel`, and `ui::keys::panel_scroll_action` maps Up/Down,
+/// PageUp/PageDown and Home/End to the shared list-movement intents while those
+/// panels are idle. While a settings field is focused, however, those keys are
+/// literal text or inert no-ops, so the only remaining scroll route is the
+/// wheel. The note is kept verbatim for that editing state (and still absent
+/// from the audit hint, which owns a handle) rather than promising a keyboard
+/// path that editing mode cannot honour.
 pub(super) const MOUSE_WHEEL_SCROLL_ONLY_HINT: &str = "スクロールはマウス／ホイールのみ";
+
+/// Keyboard scrolling keys for the generator and settings scroll bodies.
+///
+/// Their bodies call `.track_scroll(...)` on a `ScrollHandle`, so these keys
+/// reach that handle through `ui::input`'s existing `MoveSelection*` dispatcher
+/// (`ui::keys::panel_scroll_action`). The wording differs from
+/// [`LIST_PAGE_AND_EDGE_HINT`] on purpose: these panels have no selectable
+/// rows, so the keys move the viewport rather than a highlight. Up/Down move
+/// one fixed 24px row; `ui::input::PAGE_MOVE_ROWS` is 10, so PageUp/PageDown
+/// move a fixed 240px — not a viewport-sized page, which GPUI cannot report
+/// here. The wording must match that step instead of promising "1ページ".
+pub(super) const PANEL_SCROLL_KEYS_HINT: &str =
+    "↑↓: 1行ずつスクロール / PageUp/PageDown: 固定10行分（240px）ずつスクロール / Home/End: 先頭/末尾へスクロール";
 
 /// Navigation keys for the vault list and the audit rows.
 ///
@@ -164,21 +179,23 @@ pub(super) fn generator_length_labels(
     (password_label, passphrase_label)
 }
 
-/// Inline key hint for the generator panel, including its scroll limitation.
+/// Inline key hint for the generator panel, including its scroll keys.
 ///
 /// `F1` is the global focus-recovery key and belongs in every persistent hint
 /// just as it does in `settings_hint`; without it a generator user who loses
 /// focus has no on-screen way to find the way back. `c` is the direct jump to
 /// `Panel::Settings` (`ui::keys::classify_key`), matching the other panels'
-/// hints, while `n` keeps its generator-local "back to vault" meaning. Pure so
-/// the wording can be pinned by tests without rendering a GPUI window.
+/// hints, while `n` keeps its generator-local "back to vault" meaning. The
+/// panel body tracks a `ScrollHandle`, so the hint advertises
+/// [`PANEL_SCROLL_KEYS_HINT`] instead of the old wheel-only note. Pure so the
+/// wording can be pinned by tests without rendering a GPUI window.
 pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String {
     format!(
-        "p/h: 生成 / y: パスワードをコピー / Y: パスフレーズをコピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / c: 設定 / n: 一覧に戻る / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT} / {MOUSE_WHEEL_SCROLL_ONLY_HINT}"
+        "p/h: 生成 / y: パスワードをコピー / Y: パスフレーズをコピー（{clipboard_restore_seconds}秒で復元） / w: 設定を保存 / d: 破棄 / c: 設定 / n: 一覧に戻る / l: ロック / Esc: 終了 / {FOCUS_RECOVERY_HINT} / {PANEL_SCROLL_KEYS_HINT}"
     )
 }
 
-/// Inline key hint for the settings panel, including its scroll limitation.
+/// Inline key hint for the settings panel, including its scroll state.
 ///
 /// `settings_hint` already carries the settings-specific keys and avoids the
 /// status bar's "入力中:" prefix; appending the scroll note must not reintroduce
@@ -189,6 +206,9 @@ pub(super) fn generator_panel_key_hint(clipboard_restore_seconds: u64) -> String
 /// what makes the generator-panel key discoverable during editing: the jump
 /// itself cannot fire until Enter/Escape confirms the field
 /// (`ui::keys::classify_key`), so the wording says so instead of promising it.
+/// Editing is also the only state that keeps [`MOUSE_WHEEL_SCROLL_ONLY_HINT`]:
+/// scroll keys are inert as text, while the idle state advertises
+/// [`PANEL_SCROLL_KEYS_HINT`] for its tracked `ScrollHandle`.
 pub(super) fn settings_panel_key_hint(editing: bool) -> String {
     if editing {
         format!(
@@ -197,11 +217,7 @@ pub(super) fn settings_panel_key_hint(editing: bool) -> String {
             MOUSE_WHEEL_SCROLL_ONLY_HINT
         )
     } else {
-        format!(
-            "{} / {}",
-            settings_hint(editing),
-            MOUSE_WHEEL_SCROLL_ONLY_HINT
-        )
+        format!("{} / {}", settings_hint(editing), PANEL_SCROLL_KEYS_HINT)
     }
 }
 
@@ -417,8 +433,9 @@ pub(super) fn audit_summary_base(report: &Report, dirty: bool) -> String {
 /// `.overflow_y_scroll()`, so a long report scrolled [`FOCUS_RECOVERY_HINT`]
 /// off screen. It now mirrors the generator and settings panels: only the
 /// footer carries F1, exactly once, independent of the scroll offset. The
-/// scroll note is intentionally absent here because the audit panel owns a
-/// `ScrollHandle` (Up/Down and PageUp/PageDown work), unlike those panels.
+/// wheel-only and panel-scroll notes are both absent here: the audit panel
+/// keeps its own row-navigation wording because Up/Down select findings, not
+/// viewport pixels, and that behaviour must stay unchanged.
 /// Pure so the "always visible" contract can be pinned without a GPUI window.
 pub(super) fn audit_panel_key_hint(report: &Report) -> String {
     let row_keys = row_selection_keys_hint(report.items.len());
@@ -603,6 +620,7 @@ pub(super) fn generator_panel<'a>(
     settings: &'a Settings,
     state: &'a GeneratorState,
     dirty: bool,
+    scroll_handle: &'a ScrollHandle,
 ) -> impl IntoElement + 'a {
     let password = &settings.password_generator;
     let passphrase = &settings.passphrase_generator;
@@ -615,9 +633,10 @@ pub(super) fn generator_panel<'a>(
         pp_bits,
         &passphrase.separator,
     );
-    // The body scrolls, but F1 must not: a hint hidden at the bottom of the
-    // scroll is useless precisely when focus has been lost. Keep the body in
-    // its own scroll container and draw the key guidance in a fixed footer.
+    // The body scrolls through its own `ScrollHandle`, but F1 must not: a hint
+    // hidden at the bottom of the scroll is useless precisely when focus has
+    // been lost. Keep the body in its own tracked scroll container and draw the
+    // key guidance in a fixed footer.
     div()
         .flex()
         .flex_col()
@@ -633,6 +652,7 @@ pub(super) fn generator_panel<'a>(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(scroll_handle)
                 .child(
                     div()
                         .text_lg()
@@ -740,6 +760,7 @@ pub(super) fn settings_panel<'a>(
     settings: &'a Settings,
     editing: Option<SettingsField>,
     dirty: bool,
+    scroll_handle: &'a ScrollHandle,
 ) -> impl IntoElement + 'a {
     let server_url = settings.server_url.as_str();
     let email = settings.email.as_str();
@@ -747,8 +768,9 @@ pub(super) fn settings_panel<'a>(
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "(設定ディレクトリを特定できません)".to_string());
     // As in the generator panel, F1 must not be hidden at the bottom of the
-    // scrollable body. The settings rows scroll; the key guidance is a fixed
-    // footer so the recovery key is always on screen.
+    // scrollable body. The settings rows scroll through their own
+    // `ScrollHandle`; the key guidance is a fixed footer so the recovery key is
+    // always on screen.
     div()
         .flex()
         .flex_col()
@@ -764,6 +786,7 @@ pub(super) fn settings_panel<'a>(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(scroll_handle)
                 .child(div().text_lg().font_weight(FontWeight::BOLD).child("設定"))
                 .child(
                     div()
@@ -1023,26 +1046,69 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn panels_without_a_scroll_handle_advertise_mouse_wheel_only() {
+    fn scrollable_panels_advertise_the_keyboard_scroll_path() {
         let generator = generator_panel_key_hint(30);
+        assert!(generator.contains(PANEL_SCROLL_KEYS_HINT), "{generator}");
         assert!(
-            generator.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT),
-            "{generator}"
+            !generator.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT),
+            "a tracked scroll handle makes the wheel-only note false: {generator}"
         );
         assert!(generator.contains("30秒で復元"), "{generator}");
         assert!(generator.contains("p/h: 生成"), "{generator}");
 
-        for editing in [false, true] {
-            let settings = settings_panel_key_hint(editing);
+        let idle = settings_panel_key_hint(false);
+        assert!(idle.contains(PANEL_SCROLL_KEYS_HINT), "{idle}");
+        assert!(!idle.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{idle}");
+        assert!(idle.contains(settings_hint(false)), "{idle}");
+
+        // Editing is the one state where the scroll keys are text/no-ops, so
+        // the verbatim wheel-only note must stay there and nowhere else.
+        let editing = settings_panel_key_hint(true);
+        assert!(editing.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{editing}");
+        assert!(!editing.contains(PANEL_SCROLL_KEYS_HINT), "{editing}");
+        assert!(editing.contains(settings_hint(true)), "{editing}");
+        assert!(
+            !editing.starts_with("入力中:"),
+            "the inline hint must not repeat the status-bar prefix: {editing}"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_scroll_hint_names_every_key_bound_by_the_classifier() {
+        for token in ["↑↓", "PageUp/PageDown", "Home/End"] {
             assert!(
-                settings.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT),
-                "{settings}"
+                PANEL_SCROLL_KEYS_HINT.contains(token),
+                "missing {token} in {PANEL_SCROLL_KEYS_HINT}"
             );
-            assert!(settings.contains(settings_hint(editing)), "{settings}");
+        }
+        for hint in [generator_panel_key_hint(30), settings_panel_key_hint(false)] {
+            for token in ["↑↓", "PageUp/PageDown", "Home/End"] {
+                assert!(hint.contains(token), "{hint}");
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn panel_scroll_hint_describes_the_fixed_ten_row_page_step() {
+        // `ui::input::PAGE_MOVE_ROWS` is 10 and one row is 24px, so the hint
+        // must promise a fixed 240px move rather than a viewport-sized page.
+        for token in [
+            "↑↓: 1行ずつスクロール",
+            "固定10行分（240px）ずつスクロール",
+            "Home/End: 先頭/末尾へスクロール",
+        ] {
             assert!(
-                !settings.starts_with("入力中:"),
-                "the inline hint must not repeat the status-bar prefix: {settings}"
+                PANEL_SCROLL_KEYS_HINT.contains(token),
+                "missing {token} in {PANEL_SCROLL_KEYS_HINT}"
             );
+        }
+        assert!(
+            !PANEL_SCROLL_KEYS_HINT.contains("1ページずつ"),
+            "a page-sized move is not available here: {PANEL_SCROLL_KEYS_HINT}"
+        );
+        for hint in [generator_panel_key_hint(30), settings_panel_key_hint(false)] {
+            assert!(hint.contains("固定10行分（240px）ずつスクロール"), "{hint}");
+            assert!(!hint.contains("1ページずつ"), "{hint}");
         }
     }
 
@@ -1079,7 +1145,7 @@ mod tests {
             1,
             "the hint must not repeat the recovery key: {hint}"
         );
-        assert!(hint.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{hint}");
+        assert!(hint.contains(PANEL_SCROLL_KEYS_HINT), "{hint}");
         assert!(hint.contains("30秒で復元"), "{hint}");
     }
 
@@ -1089,10 +1155,10 @@ mod tests {
         // in a fixed footer outside `.overflow_y_scroll()`. The footer must
         // carry F1 exactly once for every hint variant, otherwise a lost focus
         // would again be discoverable only at the end of the scroll.
-        for hint in [
-            generator_panel_key_hint(30),
-            settings_panel_key_hint(false),
-            settings_panel_key_hint(true),
+        for (hint, scroll_note) in [
+            (generator_panel_key_hint(30), PANEL_SCROLL_KEYS_HINT),
+            (settings_panel_key_hint(false), PANEL_SCROLL_KEYS_HINT),
+            (settings_panel_key_hint(true), MOUSE_WHEEL_SCROLL_ONLY_HINT),
         ] {
             let footer = panel_key_hint_footer(&hint);
             assert!(footer.starts_with("操作: "), "{footer}");
@@ -1105,9 +1171,9 @@ mod tests {
                 1,
                 "F1 must appear once in the fixed footer: {footer}"
             );
-            // The scroll note still belongs to the body; the footer only
-            // promises that the keys themselves are always reachable.
-            assert!(footer.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{footer}");
+            // The scroll guidance is part of the always-visible footer, and it
+            // matches the panel's actual handle/editing state.
+            assert!(footer.contains(scroll_note), "{footer}");
             assert!(!footer.contains("入力中:"), "{footer}");
         }
     }
@@ -1477,10 +1543,15 @@ mod tests {
                     "key guidance must stay in the footer, not the scroll body ({label}): {body}"
                 );
             }
-            // The audit panel owns a ScrollHandle, so it must not promise the
-            // mouse-only scrolling note used by the generator/settings panels.
+            // The audit panel keeps its row-navigation wording: neither the
+            // editing-only wheel note nor the settings/generator viewport hint
+            // may leak into it. Up/Down still select findings there.
             assert!(
                 !footer.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT),
+                "{label}: {footer}"
+            );
+            assert!(
+                !footer.contains(PANEL_SCROLL_KEYS_HINT),
                 "{label}: {footer}"
             );
             // The pure detail line keeps its prior wording for status/tests.
@@ -1870,22 +1941,20 @@ mod tests {
         ] {
             assert!(editing.contains(token), "missing {token} in {editing}");
         }
-        // The original hint and the scroll note must survive the addition.
+        // The original hint and the editing-state scroll note must survive
+        // the addition; the keyboard-scroll note belongs to the idle state.
         assert!(editing.contains(settings_hint(true)), "{editing}");
         assert!(editing.contains(MOUSE_WHEEL_SCROLL_ONLY_HINT), "{editing}");
+        assert!(!editing.contains(PANEL_SCROLL_KEYS_HINT), "{editing}");
         assert!(!editing.starts_with("入力中:"), "{editing}");
 
-        // Outside editing those keys really are commands, so the extra note
-        // belongs only to the editing variant.
+        // Outside editing those keys scroll the tracked body instead of being
+        // literal text, so the extra note belongs only to the editing variant.
         let idle = settings_panel_key_hint(false);
         assert!(!idle.contains("設定値は変更しません"), "{idle}");
         assert_eq!(
             idle,
-            format!(
-                "{} / {}",
-                settings_hint(false),
-                MOUSE_WHEEL_SCROLL_ONLY_HINT
-            )
+            format!("{} / {}", settings_hint(false), PANEL_SCROLL_KEYS_HINT)
         );
     }
 

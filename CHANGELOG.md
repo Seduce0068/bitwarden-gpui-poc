@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第157弾 / 2026-11-28）
+
+- 生成／設定パネルのキーボードスクロールと ui::text リーフ化
+- server_url 正規化を authority のみに限定
+- 権限ステータスの同期見出しとキャッシュ復元の unblock 化
+- AuthError の family／完全テキスト分離と fail-closed の修正
+- markdownlint-cli を package.json／Dependabot 管理へ移行
+- Betterleaks 除外フィルタのアンカー化と README／ADR の整合
+
 ### 全体改善（第156弾 / 2026-11-28）
 
 - オフライン復元の表示を一覧ヘッダへ永続化

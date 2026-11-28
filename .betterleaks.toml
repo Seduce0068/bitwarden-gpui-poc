@@ -2,18 +2,21 @@ title = "betterleaks config for bitwarden-gpui-poc"
 
 # Generated build output is skipped before regex matching.
 prefilter = '''
-filter.matchesAny(attributes["path"], [`(^|/)target/`])
+filter.matchesAny(attributes["path"], [`(^|/)target/`, `(^|/)node_modules/`])
 '''
 
 # Known synthetic fixtures used only in tests and documentation.
-# Scoped to these literals so real secrets in the same commits are still detected.
+# Every secret literal is anchored (^...$) so a real secret that merely contains
+# a fixture substring is still detected. Keep all known canaries listed here.
+# The vault_sync_tests.rs line exception is additionally gated on anchored
+# fixture secret literals; a line pattern alone would suppress unknown secrets.
 filter = '''
 filter.matchesAny(finding["secret"], [
-  `2\.aWxvdGhlcg==`,
-  `テストアカウントのマスターパスワード`,
-  `!password123`, `password123!`, `1!password`, `12345678!`,
-  `r2-core-151-device`, `r2-core-152-prelogin`, `r2-core-152-token`,
-  `r2-core-153-parse`, `r2-core-153-live`,
+  `^2\.aWxvdGhlcg==$`,
+  `^テストアカウントのマスターパスワード$`,
+  `^!password123$`, `^password123!$`, `^1!password$`, `^12345678!$`,
+  `^r2-core-151-device$`, `^r2-core-152-prelogin$`, `^r2-core-152-token$`,
+  `^r2-core-153-parse$`, `^r2-core-153-live$`,
 ])
 || filter.containsAny(finding["match"], [`2001:db8::1`, `https://user:pass@host`,  `https://u:p@host:8443`, `passwordあいうえお`,
   `secret=GEZDGNBVGY3TQOJQ`,
@@ -37,7 +40,14 @@ filter.matchesAny(finding["secret"], [
   `authenticate(&invalid, "device")`])
 || (
   filter.matchesAny(attributes["path"], [`vault_sync_tests\.rs`]) &&
-  filter.matchesAny(finding["line"], [`"Password"\s*:`])
+  filter.matchesAny(finding["line"], [`"Password"\s*:`]) &&
+  filter.matchesAny(finding["secret"], [
+    `^"?vT7#kQm2!zR9wP4\$xL8@"?$`,
+    `^REAL_PASSWORD$`, `^UNDECRYPTABLE_PASSWORD$`, `^2\.pass$`, `^2\.user$`,
+    `^NEW_PASSWORD_VALUE$`, `^NEW_UPDATED_PASSWORD$`,
+    `^KEPT_PASSWORD_VALUE$`, `^FIRST_PASSWORD_VALUE$`,
+    `^SECOND_PASSWORD_VALUE$`, `^NEVER_IN_THE_MODEL$`,
+  ])
 )
 '''
 
