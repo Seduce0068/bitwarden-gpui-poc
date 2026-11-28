@@ -3643,19 +3643,16 @@ fn custom_weak_bits_changes_the_audit_not_the_generated_strength() {
 #[test]
 fn finding_message_renders_weak_bits_and_stale_days_numbers() {
     // `Finding::message` interpolates its payload fields verbatim
-    // (health.rs:88-92). Pin the exact text plus the digits so a regression to
-    // a fixed placeholder (or to a unit-less rendering) is caught.
+    // (health.rs:88-92). Pin the exact text: the full-string comparison already
+    // proves the digits and the unit suffix are present, so separate
+    // `contains` checks would be implied by (and weaker than) this assertion.
     for bits in [0u32, 1, 13, 40, 41, 999, u32::MAX] {
         let message = Finding::WeakPassword { bits }.message();
         assert_eq!(message, format!("弱いパスワード（推定 {bits} bit）"));
-        assert!(message.contains(&bits.to_string()), "{message}");
-        assert!(message.contains(" bit"), "{message}");
     }
     for days in [0i64, 1, 7, 365, 400, 10_000, i64::MIN, i64::MAX] {
         let message = Finding::Stale { days }.message();
         assert_eq!(message, format!("{days} 日以上更新されていない"));
-        assert!(message.contains(&days.to_string()), "{message}");
-        assert!(message.contains("日以上"), "{message}");
     }
     // Distinct payloads must render distinctly: no shared placeholder.
     assert_ne!(

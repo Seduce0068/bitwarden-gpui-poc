@@ -194,6 +194,36 @@ fn loopback_login_server(
 }
 
 #[test]
+fn from_credentials_wraps_both_secrets_like_the_struct_literal() {
+    // `ui::login_flow` builds its config through this constructor so it never
+    // names `openwarden::SecretString` (ADR 2026-11-16). Pin that the wrapper
+    // keeps every field and the redacted Debug rendering of the literal form.
+    let built = AuthConfig::from_credentials(
+        "https://vault.example.com",
+        "user.1234",
+        CLIENT_SECRET_CANARY,
+        "alice@example.com",
+        MASTER_PASSWORD_CANARY,
+    );
+    let literal = config();
+    assert_eq!(built.server_url, literal.server_url);
+    assert_eq!(built.client_id, literal.client_id);
+    assert_eq!(built.email, literal.email);
+    assert_eq!(
+        built.client_secret.expose_secret(),
+        literal.client_secret.expose_secret()
+    );
+    assert_eq!(
+        built.master_password.expose_secret(),
+        literal.master_password.expose_secret()
+    );
+
+    let rendered = format!("{built:?}");
+    assert!(!rendered.contains(CLIENT_SECRET_CANARY), "{rendered}");
+    assert!(!rendered.contains(MASTER_PASSWORD_CANARY), "{rendered}");
+}
+
+#[test]
 fn valid_config_passes_validation() {
     assert_eq!(validate_config(&config()), Ok(()));
 }
@@ -3334,6 +3364,31 @@ fn sync_fallback_strips_the_sync_prefix_from_a_generic_cache_other() {
         bare.status_message(),
         "同期に失敗しました（未分類の失敗（no-source reason））"
     );
+}
+
+#[test]
+fn sync_fallback_keeps_the_insecure_permission_mode_in_the_status() {
+    use crate::error::{AppError, BoxedCause};
+
+    // The only runtime-detail variant (`OtherDetail`) carries the observed
+    // mode. R4 found that composing the fallback from `message()` dropped it
+    // because that accessor must return a generic `&'static str`; the status
+    // must be built from `status_message()` instead.
+    let cause =
+        BoxedCause::text("キャッシュファイルの権限が安全ではありません（mode 0644、期待 0600）");
+    let fallback = super::cache_restore_failure(AppError::ReadFailedCause(cause));
+    assert!(matches!(&fallback, AuthError::OtherDetail(text)
+        if text.contains("mode 0644") && text.contains("期待 0600")));
+
+    let combined = super::sync_fallback_failure(
+        fallback,
+        Some(AppError::SyncCause(BoxedCause::text("HTTP 503"))),
+    );
+    let status = combined.status_message();
+    assert!(status.contains("mode 0644"), "{status}");
+    assert!(status.contains("期待 0600"), "{status}");
+    assert!(status.contains("HTTP 503"), "{status}");
+    assert!(!status.contains("TOP_SECRET"), "{status}");
 }
 
 #[test]

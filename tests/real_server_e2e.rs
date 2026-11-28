@@ -35,7 +35,6 @@
 use bitwarden_gpui_poc::auth::{authenticate_with_timeout, unlock_and_import, AuthConfig};
 use bitwarden_gpui_poc::totp::{code_at, now_unix};
 use bitwarden_gpui_poc::vault_sync::{is_undecryptable_totp, UNDECRYPTABLE_PASSWORD};
-use openwarden::SecretString;
 use std::time::Duration;
 
 /// Returns the value, or the reason it cannot be used (`missing` / `empty`).
@@ -45,6 +44,49 @@ fn env_state(name: &str) -> Result<String, &'static str> {
         Ok(_) => Err("empty"),
         Err(_) => Err("missing"),
     }
+}
+
+/// Restores one environment variable exactly as it was on every exit path,
+/// including a panicking assertion. This is deliberately separate from
+/// `IsolatedXdgDirs` below, which only exists for the live-server cache paths:
+/// the branch test must not leak its fixture value into any other test.
+struct RestoreEnvVar {
+    name: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl RestoreEnvVar {
+    fn new(name: &'static str) -> Self {
+        let previous = std::env::var_os(name);
+        std::env::remove_var(name);
+        Self { name, previous }
+    }
+}
+
+impl Drop for RestoreEnvVar {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
+        }
+    }
+}
+
+/// CI runs non-ignored tests only, so `env_state`'s three branches must be
+/// covered here rather than in the opt-in live-server test. A dedicated name
+/// keeps this test away from the `E2E_*` and `XDG_*` variables used elsewhere.
+#[test]
+fn env_state_reports_missing_empty_and_present() {
+    const NAME: &str = "BITWARDEN_GPUI_POC_ENV_STATE_TEST";
+    let _restore = RestoreEnvVar::new(NAME);
+
+    assert_eq!(env_state(NAME), Err("missing"));
+
+    std::env::set_var(NAME, "");
+    assert_eq!(env_state(NAME), Err("empty"));
+
+    std::env::set_var(NAME, "present");
+    assert_eq!(env_state(NAME), Ok(String::from("present")));
 }
 
 /// Redirect the process-wide XDG cache and config roots to a throwaway
@@ -124,13 +166,15 @@ async fn real_server_login_sync_and_unlock() {
     let email = values[3].clone();
     let master_password = values[4].clone();
 
-    let config = AuthConfig {
-        server_url,
-        client_id,
-        client_secret: SecretString::from(client_secret),
-        email,
-        master_password: SecretString::from(master_password),
-    };
+    // Build through the lib-side constructor so this test also honours the
+    // ADR boundary: no direct `openwarden` type appears in the test crate.
+    let config = AuthConfig::from_credentials(
+        &server_url,
+        &client_id,
+        &client_secret,
+        &email,
+        &master_password,
+    );
 
     let authenticated =
         authenticate_with_timeout(&config, "e2e-device-000000000001", Duration::from_secs(60))

@@ -40,6 +40,34 @@ pub struct AuthConfig {
     pub master_password: SecretString,
 }
 
+impl AuthConfig {
+    /// Build a config from plain-text inputs, wrapping the two secrets here in
+    /// the lib layer.
+    ///
+    /// ADR `docs/adr/adr-20261116-openwarden-integration.md` requires the UI to
+    /// avoid touching `openwarden` directly. This constructor is the single
+    /// place where user-supplied credentials become `SecretString` values, so
+    /// `ui::login_flow` can build an [`AuthConfig`] without importing that
+    /// crate. The wrapping is identical to the previous UI-side expression
+    /// (`SecretString::from(text.to_string())`), so clamping, validation,
+    /// zeroization and the redacted `Debug` rendering are unchanged.
+    pub fn from_credentials(
+        server_url: &str,
+        client_id: &str,
+        client_secret: &str,
+        email: &str,
+        master_password: &str,
+    ) -> Self {
+        Self {
+            server_url: server_url.to_string(),
+            client_id: client_id.to_string(),
+            client_secret: SecretString::from(client_secret.to_string()),
+            email: email.to_string(),
+            master_password: SecretString::from(master_password.to_string()),
+        }
+    }
+}
+
 impl core::fmt::Debug for AuthConfig {
     /// Keep every field name in the rendering but never print credential text.
     ///
@@ -73,13 +101,13 @@ impl core::fmt::Debug for AuthConfig {
 /// Errors the authentication layer can report.
 ///
 /// Most variants stay cheap to copy so the UI can match and format them
-/// directly. Six variants (the `Detail` ones) own a `String`: a cause-carrying
-/// `AppError` cannot stay `Copy` while its rendered detail is surfaced in the
-/// status bar, so those variants retain the text that would otherwise be
-/// dropped by [`From<AppError> for AuthError`]. The typed cause itself stays in
-/// [`AppError`] and is reachable through `Error::source()` for callers that
-/// convert before the UI boundary; after conversion only the rendered detail
-/// survives in the small enum.
+/// directly. Six variants (the `Detail` ones) plus [`Self::OtherDetail`] own a
+/// `String`: a cause-carrying `AppError` cannot stay `Copy` while its rendered
+/// detail is surfaced in the status bar, so those variants retain the text
+/// that would otherwise be dropped by [`From<AppError> for AuthError`]. The
+/// typed cause itself stays in [`AppError`] and is reachable through
+/// `Error::source()` for callers that convert before the UI boundary; after
+/// conversion only the rendered detail survives in the small enum.
 #[derive(Clone, Debug)]
 pub enum AuthError {
     /// A required field was empty.
@@ -120,6 +148,12 @@ pub enum AuthError {
     Timeout,
     /// A failure from another layer that this small enum cannot describe.
     Other(&'static str),
+    /// A cache restore refused solely because the file's Unix mode was too
+    /// wide. Keeps the composed status (`mode 0644、期待 0600`) in an owned
+    /// `String`, since [`Self::Other`] can only hold a `&'static str` and would
+    /// drop the observed mode. The text is produced by the cache layer and
+    /// contains no path, URL or secret.
+    OtherDetail(String),
 }
 
 /// Family message for a rejected server URL, including its hint.
@@ -174,6 +208,10 @@ impl PartialEq for AuthError {
             | (KdfRejected | KdfRejectedDetail(_), KdfRejected | KdfRejectedDetail(_)) => true,
             (MissingField(left), MissingField(right)) => left == right,
             (Other(left), Other(right)) => left == right,
+            // The owned status is the identity of a permission-detail failure:
+            // a different observed mode is a different failure. It is not the
+            // same as a generic `Other`, whose text has no runtime detail.
+            (OtherDetail(left), OtherDetail(right)) => left == right,
             (BlockedServerUrl, BlockedServerUrl)
             | (InvalidEmail, InvalidEmail)
             | (Timeout, Timeout) => true,
@@ -201,6 +239,10 @@ impl AuthError {
             Self::KdfRejected | Self::KdfRejectedDetail(_) => "KDF 設定がポリシーで拒否されました",
             Self::Timeout => "ログインがタイムアウトしました",
             Self::Other(text) => text,
+            // The permission detail is runtime text and cannot satisfy this
+            // `&'static str` contract. Keep the sync family headline here;
+            // `status_message()` is the accessor that carries the mode.
+            Self::OtherDetail(_) => Self::Sync.message(),
         }
     }
 
@@ -237,6 +279,9 @@ impl AuthError {
             // and known metadata hosts, so the status bar says so even though
             // the shared family message keeps its older, narrower wording.
             Self::BlockedServerUrl => BLOCKED_SERVER_URL_STATUS.to_string(),
+            // This is the only accessor that can carry the observed mode: the
+            // owned text comes verbatim from `cache_error_status_with_detail`.
+            Self::OtherDetail(detail) if !detail.is_empty() => detail.clone(),
             _ => self.message().to_string(),
         }
     }
@@ -278,6 +323,7 @@ impl From<AuthError> for AppError {
             }
             AuthError::Timeout => Self::Timeout,
             AuthError::Other(text) => Self::Other(text.to_string()),
+            AuthError::OtherDetail(detail) => Self::Other(detail.clone()),
         }
     }
 }
@@ -1088,6 +1134,16 @@ pub(crate) fn cache_restore_failure(error: AppError) -> AuthError {
     if matches!(error, AppError::NotFound) {
         return AuthError::Sync;
     }
+    // Only a Unix permission violation has runtime text worth showing: the
+    // observed mode and the expected 0600. An owned variant is required because
+    // `AuthError::Other` can only hold a `&'static str`. Every other cause keeps
+    // its existing `Other(status)` / `Sync` wording unchanged.
+    if matches!(
+        crate::cache::CacheReadFailureKind::classify(&error),
+        crate::cache::CacheReadFailureKind::InsecurePermissions { .. }
+    ) {
+        return AuthError::OtherDetail(crate::cache::cache_error_status_with_detail(&error));
+    }
     // The classification itself lives in the cache layer; this function only
     // wraps the reason in a status message so the two cannot drift apart.
     match crate::cache::cache_restore_status(error) {
@@ -1149,10 +1205,14 @@ fn sync_fallback_failure(fallback: AuthError, cause: Option<AppError>) -> AuthEr
     // composed detail must not repeat it. The cache fallback may itself be an
     // `Other` whose message already starts with that prefix and a parenthesized
     // reason; strip both before composing the final detail.
-    let fallback_text = fallback.message();
+    // `status_message()` (not `message()`) is required here: the runtime
+    // permission detail lives only in `OtherDetail`'s owned text, while its
+    // cheap `message()` returns the generic sync family for the `&'static str`
+    // contract. Other variants render identically through either accessor.
+    let fallback_text = fallback.status_message();
     let mut reason = fallback_text
         .strip_prefix(AuthError::Sync.message())
-        .unwrap_or(fallback_text);
+        .unwrap_or(fallback_text.as_str());
     reason = reason
         .strip_prefix('（')
         .and_then(|text| text.strip_suffix('）'))

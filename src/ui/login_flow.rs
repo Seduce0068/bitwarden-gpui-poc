@@ -5,7 +5,6 @@ use crate::ui::app::BitwardenApp;
 use crate::ui::mock::mock_vault;
 use crate::ui::state::{AuthField, Panel, Screen};
 use gpui_kit::*;
-use openwarden::SecretString;
 
 /// Outcome of the whole login pipeline, ready to apply on the UI thread.
 pub(super) enum LoginResult {
@@ -56,13 +55,17 @@ impl LoginFailure {
 
 impl BitwardenApp {
     pub(super) fn auth_config(&self) -> AuthConfig {
-        let mut config = AuthConfig {
-            server_url: self.settings.server_url.clone(),
-            client_id: self.auth.client_id().to_string(),
-            client_secret: SecretString::from(self.auth.client_secret().to_string()),
-            email: self.settings.email.clone(),
-            master_password: SecretString::from(self.auth.master_password().to_string()),
-        };
+        // `AuthConfig::from_credentials` wraps the two secrets in the lib
+        // layer, so this module never needs to name `openwarden`'s
+        // `SecretString` (see ADR 2026-11-16). The remaining clamp call keeps
+        // the previous input-normalization behaviour verbatim.
+        let mut config = AuthConfig::from_credentials(
+            &self.settings.server_url,
+            self.auth.client_id(),
+            self.auth.client_secret(),
+            &self.settings.email,
+            self.auth.master_password(),
+        );
         // Clamp before validating. `authenticate_with_timeout` clamps its own
         // private copy as a backstop, but callers must not see a length-only
         // validation failure for a value that would immediately be clamped

@@ -148,6 +148,19 @@ fn vault_list_header_text(
     )
 }
 
+/// Vault header with the persistent offline-restore marker appended.
+///
+/// The temporary login warning is replaced by the next key action, so the
+/// restored-data notice belongs in a persistent element. This thin wrapper
+/// keeps the established `vault_list_header_text` wording and its drawing
+/// tests untouched while the app-level flag drives the extra label.
+fn vault_list_header_with_offline(base: String, offline: bool, reason: Option<&str>) -> String {
+    format!(
+        "{base}{}",
+        crate::ui::logic::offline_restore_header_label(offline, reason)
+    )
+}
+
 /// Name drawn in a vault list row.
 ///
 /// The raw `item.name` used to leave a blank column for empty or invisible-only
@@ -397,13 +410,17 @@ impl BitwardenApp {
                     .border_color(rgb(0x313244))
                     .text_sm()
                     .text_color(rgb(0xa6adc8))
-                    .child(vault_list_header_text(
-                        count,
-                        self.view.vault.len(),
-                        &filter_label,
-                        self.view.sort.label(),
-                        &self.view.query,
-                        self.view.searching,
+                    .child(vault_list_header_with_offline(
+                        vault_list_header_text(
+                            count,
+                            self.view.vault.len(),
+                            &filter_label,
+                            self.view.sort.label(),
+                            &self.view.query,
+                            self.view.searching,
+                        ),
+                        self.offline_restore,
+                        self.offline_restore_reason.as_deref(),
                     )),
             )
             .child(if count == 0 {
@@ -437,6 +454,12 @@ impl BitwardenApp {
 
 impl Render for BitwardenApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // `login_flow.rs` owns `AuthenticatedVault::from_cache` and is outside
+        // this task's write scope, so the post-login status is the only
+        // in-scope carrier. Latch it before any panel draws; lock/unlock clear
+        // the flag through `reset_input_state`, and a fresh-sync login clears
+        // it here.
+        self.sync_offline_restore_from_status();
         // One normalized panel value for the header tabs, the key context and
         // the body, so a stale Audit request cannot disagree with the drawing.
         let panel = crate::ui::logic::effective_panel(self.panel, self.view.audit_report.is_some());
@@ -645,6 +668,34 @@ mod tests {
         assert_eq!(
             status_bar_text(&with_hint, Screen::Unlocked, Panel::Audit),
             "監査行 1/2: example"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn vault_header_keeps_the_offline_restore_marker_after_status_changes() {
+        let base = vault_list_header_text(3, 7, "すべて", "名前 ↑", "", false);
+        assert_eq!(
+            vault_list_header_with_offline(base.clone(), false, None),
+            base
+        );
+        // An optional reason is not available yet (auth.rs drops sync_cause).
+        assert_eq!(
+            vault_list_header_with_offline(base.clone(), false, Some("同期失敗")),
+            base
+        );
+
+        let offline = vault_list_header_with_offline(base.clone(), true, None);
+        assert!(offline.starts_with(&base), "{offline}");
+        assert!(offline.ends_with(" | [オフライン復元]"), "{offline}");
+        // Established header wording and key hints survive unchanged.
+        assert!(offline.contains("Vault: 3 / 7 件"), "{offline}");
+        assert!(offline.contains("↑↓: 行を選択"), "{offline}");
+        assert!(offline.contains("Esc: 終了"), "{offline}");
+
+        let with_reason = vault_list_header_with_offline(base, true, Some("同期に失敗"));
+        assert!(
+            with_reason.contains("[オフライン復元: 同期に失敗]"),
+            "{with_reason}"
         );
     }
 

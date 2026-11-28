@@ -96,6 +96,18 @@ pub const MAX_CACHE_BODY_BYTES: usize = crate::limits::MAX_SYNC_BODY_BYTES;
 /// `save_at_max_body_size_documents_the_pretty_expansion_limit` pins it.
 pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Mode a cache file must have: owner read/write only, matching
+/// [`crate::private_file::write_private`]. Reported in the detail text when a
+/// wider mode is refused, so the user sees both values without any path or
+/// secret being copied into the message.
+const EXPECTED_CACHE_MODE: u32 = 0o600;
+
+/// Stable prefix of the cause text emitted by [`load_detailed`] for a Unix
+/// permission violation. The producer and [`CacheReadFailureKind::classify`]
+/// share this constant so the classification cannot drift from the text.
+/// Only octal mode digits follow it, never a path or a URL.
+const INSECURE_MODE_CAUSE_PREFIX: &str = "キャッシュファイルの権限が安全ではありません";
+
 /// A cached sync response, still encrypted.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncCache {
@@ -1238,9 +1250,13 @@ pub fn load_detailed(path: impl AsRef<std::path::Path>) -> Result<SyncCache, Cac
         use std::os::unix::fs::PermissionsExt;
         let mode = metadata.permissions().mode();
         if mode & 0o066 != 0 {
+            // `PermissionsExt::mode()` includes the file-type bits (0o100000
+            // for a regular file). Report only the permission bits so both the
+            // status text and the classifier see the familiar `0644` form.
+            let permission_bits = mode & 0o7777;
             return Err(CacheLoadError::ReadFailedCause(
                 crate::error::BoxedCause::text(format!(
-                    "キャッシュファイルの権限が安全ではありません（mode {mode:04o}）"
+                    "{INSECURE_MODE_CAUSE_PREFIX}（mode {permission_bits:04o}、期待 {EXPECTED_CACHE_MODE:04o}）"
                 )),
             ));
         }
@@ -1512,6 +1528,80 @@ pub fn cache_error_message(error: SyncCacheError) -> &'static str {
         SyncCacheError::Other(_) => crate::error::OTHER_ERROR_MESSAGE,
         // A future variant must never be reported as proven corruption.
         _ => crate::error::OTHER_ERROR_MESSAGE,
+    }
+}
+
+/// Refined classification of a cache read failure.
+///
+/// `AppError` has no permission-specific variant and adding one would require
+/// editing `src/error.rs`, which is outside this module. The classification is
+/// derived from the cause retained by [`crate::error::AppError::ReadFailedCause`], so it
+/// also works after `AppError::clone()` flattens a boxed cause into text. Only
+/// octal mode digits are inspected: no path, URL or secret is carried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheReadFailureKind {
+    /// Group/other permission bits were set on the cache file.
+    InsecurePermissions { actual_mode: u32 },
+    /// Any other failure, including a plain I/O error.
+    Other,
+}
+
+impl CacheReadFailureKind {
+    /// Classify a cache error from the cause retained by `ReadFailedCause`.
+    ///
+    /// Only the text this module emits for a Unix permission violation matches;
+    /// an unrelated I/O cause stays [`Self::Other`] instead of being guessed at.
+    pub fn classify(error: &SyncCacheError) -> Self {
+        let SyncCacheError::ReadFailedCause(cause) = error else {
+            return Self::Other;
+        };
+        let text = cause.as_error().to_string();
+        let Some(remainder) = text.strip_prefix(INSECURE_MODE_CAUSE_PREFIX) else {
+            return Self::Other;
+        };
+        let Some(octal) = remainder
+            .strip_prefix("（mode ")
+            .and_then(|tail| tail.split_once('、'))
+            .map(|(digits, _)| digits)
+        else {
+            return Self::Other;
+        };
+        match u32::from_str_radix(octal, 8) {
+            // Older cause text may include the file-type bits; keep only the
+            // permission bits so `0644` and `100644` classify identically.
+            Ok(actual_mode) => Self::InsecurePermissions {
+                actual_mode: actual_mode & 0o7777,
+            },
+            Err(_) => Self::Other,
+        }
+    }
+
+    /// Detail fragment for the status line, without the fixed status text.
+    ///
+    /// Contains only the observed and expected octal modes, so it is safe to
+    /// show in the UI and to log: no local path or credential is included.
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::InsecurePermissions { actual_mode } => Some(format!(
+                "mode {actual_mode:04o}、期待 {EXPECTED_CACHE_MODE:04o}"
+            )),
+            Self::Other => None,
+        }
+    }
+}
+
+/// Fixed [`cache_error_message`] text with the permission detail attached.
+///
+/// The static-text API stays unchanged for callers that can only show a
+/// `&'static str`. Callers able to carry an owned `String` should use this
+/// function: a permission violation then renders
+/// `キャッシュを読み込めません（mode 0644、期待 0600）` instead of hiding the
+/// observed mode behind the generic "unreadable" wording.
+pub fn cache_error_status_with_detail(error: &SyncCacheError) -> String {
+    let status = cache_error_message(error.clone());
+    match CacheReadFailureKind::classify(error).detail() {
+        Some(detail) => format!("{status}（{detail}）"),
+        None => status.to_owned(),
     }
 }
 

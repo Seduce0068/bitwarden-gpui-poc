@@ -35,6 +35,19 @@ pub struct BitwardenApp {
     pub(super) editing: Option<SettingsField>,
     pub(super) auth: crate::ui::auth_state::AuthState,
     pub(super) login_generation: crate::ui::login_generation::LoginGeneration,
+    /// Whether the unlocked vault was restored from the encrypted offline cache.
+    ///
+    /// `login_flow.rs` (outside this task's write scope) is the only place that
+    /// sees `AuthenticatedVault::from_cache`; this flag is latched from the
+    /// post-login status in `sync_offline_restore_from_status` and cleared by
+    /// `reset_input_state` on lock / unlock.
+    pub(super) offline_restore: bool,
+    /// Failed live-sync cause, when one is available.
+    ///
+    /// Always `None` today: `auth.rs` drops `sync_cause` on a successful cache
+    /// restore. Kept so an auth-side change can fill it without touching the
+    /// renderer.
+    pub(super) offline_restore_reason: Option<String>,
     pub(super) clipboard: crate::ui::clipboard::ClipboardState,
     pub(super) last_activity: std::time::Instant,
     pub focus_handle: FocusHandle,
@@ -236,6 +249,25 @@ pub(super) fn unsaved_status_suffix(dirty: bool) -> &'static str {
 /// Compose a status message with the persistent unsaved marker.
 pub(super) fn status_with_unsaved(base: &str, dirty: bool) -> String {
     format!("{base}{}", unsaved_status_suffix(dirty))
+}
+
+/// Pure transition for the persistent offline-restore latch.
+///
+/// Only a login completion status changes the flag: a cache restore turns it
+/// on, a fresh-sync login turns it off (and drops any diagnostic reason). All
+/// other statuses — including failed logins — leave the restored-data notice
+/// in place, because the unlocked vault is still the cached one. Kept pure so
+/// the contract can be tested without a GPUI window.
+fn next_offline_restore(
+    offline: bool,
+    reason: Option<String>,
+    status: &str,
+) -> (bool, Option<String>) {
+    match crate::ui::logic::offline_restore_from_login_status(status) {
+        Some(true) => (true, reason),
+        Some(false) => (false, None),
+        None => (offline, reason),
+    }
 }
 
 /// Whether `value` carries no visible content or identity.
@@ -938,6 +970,8 @@ impl BitwardenApp {
             editing: None,
             auth: crate::ui::auth_state::AuthState::new(),
             login_generation: crate::ui::login_generation::LoginGeneration::default(),
+            offline_restore: false,
+            offline_restore_reason: None,
             clipboard: crate::ui::clipboard::ClipboardState::new(),
             last_activity: std::time::Instant::now(),
             focus_handle: cx.focus_handle(),
@@ -1072,6 +1106,21 @@ impl BitwardenApp {
         .detach();
     }
 
+    /// Latch the persistent offline-restore state from the login status.
+    ///
+    /// Called once per render: `finish_login` writes the temporary warning
+    /// through `login_success_status`, and a later key action may replace that
+    /// status while the vault is still the restored one. Lock/unlock clearing
+    /// lives in `reset_input_state`; only a fresh-sync login status clears it
+    /// here (see [`next_offline_restore`]).
+    pub(super) fn sync_offline_restore_from_status(&mut self) {
+        let offline = self.offline_restore;
+        let reason = self.offline_restore_reason.take();
+        let (offline, reason) = next_offline_restore(offline, reason, &self.status);
+        self.offline_restore = offline;
+        self.offline_restore_reason = reason;
+    }
+
     /// Apply the input-mode reset shared by all lock/unlock transitions.
     ///
     /// Also stamps `last_activity`; the caller keeps ownership of the vault,
@@ -1091,6 +1140,11 @@ impl BitwardenApp {
         // Replacing the handle (instead of only zeroing its offset) also drops
         // any queued `scroll_to_item` target before the next audit render.
         reset_audit_scroll(&mut self.audit_scroll_handle, &mut self.audit_row_selection);
+        // The offline-restore notice belongs to the vault being left: lock and
+        // every new unlock start without it. A cache-restore login re-latches
+        // it from the status on the next render; a real sync stays cleared.
+        self.offline_restore = false;
+        self.offline_restore_reason = None;
     }
 
     /// Lock the vault: discard the data and clear every transient input mode.
@@ -1475,6 +1529,10 @@ impl BitwardenApp {
         // index can stay the same while a different finding occupies it. A
         // threshold change from a settings panel keeps its own status even
         // though the report (and its row selection) is refreshed here.
+        // `enter_unlocked` assigns the post-login status after this call, so
+        // an empty report here is always overwritten. The persistent
+        // offline-restore latch is re-derived from that status during render;
+        // do not gate this on the status text (R4 found that guard unreachable).
         if let Some(status) = audit_refresh_status_for_panel(
             self.view.audit_report.as_ref(),
             self.audit_row_selection,
@@ -1520,6 +1578,35 @@ mod tests {
         assert_eq!(quit_gate_warning(true), Some(unsaved_quit_warning_status()));
         assert_eq!(quit_gate_warning(false), None);
         assert!(quit_gate_warning(true).is_some_and(|text| text.contains("w: 保存 / d: 破棄")));
+    }
+
+    #[::core::prelude::v1::test]
+    fn offline_restore_latch_follows_login_statuses_only() {
+        let restored = crate::ui::logic::login_success_status(2, true);
+        let fresh = crate::ui::logic::login_success_status(2, false);
+
+        let (offline, reason) = next_offline_restore(false, None, &restored);
+        assert!(offline, "a cache restore must latch the marker");
+        assert_eq!(
+            reason, None,
+            "auth.rs drops sync_cause, so no reason exists"
+        );
+
+        // Any later transient status leaves the restored-data notice in place.
+        let (still, _) = next_offline_restore(offline, reason, "項目を選択してください");
+        assert!(still);
+        let (still, _) = next_offline_restore(still, None, "ログイン失敗: 同期（r で再試行）");
+        assert!(still, "a failed re-login keeps showing the cached vault");
+
+        // Only a fresh sync clears it, along with any diagnostic reason.
+        let (cleared, cleared_reason) =
+            next_offline_restore(still, Some("sync_cause".to_string()), &fresh);
+        assert!(!cleared);
+        assert_eq!(cleared_reason, None);
+
+        // Lock/unlock clearing is unconditional (reset_input_state), so an
+        // unrelated first status must never set the marker on its own.
+        assert!(!next_offline_restore(false, None, "ログイン中…").0);
     }
 
     #[::core::prelude::v1::test]

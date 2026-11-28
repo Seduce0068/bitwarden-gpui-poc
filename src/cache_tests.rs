@@ -5846,3 +5846,100 @@ fn bounded_read_with_a_zero_limit_accepts_empty_and_rejects_one_byte() {
     );
     assert_eq!(one_byte.position(), 1, "the probing byte is consumed");
 }
+
+#[cfg(unix)]
+#[test]
+fn insecure_mode_error_keeps_fixed_status_and_exposes_both_modes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.json");
+    let cache = SyncCache::from_body(body(), "https://vault.example.com").unwrap();
+    save(&path, &cache).unwrap();
+
+    for (mode, expected_detail) in [
+        (
+            0o644u32,
+            "キャッシュを読み込めません（mode 0644、期待 0600）",
+        ),
+        (
+            0o660u32,
+            "キャッシュを読み込めません（mode 0660、期待 0600）",
+        ),
+    ] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        let error = load_detailed(&path).unwrap_err();
+        assert!(matches!(&error, CacheLoadError::ReadFailedCause(_)));
+
+        // Callers limited to a `&'static str` keep the exact old wording.
+        assert_eq!(cache_error_message(error.clone()), REASON_UNREADABLE);
+        assert_eq!(
+            super::cache_restore_status(error.clone()),
+            Some("同期に失敗しました（キャッシュを読み込めません）")
+        );
+
+        // Callers able to carry an owned string can now show the real mode.
+        assert_eq!(
+            CacheReadFailureKind::classify(&error),
+            CacheReadFailureKind::InsecurePermissions { actual_mode: mode }
+        );
+        assert_eq!(
+            CacheReadFailureKind::classify(&error).detail(),
+            Some(format!("mode {mode:04o}、期待 0600"))
+        );
+        assert_eq!(cache_error_status_with_detail(&error), expected_detail);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_detail_survives_clone_and_carries_no_path_or_secret() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("private-cache.json");
+    let secret_url = "https://user:TOP_SECRET@host.example.com/vault";
+    let cache = SyncCache::from_body(body(), secret_url).unwrap();
+    save(&path, &cache).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o606)).unwrap();
+
+    // `AppError::clone()` flattens a boxed cause into text; classification must
+    // still work on that cloned text and not depend on a typed downcast.
+    let error = load_detailed(&path).unwrap_err().clone();
+    assert_eq!(
+        CacheReadFailureKind::classify(&error),
+        CacheReadFailureKind::InsecurePermissions { actual_mode: 0o606 }
+    );
+    let detail = cache_error_status_with_detail(&error);
+    assert_eq!(detail, "キャッシュを読み込めません（mode 0606、期待 0600）");
+    assert!(!detail.contains("TOP_SECRET"), "{detail}");
+    assert!(!detail.contains("host.example.com"), "{detail}");
+    assert!(
+        !detail.contains(dir.path().to_string_lossy().as_ref()),
+        "{detail}"
+    );
+    assert!(!detail.contains("private-cache.json"), "{detail}");
+}
+
+#[test]
+fn unrelated_cache_errors_are_not_mislabelled_as_permission_denied() {
+    use crate::error::BoxedCause;
+
+    let cases: Vec<SyncCacheError> = vec![
+        SyncCacheError::ReadFailedCause(BoxedCause::new(std::io::Error::other("denied"))),
+        // A cause that merely mentions `mode` without the module's marker must
+        // not be classified as a permission violation.
+        SyncCacheError::ReadFailedCause(BoxedCause::text("mode 0644")),
+        SyncCacheError::CacheParse(BoxedCause::text("bad json")),
+        SyncCacheError::NotFound,
+    ];
+    for error in cases {
+        let kind = CacheReadFailureKind::classify(&error);
+        assert_eq!(kind, CacheReadFailureKind::Other, "{error:?}");
+        assert_eq!(kind.detail(), None);
+        assert_eq!(
+            cache_error_status_with_detail(&error),
+            cache_error_message(error)
+        );
+    }
+}

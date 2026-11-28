@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 全体改善（第156弾 / 2026-11-28）
+
+- オフライン復元の表示を一覧ヘッダへ永続化
+- キャッシュ権限違反の mode と期待値をステータスへ反映
+- `AuthConfig::from_credentials` を追加し UI から openwarden 直接 import を削除
+- E2E の `env_state` を非 ignored テストで検証し XDG パスを隔離
+- health の形骸化アサートを整理
+- CI の Betterleaks rev 検査、cargo-audit 版整合、`deny.toml` の unsound 方針を明示
+
 ### 全体改善（第155弾 / 2026-11-28）
 
 - TOTP シークレットの平文複製を `Zeroizing<String>` へ変更

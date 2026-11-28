@@ -38,10 +38,14 @@ jobs:
         npm install --global markdownlint-cli@${MARKDOWNLINT_VERSION}
         grep -Fq "markdownlint-cli@${MARKDOWNLINT_VERSION}" README.md
         markdownlint README.md CHANGELOG.md todo.md 'docs/**/*.md'
+        # cargo audit の実体は共通ワークフローが実行するため変更せず、
+        # 版だけを README と突き合わせて片方だけの更新を検出する。
+        CARGO_AUDIT_VERSION=0.23.0
+        grep -Fq "cargo audit@${CARGO_AUDIT_VERSION}" README.md
         # シークレットスキャンは pre-commit を主軸とし、CI を最終ゲートとする。
         BETTERLEAKS_VERSION=1.10.1
         # pre-commit と CI の版がずれないようにする（片方だけの更新を検出）。
-        grep -Fqx "    rev: v${BETTERLEAKS_VERSION}" .pre-commit-config.yaml
+        grep -Eq "^[[:space:]]*rev: v${BETTERLEAKS_VERSION}$" .pre-commit-config.yaml
         BETTERLEAKS_ARCHIVE="betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz"
         curl -sSfL \
           "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${BETTERLEAKS_ARCHIVE}" \

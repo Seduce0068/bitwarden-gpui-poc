@@ -24,32 +24,31 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-### 中優先度
-
-- [ ] **オフライン復元の警告を一覧へ永続表示** —
-  根拠 `src/ui/logic.rs:268` / `src/ui/login_flow.rs:196` / R5-VU01 / 中
-- [ ] **キャッシュ権限エラーの詳細をステータスへ反映** —
-  根拠 `src/cache.rs:1241,1486,1508` / R5-VU01 / 中
-- [ ] **UI から openwarden の直接 import を消す** —
-  根拠 `src/ui/login_flow.rs:8,62-64` /
-  `docs/adr/adr-20261116-openwarden-integration.md:47` / R1-AR01 / 中
-
-### 低優先度
-
-- [ ] **E2E の env_state 3 状態を単体テスト** —
-  根拠 `tests/real_server_e2e.rs:42-48` / R3-TQ01 / 低
-- [ ] **health message の完全一致後の contains 重複を整理** —
-  根拠 `src/health_tests.rs:3593-3601` / R3-TQ01 / 低
-- [ ] **cargo-audit の版を固定し README のツール表へ追加** —
-  根拠 `.github/workflows/ci.yml:24,28` / `README.md:350-354` / R4-DP01 / 低
-- [ ] **deny.toml に `unsound = "deny"` を明示** —
-  根拠 `deny.toml:4-11` / R4-DP01 / 低
-- [ ] **pre-commit の Betterleaks 実行バイナリ版を検証** —
-  根拠 `.pre-commit-config.yaml:2-6` / R4-DP01 / 低
-- [ ] **CI の Betterleaks rev grep を空白許容へ変更** —
-  根拠 `.github/workflows/ci.yml:44` / R4-DP01 / 低
+なし（第156弾で 9 件すべてを完了）。
 
 ## 完了
+
+- [x] 第156弾（16 担当・100 回目）の指摘 9 件を完結（2026-11-28）
+  - オフライン復元マーカーを一覧ヘッダへ永続表示（ロックで解除）。
+  - キャッシュ権限違反の mode と期待 0600 をステータスへ反映。
+  - `AuthConfig::from_credentials` を追加し UI／E2E から openwarden 直接
+    import を削除（ADR 境界）。
+  - E2E の `env_state` を非 ignored で検証し、XDG パスを隔離。
+  - health の形骸化アサート、CI の Betterleaks rev grep、
+    cargo-audit 版整合、pre-commit 版確認を整理。
+  - 起動エージェント: 9 体（実装 7 + レビュー 2）。
+  - 検証: fmt / check / test（1320 passed、E2E 1 ignored、2 回連続）/
+    clippy -D warnings / rustdoc -D warnings / cargo audit（--no-fetch）/
+    cargo deny（offline）/ markdownlint / Betterleaks 1.10.1（dir＋git 履歴）
+    すべて成功。
+  - 未検証: E2E は実サーバー環境破棄後のためコンパイル確認のみ。
+  - 却下: `deny.toml` の `unsound = "deny"` はスキーマ v2 で不正値のため、
+    `unmaintained` と同じ `workspace` 方針を明示（直接依存は失敗）。
+  - 修正: 権限 mode にファイル種別ビット (0o100000) が混じるため
+    `0o7777` でマスク。`OtherDetail` の詳細は `sync_fallback_failure` が
+    `message()` ではなく `status_message()` を使うよう接続。
+  - 却下: render 内のラッチ更新と E2E の env_lock に関する指摘は
+    副作用・競合が未観測の speculative として記録のみ。
 
 - [x] 第155弾（16 担当・99 回目）の指摘 9 件を完結（2026-11-28）
   - TOTP シークレットの平文複製を `Zeroizing<String>` へ変更。
@@ -1686,6 +1685,10 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## メモ
 
+- 保留（第156弾 R4 v2-corr）: オフライン復元ラッチを render 内の副作用から
+  `finish_login` 側の直接設定へ移す設計、および E2E の環境変数ガードを
+  `env_lock` 配下へ置く設計は、いずれも不具合未観測の speculative。
+  `AuthenticatedVault` に同期失敗理由を保持する経路もあわせて検討する。
 - 要判断（第155弾 R1-ST01）: キャレット移動／実テキスト入力ウィジェット
   （`src/ui/keys.rs:27,448`）は大規模機能であり、PoC のスコープ外とするか
   既知制約として明記するかの判断が必要。

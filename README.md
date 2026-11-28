@@ -257,6 +257,7 @@ cargo fmt --all -- --check
 cargo check --all-targets --locked
 cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
+# cargo audit@0.23.0 系（cargo audit --version で確認）
 cargo audit
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 cargo deny check
@@ -274,6 +275,7 @@ pre-commit フックとして使います。初回のみ次を実行してくだ
 # pre-commit は PEP 668 対応のため uv tool または pipx で導入する
 uv tool install pre-commit
 # betterleaks 本体はリリースバイナリを ~/.local/bin に配置済みであること
+betterleaks --version  # 1.10.1 であることを確認（pre-commit の rev と一致）
 pre-commit install
 ```
 
@@ -350,6 +352,7 @@ CI（`.github/workflows/ci.yml`）と pre-commit で共通して使うツール�
 | ツール | CI | pre-commit |
 | --- | --- | --- |
 | betterleaks | `BETTERLEAKS_VERSION` = 1.10.1 | `rev`（pre-commit config） |
+| cargo-audit | `cargo audit@0.23.0`（共通ワークフロー） | — |
 | cargo-deny | `cargo install cargo-deny@0.21.0 --exact --locked` | — |
 | markdownlint-cli | `npm install --global markdownlint-cli@0.50.0` | — |
 

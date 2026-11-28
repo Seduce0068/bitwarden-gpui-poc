@@ -261,16 +261,60 @@ pub(super) fn format_revision_date(revision: i64) -> String {
     format_revision_date_at(revision, 0)
 }
 
+/// Marker embedded in the post-login status when the vault came from cache.
+///
+/// One shared constant keeps the transient warning and the persistent header
+/// latch from drifting apart.
+pub(super) const OFFLINE_CACHE_RESTORE_MARKER: &str = "オフラインキャッシュから復元";
+
+/// Prefix that only the real-login completion status uses.
+pub(super) const LOGIN_SUCCESS_STATUS_PREFIX: &str = "ログイン成功: ";
+
 /// Status text after a successful login.
 ///
 /// A vault restored from the encrypted offline cache may be stale (the sync
 /// call failed), so the status says so instead of implying fresh data.
 pub(super) fn login_success_status(count: usize, from_cache: bool) -> String {
-    let base = format!("ログイン成功: {count} 件の項目を読み込みました");
+    let base = format!(
+        "{}{} 件の項目を読み込みました",
+        LOGIN_SUCCESS_STATUS_PREFIX, count
+    );
     if from_cache {
-        format!("{base}（オフラインキャッシュから復元。最新でない可能性があります）")
+        format!(
+            "{base}（{}。最新でない可能性があります）",
+            OFFLINE_CACHE_RESTORE_MARKER
+        )
     } else {
         base
+    }
+}
+
+/// Latch source for the persistent offline-restore marker.
+///
+/// `Some(true)` is the cache-restore login status, `Some(false)` a fresh-sync
+/// login status, and `None` every other status (a transient action message,
+/// the lock screen, ...). `login_flow.rs` is the only place that sees the
+/// `AuthenticatedVault::from_cache` flag and is outside this task's write
+/// scope, so the app latches the state from this status instead. The unsaved
+/// suffix is appended after the login status, so `strip_prefix` still works.
+pub(super) fn offline_restore_from_login_status(status: &str) -> Option<bool> {
+    let rest = status.strip_prefix(LOGIN_SUCCESS_STATUS_PREFIX)?;
+    Some(rest.contains(OFFLINE_CACHE_RESTORE_MARKER))
+}
+
+/// Persistent label appended to the vault list header after a cache restore.
+///
+/// `reason` would carry the failed live sync's cause, but `auth.rs` drops
+/// `sync_cause` on a successful cache restore, so callers pass `None` today.
+/// Unlike the status bar this label survives later key actions while the
+/// unlocked vault is still the restored one.
+pub(super) fn offline_restore_header_label(offline: bool, reason: Option<&str>) -> String {
+    if !offline {
+        return String::new();
+    }
+    match reason.filter(|reason| !crate::ui::app::is_visually_empty(reason)) {
+        Some(reason) => format!(" | [オフライン復元: {reason}]"),
+        None => " | [オフライン復元]".to_string(),
     }
 }
 
@@ -675,6 +719,53 @@ mod tests {
             restored.contains("最新でない可能性があります"),
             "{restored}"
         );
+    }
+
+    #[test]
+    fn offline_restore_header_label_is_opt_in_and_names_an_optional_reason() {
+        assert_eq!(OFFLINE_CACHE_RESTORE_MARKER, "オフラインキャッシュから復元");
+        assert_eq!(offline_restore_header_label(false, None), "");
+        assert_eq!(offline_restore_header_label(false, Some("同期失敗")), "");
+        assert_eq!(
+            offline_restore_header_label(true, None),
+            " | [オフライン復元]"
+        );
+        // An invisible-only reason must not leave a dangling colon.
+        assert_eq!(
+            offline_restore_header_label(true, Some("  \u{200b} ")),
+            " | [オフライン復元]"
+        );
+        assert_eq!(
+            offline_restore_header_label(true, Some("同期失敗")),
+            " | [オフライン復元: 同期失敗]"
+        );
+    }
+
+    #[test]
+    fn offline_restore_is_latched_only_from_login_statuses() {
+        let restored = login_success_status(3, true);
+        assert_eq!(offline_restore_from_login_status(&restored), Some(true));
+        let fresh = login_success_status(3, false);
+        assert_eq!(offline_restore_from_login_status(&fresh), Some(false));
+        // The temporary warning still carries the exact established wording.
+        assert!(
+            restored.contains("最新でない可能性があります"),
+            "{restored}"
+        );
+
+        // The unsaved-settings suffix is appended after the login status and
+        // must not hide the latch source.
+        let dirty = crate::ui::app::status_with_unsaved(&restored, true);
+        assert_eq!(offline_restore_from_login_status(&dirty), Some(true));
+
+        for other in [
+            "ログイン中…",
+            "ロックしました（Enter: ログイン / m: モック）",
+            "項目を選択してください",
+            "ログイン失敗: 同期（r で再試行）",
+        ] {
+            assert_eq!(offline_restore_from_login_status(other), None, "{other}");
+        }
     }
 
     #[test]

@@ -3,6 +3,10 @@
 
 [advisories]
 # 脆弱性（vulnerability）は常にゲートを失敗させる。ignore は空。
+# unsound は既定が warn。設定スキーマ v2 は deny ではなく all/workspace/
+# transitive/none を取るため、unmaintained と同じ workspace 方針を明示する。
+# これで直接依存の unsound 勧告はゲート失敗、推移依存は従前どおり警告。
+unsound = "workspace"
 # 推移依存の unmaintained は、ピン留めした gpui-kit 0.9.1 由来で
 # こちらでは解消できないため失敗させない（共通ワークフローの
 # cargo audit と同じ方針）。直接依存が unmaintained になった場合は失敗。
