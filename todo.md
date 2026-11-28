@@ -24,9 +24,98 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## 未着手
 
-なし（第156弾で 9 件すべてを完了）。
+### 高優先度
+
+- [ ] **設定／生成パネルをキーボードでスクロール可能に** —
+  根拠 `src/ui/panels.rs:27,626-635` / `src/ui/keys.rs:1007-1017` / e-ax / 高
+- [ ] **ui::logic と ui::app の双方向依存を一方向へ** —
+  根拠 `src/ui/logic.rs:105-120` / `src/ui/app.rs:7-12` / e-ar / 高
+
+### 中優先度
+
+- [ ] **キャッシュの server_url 比較を正規化** —
+  根拠 `src/cache.rs:1423-1425` / e-er / 中
+- [ ] **ログイン待機に残秒／進捗を表示** —
+  根拠 `src/ui/login_flow.rs:96-98` / `src/ui/app.rs:1052-1063` / e-vu / 中
+- [ ] **永続的認証失敗に「r で再試行」を出さない** —
+  根拠 `src/ui/login_flow.rs:34-37,277-287` / e-vu + e-fg / 中
+- [ ] **未お気に入りの星アイコンのコントラストを 3:1 以上へ** —
+  根拠 `src/ui/render.rs:269,288-294` / e-ax / 中
+- [ ] **is_visually_empty と空認証情報判定を分離** —
+  根拠 `src/ui/app.rs:273-291` / `src/auth.rs:535-539` / e-ar / 中
+- [ ] **権限違反ステータスに同期ファミリ見出しを付与** —
+  根拠 `src/cache.rs:1600` / `src/auth.rs:1145` / e-tq / 中
+- [ ] **権限分類をローカライズ文字列パースから構造化へ** —
+  根拠 `src/cache.rs:1257,1534-1576` / `src/error.rs` / e-ar / 中
+- [ ] **キャッシュ復元の同期 I/O を unblock 化** —
+  根拠 `src/auth.rs:1240` / `src/cache.rs:1195-1225` / e-ar / 中
+- [ ] **AuthError の message() と status_message() を整合** —
+  根拠 `src/auth.rs:231,242-246,258-287` / e-ar / 中
+- [ ] **AuthError→AppError 逆変換で型付き cause を保持** —
+  根拠 `src/auth.rs:298-329` / `src/error.rs:46-60` / e-ar / 中
+- [ ] **markdownlint-cli を npm lockfile と Dependabot の管理下へ** —
+  根拠 `.github/dependabot.yml:6` / `.github/workflows/ci.yml:37-38` / e-dp / 中
+- [ ] **Betterleaks の除外フィルタを完全一致／アンカー付きへ** —
+  根拠 `.betterleaks.toml:9-16,39-40` / e-dp / 中
+
+### 低優先度
+
+- [ ] **無効 UTF-8 の設定ファイルを ParseFailed に分類** —
+  根拠 `src/settings.rs:415-420` / e-er / 低
+- [ ] **永続先なしの device_id 再生成を明示的に扱う** —
+  根拠 `src/settings.rs:771-786` / `src/ui/login_flow.rs:103-117` / e-er / 低
+- [ ] **user_id_from_client_id の fail-closed 説明を実装へ揃える** —
+  根拠 `src/auth.rs:1155-1171` / e-er / 低
+- [ ] **起動時の設定警告を永続的／再表示可能に** —
+  根拠 `src/ui/app.rs:938-961` / `src/ui/actions.rs:170-178` / e-vu / 低
+- [ ] **キー案内と未保存警告の重複文言を定数化** —
+  根拠 `src/ui/logic.rs:164-197` / `src/ui/app.rs:94,640,699,1163` / e-vu / 低
+- [ ] **「ログイン制限」と「ログインタイムアウト」の表記を統一** —
+  根拠 `src/ui/panels.rs:256` / `src/ui/input.rs:996-1003` / e-vu + e-fg / 低
+- [ ] **README の監査ボタン説明に未生成時の挙動を追記** —
+  根拠 `README.md:196-197` / `src/ui/render.rs:499-503` / e-fg / 低
+- [ ] **README の F1 案内を「フォーカス外れ時」と明記** —
+  根拠 `README.md:177` / `src/ui/app.rs:1014-1025` / e-fg / 低
+- [ ] **キー表の5番目を「マスターパスワード」に統一** —
+  根拠 `README.md:170` / `src/ui/keys.rs:525` / e-fg / 低
+- [ ] **ADR 変更ログへ 2026-11-28 の節を追記** —
+  根拠 `docs/adr/log.md:3` / `README.md:370-372` / e-fg / 低
+- [ ] **将来スキーマの device_id 救済と数値文字列 legacy を文書化** —
+  根拠 `README.md:221,241-243` / `src/settings.rs:895-929` / e-fg / 低
+- [ ] **pre-commit に fmt／markdownlint 等のローカルゲートを追加** —
+  根拠 `.pre-commit-config.yaml:1-6` / `README.md:256-263` / e-dp / 低
+- [ ] **CI の cargo-deny 導入をキャッシュ／バイナリ化** —
+  根拠 `.github/workflows/ci.yml:32-34` / e-dp / 低
+- [ ] **Dependabot が CI 内の cargo-deny 版も追跡するよう調整** —
+  根拠 `.github/dependabot.yml:6` / `.github/workflows/ci.yml:33` / e-dp / 低
+- [ ] **README の CI 節へ週次 cron を記載** —
+  根拠 `.github/workflows/ci.yml:11-13` / `README.md:298-302` / e-dp / 低
+- [ ] **更新日時の UTC 固定を選択可能化または明記** —
+  根拠 `src/ui/logic.rs:233-262` / e-ax / 低
+- [ ] **Esc を確定ではなく取り消しへ分離** —
+  根拠 `src/ui/keys.rs:502,532,621` / `README.md:191` / e-ax / 低
+- [ ] **UI 文言のワンソース化（段階移行）** —
+  根拠 `src/ui/logic.rs:46,174-199` / `src/ui/panels.rs:640-688` / e-ax / 低
+- [ ] **検索終了 API を単一メソッドへ集約** —
+  根拠 `src/ui/app.rs:188-200,224-235` / e-ar / 低
+- [ ] **OtherDetail の PartialEq 規則を明文化** —
+  根拠 `src/auth.rs:193-220` / e-ar / 低
+- [ ] **OtherDetail 往復と権限 classify の境界テストを追加** —
+  根拠 `src/auth_tests.rs:3409,3461` / `src/cache_tests.rs:5883,5924` / e-tq / 低
+- [ ] **dead_code 抑止の本番未使用シンボル4件を整理** —
+  根拠 `src/limits.rs:88,94` / `src/ui/input.rs:53,219` / e-st / 低
 
 ## 完了
+
+- [x] バックログ補充（第157弾準備 / 2026-11-28）。
+  swarm-todo-discovery と swarm-project-review の R1〜R5 を8体並列で
+  実行し、重複・妥当性を吸収して上記38件を追記した。
+  - 却下: `@v1` の可変タグを SHA pin へ変更する案は共通ワークフロー
+    方針の変更を伴うためユーザー承認待ち（メモへ退避）。
+  - 却下: ライブリージョン／フォーカスリングの指摘は GPUI の API
+    をコードから確認できず speculative のためメモへ退避。
+  - 却下: import audit の本番破棄は ADR が意図的に記録済み。
+  - 却下: オフライン復元ラッチ／理由保持の再設計は既にメモ済み。
 
 - [x] 第156弾（16 担当・100 回目）の指摘 9 件を完結（2026-11-28）
   - オフライン復元マーカーを一覧ヘッダへ永続表示（ロックで解除）。
@@ -1685,6 +1774,13 @@ swarm コンボ（swarm-project-review → swarm-todo-discovery → swarm-coding
 
 ## メモ
 
+- 要判断（第157弾 e-dp）: `rust-gates.yml@v1` は方針でタグピンが指定されて
+  おり、SHA pin への変更はユーザー承認が必要。まず週次監査で解決 SHA を
+  記録する手順を README に追加する案は低優先度タスクとして採用済み。
+- 保留（第157弾 e-ax）: ライブリージョン／フォーカスリングの可否は GPUI の
+  アクセシビリティ API をコードから確認できず speculative。実機検証が必要。
+- 保留（第157弾 e-ar）: `AuthError` の詳細表現を構造化バリアントへ統一する
+  設計は、error.rs と既存 From 変換の広範囲改修を伴うため設計判断として残す。
 - 保留（第156弾 R4 v2-corr）: オフライン復元ラッチを render 内の副作用から
   `finish_login` 側の直接設定へ移す設計、および E2E の環境変数ガードを
   `env_lock` 配下へ置く設計は、いずれも不具合未観測の speculative。
