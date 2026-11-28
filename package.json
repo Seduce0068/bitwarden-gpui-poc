@@ -4,6 +4,6 @@
   "private": true,
   "description": "Bitwarden/Vaultwarden client PoC built with GPUI (gpui-kit)",
   "devDependencies": {
-    "markdownlint-cli": "0.50.0"
+    "markdownlint-cli": "0.50.1"
   }
 }
